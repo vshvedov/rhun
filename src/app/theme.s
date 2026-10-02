@@ -113,13 +113,14 @@ theme_derive:
     CONST T_BG, 0xff1e1f24
     CONST T_FG, 0xffd4d6dc
     CONST T_ACCENT, 0xff7aa2f7
+    COPY T_UI_FG, T_FG
     cmp dword ptr [rip + g_theme_dark], 0
     je .Ltd_light
     DERIVE_C T_PANEL, T_BG, 0xff000000, 40
     DERIVE_C T_BORDER, T_PANEL, 0xff000000, 70
     DERIVE T_LINE_HL, T_BG, T_FG, 10
     DERIVE T_SELECTION, T_BG, T_ACCENT, 72
-    DERIVE T_HOVER, T_PANEL, T_FG, 18
+    DERIVE T_HOVER, T_PANEL, T_UI_FG, 18
     DERIVE T_ACTIVE, T_PANEL, T_ACCENT, 56
     DERIVE T_POPUP, T_BG, T_FG, 12
     DERIVE_C T_INPUT, T_BG, 0xff000000, 30
@@ -130,7 +131,7 @@ theme_derive:
     DERIVE T_BORDER, T_PANEL, T_FG, 36
     DERIVE T_LINE_HL, T_BG, T_FG, 12
     DERIVE T_SELECTION, T_BG, T_ACCENT, 56
-    DERIVE T_HOVER, T_PANEL, T_FG, 16
+    DERIVE T_HOVER, T_PANEL, T_UI_FG, 16
     DERIVE T_ACTIVE, T_PANEL, T_ACCENT, 44
     DERIVE_C T_POPUP, T_BG, 0xffffffff, 140
     DERIVE_C T_INPUT, T_BG, 0xffffffff, 160
@@ -140,8 +141,16 @@ theme_derive:
     COPY T_STATUS, T_PANEL
     COPY T_TAB, T_PANEL
     COPY T_TAB_ACTIVE, T_BG
+    COPY T_TITLEBAR_UNFOCUSED, T_TITLEBAR
+    COPY T_TAB_ACTIVE_UNFOCUSED, T_TAB_ACTIVE
     DERIVE T_MUTED, T_FG, T_BG, 110
-    DERIVE T_PANEL_FG, T_FG, T_PANEL, 30
+    # muted interface text: from ui_fg when the theme gives it, else the editor's
+    ISDEF T_UI_FG
+    jc 1f
+    COPY T_UI_MUTED, T_MUTED
+    jmp 2f
+1:  DERIVE T_UI_MUTED, T_UI_FG, T_PANEL, 110
+2:  DERIVE T_PANEL_FG, T_UI_FG, T_PANEL, 30
     DERIVE T_LINENO, T_FG, T_BG, 150
     COPY T_LINENO_ACTIVE, T_FG
     COPY T_CURSOR, T_ACCENT
@@ -459,6 +468,7 @@ slot_names:
     .quad .Lc10, .Lc11, .Lc12, .Lc13, .Lc14, .Lc15, .Lc16, .Lc17, .Lc18, .Lc19
     .quad .Lt0, .Lt1, .Lt2, .Lt3, .Lt4, .Lt5, .Lt6, .Lt7, .Lt8, .Lt9
     .quad .Lt10, .Lt11, .Lt12, .Lt13, .Lt14, .Lt15, .Lg0, .Lg1, .Lg2
+    .quad .Lu0, .Lu1, .Lu2, .Lu3
 .Ls0: .asciz "bg"
 .Ls1: .asciz "fg"
 .Ls2: .asciz "accent"
@@ -525,3 +535,7 @@ slot_names:
 .Lg0: .asciz "git_added"
 .Lg1: .asciz "git_modified"
 .Lg2: .asciz "git_deleted"
+.Lu0: .asciz "ui_fg"
+.Lu1: .asciz "ui_muted"
+.Lu2: .asciz "titlebar_unfocused"
+.Lu3: .asciz "tab_active_unfocused"

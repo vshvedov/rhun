@@ -717,7 +717,7 @@ FN find_draw
     mov edx, [rsp + 8]
     mov ecx, ebx
     lea r8, [rip + buf]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     # toggles and arrows after the count
     mov r12d, [rsp + 12]
@@ -756,7 +756,7 @@ FN find_draw
     mov ecx, ebx
     mov r8d, ebx
     lea r9, [rip + .Laa]
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     push rax
     call ui_text_center
@@ -886,7 +886,7 @@ text_button:
     mov ecx, r15d
     mov r8d, ebx
     mov r9, r14
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     push rax
     call ui_text_center

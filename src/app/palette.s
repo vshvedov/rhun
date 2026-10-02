@@ -2215,7 +2215,7 @@ FN palette_draw
     M ecx, MI_20
     call hint_text
     mov r8, rax
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     jmp .Lpd_ret
 5:  # Mouse scrolling owns the viewport until selection changes explicitly.
@@ -2388,7 +2388,7 @@ FN palette_draw
     mov ecx, ebx
     mov r8, [rsp + 40]
     mov r9, [rsp + 48]
-    COLOR eax, T_MUTED
+    COLOR eax, T_UI_MUTED
     push rax
     push rax
     call ui_text_v
@@ -2455,7 +2455,7 @@ draw_highlighted:
     sub rsi, rbx
     call utf8_decode
     mov [rsp + 32], edx
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
     cmp dword ptr [rip + pal_mode], PM_GREP
     jne 3f
     mov rax, [rsp + 40]

@@ -1036,14 +1036,22 @@ draw_list:
     mov edi, ebx
     call select_row
     mov dword ptr [rip + g_focus], FOCUS_EDITOR
-4:  # background
+4:  # background; the text of a filled row takes the interface colors
+    COLOR eax, T_FG
+    mov [rsp + 36], eax         # text color
+    COLOR eax, T_MUTED
+    mov [rsp + 40], eax         # muted text color
     COLOR r8d, T_ACTIVE
     cmp ebx, [rip + sel]
     je 41f
     test dword ptr [rsp + 24], UB_HOVER
     jz 42f
     COLOR r8d, T_HOVER
-41: mov edi, [rsp]
+41: COLOR eax, T_UI_FG
+    mov [rsp + 36], eax
+    COLOR eax, T_UI_MUTED
+    mov [rsp + 40], eax
+    mov edi, [rsp]
     mov esi, r13d
     mov edx, [rsp + 8]
     mov ecx, r15d
@@ -1080,7 +1088,7 @@ draw_list:
     mov ecx, r15d
     lea r8, [rsp + 48]
     mov r9d, [rsp + 32]
-    COLOR eax, T_MUTED
+    mov eax, [rsp + 40]
     push rax
     push rax
     call ui_text_v
@@ -1104,7 +1112,7 @@ draw_list:
     mov edi, 140
     call sc
     push rax
-    COLOR eax, T_MUTED
+    mov eax, [rsp + 40 + 8]
     push rax
     lea rdi, [rip + g_face_small]
     mov esi, [rsp + 28 + 16]
@@ -1135,7 +1143,7 @@ draw_list:
     sub eax, [rip + g_mt + 4*MI_12]
     jle .Ldl_next
     push rax
-    COLOR eax, T_FG
+    mov eax, [rsp + 36 + 8]
     push rax
     lea rdi, [rip + g_face_ui]
     mov esi, r12d
@@ -1153,7 +1161,7 @@ draw_list:
     mov edx, r13d
     mov ecx, r15d
     lea r8, [rip + .Lclean]
-    COLOR r9d, T_MUTED
+    mov r9d, [rsp + 40]
     call ui_text_c
     jmp .Ldl_next
 1:  lea rdi, [rip + g_face_ui]
@@ -1161,7 +1169,7 @@ draw_list:
     mov edx, r13d
     mov ecx, r15d
     lea r8, [rip + .Lwip]
-    COLOR r9d, T_FG
+    mov r9d, [rsp + 36]
     call ui_text_c
     add eax, [rip + g_mt + 4*MI_8]
     mov r12d, eax
@@ -1174,7 +1182,7 @@ draw_list:
     mov edx, r13d
     mov ecx, r15d
     lea r8, [rsp + 48]
-    COLOR r9d, T_MUTED
+    mov r9d, [rsp + 40]
     call ui_text_c
 .Ldl_next:
     add r13d, r15d
@@ -1615,11 +1623,14 @@ chips:
     sub ecx, eax
     M r8d, MI_4
     call gfx_round_rect
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     cmp dword ptr [rsp + 8], 1
     jne 7f
     COLOR eax, T_ACCENT_FG
-7:  push rax
+7:  cmp dword ptr [rsp + 8], 2
+    jne 71f
+    COLOR eax, T_FG
+71: push rax
     push rax
     lea rdi, [rip + g_face_small]
     mov esi, r12d
@@ -1737,7 +1748,7 @@ draw_details:
     mov r9, [rip + tmp + SB_len]
     mov eax, [rsp + 16]
     push rax
-    COLOR eax, T_MUTED
+    COLOR eax, T_UI_MUTED
     push rax
     lea rdi, [rip + g_face_small]
     mov esi, r12d
@@ -1779,7 +1790,7 @@ draw_details:
     sub r9, rbx
     mov eax, [rsp + 16]
     push rax
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     lea rdi, [rip + g_face_ui]
     mov esi, r12d
@@ -1905,7 +1916,7 @@ draw_details:
     sub eax, r12d
     sub eax, [rip + g_mt + 4*MI_32]
     push rax
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     lea rdi, [rip + g_face_ui]
     mov esi, r12d
@@ -1951,7 +1962,7 @@ draw_details:
     mov r8, [rsp]
     mov eax, [rsp + 16 + 16]
     push rax
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     lea rdi, [rip + g_face_ui]
     mov esi, r12d
@@ -1969,7 +1980,7 @@ draw_details:
     mov esi, r12d
     mov edx, r13d
     M ecx, MI_24
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     add r13d, [rip + g_mt + 4*MI_28]
     add rsp, 8

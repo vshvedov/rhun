@@ -1,39 +1,40 @@
-ayu-light #fcfcfc #5c6166 #f3f4f5 #d1e4f4 #fa8d3e #86b300 #adaeb1 
-catppuccin-latte #eff1f5 #4c4f69 #e6e9ef #ccd0da #8839ef #40a02b #9ca0b0 
-catppuccin-mocha #1e1e2e #cdd6f4 #181825 #45475a #cba6f7 #a6e3a1 #6c7086 
-dracula #282a36 #f8f8f2 #21222c #44475a #ff79c6 #f1fa8c #6272a4 
-elflord-dark #000000 #00ffff #0e0e0e #104a6a #c45050 #ff00ff #80a0ff 
-elflord-light #ffffff #005f60 #f2f6f6 #c9eded #aa3333 #a800a8 #3d5fc4 
-ethereal #060b1e #ffcead #040816 #252e56 #ead7e7 #92a593 #6d7db6 
-everforest #2d353b #d3c6aa #21272c #3d484d #e67e80 #83c092 #859289 
-flexoki-light #fffcf0 #100f0f #f2efe4 #cecdc3 #66800b #24837b #b7b5ac 
-github-dark #0d1117 #e6edf3 #010409 #1f3a5f #ff7b72 #a5d6ff #8b949e 
-github-light #ffffff #1f2328 #f6f8fa #ddf4ff #cf222e #0a3069 #6e7781 
-gruvbox-dark #282828 #ebdbb2 #1d2021 #504945 #fb4934 #b8bb26 #928374 
-gruvbox-light #fbf1c7 #3c3836 #f2e5bc #ebdbb2 #9d0006 #79740e #928374 
-hackerman #0b0c16 #ddf7ff #080910 #1f253a #85e0bc #4fe88f #6a6e95 
-kanagawa #1f1f28 #dcd7ba #17171e #363646 #957fb8 #98bb6c #727169 
-last-horizon #0c0b0c #fafcfb #090809 #584e51 #c4d8e2 #87a9b0 #584e51 
-lumon #16242d #d6e2ee #101b21 #243d56 #9fcfe9 #79abd2 #416b8b 
-lupine #fafafa #212121 #ececec #d0d0d0 #b363ff #4a2fd0 #9e9e9e 
-matte-black #121212 #bebebe #0d0d0d #333333 #059669 #eaeaea #8a8a8d 
-miasma #222222 #c2c2b0 #191919 #383838 #bb7744 #5f875f #666666 
-min-dark #1f1f1f #cccccc #1a1a1a #264f78 #f97583 #ffab70 #6b737c 
-min-light #ffffff #424242 #f6f6f6 #add6ff #d32f2f #22863a #c2c3c5 
-monokai #272822 #f8f8f2 #1e1f1c #49483e #f92672 #e6db74 #75715e 
-nord #2e3440 #d8dee9 #272c36 #434c5e #81a1c1 #a3be8c #616e88 
-one-dark #282c34 #abb2bf #21252b #3e4451 #c678dd #98c379 #5c6370 
-one-light #fafafa #383a42 #eaeaeb #e5e5e6 #a626a4 #50a14f #a0a1a7 
-osaka-jade #111c18 #c1c497 #0c1512 #32473b #75bbb3 #549e6a #53685b 
-retro-82 #05182e #f6dcac #031222 #134e5a #faa968 #f6dcac #2a6a73 
-rhun-dark #1c1e24 #d5d8df #17191e #2f3a5c #c49cff #a8d98a #646c7c 
-rhun-light #fbfbfc #2a2e37 #f1f2f5 #d6ddfb #7b3fe4 #3b7d2a #8a909c 
-ristretto #2c2525 #e6d9db #211b1b #403e41 #bebffd #adda78 #72696a 
-rose-pine-dawn #faf4ed #575279 #ede7e1 #dfdad9 #286983 #ea9d34 #9893a5 
-rose-pine #191724 #e0def4 #1f1d2e #403d52 #31748f #f6c177 #6e6a86 
-solarized-dark #002b36 #839496 #00212b #0a4a5a #859900 #2aa198 #586e75 
-solarized-light #fdf6e3 #657b83 #eee8d5 #e3dcc6 #859900 #2aa198 #93a1a1 
-solitude #101315 #cacccc #0c0e10 #343d41 #b14242 #df6464 #737373 
-tokyo-night #1a1b26 #c0caf5 #16161e #283457 #bb9af7 #9ece6a #565f89 
-vantablack #000000 #ffffff #090909 #1a1a1a #9b9b9b #b6b6b6 #7a7a7a 
-white #ffffff #000000 #f5f5f5 #c0c0c0 #2e2e2e #3a3a3a #808080 
+ayu-light #fcfcfc #5c6166 #f3f4f5 #d1e4f4 #fa8d3e #86b300 #adaeb1 #a0a3a6 #e9eaec #6d7276 #f3f4f5 #fcfcfc #5c6166 #a0a3a6 #f3f4f5 #fcfcfc 
+catppuccin-latte #eff1f5 #4c4f69 #e6e9ef #ccd0da #8839ef #40a02b #9ca0b0 #9294a5 #dcdfe6 #5e6178 #e6e9ef #eff1f5 #4c4f69 #9294a5 #e6e9ef #eff1f5 
+catppuccin-mocha #1e1e2e #cdd6f4 #181825 #45475a #cba6f7 #a6e3a1 #6c7086 #81869e #242533 #b7bfdb #181825 #1e1e2e #cdd6f4 #81869e #181825 #1e1e2e 
+dracula #282a36 #f8f8f2 #21222c #44475a #ff79c6 #f1fa8c #6272a4 #9e9fa1 #303139 #dededa #21222c #282a36 #f8f8f2 #9e9fa1 #21222c #282a36 
+elflord-dark #000000 #00ffff #0e0e0e #104a6a #c45050 #ff00ff #80a0ff #7f7f7f #0d1e1e #01e2e2 #0e0e0e #000000 #00ffff #7f7f7f #0e0e0e #000000 
+elflord-light #ffffff #005f60 #f2f6f6 #c9eded #aa3333 #a800a8 #3d5fc4 #5f7373 #e2ecec #1c7071 #f2f6f6 #ffffff #005f60 #5f7373 #f2f6f6 #ffffff 
+ethereal #060b1e #ffcead #040816 #252e56 #ead7e7 #92a593 #6d7db6 #947a6f #151520 #e1b69b #040816 #060b1e #ffcead #947a6f #040816 #060b1e 
+everforest #2d353b #d3c6aa #21272c #3d484d #e67e80 #83c092 #859289 #8b877a #2d3234 #beb39b #21272c #2d353b #d3c6aa #8b877a #21272c #2d353b 
+flexoki-light #fffcf0 #100f0f #f2efe4 #cecdc3 #66800b #24837b #b7b5ac #76746f #e3e1d6 #2a2927 #f2efe4 #fffcf0 #100f0f #76746f #f2efe4 #fffcf0 
+github-dark #0d1117 #e6edf3 #010409 #1f3a5f #ff7b72 #a5d6ff #8b949e #888e94 #111419 #cbd1d7 #010409 #0d1117 #e6edf3 #888e94 #010409 #0d1117 
+github-light #ffffff #1f2328 #f6f8fa #ddf4ff #cf222e #0a3069 #6e7781 #7f8184 #e8eaec #383b40 #f6f8fa #ffffff #1f2328 #7f8184 #f6f8fa #ffffff 
+gruvbox-dark #282828 #ebdbb2 #1d2021 #504945 #fb4934 #b8bb26 #928374 #978e76 #2b2d2b #d2c5a1 #1d2021 #282828 #ebdbb2 #978e76 #1d2021 #282828 
+gruvbox-light #fbf1c7 #3c3836 #f2e5bc #ebdbb2 #9d0006 #79740e #928374 #8e8774 #e6dab3 #514c45 #f2e5bc #fbf1c7 #3c3836 #8e8774 #f2e5bc #fbf1c7 
+hackerman #0b0c16 #ddf7ff #080910 #1f253a #85e0bc #4fe88f #6a6e95 #82929a #161920 #c4dbe2 #080910 #0b0c16 #ddf7ff #82929a #080910 #0b0c16 
+kanagawa #1f1f28 #dcd7ba #17171e #363646 #957fb8 #98bb6c #727169 #8a877b #242428 #c4c0a7 #17171e #1f1f28 #dcd7ba #8a877b #17171e #1f1f28 
+last-horizon #0c0b0c #fafcfb #090809 #584e51 #c4d8e2 #87a9b0 #584e51 #939494 #19191a #dddfde #090809 #0c0b0c #fafcfb #939494 #090809 #0c0b0c 
+lumon #16242d #d6e2ee #101b21 #243d56 #9fcfe9 #79abd2 #416b8b #83909b #1d282f #becad5 #101b21 #16242d #d6e2ee #83909b #101b21 #16242d 
+lupine #fafafa #212121 #ececec #d0d0d0 #b363ff #4a2fd0 #9e9e9e #7e7e7e #dfdfdf #383838 #ececec #fafafa #212121 #7e7e7e #ececec #fafafa 
+matte-black #121212 #bebebe #0d0d0d #333333 #059669 #eaeaea #8a8a8d #747474 #191919 #a9a9a9 #0d0d0d #121212 #bebebe #747474 #0d0d0d #121212 
+miasma #222222 #c2c2b0 #191919 #383838 #bb7744 #5f875f #666666 #7d7d72 #242423 #aeae9e #191919 #222222 #c2c2b0 #7d7d72 #191919 #222222 
+min-dark #1f1f1f #cccccc #1a1a1a #264f78 #f97583 #ffab70 #6b737c #727272 #262626 #888888 #1a1a1a #1f1f1f #cccccc #727272 #1a1a1a #1f1f1f 
+min-light #ffffff #424242 #f6f6f6 #add6ff #d32f2f #22863a #c2c3c5 #9e9e9e #eeeeee #757575 #f6f6f6 #ffffff #424242 #9e9e9e #f6f6f6 #ffffff 
+monokai #272822 #f8f8f2 #1e1f1c #49483e #f92672 #e6db74 #75715e #9e9e98 #2d2e2b #deded8 #1e1f1c #272822 #f8f8f2 #9e9e98 #1e1f1c #272822 
+nord #2e3440 #d8dee9 #272c36 #434c5e #81a1c1 #a3be8c #616e88 #8e94a0 #333842 #c3c9d4 #272c36 #2e3440 #d8dee9 #8e94a0 #272c36 #2e3440 
+one-dark #282c34 #abb2bf #21252b #3e4451 #c678dd #98c379 #5c6370 #727883 #2a2e35 #9aa1ad #21252b #282c34 #abb2bf #727883 #21252b #282c34 
+one-light #fafafa #383a42 #eaeaeb #e5e5e6 #a626a4 #50a14f #a0a1a7 #8b8c91 #dedfe0 #4c4e55 #eaeaeb #fafafa #383a42 #8b8c91 #eaeaeb #fafafa 
+osaka-jade #111c18 #c1c497 #0c1512 #32473b #75bbb3 #549e6a #53685b #757b60 #18211b #abaf87 #0c1512 #111c18 #c1c497 #757b60 #0c1512 #111c18 
+retro-82 #05182e #f6dcac #031222 #134e5a #faa968 #f6dcac #2a6a73 #8e8775 #14202b #d9c49b #031222 #05182e #f6dcac #8e8775 #031222 #05182e 
+rhun-dark #1c1e24 #d5d8df #17191e #2f3a5c #c49cff #a8d98a #646c7c #85888e #24262b #bec1c8 #17191e #1c1e24 #d5d8df #85888e #17191e #1c1e24 
+rhun-light #fbfbfc #2a2e37 #f1f2f5 #d6ddfb #7b3fe4 #3b7d2a #8a909c #83868b #e4e5e9 #41444d #f1f2f5 #fbfbfc #2a2e37 #83868b #f1f2f5 #fbfbfc 
+ristretto #2c2525 #e6d9db #211b1b #403e41 #bebffd #adda78 #72696a #968b8c #2e2828 #cec2c4 #211b1b #2c2525 #e6d9db #968b8c #211b1b #2c2525 
+rose-pine-dawn #faf4ed #575279 #ede7e1 #dfdad9 #286983 #ea9d34 #9893a5 #9d97aa #e3ddda #686385 #ede7e1 #faf4ed #575279 #9d97aa #ede7e1 #faf4ed 
+rose-pine #191724 #e0def4 #1f1d2e #403d52 #31748f #f6c177 #6e6a86 #8a889a #2c2a3b #c9c7dc #1f1d2e #191724 #e0def4 #8a889a #1f1d2e #191724 
+solarized-dark #002b36 #839496 #00212b #0a4a5a #859900 #2aa198 #586e75 #4a666c #092932 #738689 #00212b #002b36 #839496 #4a666c #00212b #002b36 
+solarized-light #fdf6e3 #657b83 #eee8d5 #e3dcc6 #859900 #2aa198 #93a1a1 #a6afac #e5e1cf #75878c #eee8d5 #fdf6e3 #657b83 #a6afac #eee8d5 #fdf6e3 
+solitude #101315 #cacccc #0c0e10 #343d41 #b14242 #df6464 #737373 #7a7c7d #191b1d #b3b5b5 #0c0e10 #101315 #cacccc #7a7c7d #0c0e10 #101315 
+tokyo-night #1a1b26 #c0caf5 #16161e #283457 #bb9af7 #9ece6a #565f89 #787e9c #21222d #acb4db #16161e #1a1b26 #c0caf5 #787e9c #16161e #1a1b26 
+vantablack #000000 #ffffff #090909 #1a1a1a #9b9b9b #b6b6b6 #7a7a7a #919191 #1a1a1a #e2e2e2 #090909 #000000 #ffffff #919191 #090909 #000000 
+white #ffffff #000000 #f5f5f5 #c0c0c0 #2e2e2e #3a3a3a #808080 #6d6d6d #e5e5e5 #1c1c1c #f5f5f5 #ffffff #000000 #6d6d6d #f5f5f5 #ffffff 
+ui-chrome #000040 #d7d6d2 #959ebd #222d73 #7aa2f7 #98c379 #7a7a93 #7a7a93 #8a92af #111216 #959ebd #b0b9d6 #000000 #404351 #7f88a6 #b0b9d6 

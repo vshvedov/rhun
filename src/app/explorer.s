@@ -762,7 +762,7 @@ FN explorer_draw
     mov edx, [rsp + 4]
     mov ecx, r15d
     lea r8, [rip + .Lheader]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     M r12d, MI_28
     mov esi, [rsp]
@@ -805,7 +805,7 @@ FN explorer_draw
     add edx, r15d
     M ecx, MI_24
     lea r8, [rip + .Lno_folder]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     jmp .Lxd_done
 3:  # list area
@@ -975,7 +975,7 @@ FN explorer_draw
     mov r8d, ecx
     shr ecx, 0
     mov ecx, r8d
-    COLOR r8d, T_MUTED
+    COLOR r8d, T_UI_MUTED
     call icon_draw
 55: add r15d, [rip + g_mt + 4*MI_16]
     add r15d, [rip + g_mt + 4*MI_2]
@@ -989,7 +989,7 @@ FN explorer_draw
     sub edx, ecx
     sar edx, 1
     add edx, r13d
-    COLOR r8d, T_MUTED
+    COLOR r8d, T_UI_MUTED
     cmp dword ptr [r14 + N_dir], 0
     je 57f
     COLOR r8d, T_ACCENT
@@ -1220,7 +1220,7 @@ FN explorer_menu_draw
     mov edx, [rsp + 8]
     mov ecx, ebx
     mov r8, [rsp + 24]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     mov eax, [rip + g_mt + 4*MI_16]
     add [rsp + 20], eax
@@ -1241,7 +1241,7 @@ FN explorer_menu_draw
     add esi, [rip + g_mt + 4*MI_16]
     mov edx, [rsp + 8]
     mov ecx, ebx
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
     call ui_text_c
     call gfx_clip_pop
     test dword ptr [rsp + 16], UB_CLICK

@@ -956,7 +956,7 @@ header_draw:
     mov ecx, r13d
     mov r8d, r13d
     mov r9d, IC_CHEV_DN2
-    call ui_icon_btn
+    call ui_icon_btn_bg
     test eax, UB_CLICK
     jz 1f
     mov dword ptr [rip + g_term_open], 0
@@ -969,7 +969,7 @@ header_draw:
     mov ecx, r13d
     mov r8d, r13d
     mov r9d, IC_CLOSE
-    call ui_icon_btn
+    call ui_icon_btn_bg
     test eax, UB_CLICK
     jz 2f
     call cmd_kill_terminal
@@ -981,7 +981,7 @@ header_draw:
     mov ecx, r13d
     mov r8d, r13d
     mov r9d, IC_PLUS
-    call ui_icon_btn
+    call ui_icon_btn_bg
     test eax, UB_CLICK
     jz 3f
     call cmd_new_terminal

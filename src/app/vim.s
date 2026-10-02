@@ -4267,7 +4267,7 @@ FN vim_cmdline_draw
     mov edx, r13d
     mov ecx, r14d
     lea r8, [rsp]
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
     call ui_text_c
     mov r15d, eax
     lea rdi, [rip + v_tf]
@@ -4286,7 +4286,7 @@ FN vim_cmdline_draw
     mov ecx, r14d
     mov r8, rbx
     mov r9, [rsp]
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     push rax
     call ui_text_v

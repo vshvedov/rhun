@@ -2,7 +2,7 @@
 #   key ctrl+s | type text | click x y [right|middle] | tap x y | move x y | down | up | scroll dy [ctrl]
 #   open path | cmd name | shot file.ppm | wait ms | resize w h | print-doc | print-state | echo text | quit
 #   wait-git | print-git | print-gitlog | print-scm | wait-update | print-update | print-project | print-palette
-#   print-menu
+#   print-menu | focus 0|1
 .include "rhun.inc"
 
 .bss
@@ -636,6 +636,14 @@ c_resize:
     xor eax, eax
     ret
 
+# focus 0|1: the window loses or gets the focus, as the platform reports it
+c_focus:
+    call next_int
+    mov edi, eax
+    call app_on_focus
+    xor eax, eax
+    ret
+
 c_quit:
     mov eax, 1
     ret
@@ -1166,6 +1174,7 @@ on_client:
 .Lc_shot: .asciz "shot"
 .Lc_wait: .asciz "wait"
 .Lc_resize: .asciz "resize"
+.Lc_focus: .asciz "focus"
 .Lc_quit: .asciz "quit"
 .Lc_echo: .asciz "echo"
 .Lc_print_doc: .asciz "print-doc"
@@ -1213,7 +1222,7 @@ ctl_table:
     .quad .Lc_wait_ai, c_wait_ai, .Lc_print_ai, c_print_ai
     .quad .Lc_wait_update, c_wait_update, .Lc_print_update, c_print_update
     .quad .Lc_print_frames, c_print_frames, .Lc_print_project, c_print_project
-    .quad .Lc_print_palette, c_print_palette, .Lc_print_menu, c_print_menu, 0, 0
+    .quad .Lc_print_palette, c_print_palette, .Lc_print_menu, c_print_menu, .Lc_focus, c_focus, 0, 0
 
 .data
 lsock: .long -1

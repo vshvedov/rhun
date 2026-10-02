@@ -1311,7 +1311,7 @@ FN iv_status
     mov ecx, [rsp + 12]
     mov r8, [rip + tmp + SB_ptr]
     mov r9, [rip + tmp + SB_len]
-    COLOR eax, T_MUTED
+    COLOR eax, T_UI_MUTED
     push rax
     push rax
     call ui_text_v
@@ -1386,7 +1386,7 @@ status_item:
     mov edx, [rsp + 32 + 4]
     mov ecx, [rsp + 32 + 12]
     mov r8, r13
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     sub r12d, [rip + g_mt + 4*MI_20]
     add rsp, 8

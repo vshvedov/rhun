@@ -1665,7 +1665,10 @@ FN titlebar_draw
     mov [rsp + 8], edx
     mov [rsp + 12], ecx
     COLOR r8d, T_TITLEBAR
-    call gfx_fill
+    cmp dword ptr [rip + g_win_focused], 0
+    jne 1f
+    COLOR r8d, T_TITLEBAR_UNFOCUSED
+1:  call gfx_fill
     mov edi, [rsp]
     mov esi, [rsp + 12]
     dec esi
@@ -1744,7 +1747,7 @@ FN titlebar_draw
     mov edx, [rsp + 4]
     mov ecx, [rsp + 12]
     mov r8, [rsp + 16]
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
     call ui_text_c
     mov esi, eax
     add esi, [rip + g_mt + 4*MI_4]
@@ -1754,10 +1757,10 @@ FN titlebar_draw
     sar edx, 1
     add edx, [rsp + 4]
     mov edi, IC_CHEV_D
-    COLOR r8d, T_MUTED
+    COLOR r8d, T_UI_MUTED
     test ebx, UB_HOVER
     jz 43f
-    COLOR r8d, T_FG
+    COLOR r8d, T_UI_FG
 43: call icon_draw
     lea r12d, [r14 + r15]
     test ebx, UB_CLICK
@@ -1775,7 +1778,7 @@ FN titlebar_draw
     mov edx, [rsp + 4]
     mov ecx, [rsp + 12]
     lea r8, [rip + g_branch]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     mov r12d, eax
 5:  # active file, centered
@@ -1799,7 +1802,7 @@ FN titlebar_draw
     mov ecx, [rsp + 12]
     mov r8, [rsp + 16]
     mov r9, [rsp + 24]
-    COLOR eax, T_MUTED
+    COLOR eax, T_UI_MUTED
     push rax
     push rax
     call ui_text_v
@@ -1818,7 +1821,7 @@ FN titlebar_draw
     mov r8d, [rsp + 12]
     call ui_btn
     mov ebx, eax
-    COLOR r14d, T_MUTED
+    COLOR r14d, T_UI_MUTED
     test ebx, UB_HOVER
     jz 61f
     mov edi, r12d
@@ -1972,10 +1975,10 @@ FN titlebar_draw
     xor edx, edx
     mov ecx, r13d
     mov r8d, [rsp + 24 + 8 + 12]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     test ebx, UB_HOVER
     jz 2f
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
 2:  call ui_icon_center
     mov eax, ebx
     add rsp, 8
@@ -2138,7 +2141,10 @@ FN tabs_draw
     mov edx, [rsp + 16]
     mov ecx, [rsp + 12]
     COLOR r8d, T_TAB_ACTIVE
-    call gfx_fill
+    cmp dword ptr [rip + g_win_focused], 0
+    jne 62f
+    COLOR r8d, T_TAB_ACTIVE_UNFOCUSED
+62: call gfx_fill
     mov edi, r12d
     mov esi, [rsp + 4]
     mov edx, [rsp + 16]
@@ -2178,10 +2184,10 @@ FN tabs_draw
 80: mov r9d, eax
     test eax, eax
     jnz 81f
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     cmp rbx, [rip + g_tab_cur]
     jne 81f
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
 81: lea rdi, [rip + g_face_ui]
     mov esi, r12d
     add esi, [rip + g_mt + 4*MI_16]
@@ -2232,10 +2238,10 @@ FN tabs_draw
     mov edx, ecx
     mov r8d, ecx
     shr r8d, 1
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
     cmp rbx, [rip + g_tab_cur]
     je 821f
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
 821:call gfx_round_rect
     jmp .Ltd_next
 83: cmp rbx, [rip + g_tab_cur]
@@ -2257,7 +2263,7 @@ FN tabs_draw
     mov edx, [rsp + 28]
     mov ecx, r13d
     mov r8d, r13d
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_icon_center
     test dword ptr [rsp + 32], UB_CLICK
     jz .Ltd_next
@@ -2382,7 +2388,7 @@ FN statusbar_draw
     mov ecx, [rsp + 12]
     mov r8, [rip + tmp_sb + SB_ptr]
     mov r9, [rip + tmp_sb + SB_len]
-    COLOR eax, T_MUTED
+    COLOR eax, T_UI_MUTED
     push rax
     push rax
     call ui_text_v
@@ -2514,7 +2520,7 @@ statusbar_update:
     mov edx, [rsp + 16 + 4]
     mov ecx, [rsp + 16 + 12]
     mov r8, r13
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     sub r12d, [rip + g_mt + 4*MI_20]
     pop rbx
@@ -2679,7 +2685,7 @@ FN welcome_draw
     mov edx, r12d
     mov ecx, r14d
     mov r8, r13
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
     call ui_text_c
     test dword ptr [rsp + 40], UB_CLICK
     jz 3f
@@ -2765,7 +2771,7 @@ FN dialog_draw
 2:  mov eax, r12d
     sub eax, [rip + g_mt + 4*MI_40]
     push rax
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     lea rdi, [rip + g_face_ui]
     mov esi, r14d
@@ -2788,7 +2794,7 @@ FN dialog_draw
     mov eax, r12d
     sub eax, [rip + g_mt + 4*MI_40]
     push rax
-    COLOR eax, T_MUTED
+    COLOR eax, T_UI_MUTED
     push rax
     lea rdi, [rip + g_face_small]
     mov esi, r14d
@@ -2867,7 +2873,7 @@ FN dialog_draw
     push rax
     call gfx_frame
     add rsp, 16
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     cmp dword ptr [rsp + 8], 2
     jne 3f
     COLOR eax, T_ACCENT_FG
@@ -2996,7 +3002,7 @@ toast_draw:
     mov ecx, r12d
     mov r8d, ebx
     lea r9, [rip + g_toast]
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     push rax
     call ui_text_center

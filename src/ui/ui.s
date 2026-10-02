@@ -432,9 +432,16 @@ FN ui_icon_center
     pop rbx
     ret
 
-# ui_icon_btn(id, x, y, w, h, icon) -> UB bits ; hover background + muted icon
+# ui_icon_btn(id, x, y, w, h, icon) -> UB bits ; hover background + muted icon, on the interface
 FN ui_icon_btn
+    COLOR eax, T_UI_MUTED
+    jmp icon_btn
+# ui_icon_btn_bg(id, x, y, w, h, icon) -> UB bits ; the same on the editor background (the terminal's header)
+FN ui_icon_btn_bg
+    COLOR eax, T_MUTED
+icon_btn:
     PROLOGUE 32
+    mov [rsp + 8], eax          # idle icon color
     mov [rsp], edi
     mov r12d, esi
     mov r13d, edx
@@ -457,10 +464,10 @@ FN ui_icon_btn
     mov edx, r13d
     mov ecx, r14d
     mov r8d, r15d
-    COLOR r9d, T_MUTED
+    mov r9d, [rsp + 8]
     test dword ptr [rsp + 4], UB_HOVER
     jz 2f
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
 2:  call ui_icon_center
     mov eax, [rsp + 4]
     EPILOGUE
@@ -1136,7 +1143,7 @@ FN ui_textfield
     mov edx, [rsp + 4]
     mov ecx, [rsp + 12]
     mov r8, [rsp + 24]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     jmp 7f
 6:  # selection
@@ -1170,7 +1177,7 @@ FN ui_textfield
     mov ecx, [rsp + 12]
     mov r8, r14
     mov r9, r15
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     push rax
     call ui_text_v
@@ -1564,7 +1571,7 @@ FN ui_textarea
     mov esi, [rsp + 36]
     mov edx, [rsp + 40]
     mov ecx, [rsp + 32]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     jmp .Lta_caret
 6:  mov rdi, rbx
@@ -1632,7 +1639,7 @@ FN ui_textarea
     mov edx, [rsp + 76]
     mov ecx, [rsp + 32]
     lea r8, [r14 + r12]
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     push rax
     call ui_text_v

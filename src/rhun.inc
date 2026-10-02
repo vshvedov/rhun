@@ -433,7 +433,11 @@ ENDSTRUCT INI_SIZE
 .equ T_GIT_ADD, T_TERM + 16
 .equ T_GIT_MOD, T_TERM + 17
 .equ T_GIT_DEL, T_TERM + 18
-.equ T_COUNT, T_TERM + 19
+.equ T_UI_FG, T_TERM + 19       # text on the interface: bars, tabs, panels, menus, fields
+.equ T_UI_MUTED, T_TERM + 20
+.equ T_TITLEBAR_UNFOCUSED, T_TERM + 21
+.equ T_TAB_ACTIVE_UNFOCUSED, T_TERM + 22
+.equ T_COUNT, T_TERM + 23
 
 .macro COLOR reg, slot
     mov \reg, [rip + g_theme + 4*(\slot)]

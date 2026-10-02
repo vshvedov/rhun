@@ -1,0 +1,13 @@
+# a user theme for tests/theme_test: a light interface around a dark editor; ui_muted, hover
+# and panel_fg follow ui_fg, tab_active_unfocused copies tab_active
+name = UI Chrome
+kind = dark
+
+bg                 = #000040
+fg                 = #d7d6d2
+panel              = #959ebd
+tab_active         = #b0b9d6
+popup              = #b0b9d6
+input              = #c2c8e0
+ui_fg              = #000000
+titlebar_unfocused = #7f88a6

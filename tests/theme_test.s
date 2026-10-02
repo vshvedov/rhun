@@ -1,4 +1,4 @@
-# loads every built-in theme and prints a few derived slots
+# loads every built-in theme, then the user themes (tests/data/config), and prints a few derived slots
 .include "rhun.inc"
 .bss
 .p2align 3
@@ -63,4 +63,6 @@ FN main
     EPILOGUE
 .section .rodata
 .p2align 2
-slots: .long T_BG, T_FG, T_PANEL, T_SELECTION, T_SYN + C_KEYWORD, T_SYN + C_STRING, T_SYN + C_COMMENT, -1
+slots: .long T_BG, T_FG, T_PANEL, T_SELECTION, T_SYN + C_KEYWORD, T_SYN + C_STRING, T_SYN + C_COMMENT
+    .long T_MUTED, T_HOVER, T_PANEL_FG, T_TITLEBAR, T_TAB_ACTIVE
+    .long T_UI_FG, T_UI_MUTED, T_TITLEBAR_UNFOCUSED, T_TAB_ACTIVE_UNFOCUSED, -1

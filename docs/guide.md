@@ -289,6 +289,8 @@ string = #a6e3a1
 
 Under `[terminal]` a theme can set the 16 terminal colors, `black` to `bright_white`; the ones not given come from the theme's other colors. `git_added`, `git_modified` and `git_deleted` color changes in the gutter, tabs, explorer and diffs.
 
+Text on the title bar, tabs, status bar, panels, menus and fields is `ui_fg` and `ui_muted`, which default to `fg` and `muted`; set them for an interface lighter or darker than the editor, and give `panel`, `tab_active`, `popup` and `input` too, as these otherwise follow `bg`. `titlebar_unfocused` and `tab_active_unfocused` color the title bar and the active tab while the window is in the background.
+
 On Omarchy the theme list starts with Follow Omarchy (`theme = omarchy`): rhun uses the theme Omarchy has set and switches with it. It is the default there until you pick another theme. For an Omarchy theme rhun has no match for, add a rhun theme with the same name; otherwise rhun's own dark or light theme is used.
 
 ### Languages
@@ -339,7 +341,7 @@ shot /tmp/rhun.ppm
 print-state
 ```
 
-Commands: `key`, `type`, `click x y [right|middle]`, `move`, `down`, `up`, `scroll dy [ctrl]`, `open`, `cmd`, `shot`, `wait`, `wait-git`, `wait-update`, `resize`, `print-doc`, `print-state`, `print-project`, `print-palette`, `print-menu`, `print-term`, `print-git`, `print-gitlog`, `print-scm`, `print-update`, `print-frames`, `echo`, `quit`. `cmd` runs anything from the command palette by its snake case name.
+Commands: `key`, `type`, `click x y [right|middle]`, `move`, `down`, `up`, `scroll dy [ctrl]`, `open`, `cmd`, `shot`, `wait`, `wait-git`, `wait-update`, `resize`, `focus 0|1`, `print-doc`, `print-state`, `print-project`, `print-palette`, `print-menu`, `print-term`, `print-git`, `print-gitlog`, `print-scm`, `print-update`, `print-frames`, `echo`, `quit`. `cmd` runs anything from the command palette by its snake case name.
 
 ## Extensions (planned)
 

@@ -318,7 +318,10 @@ FN settings_draw
     M r8d, MI_28
     lea r9, [rip + .Lopen_file]
     COLOR eax, T_FG
-    push rax
+    test dword ptr [rsp + 32], UB_HOVER
+    jz 21f
+    COLOR eax, T_UI_FG
+21: push rax
     push rax
     call ui_text_center
     add rsp, 16
@@ -391,7 +394,7 @@ FN settings_draw
     add edx, [rip + g_mt + 4*MI_10]
     M ecx, MI_24
     mov r8, [rbx + SET_label]
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
     call ui_text_c
     # the description stops short of the control
     mov rdi, rbx
@@ -410,7 +413,7 @@ FN settings_draw
     add edx, [rip + g_mt + 4*MI_32]
     M ecx, MI_20
     mov r8, [rbx + SET_desc]
-    COLOR r10d, T_MUTED
+    COLOR r10d, T_UI_MUTED
     mov r11d, [rsp + 36]
     push r11
     push r10
@@ -482,7 +485,7 @@ FN settings_draw
     mov ecx, [rsp + 44]
     M r8d, MI_32
     mov r9, [rsp + 64]
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     push rax
     call ui_text_center
@@ -562,12 +565,12 @@ FN settings_draw
     sub ecx, [rip + g_mt + 4*MI_4]
     M r8d, MI_RADIUS
     call gfx_round_rect
-6:  COLOR eax, T_MUTED
+6:  COLOR eax, T_UI_MUTED
     mov rcx, [rbx + SET_ptr]
     mov ecx, [rcx]
     cmp ecx, [rsp + 72]
     jne 7f
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
 7:  lea rdi, [rip + g_face_ui]
     mov esi, [rsp + 76]
     mov edx, [rsp + 60]
@@ -654,7 +657,7 @@ FN settings_draw
     M ecx, MI_64
     mov r8d, [rsp + 44]
     lea r9, [rip + buf]
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     push rax
     push rax
     call ui_text_center
@@ -746,7 +749,7 @@ FN settings_draw
     mov edx, [rsp + 60]
     M ecx, MI_32
     mov r8, [rsp + 64]
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
     call ui_text_c
     mov edi, IC_CHEV_DN2
     mov esi, [rsp + 52]
@@ -755,7 +758,7 @@ FN settings_draw
     mov edx, [rsp + 60]
     M ecx, MI_32
     mov r8d, ecx
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_icon_center
     test dword ptr [rsp + 32], UB_CLICK
     jz .Lsd_next
@@ -808,12 +811,12 @@ FN settings_draw
     mov edx, [rsp + 60]
     M ecx, MI_32
     mov r8, [rsp + 64]
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     test r9, r9
     jnz 62f
     lea r8, [rip + .Lbuiltin]
     mov r9d, 8
-    COLOR eax, T_MUTED
+    COLOR eax, T_UI_MUTED
 62: mov r11d, [rsp + 44]
     sub r11d, [rip + g_mt + 4*MI_20]
     push r11

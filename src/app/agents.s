@@ -1737,7 +1737,7 @@ list_draw:
     mov edx, [rsp + 4]
     mov ecx, r15d
     lea r8, [rip + .Lheader]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
     M r12d, MI_28
     mov edi, ID_AG_REFRESH
@@ -1768,7 +1768,7 @@ list_draw:
     cmp qword ptr [rip + g_project], 0
     jne 11f
     lea r8, [rip + .Lnoproj]
-11: COLOR r9d, T_MUTED
+11: COLOR r9d, T_UI_MUTED
     call ui_text_c
     jmp .Lld_ret
 2:  mov eax, [rsp + 4]
@@ -1879,7 +1879,7 @@ list_draw:
     add edx, [rip + g_mt + 4*MI_6]
     M ecx, MI_24
     mov r8, [rsp + 32]
-    COLOR r10d, T_FG
+    COLOR r10d, T_UI_FG
     mov r11d, [rsp + 8]
     sub r11d, [rip + g_mt + 4*MI_48]
     push r11
@@ -1918,7 +1918,7 @@ list_draw:
     M ecx, MI_20
     mov r8, [rip + tmp + SB_ptr]
     mov r9, [rip + tmp + SB_len]
-    COLOR eax, T_MUTED
+    COLOR eax, T_UI_MUTED
     push rax
     push rax
     call ui_text_v
@@ -1979,7 +1979,7 @@ thread_draw:
     mov edx, [rsp + 4]
     mov ecx, r15d
     mov r8, [rsp + 16]
-    COLOR r10d, T_FG
+    COLOR r10d, T_UI_FG
     mov r11d, [rsp + 8]
     sub r11d, [rip + g_mt + 4*MI_64]
     push r11
@@ -2082,7 +2082,7 @@ thread_draw:
     add edx, [rip + g_mt + 4*MI_8]
     M ecx, MI_24
     lea r8, [rip + .Lempty_thread]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     call ui_text_c
 65: # messages
     mov r13d, [rsp + 20]
@@ -2203,7 +2203,7 @@ draw_msg:
     COLOR r9d, T_HOVER
     call gfx_round_rect
     lea r8, [rip + .Lyou]
-    COLOR r9d, T_MUTED
+    COLOR r9d, T_UI_MUTED
     jmp 2f
 1:  lea r8, [rip + .Lagent]
     COLOR r9d, T_ACCENT
@@ -2224,7 +2224,7 @@ draw_msg:
     mov eax, r12d
     add eax, [rip + g_mt + 4*MI_28]
     mov [rsp + WR_y], eax
-    COLOR eax, T_FG
+    COLOR eax, T_UI_FG
     mov [rsp + WR_color], eax
     mov dword ptr [rsp + WR_draw], 1
     mov eax, [rip + g_cv + CV_cy0]
@@ -2242,7 +2242,7 @@ draw_msg:
     sub edx, ecx
     sar edx, 1
     add edx, r12d
-    COLOR r8d, T_MUTED
+    COLOR r8d, T_UI_MUTED
     call icon_draw
     mov r8, [rbx + AM_name]
     test r8, r8
@@ -2252,7 +2252,7 @@ draw_msg:
     add esi, [rip + g_mt + 4*MI_24]
     mov edx, r12d
     mov ecx, r13d
-    COLOR r9d, T_FG
+    COLOR r9d, T_UI_FG
     call ui_text_c
     mov [rsp + 96], eax
     jmp 4f
@@ -2278,7 +2278,7 @@ draw_msg:
     mov edx, r12d
     mov ecx, r13d
     mov r8, [rbx + AM_text]
-    COLOR r10d, T_MUTED
+    COLOR r10d, T_UI_MUTED
     mov r11d, [r14]
     add r11d, [r14 + 8]
     sub r11d, esi

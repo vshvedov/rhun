@@ -378,7 +378,7 @@ start:
     mov [rsp + 24], rax
     lea rax, [rip + .Ltext]
     mov [rsp + 32], rax
-    lea rax, [rip + .Lcommand]
+    lea rax, [rip + windows_helper_flag]
     mov [rsp + 40], rax
     lea rax, [rip + commit_ai_script]
     mov [rsp + 48], rax
@@ -672,7 +672,6 @@ describe:
 .Ltext: .asciz "Text"
 .Lnoprofile: .asciz "-NoProfile"
 .Lnoninteractive: .asciz "-NonInteractive"
-.Lcommand: .asciz "-EncodedCommand"
 .else
 .Lshell: .asciz "/bin/sh"
 .Lcommand: .asciz "-c"

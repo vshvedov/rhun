@@ -70,7 +70,7 @@ FN win_update_command
     mov [rbx + 24], rax
     lea rax, [rip + .Ltext]
     mov [rbx + 32], rax
-    lea rax, [rip + .Lencoded]
+    lea rax, [rip + windows_helper_flag]
     mov [rbx + 40], rax
     lea rax, [rip + windows_update_script]
     mov [rbx + 48], rax
@@ -153,7 +153,6 @@ FN win_update_error
 .Lnoninteractive: .asciz "-NonInteractive"
 .Loutputformat: .asciz "-OutputFormat"
 .Ltext: .asciz "Text"
-.Lencoded: .asciz "-EncodedCommand"
 .Laction: .asciz "RHUN_UP_ACTION="
 .Lversion: .asciz "RHUN_UP_VERSION="
 .Lexe: .asciz "RHUN_UP_EXE="

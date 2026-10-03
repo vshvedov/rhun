@@ -3,6 +3,8 @@
 *.inc text eol=lf
 *.sh text eol=lf
 *.py text eol=lf
+*.ps1 text eol=lf
+*.manifest text eol=lf
 *.rsc text eol=lf
 *.expected text eol=lf
 *.syn text eol=lf

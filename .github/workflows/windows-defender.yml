@@ -1,0 +1,92 @@
+name: windows-defender
+
+on:
+  push:
+    branches: ['feat/windows-defender*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    runs-on: windows-2022
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        helper: [official, encoded, no-ai, no-updater, none, plain]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache/restore@v4
+        with:
+          path: build/llvm
+          key: llvm-windows-x64-23.1.2
+      - name: LLVM
+        shell: pwsh
+        timeout-minutes: 20
+        run: tools/setup-windows-llvm.ps1
+      - name: Diagnostic build
+        env:
+          RHUN_DIST: '1'
+        run: python tools/build-windows.py test --helper-mode ${{ matrix.helper == 'official' && 'encoded' || matrix.helper }}
+      - name: Original release
+        if: matrix.helper == 'official'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force build/windows | Out-Null
+          gh release download v0.16.6 --repo vshvedov/rhun --pattern rhun-0.16.6-windows-x86_64.zip --dir build/windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $archive = 'build/windows/rhun-0.16.6-windows-x86_64.zip'
+          if ((Get-FileHash $archive -Algorithm SHA256).Hash -ine 'ca772914f7116fb4f6b469b301559616c6aa204aab656d00bab349d0949d4c5c') { throw 'Official ZIP hash mismatch.' }
+          Expand-Archive -LiteralPath $archive -DestinationPath build/original
+          Copy-Item build/original/rhun-0.16.6/rhun.exe,build/original/rhun-0.16.6/rhun.com build/windows
+      - name: Package
+        if: matrix.helper != 'official'
+        run: python tools/package-windows.py
+      - name: Compare repeat build
+        if: matrix.helper != 'official'
+        shell: pwsh
+        env:
+          RHUN_DIST: '1'
+        run: |
+          $hashes = Get-FileHash build/windows/rhun.exe,build/windows/rhun.com -Algorithm SHA256
+          python tools/build-windows.py test --helper-mode ${{ matrix.helper }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($file in $hashes) {
+            if ((Get-FileHash $file.Path -Algorithm SHA256).Hash -ne $file.Hash) { throw "Build is not reproducible: $($file.Path)" }
+          }
+      - name: Defender comparison
+        shell: pwsh
+        timeout-minutes: 10
+        run: |
+          tests/windows-defender.ps1
+          $archive = (Get-ChildItem build/windows/rhun-*-windows-x86_64.zip).FullName
+          tools/scan-windows.ps1 -Path @('build/windows/rhun.exe', 'build/windows/rhun.com', $archive) -ConfigureRunner -ReportOnly
+      - name: Helper runtime regression tests
+        id: runtime
+        continue-on-error: true
+        if: matrix.helper == 'plain' || matrix.helper == 'encoded' || matrix.helper == 'official'
+        run: python tests/windows.py
+      - name: Defender runtime evidence
+        if: always()
+        shell: pwsh
+        env:
+          RUNTIME_TEST_OUTCOME: ${{ steps.runtime.outcome }}
+        run: |
+          New-Item -ItemType Directory -Force build/defender | Out-Null
+          @{outcome=$env:RUNTIME_TEST_OUTCOME} | ConvertTo-Json | Set-Content build/defender/runtime-tests.json
+          Get-MpThreat | Select-Object ThreatID, ThreatName, IsActive | ConvertTo-Json -Depth 5 | Set-Content build/defender/threats.json
+          Get-MpThreatDetection | Select-Object InitialDetectionTime, LastThreatStatusChangeTime, ThreatID, Resources, ProcessName, ActionSuccess | ConvertTo-Json -Depth 5 | Set-Content build/defender/runtime-detections.json
+          Get-WinEvent -FilterHashtable @{LogName='Microsoft-Windows-Windows Defender/Operational'; StartTime=(Get-Date).AddHours(-1); Id=1116,1117,1121,1122} -ErrorAction SilentlyContinue | Select-Object TimeCreated, Id, Message | ConvertTo-Json -Depth 5 | Set-Content build/defender/runtime-events.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: defender-${{ matrix.helper }}
+          path: build/defender
+          if-no-files-found: error

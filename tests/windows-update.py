@@ -162,10 +162,12 @@ with tempfile.TemporaryDirectory(prefix='rhun-update-') as temporary:
         assert reported == ('rhun ' + LATEST).encode(), reported
         assert personal.read_bytes() == b'keep this'
         assert not (portable / '.rhun-install').exists(), 'portable update registered an installation'
+        # Defender can delay the restarted process. An empty lookup must remain
+        # a polling result rather than Get-Process -Name's terminating exit code.
         deadline = time.monotonic() + 20
         while time.monotonic() < deadline:
             ids = subprocess.check_output(['powershell.exe', '-NoProfile', '-Command',
-                "Get-Process -Name rhun -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $env:TEST_EXE } | Select-Object -ExpandProperty Id"],
+                "Get-Process -ErrorAction Stop | Where-Object { $_.Name -eq 'rhun' -and $_.Path -eq $env:TEST_EXE } | Select-Object -ExpandProperty Id"],
                 env=dict(os.environ, TEST_EXE=str(portable / 'rhun.exe'))).split()
             if ids:
                 break

@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +32,16 @@ class SidebarSplit(unittest.TestCase):
                         XDG_STATE_HOME=(self.work / 'state').as_posix())
 
     def tearDown(self):
-        self.tmp.cleanup()
+        # Windows releases a child's handle on the project dir a beat after the
+        # process exits; retry instead of erroring out of cleanup (WinError 32)
+        for attempt in range(25):
+            try:
+                self.tmp.cleanup()
+                return
+            except PermissionError:
+                if attempt == 24:
+                    raise
+                time.sleep(0.2)
 
     def run_editor(self, actions, agents=False, autohide=True):
         self.config.write_text('[ui]\nsidebar = true\nsidebar_width = 240\nagents_panel = %s\n'

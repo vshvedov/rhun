@@ -4,7 +4,7 @@
 .bss
 .p2align 3
 .globl g_mt, g_s, g_mx, g_my, g_mdown, g_pressed, g_released, g_scroll_x, g_scroll_y
-.globl g_hot, g_active, g_cursor, g_block, g_clicks, g_face_ui, g_face_small, g_face_big, g_face_code
+.globl g_hot, g_active, g_cursor, g_block, g_clicks, g_press_x, g_face_ui, g_face_small, g_face_big, g_face_code
 .globl g_hole
 g_mt: .zero 4 * MI_COUNT
 g_s: .long 0                    # float scale
@@ -209,14 +209,14 @@ FN ui_input_button
     cdq
     xor eax, edx
     sub eax, edx
-    cmp eax, [rip + g_mt + 4*MI_4]
+    cmp eax, [rip + g_mt + 4*MI_8]
     jg 1f
     mov eax, [rip + g_my]
     sub eax, [rip + last_press_y]
     cdq
     xor eax, edx
     sub eax, edx
-    cmp eax, [rip + g_mt + 4*MI_4]
+    cmp eax, [rip + g_mt + 4*MI_8]
     jg 1f
     mov eax, [rip + g_clicks]
     inc eax

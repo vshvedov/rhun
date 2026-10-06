@@ -80,7 +80,7 @@ pm_items: .zero 16 * 13         # the project menu: 2 commands, a line, 9 folder
 .globl g_shot_path
 g_shot_path: .quad 0
 tmp_sb: .zero SB_SIZE
-split_drag: .long 0
+split_drag: .long 0               # 1 once the press has moved past the dead zone (splitter)
 split_l_bits: .long 0           # UB_* of the dividers, hit tested before the panels
 split_r_bits: .long 0
 .globl g_editor_rect
@@ -1725,6 +1725,7 @@ FN app_render
     mov edi, [rsp]
     sub edi, [rip + g_agents_px]
     mov [rsp + 32], edi
+    mov edi, [rsp + 32]
     mov esi, [rsp + 20]
     mov edx, [rip + g_agents_px]
     mov ecx, [rsp + 24]
@@ -1953,9 +1954,34 @@ splitter:
     COLOR r9d, T_ACCENT
     call gfx_round_rect
     mov eax, [rsp]
-1:  test eax, UB_HELD
+1:  test eax, UB_DOUBLE       # double-click snaps the panel back to its default width
+    jz 4f
+    mov ecx, 240
+    lea rdx, [rip + cfg_sidebar_w]
+    cmp ebx, ID_SPLIT_L
+    je 41f
+    mov ecx, 380
+    lea rdx, [rip + cfg_agents_w]
+41: mov [rdx], ecx
+    mov dword ptr [rip + g_dirty], 1
+    mov dword ptr [rip + g_settings_changed], 1
+    jmp 9f                      # this press resets; it must not also drag it back
+4:  test eax, UB_HELD
     jz 9f
-    # new width in logical points
+    test eax, UB_PRESS
+    jz 5f
+    mov dword ptr [rip + split_drag], 0     # fresh press: wait for real motion
+5:  cmp dword ptr [rip + split_drag], 0
+    jne 6f
+    mov ecx, [rip + g_mx]
+    sub ecx, [rip + g_press_x]
+    mov edx, ecx
+    neg edx
+    cmovs edx, ecx
+    cmp edx, [rip + g_mt + 4*MI_4]
+    jle 9f                                  # parked in the dead zone: the strip must not chase a press or its jitter
+    mov dword ptr [rip + split_drag], 1
+6:  # new width in logical points
     mov eax, [rip + g_mx]
     cmp ebx, ID_SPLIT_L
     jne 2f

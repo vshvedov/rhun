@@ -4,14 +4,26 @@
 
 .bss
 .p2align 3
-.globl g_theme, g_theme_dark, g_themes, g_theme_cur
+.globl g_theme, g_theme_dark, g_themes, g_theme_cur, g_system_dark
 g_theme: .zero 4 * T_COUNT
 g_theme_dark: .long 0
 .p2align 3
+auto_checked_at: .quad 0
+linux_pref_pid: .quad 0
+linux_pref_fd: .long 0
+linux_pref_known: .long 0
+linux_pref_checked_at: .quad 0
+linux_pref_output: .zero 64
 defined: .zero 16                # bit per slot given by the theme
 g_themes: .zero VEC_SIZE
 g_theme_cur: .quad 0            # index into g_themes
 it: .zero INI_SIZE
+
+.data
+.p2align 2
+g_system_dark: .long 1         # last system appearance, used by Theme mode = System
+.p2align 3
+.Lgsettings_argv: .quad .Lgsettings, .Lget, .Lschema, .Lkey, 0
 
 .text
 
@@ -430,6 +442,255 @@ FN theme_apply
     pop rbx
     ret
 
+# theme_migrate_legacy(): move the old [ui] theme value into its matching light/dark setting
+FN theme_migrate_legacy
+    PROLOGUE
+    mov rbx, [rip + cfg_theme]
+    lea rax, [rip + cfg_def_theme]
+    cmp rbx, rax
+    je 8f
+    cmp dword ptr [rip + cfg_theme_seen], 0
+    jne 7f                       # new theme settings take precedence
+    mov rdi, rbx
+    call theme_find
+    test rax, rax
+    js 7f
+    mov rdi, rax
+    call theme_entry
+    cmp dword ptr [rax + TH_dark], 0
+    je 1f
+    mov rax, [rax + TH_id]
+    mov [rip + cfg_dark_theme], rax
+    mov dword ptr [rip + cfg_theme_mode], 1
+    jmp 7f
+1:  mov rax, [rax + TH_id]
+    mov [rip + cfg_light_theme], rax
+    mov dword ptr [rip + cfg_theme_mode], 0
+7:  # release the legacy string and restore its default pointer
+    mov rdi, [rip + cfg_owned_strings]
+    call mem_free
+    mov qword ptr [rip + cfg_owned_strings], 0
+    lea rax, [rip + cfg_def_theme]
+    mov [rip + cfg_theme], rax
+8:  EPILOGUE
+
+# theme_apply_preference(): apply the selected light/dark theme
+FN theme_apply_preference
+    PROLOGUE
+    mov eax, [rip + cfg_theme_mode]
+    cmp eax, 2
+    jne 1f
+    call system_appearance_dark
+    mov [rip + g_system_dark], eax
+    test eax, eax
+    jz 2f
+    mov rdi, [rip + cfg_dark_theme]
+    jmp 3f
+1:  test eax, eax
+    jz 2f
+    mov rdi, [rip + cfg_dark_theme]
+    jmp 3f
+2:  mov rdi, [rip + cfg_light_theme]
+3:  call theme_find
+    test rax, rax
+    jns 4f
+    cmp dword ptr [rip + cfg_theme_mode], 0
+    je 31f
+    cmp dword ptr [rip + cfg_theme_mode], 2
+    jne 32f
+    cmp dword ptr [rip + g_system_dark], 0
+    jne 32f
+31: lea rdi, [rip + cfg_def_light_theme]
+    jmp 33f
+32: lea rdi, [rip + cfg_def_dark_theme]
+33: call theme_find
+4:  mov rdi, rax
+    call theme_apply
+    EPILOGUE
+
+# theme_auto_tick(): update a System theme when the OS appearance changes
+FN theme_auto_tick
+    PROLOGUE
+    cmp dword ptr [rip + cfg_theme_mode], 2
+    jne 9f
+    call time_ms
+    mov rbx, rax
+    sub rax, [rip + auto_checked_at]
+    cmp rax, 1000
+    jb 9f
+    mov [rip + auto_checked_at], rbx
+    call system_appearance_dark
+    cmp eax, [rip + g_system_dark]
+    je 9f
+    mov [rip + g_system_dark], eax
+    call theme_apply_preference
+9:  EPILOGUE
+
+# system_appearance_dark() -> 1 for dark, 0 for light
+FN system_appearance_dark
+    PROLOGUE
+.ifdef MACOS
+    call mac_system_appearance_dark
+    EPILOGUE
+.else
+.ifdef WINDOWS
+    call win_system_appearance_dark
+    EPILOGUE
+.else
+    call linux_system_appearance_dark
+    EPILOGUE
+.endif
+.endif
+
+.ifndef MACOS
+.ifndef WINDOWS
+# Query GNOME's color-scheme setting without blocking the editor loop.
+FN linux_system_appearance_dark
+    PROLOGUE 16
+    # GTK_THEME is an explicit override, so it takes priority over desktop settings.
+    lea rdi, [rip + .Lgtk_theme]
+    call getenv
+    test rax, rax
+    jz .Llsad_check_query
+    mov rdi, rax
+    call strlen
+    test rax, rax
+    jz .Llsad_check_query
+    mov rsi, rax
+    lea rdx, [rip + .Ldark_word]
+    mov ecx, 4
+    call str_ifind
+    test rax, rax
+    jns .Llsad_env_dark
+    xor eax, eax
+    jmp .Llsad_ret
+.Llsad_env_dark:
+    mov eax, 1
+    jmp .Llsad_ret
+.Llsad_check_query:
+    mov rdi, [rip + linux_pref_pid]
+    test rdi, rdi
+    jz .Llsad_start
+    mov esi, 1
+    call proc_wait
+    cmp eax, -1
+    je .Llsad_fallback
+    # The query exited. Read its small result, then close the pipe.
+    mov edi, [rip + linux_pref_fd]
+    lea rsi, [rip + linux_pref_output]
+    mov edx, 63
+    SYS SYS_read
+    test rax, rax
+    jle .Llsad_close
+    lea rdi, [rip + linux_pref_output]
+    mov byte ptr [rdi + rax], 0
+    mov r12, rax
+    lea rdi, [rip + linux_pref_output]
+    mov esi, r12d
+    lea rdx, [rip + .Lprefer_dark]
+    mov ecx, 11
+    call str_find
+    test rax, rax
+    jns .Llsad_dark
+    lea rdi, [rip + linux_pref_output]
+    mov esi, r12d
+    lea rdx, [rip + .Lprefer_light]
+    mov ecx, 12
+    call str_find
+    test rax, rax
+    jns .Llsad_light
+    lea rdi, [rip + linux_pref_output]
+    mov esi, r12d
+    lea rdx, [rip + .Ldefault_word]
+    mov ecx, 7
+    call str_find
+    test rax, rax
+    jns .Llsad_light
+    jmp .Llsad_close
+.Llsad_dark:
+    mov dword ptr [rip + linux_pref_known], 1
+    mov eax, 1
+    jmp .Llsad_close_return
+.Llsad_light:
+    mov dword ptr [rip + linux_pref_known], 1
+    xor eax, eax
+    jmp .Llsad_close_return
+.Llsad_close:
+    mov eax, [rip + g_system_dark]
+.Llsad_close_return:
+    mov dword ptr [rip + linux_pref_pid], 0
+    mov edi, [rip + linux_pref_fd]
+    SYS SYS_close
+    mov dword ptr [rip + linux_pref_fd], 0
+    cmp dword ptr [rip + linux_pref_known], 0
+    jne .Llsad_ret
+    jmp .Llsad_fallback
+.Llsad_start:
+    cmp dword ptr [rip + linux_pref_known], -1
+    je .Llsad_fallback
+    call time_ms
+    sub rax, [rip + linux_pref_checked_at]
+    cmp rax, 5000
+    jb .Llsad_fallback
+    lea rdi, [rip + .Lgsettings]
+    call proc_which
+    test rax, rax
+    jnz 1f
+    mov dword ptr [rip + linux_pref_known], -1
+    jmp .Llsad_fallback
+1:  mov r12, rax
+    mov [rip + .Lgsettings_argv], rax
+    lea rdi, [rip + .Lgsettings_argv]
+    mov rsi, [rip + g_envp]
+    xor edx, edx
+    call run_piped
+    mov r13, rax
+    mov r14d, edx
+    lea rax, [rip + .Lgsettings]
+    mov [rip + .Lgsettings_argv], rax
+    mov rdi, r12
+    call mem_free
+    test r13, r13
+    js .Llsad_fallback
+    mov [rip + linux_pref_pid], r13
+    mov [rip + linux_pref_fd], r14d
+    call time_ms
+    mov [rip + linux_pref_checked_at], rax
+.Llsad_fallback:
+    cmp dword ptr [rip + linux_pref_known], 1
+    jne 2f
+    mov eax, [rip + g_system_dark]
+    jmp .Llsad_ret
+2:  # COLORFGBG is a common terminal hint: a dark background ends in 0..6.
+    lea rdi, [rip + .Lcolorfgbg]
+    call getenv
+    test rax, rax
+    jz 5f
+    mov rbx, rax
+    mov r12, rax
+6:  cmp byte ptr [rbx], 0
+    je 7f
+    cmp byte ptr [rbx], ';'
+    jne 8f
+    lea r12, [rbx + 1]
+8:  inc rbx
+    jmp 6b
+7:  cmp byte ptr [r12], 0
+    je 5f
+    mov rdi, r12
+    call parse_u64
+    test rdx, rdx
+    jz 5f
+    cmp eax, 7
+    setb al
+    movzx eax, al
+    jmp .Llsad_ret
+5:  mov eax, 1              # use rhun's dark default when no desktop hint exists
+.Llsad_ret:
+    EPILOGUE
+.endif
+.endif
+
 # theme_current_id() -> cstr
 FN theme_current_id
     mov rax, [rip + g_theme_cur]
@@ -448,6 +709,16 @@ FN theme_entry
 .Lkind: .asciz "kind"
 .Lname: .asciz "name"
 .Llight: .asciz "light"
+.Lgtk_theme: .asciz "GTK_THEME"
+.Ldark_word: .asciz "dark"
+.Lcolorfgbg: .asciz "COLORFGBG"
+.Lgsettings: .asciz "gsettings"
+.Lget: .asciz "get"
+.Lschema: .asciz "org.gnome.desktop.interface"
+.Lkey: .asciz "color-scheme"
+.Lprefer_dark: .asciz "prefer-dark"
+.Lprefer_light: .asciz "prefer-light"
+.Ldefault_word: .asciz "default"
 .Lthemes_dir: .asciz "themes"
 .Ltheme_ext: .asciz ".theme"
 .p2align 3

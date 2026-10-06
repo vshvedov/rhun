@@ -95,22 +95,21 @@ FN app_init
     PROLOGUE 16
     call config_load
     call theme_scan
-    # on Omarchy, follow its theme until one is picked
+    call theme_migrate_legacy
+    # on Omarchy, use its theme until a theme setting is configured
     cmp qword ptr [rip + g_follow], 0
     js 2f
-    lea rax, [rip + cfg_def_theme]
-    cmp [rip + cfg_theme], rax
+    cmp dword ptr [rip + cfg_theme_seen], 0
+    jne 2f
+    lea rax, [rip + cfg_def_light_theme]
+    cmp [rip + cfg_light_theme], rax
+    jne 2f
+    lea rax, [rip + cfg_def_dark_theme]
+    cmp [rip + cfg_dark_theme], rax
     jne 2f
     lea rax, [rip + omarchy_id]
-    mov [rip + cfg_theme], rax
-2:  mov rdi, [rip + cfg_theme]
-    call theme_find
-    test rax, rax
-    jns 1f
-    lea rdi, [rip + cfg_def_theme]
-    call theme_find
-1:  mov rdi, rax
-    call theme_apply
+    mov [rip + cfg_dark_theme], rax
+2:  call theme_apply_preference
     call app_load_fonts
     call syntax_load_all
     call keys_init
@@ -1089,6 +1088,7 @@ FN app_toast
 FN app_reload_config
     PROLOGUE
     call config_load
+    call theme_migrate_legacy
     call keys_reload
     call app_apply_settings
     EPILOGUE
@@ -1096,15 +1096,8 @@ FN app_reload_config
 # app_apply_settings(): push current cfg_* values into the running app
 FN app_apply_settings
     PROLOGUE
-    mov rdi, [rip + cfg_theme]
-    call theme_find
-    test rax, rax
-    js 1f
-    cmp rax, [rip + g_theme_cur]
-    je 1f
-    mov rdi, rax
-    call theme_apply
-1:  call git_apply
+    call theme_apply_preference
+    call git_apply
     call ai_apply
     call vim_sync
     call watch_apply_settings
@@ -1581,6 +1574,7 @@ FN app_timeout
 
 FN app_tick
     PROLOGUE
+    call theme_auto_tick
     call watch_tick
     call tip_tick
     call ed_blink_tick

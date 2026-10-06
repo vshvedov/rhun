@@ -62,6 +62,8 @@ results: .zero VEC_SIZE
 strings: .zero SB_SIZE          # label storage for file items
 pal_label: .quad 0              # prompt label
 pal_theme_before: .quad 0
+pal_theme_target: .long 0         # 0 = active theme, 1 = light theme, 2 = dark theme
+pal_theme_preselect: .long 0
 pal_path: .zero 4096
 scan_depth: .long 0
 scan_prefix: .zero 4096         # relative dir during scan
@@ -139,13 +141,13 @@ palette_open:
 
 FN palette_close
     push rbx
-    # themes: Esc restores the previous theme
+    # themes: Esc restores the configured theme, including a changed system appearance
     cmp dword ptr [rip + pal_mode], PM_THEMES
     jne 1f
     mov rdi, [rip + pal_theme_before]
     cmp rdi, [rip + g_theme_cur]
     je 1f
-    call theme_apply
+    call theme_apply_preference
 1:  call grep_release
     mov dword ptr [rip + pal_mode], PM_NONE
     call pal_return_focus
@@ -172,6 +174,14 @@ FN cmd_command_palette
     mov edi, PM_COMMANDS
     jmp palette_open
 FN cmd_select_theme
+    mov dword ptr [rip + pal_theme_target], 0
+    jmp cmd_select_theme_open
+FN cmd_select_light_theme
+    mov dword ptr [rip + pal_theme_target], 1
+    jmp cmd_select_theme_open
+FN cmd_select_dark_theme
+    mov dword ptr [rip + pal_theme_target], 2
+cmd_select_theme_open:
     mov rax, [rip + g_theme_cur]
     mov [rip + pal_theme_before], rax
     mov edi, PM_THEMES
@@ -873,13 +883,33 @@ load_commands:
 
 load_themes:
     PROLOGUE
+    cmp dword ptr [rip + pal_theme_target], 1
+    je 11f
+    cmp dword ptr [rip + pal_theme_target], 2
+    je 12f
+    mov eax, [rip + g_theme_cur]
+    jmp 13f
+11: mov rdi, [rip + cfg_light_theme]
+    call theme_find
+    jmp 13f
+12: mov rdi, [rip + cfg_dark_theme]
+    call theme_find
+13: mov [rip + pal_theme_preselect], eax
     xor ebx, ebx
 1:  cmp rbx, [rip + g_themes + VEC_len]
     jae 9f
     mov rdi, rbx
     call theme_entry
     mov r12, rax
-    lea r13, [rip + .Ldark]
+    cmp dword ptr [rip + pal_theme_target], 1
+    jne 14f
+    cmp dword ptr [r12 + TH_dark], 0
+    jne 7f
+14: cmp dword ptr [rip + pal_theme_target], 2
+    jne 15f
+    cmp dword ptr [r12 + TH_dark], 0
+    je 7f
+15: lea r13, [rip + .Ldark]
     cmp dword ptr [r12 + TH_dark], 0
     jne 2f
     lea r13, [rip + .Llight]
@@ -896,13 +926,16 @@ load_themes:
     mov rsi, rax
     mov rdx, r13
     mov rcx, rbx
-    call item_add
+    mov eax, [rip + items + VEC_len]
+    cmp ebx, [rip + pal_theme_preselect]
+    jne 16f
+    mov [rip + pal_sel], eax
+16: call item_add
     inc rbx
     jmp 1b
-9:  # preselect the current theme
-    mov rax, [rip + g_theme_cur]
-    mov [rip + pal_sel], eax
-    EPILOGUE
+7:  inc rbx
+    jmp 1b
+9:  EPILOGUE
 
 load_langs:
     PROLOGUE
@@ -1920,11 +1953,32 @@ palette_accept:
     jmp .Lpa_ret
 2:  cmp ebx, PM_THEMES
     jne 3f
-    mov rdi, [r12 + IT_data]
+    mov r13, [r12 + IT_data]
+    mov rdi, r13
     call theme_apply
-    call theme_current_id
-    mov [rip + cfg_theme], rax
-    mov dword ptr [rip + g_settings_changed], 1
+    mov rdi, r13
+    call theme_entry
+    cmp dword ptr [rip + pal_theme_target], 1
+    je 21f
+    cmp dword ptr [rip + pal_theme_target], 2
+    je 22f
+    cmp dword ptr [rax + TH_dark], 0
+    je 23f
+    mov rcx, [rax + TH_id]
+    mov [rip + cfg_dark_theme], rcx
+    mov dword ptr [rip + cfg_theme_mode], 1
+    jmp 24f
+23: mov rcx, [rax + TH_id]
+    mov [rip + cfg_light_theme], rcx
+    mov dword ptr [rip + cfg_theme_mode], 0
+    jmp 24f
+21: mov rcx, [rax + TH_id]
+    mov [rip + cfg_light_theme], rcx
+    jmp 24f
+22: mov rcx, [rax + TH_id]
+    mov [rip + cfg_dark_theme], rcx
+24: mov dword ptr [rip + g_settings_changed], 1
+    call theme_apply_preference
     mov rax, [rip + g_theme_cur]
     mov [rip + pal_theme_before], rax
     jmp .Lpa_close

@@ -47,6 +47,7 @@ STRINGS = {
     ('terminal', 'shell'): 'missing shell café', ('git', 'commit_model'): 'model:café',
 }
 CHOICES = {('ui', 'decorations'): ('auto', 'client', 'server'),
+           ('ui', 'theme_mode'): ('light', 'dark', 'system'),
            ('git', 'commit_ai'): ('off', 'claude', 'codex', 'ollama')}
 
 
@@ -131,7 +132,8 @@ class SettingsUI(unittest.TestCase):
     def test_inventory_requires_cases_for_every_setting(self):
         expected = {(s, k) for s, names in BOOLS.items() for k in names.split()}
         expected |= set(INTS) | set(STRINGS) | set(CHOICES)
-        expected |= {('ui', 'theme'), ('git', 'ai_setup'), ('updates', 'check_now')}
+        expected |= {('ui', 'light_theme'), ('ui', 'dark_theme'), ('git', 'ai_setup'),
+                     ('updates', 'check_now')}
         self.assertEqual(expected, {(s, k) for s, k, _ in ROWS})
 
     def test_every_boolean_toggles_both_ways(self):
@@ -166,7 +168,8 @@ class SettingsUI(unittest.TestCase):
                         column = 1400 - round(16 * scale)
                     right = (1400 + column) // 2 - round(16 * scale)
                     x = right - round((14 if direction == '+' else 106) * scale)
-                    y = round((484 if compact else self.row_y(section, key)) * scale)
+                    base_y = self.compact_row_y(section, key) if compact else self.row_y(section, key)
+                    y = round(base_y * scale)
                     self.run_editor([f'click {x} {y}'])
                     self.assertAlmostEqual(float(self.value(section, key)), expected, places=2)
 
@@ -183,6 +186,7 @@ class SettingsUI(unittest.TestCase):
     def test_every_choice_segment(self):
         # Pixel widths of the built-in 13 point font plus the documented 24 point padding.
         widths = {('ui', 'decorations'): (55, 55, 78),
+                  ('ui', 'theme_mode'): (54, 53, 106),
                   ('git', 'commit_ai'): (45, 92, 59, 116)}
         for (section, key), options in CHOICES.items():
             for index, option in enumerate(options):
@@ -193,17 +197,52 @@ class SettingsUI(unittest.TestCase):
                     self.run_editor([f'click {x} {self.row_y(section, key)}'])
                     self.assertEqual(self.value(section, key), option)
 
-    def test_theme_button_preview_cancel_and_accept(self):
+    def test_light_and_dark_theme_settings_accept_matching_themes(self):
         self.configure()
-        y = self.row_y('ui', 'theme')
-        output = self.run_editor([f'click 1000 {y}', 'type github', 'key Down', 'print-state',
-                                  'key Escape', 'print-state', f'click 1000 {y}',
+        light_y = self.row_y('ui', 'light_theme')
+        dark_y = self.row_y('ui', 'dark_theme')
+        self.run_editor([f'click 1000 {light_y}', 'type github', 'key Return'])
+        self.assertEqual(self.value('ui', 'light_theme'), 'github-light')
+        self.assertEqual(self.value('ui', 'dark_theme'), 'rhun-dark')
+        self.run_editor([f'click 1000 {dark_y}', 'type github', 'key Return'])
+        self.assertEqual(self.value('ui', 'dark_theme'), 'github-dark')
+        self.assertEqual(self.value('ui', 'theme_mode'), 'dark')
+
+    def test_global_theme_picker_updates_mode_and_cancel_restores_selection(self):
+        self.configure()
+        output = self.run_editor(['cmd select_theme', 'type github', 'key Down', 'print-state',
+                                  'key Escape', 'print-state', 'cmd select_theme',
                                   'type github light', 'key Return', 'print-state'])
         states = [line for line in output.splitlines() if line.startswith('tabs=')]
         self.assertIn('theme=github-light', states[0])
         self.assertIn('theme=rhun-dark', states[1])
         self.assertIn('theme=github-light', states[2])
-        self.assertEqual(self.value('ui', 'theme'), 'github-light')
+        self.assertEqual(self.value('ui', 'light_theme'), 'github-light')
+        self.assertEqual(self.value('ui', 'theme_mode'), 'light')
+
+    def test_theme_mode_uses_the_matching_theme_setting(self):
+        self.configure()
+        self.config.write_text('[ui]\nlight_theme = github-light\ndark_theme = github-dark\n'
+                               'theme_mode = dark\nsidebar = false\nagents_panel = false\n',
+                               encoding='utf-8')
+        parts = (54, 53, 106)
+        row_y = self.row_y('ui', 'theme_mode')
+        x_light = 1044 - sum(parts) + parts[0] // 2
+        x_dark = 1044 - sum(parts) + parts[0] + parts[1] // 2
+        x_system = 1044 - parts[2] // 2
+        output = self.run_editor([f'click {x_light} {row_y}', 'print-state',
+                                  f'click {x_dark} {row_y}', 'print-state',
+                                  f'click {x_system} {row_y}', 'print-state'])
+        states = [line for line in output.splitlines() if line.startswith('tabs=')]
+        self.assertIn('theme=github-light', states[0])
+        self.assertIn('theme=github-dark', states[1])
+        self.assertRegex(states[2], r'theme=github-(?:light|dark)')
+        self.assertEqual(self.value('ui', 'theme_mode'), 'system')
+
+    def test_legacy_theme_setting_migrates_on_startup(self):
+        self.config.write_text('[ui]\ntheme = github-light\n', encoding='utf-8')
+        output = self.run_editor(['print-state'])
+        self.assertIn('theme=github-light', output)
 
     def test_open_settings_file_button(self):
         self.configure()

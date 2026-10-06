@@ -588,6 +588,19 @@ dict_int:
     ldp x29, x30, [sp], #48
     ret
 
+// Return the effective system appearance, independent of the window's explicit appearance.
+FN mac_system_appearance_dark
+    XENTRY
+    CLS x0, NSApplication
+    MSG sharedApplication
+    MSG effectiveAppearance
+    MSG name
+    EXT x2, _NSAppearanceNameDarkAqua
+    MSG isEqualToString_
+    cmp x0, #0
+    cset w8, ne
+    XLEAVE
+
 // follow_theme(): the window's appearance (traffic lights, menus) matches a dark or light theme
 follow_theme:
     ENTER
@@ -2044,6 +2057,9 @@ DEFSEL performWindowDragWithEvent_, "performWindowDragWithEvent:"
 DEFSEL miniaturize_, "miniaturize:"
 DEFSEL zoom_, "zoom:"
 DEFSEL appearanceNamed_, "appearanceNamed:"
+DEFSEL effectiveAppearance, "effectiveAppearance"
+DEFSEL name, "name"
+DEFSEL isEqualToString_, "isEqualToString:"
 DEFSEL setAppearance_, "setAppearance:"
 DEFSEL standardUserDefaults, "standardUserDefaults"
 DEFSEL stringForKey_, "stringForKey:"

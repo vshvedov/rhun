@@ -8,7 +8,7 @@ rhun draws everything itself: it rasterizes TrueType fonts, icons and widgets in
 - Project menu in the title bar: open a folder or a file from anywhere on disk, or a recent folder, in this window or a new one
 - Image preview: PNG, JPEG, GIF, BMP, ICO, QOI, PNM and TGA open in a tab, with zoom and pan
 - Syntax highlighting for about 125 languages, defined in plain text grammar files
-- 40 color themes, dark and light, with a match for every Omarchy theme; add your own
+- 40 color themes, dark and light, with a match for every Omarchy theme; separate light and dark choices and automatic system appearance matching
 - Settings page and a readable config file, both applied while running
 - Agents panel: Claude Code and Codex sessions of the project, with theme-colored provider badges and icons, updated live as the agent works
 - Terminal panel: shells with 24-bit color, mouse, scrollback and full-screen programs
@@ -328,7 +328,9 @@ Registers, marks, macros, ranges and `:s`, visual block and replace mode are not
 
 ```ini
 [ui]
-theme = tokyo-night
+light_theme = rhun-light
+dark_theme = tokyo-night
+theme_mode = dark
 scale = 1.25
 [editor]
 font_size = 15
@@ -347,7 +349,9 @@ Key names are those of the command palette entries in snake case (see `src/app/k
 
 ### Themes
 
-Choose **Turbo Pascal** in the theme picker (Ctrl+K Ctrl+Shift+T) for a blue editor with yellow text, white keywords and the DOS terminal palette. To select it in the configuration file, set `theme = turbo-pascal` under `[ui]`.
+Choose **Turbo Pascal** in the theme picker (Ctrl+K Ctrl+Shift+T) for a blue editor with yellow text, white keywords and the DOS terminal palette. The picker updates the light or dark theme setting, based on the theme's kind. It also selects that mode.
+
+In Settings > Appearance, set **Light theme** and **Dark theme** independently. Set **Theme mode** to **Light**, **Dark**, or **System (Auto)**. System mode follows the operating system's appearance. The configuration keys are `light_theme`, `dark_theme`, and `theme_mode` under `[ui]`.
 
 A theme is a `name.theme` file in `~/.config/rhun/themes/`. Colors not given are derived from `bg`, `fg` and `accent`, so a theme can be three lines. See `runtime/themes/` for all keys.
 
@@ -363,7 +367,9 @@ string = #a6e3a1
 
 Under `[terminal]` a theme can set the 16 terminal colors, `black` to `bright_white`; the ones not given come from the theme's other colors. `git_added`, `git_modified` and `git_deleted` color changes in the gutter, tabs, explorer and diffs.
 
-On Omarchy the theme list starts with Follow Omarchy (`theme = omarchy`): rhun uses the theme Omarchy has set and switches with it. It is the default there until you pick another theme. For an Omarchy theme rhun has no match for, add a rhun theme with the same name; otherwise rhun's own dark or light theme is used.
+On Omarchy the theme list starts with Follow Omarchy (`dark_theme = omarchy`): rhun uses the theme Omarchy has set and switches with it. It is the default there until you choose another theme. For an Omarchy theme rhun has no match for, add a rhun theme with the same name; otherwise rhun uses its own dark or light theme.
+
+The old `theme` key remains supported. rhun moves its value to the matching light or dark theme setting when it loads the configuration.
 
 ### Languages
 

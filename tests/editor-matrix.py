@@ -124,7 +124,8 @@ class EditorMatrix(unittest.TestCase):
         self.assertEqual((width, height), (640, 480))
         at = lambda x, y: pixels[(y * width + x) * 3:(y * width + x) * 3 + 3]
         self.assertEqual(at(20, 324), bytes.fromhex('1c1e24'), 'a field paints outside its column')
-        self.run_editor(['cmd settings', 'move 320 320', 'scroll 1800',
+        # The new appearance rows move the Interface font field farther down the scaled page.
+        self.run_editor(['cmd settings', 'move 320 320', 'scroll 2712',
                          'click 320 372', 'type narrow-font', 'key Return'], size='640x480', scale='3')
         import configparser
         config = configparser.ConfigParser(interpolation=None)

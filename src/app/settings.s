@@ -51,6 +51,12 @@ FN setting_applied
     mov dword ptr [rip + g_settings_changed], 1
     mov dword ptr [rip + g_dirty], 1
     mov rax, [rbx + SET_ptr]
+    lea rcx, [rip + cfg_theme_mode]
+    cmp rax, rcx
+    jne 0f
+    call theme_apply_preference
+    jmp 9f
+0:  mov rax, [rbx + SET_ptr]
     lea rcx, [rip + cfg_font]
     cmp rax, rcx
     je 1f
@@ -809,8 +815,21 @@ FN settings_draw
     call setting_applied
     jmp .Lsd_next
 .Lsd_theme:
-    # button showing the theme name, opens the theme picker
-    mov rdi, [rip + g_theme_cur]
+    # button showing the selected theme name, opens its light/dark theme picker
+    mov rax, [rbx + SET_ptr]
+    mov rdi, [rax]
+    call theme_find
+    test rax, rax
+    jns 1f
+    mov rax, [rbx + SET_ptr]
+    lea rcx, [rip + cfg_light_theme]
+    cmp rax, rcx
+    jne 11f
+    lea rdi, [rip + cfg_def_light_theme]
+    jmp 12f
+11: lea rdi, [rip + cfg_def_dark_theme]
+12: call theme_find
+1:  mov rdi, rax
     call theme_entry
     mov r8, [rax + TH_name]
     mov [rsp + 64], r8
@@ -870,7 +889,13 @@ FN settings_draw
     call ui_icon_center
     test dword ptr [rsp + 32], UB_CLICK
     jz .Lsd_next
-    call cmd_select_theme
+    mov rax, [rbx + SET_ptr]
+    lea rcx, [rip + cfg_light_theme]
+    cmp rax, rcx
+    jne 2f
+    call cmd_select_light_theme
+    jmp .Lsd_next
+2:  call cmd_select_dark_theme
     jmp .Lsd_next
 .Lsd_str:
     mov edi, 300

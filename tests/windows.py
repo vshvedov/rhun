@@ -336,6 +336,22 @@ with tempfile.TemporaryDirectory(prefix='rhun-windows-', dir=OUT) as temporary:
         assert 'saved Ω'.encode() in output, output
     check('paths/backslash-save-as-and-open', path_prompts)
 
+    def shift_wheel():
+        # Shift turns the editor's wheel sideways, as in other Windows apps (discussion 67)
+        project = temp / 'shift wheel'
+        project.mkdir()
+        wide = project / 'wide.txt'
+        wide.write_text(''.join(f'line {i:02d} ' + 'wide ' * 60 + '\n' for i in range(80)),
+                        encoding='utf-8', newline='\n')
+        script = script_file('shift-wheel', 'move 500 350\nscroll 120 shift\nwait 50\nprint-scroll\n'
+                                            'scroll 120\nwait 50\nprint-scroll\nquit\n')
+        output = run('rhun.com', winpath(project), winpath(wide), '--headless', '1000x700', '--script',
+                     script, env=environment('shift-wheel')).stdout.decode()
+        sideways, down = [line.split()[:2] for line in output.splitlines() if line.startswith('x=')]
+        assert sideways == ['x=120', 'y=0'], output
+        assert down[0] == 'x=120' and down[1] != 'y=0', output
+    check('wheel/shift-scrolls-sideways', shift_wheel)
+
     def control():
         result = run('rhun.com', '--headless', '800x600', '--control', winpath(temp / 'control'), success=False,
                      env=environment('control'))

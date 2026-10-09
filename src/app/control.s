@@ -439,6 +439,7 @@ c_print_shape:
     xor eax, eax
     ret
 
+# scroll dy [mods]: the wheel, with modifiers held as a key combination names them (ctrl, shift+alt)
 c_scroll:
     call next_int
     push rax
@@ -447,16 +448,10 @@ c_scroll:
     xor ecx, ecx
     test rdx, rdx
     jz 1f
-    mov ecx, MOD_CTRL
-    cmp rdx, 3
-    jne 1f
-    cmp byte ptr [rax], 'a'
-    jne 1f
-    cmp byte ptr [rax + 1], 'l'
-    jne 1f
-    cmp byte ptr [rax + 2], 't'
-    jne 1f
-    mov ecx, MOD_ALT
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_combo
+    mov ecx, edx
 1:  pop rax
     pop rax
     xor edi, edi

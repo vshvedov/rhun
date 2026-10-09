@@ -73,6 +73,7 @@ python3 tests/editor-matrix.py || fail=1
 python3 tests/editor-hscroll.py || fail=1
 python3 tests/splitter.py || fail=1
 python3 tests/scroll-sensitivity.py || fail=1
+python3 tests/shift-wheel.py || fail=1
 python3 tests/stress.py || fail=1
 if [ "$(uname -s)" = Darwin ] || command -v strace >/dev/null; then
     status=0

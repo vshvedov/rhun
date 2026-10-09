@@ -1485,6 +1485,21 @@ FN app_on_scroll
     mov dword ptr [rip + g_dirty], 1
 2:  ret
 
+# wheel_xy() -> eax x, edx y: this frame's wheel for a view that also scrolls sideways (the editor, an
+#   image). Shift turns it sideways, as in other apps on Linux and Windows; macOS turns it itself.
+#   Views that only scroll down keep Shift's wheel as it is (the terminal's scrollback).
+FN wheel_xy
+    mov eax, [rip + g_scroll_x]
+    mov edx, [rip + g_scroll_y]
+.ifndef MACOS
+    test dword ptr [rip + g_scroll_mods], MOD_SHIFT
+    jz 1f
+    add eax, edx
+    xor edx, edx
+1:
+.endif
+    ret
+
 FN app_on_focus
     mov [rip + g_win_focused], edi
     # files may have changed while away

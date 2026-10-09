@@ -2133,8 +2133,9 @@ FN editor_draw
     cmp dword ptr [rip + g_cursor], CUR_DEFAULT
     jne 1f
     mov dword ptr [rip + g_cursor], CUR_TEXT
-1:  # wheel
-    mov eax, [rip + g_scroll_y]
+1:  # wheel (sideways with Shift: wheel_xy)
+    call wheel_xy
+    mov eax, edx
     test eax, eax
     jz 2f
     cmp dword ptr [rip + cfg_word_wrap], 0
@@ -2150,7 +2151,7 @@ FN editor_draw
     idiv rcx
     add [rbx + DOC_scrolly], rax
     mov dword ptr [rip + g_dirty], 1
-2:  mov eax, [rip + g_scroll_x]
+2:  call wheel_xy
     test eax, eax
     jz 3f
     cmp dword ptr [rip + cfg_word_wrap], 0

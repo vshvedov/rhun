@@ -40,10 +40,10 @@ class ReopenClosedTab(unittest.TestCase):
         self.stop()
         self.tmp.cleanup()
 
-    def write_config(self, git):
+    def write_config(self, git, extra=''):
         config = self.work / 'config/rhun/config'
         config.parent.mkdir(parents=True, exist_ok=True)
-        config.write_text(CONFIG.format(git='true' if git else 'false'), encoding='utf-8')
+        config.write_text(CONFIG.format(git='true' if git else 'false') + extra, encoding='utf-8')
 
     def start(self, *paths):
         control = self.work / 'control'
@@ -156,6 +156,23 @@ class ReopenClosedTab(unittest.TestCase):
         self.reopen()
         self.assertEqual(self.state()['line'], '1')
         self.assertEqual(self.command('print-scroll'), scroll)
+
+    def test_a_shorter_file_keeps_the_view_inside_its_text(self):
+        # wrapped lines without scrolling past the end: the view is clamped from its top line's rows
+        self.write_config(git=False, extra='[editor]\nword_wrap = true\nscroll_past_end = false\n')
+        # far enough down that a line index past the new text's end would leave its memory
+        (self.project / 'b.txt').write_text('x\n' * 1000000, encoding='utf-8')
+        self.start()
+        self.open('a.txt', 'b.txt')
+        self.command('key ctrl+End')
+        self.assertEqual(self.state()['line'], '1000001')
+        self.command('cmd close_tab')
+        (self.project / 'b.txt').write_text('one\ntwo\nthree\n', encoding='utf-8')
+        self.reopen()
+        state = self.state()
+        self.assertEqual((state['active'], state['line'], state['col']), ('b.txt', '4', '1'))
+        self.assertEqual(self.command('print-scroll'), 'x=0 y=0 max=0\n')
+        self.assertEqual(self.command('print-doc'), 'one\ntwo\nthree\n\n<eod>\n')
 
     def test_vim_visual_mode_ends_as_when_the_tab_is_left(self):
         self.start()

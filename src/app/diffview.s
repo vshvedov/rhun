@@ -341,7 +341,9 @@ FN diffview_answer
 2:  cmp [rbx + DOC_anchor], rax
     jbe 3f
     mov [rbx + DOC_anchor], rax
-3:  mov dword ptr [rip + g_dirty], 1
+3:  mov rdi, rbx
+    call ed_top_inside
+    mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
 # hunk_start(): r14d, r15d from "@@ -a,b +c,d @@" at r12 (the line's length is the caller's [rsp + 24])

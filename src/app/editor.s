@@ -1702,6 +1702,22 @@ editor_gutter:
 2:  M eax, MI_16
     ret
 
+# ed_top_inside(doc): the view starts at the last line when the text ends above its top line. Text
+#   replaced under a view that is kept (a reload, a diff fetched again, a reopened tab) can do that,
+#   and a wrapped view reads the rows of its top line first (its clamp, a click in it).
+FN ed_top_inside
+    mov rax, [rdi + DOC_nlines]
+    dec rax
+    mov rcx, [rdi + DOC_scrolly]
+    sar rcx, 8
+    cmp rcx, rax
+    jle 1f
+    mov [rdi + DOC_wtop], rax
+    mov qword ptr [rdi + DOC_woff], 0
+    shl rax, 8
+    mov [rdi + DOC_scrolly], rax
+1:  ret
+
 # clamp_scroll(doc)
 clamp_scroll:
     mov rax, [rdi + DOC_nlines]

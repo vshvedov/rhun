@@ -175,25 +175,16 @@ reopen_probe:
     mov rsi, [rbx + CT_anchor]
     call clamp_pos
     mov [r12 + DOC_anchor], rax
-    # the top line inside the text as it is now: a wrapped view reads that line's rows at once
     mov rax, [rbx + CT_scrolly]
-    mov rcx, [r12 + DOC_nlines]
-    dec rcx
-    mov rdx, rax
-    shr rdx, 8
-    cmp rdx, rcx
-    jbe 1f
-    mov rax, rcx
-    shl rax, 8
-    mov [rbx + CT_wtop], rcx
-    mov qword ptr [rbx + CT_woff], 0
-1:  mov [r12 + DOC_scrolly], rax
+    mov [r12 + DOC_scrolly], rax
     mov rax, [rbx + CT_scrollx]
     mov [r12 + DOC_scrollx], rax
     mov rax, [rbx + CT_wtop]
     mov [r12 + DOC_wtop], rax
     mov rax, [rbx + CT_woff]
     mov [r12 + DOC_woff], rax
+    mov rdi, r12
+    call ed_top_inside          # the file may be shorter now
     mov dword ptr [rip + g_reveal], 0     # the view as it was, even with the cursor out of it
     jmp .Lrp_place
 .Lrp_settings:

@@ -984,6 +984,8 @@ FN app_reload_doc
     mov [rbx + DOC_cur], r14
     mov [rbx + DOC_anchor], r14
     mov [rbx + DOC_scrolly], r15
+    mov rdi, rbx
+    call ed_top_inside
     mov dword ptr [rsp], 1
     jmp .Lrd_done
 .Lrd_same:

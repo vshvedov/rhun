@@ -319,6 +319,23 @@ class LiveReload(unittest.TestCase):
             pixel = (1000 * y + 10) * 3
             self.assertNotEqual(before[pixel:pixel + 3], after[pixel:pixel + 3])
 
+    def test_wrapped_view_follows_a_file_that_got_shorter(self):
+        # Without scrolling past the end, a wrapped view is clamped from its top line's rows: after
+        # the file shrinks below that line the view starts inside the new text
+        self.file.write_text(''.join(f'line {i}\n' for i in range(1, 401)), encoding='utf-8')
+        config = self.work / 'config/rhun/config'
+        config.write_text(config.read_text().replace(
+            '[editor]\n', '[editor]\nword_wrap = true\nscroll_past_end = false\n'))
+        self.start()
+        self.open_quick()
+        self.command('key ctrl+End')
+        self.assertNotIn(' y=0 ', self.command('print-scroll'))
+        self.external_write('one\ntwo\nthree\n')
+        self.wait_document('one\ntwo\nthree\n')
+        self.assertEqual(self.command('print-scroll'), 'x=0 y=0 max=0\n')
+        self.command('click 300 108')
+        self.assertIn(' line=2 ', self.command('print-state'))
+
     def test_editor_fades_without_popup_and_idle_stops_drawing(self):
         self.start()
         self.open_quick()

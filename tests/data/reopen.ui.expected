@@ -1,0 +1,7 @@
+tabs=README.md | *case.txt
+tabs=README.md | *words.txt | case.txt
+tabs=3 active=words.txt line=3 col=15 sel=13 dirty=0 lang=none focus=0 theme=rhun-dark
+tabs=
+tabs=README.md | *words.txt
+tabs=README.md | words.txt | Settings | *case.txt
+tabs=4 active=case.txt line=1 col=1 sel=0 dirty=0 lang=none focus=1 theme=rhun-dark

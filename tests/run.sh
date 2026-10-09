@@ -52,6 +52,7 @@ python3 tests/terminal-links.py || fail=1
 python3 tests/new-window.py || fail=1
 python3 tests/file-launch.py || fail=1
 python3 tests/readonly-save.py || fail=1
+python3 tests/reopen-tab.py || fail=1
 python3 tests/focused-zoom.py || fail=1
 python3 tests/agents.py || fail=1
 python3 tests/agents-refresh.py || fail=1

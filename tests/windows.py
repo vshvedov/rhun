@@ -151,7 +151,7 @@ with tempfile.TemporaryDirectory(prefix='rhun-windows-', dir=OUT) as temporary:
                      'tests/scripts/' + name + '.rsc', env=environment('ui-' + name))
         equal(result.stdout, (ROOT / 'tests/data' / (name + '.ui.expected')).read_bytes())
 
-    for name in ['editing', 'clipboard', 'movelines', 'find', 'findcase', 'replace', 'tabs', 'vim', 'wrap', 'togglecomment',
+    for name in ['editing', 'clipboard', 'movelines', 'find', 'findcase', 'replace', 'tabs', 'reopen', 'vim', 'wrap', 'togglecomment',
                  'highlight', 'image', 'mouse', 'cursor', 'compose', 'contextmenu',
                  'titlebar', 'titlebar-tap']:
         check('ui/' + name, lambda name=name: ui(name))

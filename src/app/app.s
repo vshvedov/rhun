@@ -384,6 +384,7 @@ switch_continue:
     jnz 9f
     mov dword ptr [rip + switch_pending], 0
     call close_tabs_now
+    call closed_clear           # the last project's tabs are not this one's to reopen
     mov byte ptr [rip + g_explorer_dir], 0
     mov byte ptr [rip + g_explorer_target], 0
     lea rdi, [rip + switch_path]
@@ -813,6 +814,63 @@ FN app_add_tab
     mov rax, r14
     EPILOGUE
 
+# app_place_tab(i): the active tab moves to place i in the strip (the last place at most), the tabs
+#   between closing up behind it
+FN app_place_tab
+    PROLOGUE
+    mov r12, [rip + g_tab_cur]
+    test r12, r12
+    js 9f
+    mov r13, [rip + g_tabs + VEC_len]
+    dec r13
+    cmp rdi, r13
+    cmovb r13, rdi
+    mov rdi, r12
+    call tab_at
+    mov r14, [rax + TAB_kind]
+    mov r15, [rax + TAB_doc]
+1:  cmp r12, r13
+    je 3f
+    mov rdi, r12
+    call tab_at
+    # the neighbor toward the new place moves into this slot
+    mov rcx, TAB_SIZE
+    mov rdx, 1
+    cmp r12, r13
+    jb 2f
+    neg rcx
+    neg rdx
+2:  add r12, rdx
+    lea rdx, [rax + rcx]
+    mov rsi, [rdx + TAB_kind]
+    mov [rax + TAB_kind], rsi
+    mov rsi, [rdx + TAB_doc]
+    mov [rax + TAB_doc], rsi
+    jmp 1b
+3:  mov rdi, r13
+    call tab_at
+    mov [rax + TAB_kind], r14
+    mov [rax + TAB_doc], r15
+    mov [rip + g_tab_cur], r13
+    mov dword ptr [rip + g_tabscroll_reveal], 1
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# app_tab_label(i) -> cstr: the name the tab strip shows
+FN app_tab_label
+    call tab_at
+    mov rcx, rax
+    mov rax, [rcx + TAB_doc]
+    test rax, rax
+    jz 1f
+    mov rax, [rax + DOC_name]
+    ret
+1:  lea rax, [rip + .Lsettings]
+    cmp qword ptr [rcx + TAB_kind], TAB_GIT
+    jne 2f
+    lea rax, [rip + .Lgit_tab]
+2:  ret
+
 # app_detect_lang(doc)
 FN app_detect_lang
     PROLOGUE
@@ -844,6 +902,8 @@ FN cmd_new_file
 FN app_close_tab_now
     PROLOGUE
     mov r12, rdi
+    call closed_note            # for Reopen Closed Tab
+    mov rdi, r12
     call tab_at
     xor r13d, r13d
     cmp r12, [rip + g_tab_cur]
@@ -2863,16 +2923,10 @@ FN tabs_draw
     mov rdi, rbx
     call tab_at
     mov r15, rax
-    mov rax, [r15 + TAB_doc]
-    test rax, rax
-    jz 3f
-    mov r13, [rax + DOC_name]
-    jmp 4f
-3:  lea r13, [rip + .Lsettings]
-    cmp qword ptr [r15 + TAB_kind], TAB_GIT
-    jne 4f
-    lea r13, [rip + .Lgit_tab]
-4:  mov rdi, r13
+    mov rdi, rbx
+    call app_tab_label
+    mov r13, rax
+    mov rdi, r13
     call strlen
     mov r14, rax
     lea rdi, [rip + g_face_ui]

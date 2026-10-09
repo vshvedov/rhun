@@ -260,6 +260,9 @@ On macOS the title bar is rhun's too, with the window buttons in it. Command wor
 | Ctrl+Shift+D, Ctrl+Shift+K | Duplicate, delete line |
 | Ctrl+Tab, Ctrl+W | Next tab, close tab |
 | Ctrl+Shift+W | Close all tabs |
+| Ctrl+Shift+T | Reopen closed tab |
+
+**Reopen Closed Tab** (Ctrl+Shift+T) brings back the tabs you closed, the last one first, in their place among the tabs and with the cursor, selection and scroll a file had. Pressing it again goes further back, up to 20 tabs; tabs that are already open and files that are gone are skipped. Opening another folder starts the list over.
 
 Find, replace and find in files ignore case until their Aa is on, in every script: `été` finds `Été`, `яблоко` finds `ЯБЛОКО` and `οδος` finds `ΟΔΟΣ`. Accented letters stay apart from plain ones, so `ete` does not find `été`.
 
@@ -396,7 +399,7 @@ Key names are those of the command palette entries in snake case (see `src/app/k
 
 ### Themes
 
-The theme follows the system's dark mode: `dark_theme` shows while the system is in dark mode and `light_theme` while it is in light mode, Rhun Dark and Rhun Light to start with. Pick them in Settings > Appearance, or with the theme picker (Ctrl+K Ctrl+Shift+T), which saves the theme for the mode the system is in. Turn off **Follow system dark mode** (`follow_system = false`) to keep one theme, `theme`, whatever the system does; it starts as the theme on screen. **Toggle Light/Dark Theme** in the command palette then switches `theme` between the dark and the light one.
+The theme follows the system's dark mode: `dark_theme` shows while the system is in dark mode and `light_theme` while it is in light mode, Rhun Dark and Rhun Light to start with. Pick them in Settings > Appearance, or with the theme picker (Ctrl+K), which saves the theme for the mode the system is in. Turn off **Follow system dark mode** (`follow_system = false`) to keep one theme, `theme`, whatever the system does; it starts as the theme on screen. **Toggle Light/Dark Theme** in the command palette then switches `theme` between the dark and the light one.
 
 rhun reads the mode as VS Code does and switches as soon as the system does:
 

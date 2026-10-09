@@ -902,6 +902,11 @@ FN cmd_new_file
 FN app_close_tab_now
     PROLOGUE
     mov r12, rdi
+    cmp r12, [rip + g_tab_cur]
+    jne .Lclose_note
+    call vim_leave              # out of visual mode, as leaving the tab is
+.Lclose_note:
+    mov rdi, r12
     call closed_note            # for Reopen Closed Tab
     mov rdi, r12
     call tab_at
@@ -917,10 +922,7 @@ FN app_close_tab_now
     mov rbx, [rax + TAB_doc]
     test rbx, rbx
     jz 1f
-    cmp r12, [rip + g_tab_cur]
-    jne 11f
-    call vim_leave
-11: mov rdi, rbx
+    mov rdi, rbx
     call vim_forget
     mov rdi, rbx
     call doc_free

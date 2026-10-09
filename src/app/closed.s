@@ -183,6 +183,7 @@ reopen_probe:
     mov [r12 + DOC_wtop], rax
     mov rax, [rbx + CT_woff]
     mov [r12 + DOC_woff], rax
+    mov dword ptr [rip + g_reveal], 0     # the view as it was, even with the cursor out of it
     jmp .Lrp_place
 .Lrp_settings:
     call cmd_settings

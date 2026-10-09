@@ -145,6 +145,31 @@ class ReopenClosedTab(unittest.TestCase):
         self.assertEqual(self.state()['line'], '200')
         self.assertEqual(self.command('print-scroll'), scroll)
 
+    def test_scroll_comes_back_with_the_cursor_out_of_view(self):
+        self.start()
+        self.open('a.txt', 'b.txt')
+        self.command('move 500 300')
+        self.command('scroll 2400')
+        scroll = self.command('print-scroll')
+        self.assertNotIn(' y=0 ', scroll)
+        self.command('cmd close_tab')
+        self.reopen()
+        self.assertEqual(self.state()['line'], '1')
+        self.assertEqual(self.command('print-scroll'), scroll)
+
+    def test_vim_visual_mode_ends_as_when_the_tab_is_left(self):
+        self.start()
+        self.open('a.txt', 'b.txt')
+        self.command('cmd toggle_vim')
+        self.command('type jjlvll')
+        state = self.state()
+        self.assertEqual((state['vim'], state['line'], state['col'], state['sel']), ('visual', '3', '4', '3'))
+        self.command('cmd close_tab')
+        self.reopen()
+        state = self.state()
+        self.assertEqual((state['active'], state['vim'], state['line'], state['col'], state['sel']),
+                         ('b.txt', 'normal', '3', '4', '0'))
+
     def test_close_all_comes_back_one_by_one_in_order(self):
         self.start()
         self.open('a.txt', 'b.txt', 'c.txt')

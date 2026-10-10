@@ -541,10 +541,59 @@ FN explorer_delete_target
     call app_toast
     pop rbx
     ret
-1:  mov byte ptr [rip + g_explorer_target], 0
+1:  call close_deleted_tabs
+    mov byte ptr [rip + g_explorer_target], 0
     mov byte ptr [rip + delete_path], 0
     pop rbx
     ret
+
+# close_deleted_tabs(): close open tabs of the deleted file or of files inside a deleted
+#   directory; a doc with unsaved changes keeps its tab
+close_deleted_tabs:
+    PROLOGUE
+    mov r12, [rip + g_tabs + VEC_len]
+1:  test r12, r12
+    jz 9f
+    dec r12
+    mov rdi, r12
+    call tab_at
+    mov r13, [rax + TAB_doc]
+    test r13, r13
+    jz 1b
+    mov rdi, [r13 + DOC_path]
+    test rdi, rdi
+    jz 1b
+    lea rsi, [rip + delete_path]
+    call strcmp_eq
+    test eax, eax
+    jnz 2f
+    # files inside a deleted directory: the doc's path starts with delete_path + '/'
+    mov rdi, [r13 + DOC_path]
+    call strlen
+    mov r14, rax
+    lea rdi, [rip + delete_path]
+    call strlen
+    mov r15, rax
+    cmp r14, r15
+    jbe 1b
+    mov rdi, [r13 + DOC_path]
+    mov rsi, r14
+    lea rdx, [rip + delete_path]
+    mov rcx, r15
+    call str_starts
+    test eax, eax
+    jz 1b
+    mov rax, [r13 + DOC_path]
+    cmp byte ptr [rax + r15], '/'
+    jne 1b
+2:  mov rdi, r13
+    call doc_dirty
+    test eax, eax
+    jnz 1b
+    mov rdi, r12
+    call app_close_tab_now
+    jmp 1b
+9:  EPILOGUE
 
 # explorer_key(keysym, cp, mods) -> 1 if handled
 FN explorer_key
@@ -917,12 +966,9 @@ FN explorer_draw
     test eax, UB_PRESS
     jz 5f
     mov [rip + exp_cursor], r12d
-    mov dword ptr [rip + g_focus], FOCUS_EXPLORER
     mov rdi, r14
     call activate
-    cmp dword ptr [r14 + N_dir], 0
-    jne 5f
-    mov dword ptr [rip + g_focus], FOCUS_EDITOR
+    mov dword ptr [rip + g_focus], FOCUS_EXPLORER
 5:  test dword ptr [rsp + 28], UB_RPRESS
     jz 51f
     mov [rip + exp_cursor], r12d

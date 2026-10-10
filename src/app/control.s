@@ -439,6 +439,7 @@ c_print_shape:
     xor eax, eax
     ret
 
+# scroll dy [mods]: the wheel, with modifiers held as a key combination names them (ctrl, shift+alt)
 c_scroll:
     call next_int
     push rax
@@ -447,16 +448,10 @@ c_scroll:
     xor ecx, ecx
     test rdx, rdx
     jz 1f
-    mov ecx, MOD_CTRL
-    cmp rdx, 3
-    jne 1f
-    cmp byte ptr [rax], 'a'
-    jne 1f
-    cmp byte ptr [rax + 1], 'l'
-    jne 1f
-    cmp byte ptr [rax + 2], 't'
-    jne 1f
-    mov ecx, MOD_ALT
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_combo
+    mov ecx, edx
 1:  pop rax
     pop rax
     xor edi, edi
@@ -769,6 +764,38 @@ c_print_project:
     call sb_push_byte
     xor eax, eax
     ret
+
+# print-tabs: "tabs=a | *b | c", the tab strip in order with the active tab starred
+c_print_tabs:
+    PROLOGUE
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_tabs]
+    call sb_push_cstr
+    xor ebx, ebx
+1:  cmp rbx, [rip + g_tabs + VEC_len]
+    jae 4f
+    test rbx, rbx
+    jz 2f
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_bar]
+    call sb_push_cstr
+2:  cmp rbx, [rip + g_tab_cur]
+    jne 3f
+    lea rdi, [rip + out]
+    mov esi, '*'
+    call sb_push_byte
+3:  mov rdi, rbx
+    call app_tab_label
+    lea rdi, [rip + out]
+    mov rsi, rax
+    call sb_push_cstr
+    inc rbx
+    jmp 1b
+4:  lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    EPILOGUE
 
 # print-panels: whether this window shows the explorer, the agents panel and the terminal
 c_print_panels:
@@ -1490,6 +1517,7 @@ on_client:
 .Lc_print_frames: .asciz "print-frames"
 .Lc_print_project: .asciz "print-project"
 .Lc_print_panels: .asciz "print-panels"
+.Lc_print_tabs: .asciz "print-tabs"
 .Lc_print_palette: .asciz "print-palette"
 .Lc_print_menu: .asciz "print-menu"
 .Lc_print_tip: .asciz "print-tip"
@@ -1501,6 +1529,7 @@ on_client:
 .Lc_print_appearance: .asciz "print-appearance"
 .Lc_print_term_cell: .asciz "print-term-cell"
 .Ls_project: .asciz "project="
+.Ls_bar: .asciz " | "
 .Ls_explorer_eq: .asciz "explorer="
 .Ls_agents_eq: .asciz " agents="
 .Ls_toast: .asciz "toast="
@@ -1542,7 +1571,7 @@ ctl_table:
     .quad .Lc_wait_ai, c_wait_ai, .Lc_print_ai, c_print_ai
     .quad .Lc_wait_update, c_wait_update, .Lc_print_update, c_print_update
     .quad .Lc_print_frames, c_print_frames, .Lc_print_project, c_print_project
-    .quad .Lc_print_panels, c_print_panels
+    .quad .Lc_print_panels, c_print_panels, .Lc_print_tabs, c_print_tabs
     .quad .Lc_print_palette, c_print_palette, .Lc_print_menu, c_print_menu
     .quad .Lc_print_tip, c_print_tip, .Lc_print_toast, c_print_toast, .Lc_print_link, c_print_link
     .quad .Lc_print_term_cell, c_print_term_cell, .Lc_print_scroll, c_print_scroll

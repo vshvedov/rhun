@@ -544,13 +544,16 @@ view_input:
     mov edx, [rip + g_my]
     call zoom_step
     jmp 3f
-2:  mov rdi, rbx
+2:  call wheel_xy                 # sideways with Shift
+    mov r12d, eax
+    mov r13d, edx
+    mov rdi, rbx
     call view_scale
-    cvtsi2ss xmm1, dword ptr [rip + g_scroll_y]
+    cvtsi2ss xmm1, r13d
     divss xmm1, xmm0
     addss xmm1, [rbx + IV_cy]
     movss [rbx + IV_cy], xmm1
-    cvtsi2ss xmm1, dword ptr [rip + g_scroll_x]
+    cvtsi2ss xmm1, r12d
     divss xmm1, xmm0
     addss xmm1, [rbx + IV_cx]
     movss [rbx + IV_cx], xmm1

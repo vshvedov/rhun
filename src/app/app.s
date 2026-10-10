@@ -384,6 +384,7 @@ switch_continue:
     jnz 9f
     mov dword ptr [rip + switch_pending], 0
     call close_tabs_now
+    call closed_clear           # the last project's tabs are not this one's to reopen
     mov byte ptr [rip + g_explorer_dir], 0
     mov byte ptr [rip + g_explorer_target], 0
     lea rdi, [rip + switch_path]
@@ -813,6 +814,63 @@ FN app_add_tab
     mov rax, r14
     EPILOGUE
 
+# app_place_tab(i): the active tab moves to place i in the strip (the last place at most), the tabs
+#   between closing up behind it
+FN app_place_tab
+    PROLOGUE
+    mov r12, [rip + g_tab_cur]
+    test r12, r12
+    js 9f
+    mov r13, [rip + g_tabs + VEC_len]
+    dec r13
+    cmp rdi, r13
+    cmovb r13, rdi
+    mov rdi, r12
+    call tab_at
+    mov r14, [rax + TAB_kind]
+    mov r15, [rax + TAB_doc]
+1:  cmp r12, r13
+    je 3f
+    mov rdi, r12
+    call tab_at
+    # the neighbor toward the new place moves into this slot
+    mov rcx, TAB_SIZE
+    mov rdx, 1
+    cmp r12, r13
+    jb 2f
+    neg rcx
+    neg rdx
+2:  add r12, rdx
+    lea rdx, [rax + rcx]
+    mov rsi, [rdx + TAB_kind]
+    mov [rax + TAB_kind], rsi
+    mov rsi, [rdx + TAB_doc]
+    mov [rax + TAB_doc], rsi
+    jmp 1b
+3:  mov rdi, r13
+    call tab_at
+    mov [rax + TAB_kind], r14
+    mov [rax + TAB_doc], r15
+    mov [rip + g_tab_cur], r13
+    mov dword ptr [rip + g_tabscroll_reveal], 1
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# app_tab_label(i) -> cstr: the name the tab strip shows
+FN app_tab_label
+    call tab_at
+    mov rcx, rax
+    mov rax, [rcx + TAB_doc]
+    test rax, rax
+    jz 1f
+    mov rax, [rax + DOC_name]
+    ret
+1:  lea rax, [rip + .Lsettings]
+    cmp qword ptr [rcx + TAB_kind], TAB_GIT
+    jne 2f
+    lea rax, [rip + .Lgit_tab]
+2:  ret
+
 # app_detect_lang(doc)
 FN app_detect_lang
     PROLOGUE
@@ -844,6 +902,13 @@ FN cmd_new_file
 FN app_close_tab_now
     PROLOGUE
     mov r12, rdi
+    cmp r12, [rip + g_tab_cur]
+    jne .Lclose_note
+    call vim_leave              # out of visual mode, as leaving the tab is
+.Lclose_note:
+    mov rdi, r12
+    call closed_note            # for Reopen Closed Tab
+    mov rdi, r12
     call tab_at
     xor r13d, r13d
     cmp r12, [rip + g_tab_cur]
@@ -857,10 +922,7 @@ FN app_close_tab_now
     mov rbx, [rax + TAB_doc]
     test rbx, rbx
     jz 1f
-    cmp r12, [rip + g_tab_cur]
-    jne 11f
-    call vim_leave
-11: mov rdi, rbx
+    mov rdi, rbx
     call vim_forget
     mov rdi, rbx
     call doc_free
@@ -1387,6 +1449,15 @@ FN app_on_pointer_leave
 # app_on_button(btn, pressed, mods)
 FN app_on_button
     mov [rip + g_mods], edx
+    # the caret shows at once, as after a key: a press or a release may have placed it
+    push rdi
+    push rsi
+    push rdx
+    call time_ms
+    mov [rip + g_blink_t0], rax
+    pop rdx
+    pop rsi
+    pop rdi
     call ui_input_button
     mov dword ptr [rip + g_dirty], 1
     ret
@@ -1422,6 +1493,21 @@ FN app_on_scroll
     call ui_input_scroll
     mov dword ptr [rip + g_dirty], 1
 2:  ret
+
+# wheel_xy() -> eax x, edx y: this frame's wheel for a view that also scrolls sideways (the editor, an
+#   image). Shift turns it sideways, as in other apps on Linux and Windows; macOS turns it itself.
+#   Views that only scroll down keep Shift's wheel as it is (the terminal's scrollback).
+FN wheel_xy
+    mov eax, [rip + g_scroll_x]
+    mov edx, [rip + g_scroll_y]
+.ifndef MACOS
+    test dword ptr [rip + g_scroll_mods], MOD_SHIFT
+    jz 1f
+    add eax, edx
+    xor edx, edx
+1:
+.endif
+    ret
 
 FN app_on_focus
     mov [rip + g_win_focused], edi
@@ -2118,7 +2204,8 @@ FN app_render
     jz 2f
     call edge_cursor
     mov [rip + g_cursor], eax
-2:  call ui_end
+2:  call ed_blink_frame
+    call ui_end
     # scripted screenshot
     mov rdi, [rip + g_shot_path]
     test rdi, rdi
@@ -2178,6 +2265,7 @@ resize_edges:
     push rax
     mov edi, eax
     PCALL P_resize
+    and dword ptr [rip + g_mdown], ~(1 << BTN_LEFT)   # the release goes to the compositor
     pop rax
     pop rax
 9:  ret
@@ -2863,16 +2951,10 @@ FN tabs_draw
     mov rdi, rbx
     call tab_at
     mov r15, rax
-    mov rax, [r15 + TAB_doc]
-    test rax, rax
-    jz 3f
-    mov r13, [rax + DOC_name]
-    jmp 4f
-3:  lea r13, [rip + .Lsettings]
-    cmp qword ptr [r15 + TAB_kind], TAB_GIT
-    jne 4f
-    lea r13, [rip + .Lgit_tab]
-4:  mov rdi, r13
+    mov rdi, rbx
+    call app_tab_label
+    mov r13, rax
+    mov rdi, r13
     call strlen
     mov r14, rax
     lea rdi, [rip + g_face_ui]

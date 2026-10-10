@@ -1482,7 +1482,7 @@ FN ui_textfield
     push rax
     call ui_text_v
     add rsp, 16
-7:  # caret
+7:  # caret, blinking as the editor's
     cmp dword ptr [rsp + 16], 0
     je 8f
     lea rdi, [rip + g_face_ui]
@@ -1495,8 +1495,7 @@ FN ui_textfield
     M edx, MI_2
     mov ecx, [rsp + 12]
     sub ecx, [rip + g_mt + 4*MI_12]
-    COLOR r8d, T_CURSOR
-    call gfx_fill
+    call ed_caret_draw
 8:  call gfx_clip_pop
     mov eax, [rsp + 20]
     EPILOGUE
@@ -2052,8 +2051,7 @@ FN ui_textarea
     add edi, [rsp + 52]
     M edx, MI_2
     mov ecx, [rsp + 32]
-    COLOR r8d, T_CURSOR
-    call gfx_fill
+    call ed_caret_draw           # blinking as the editor's
 9:  call gfx_clip_pop
     mov eax, [rsp + 20]
     EPILOGUE

@@ -33,6 +33,8 @@ widest_due: .quad 0             # time_ms when a long text paused in doc_widest 
 .p2align 3
 g_blink_t0: .quad 0
 blink_seen: .long 0             # the half of the blink the last frame was asked for
+caret_frame: .long 0            # this frame drew the caret that has the keyboard (ed_caret_shown)
+caret_seen: .long 0             # the last frame did: only then is there a caret to blink
 classes: .zero SB_SIZE          # per-byte syntax class for the line being drawn
 clip_sb: .zero SB_SIZE
 .globl g_ed_find, g_ed_find_case
@@ -1702,6 +1704,22 @@ editor_gutter:
 2:  M eax, MI_16
     ret
 
+# ed_top_inside(doc): the view starts at the last line when the text ends above its top line. Text
+#   replaced under a view that is kept (a reload, a diff fetched again, a reopened tab) can do that,
+#   and a wrapped view reads the rows of its top line first (its clamp, a click in it).
+FN ed_top_inside
+    mov rax, [rdi + DOC_nlines]
+    dec rax
+    mov rcx, [rdi + DOC_scrolly]
+    sar rcx, 8
+    cmp rcx, rax
+    jle 1f
+    mov [rdi + DOC_wtop], rax
+    mov qword ptr [rdi + DOC_woff], 0
+    shl rax, 8
+    mov [rdi + DOC_scrolly], rax
+1:  ret
+
 # clamp_scroll(doc)
 clamp_scroll:
     mov rax, [rdi + DOC_nlines]
@@ -2117,8 +2135,9 @@ FN editor_draw
     cmp dword ptr [rip + g_cursor], CUR_DEFAULT
     jne 1f
     mov dword ptr [rip + g_cursor], CUR_TEXT
-1:  # wheel
-    mov eax, [rip + g_scroll_y]
+1:  # wheel (sideways with Shift: wheel_xy)
+    call wheel_xy
+    mov eax, edx
     test eax, eax
     jz 2f
     cmp dword ptr [rip + cfg_word_wrap], 0
@@ -2134,7 +2153,7 @@ FN editor_draw
     idiv rcx
     add [rbx + DOC_scrolly], rax
     mov dword ptr [rip + g_dirty], 1
-2:  mov eax, [rip + g_scroll_x]
+2:  call wheel_xy
     test eax, eax
     jz 3f
     cmp dword ptr [rip + cfg_word_wrap], 0
@@ -3104,17 +3123,14 @@ draw_caret:
     jne 9f
     cmp dword ptr [rip + g_focus], FOCUS_EDITOR
     jne 9f
-    cmp dword ptr [rip + g_win_focused], 0
-    je 9f
-    # off in the odd halves of the blink, on when it does not blink
-    call ed_blink_phase
-    cmp eax, -1
-    je 1f
-    test eax, 1
-    jnz 9f
-1:  mov edi, [rip + g_caret_x]
+    mov edi, [rip + g_caret_x]
     cmp edi, [rip + g_ed_tx]
     jl 9f
+    mov dword ptr [rip + caret_frame], 1     # on screen: a caret to blink
+    call ed_caret_shown
+    test eax, eax
+    jz 9f
+    mov edi, [rip + g_caret_x]
     # vim: a block over the character outside insert mode
     cmp dword ptr [rip + cfg_vim], 0
     je 11f
@@ -3221,23 +3237,42 @@ FN ed_clip_linewise
     jmp memeq
 1:  ret
 
-# blink_elapsed() -> ms since the last caret activity, -1 if the caret does not blink (turned off,
-# not focused, BLINK_FOR idle)
+# blink_elapsed() -> ms since the last caret activity, -1 if no caret blinks (turned off, the last
+# frame drew no caret with the keyboard, the window does not have it, BLINK_FOR idle); 0 while the
+# mouse button is held (a drag moves the caret)
 blink_elapsed:
-    cmp qword ptr [rip + g_doc], 0
-    je 1f
     cmp dword ptr [rip + cfg_cursor_blink], 0
     je 1f
-    cmp dword ptr [rip + g_focus], FOCUS_EDITOR
-    jne 1f
     cmp dword ptr [rip + g_win_focused], 0
+    je 1f
+    cmp dword ptr [rip + caret_seen], 0
     je 1f
     call time_ms
     sub rax, [rip + g_blink_t0]
     cmp rax, BLINK_FOR
-    jbe 2f
-1:  mov rax, -1
+    ja 1f
+    test dword ptr [rip + g_mdown], 1 << BTN_LEFT
+    jz 2f
+    xor eax, eax
 2:  ret
+1:  mov rax, -1
+    ret
+
+# ed_caret_shown() -> eax 1 when the caret with the keyboard shows now: the window has the keyboard,
+#   and the caret is in an even half of its blink or does not blink
+FN ed_caret_shown
+    xor eax, eax
+    cmp dword ptr [rip + g_win_focused], 0
+    je 9f
+    call ed_blink_phase
+    mov ecx, eax
+    mov eax, 1
+    cmp ecx, -1
+    je 9f
+    test ecx, 1
+    jz 9f
+    xor eax, eax
+9:  ret
 
 # ed_blink_timeout() -> ms until the caret toggles, -1 if not blinking
 FN ed_blink_timeout
@@ -3260,6 +3295,54 @@ FN ed_blink_phase
     mov ecx, BLINK_MS
     div rcx
 1:  ret
+
+# ed_caret_draw(x, y, w, h): a text field's caret with the keyboard (ui_textfield, ui_textarea,
+#   vim's command line), in its rect: noted for the blink when any of it is inside the clip (a field
+#   scrolled out of view does not blink), and drawn while the blink shows it
+FN ed_caret_draw
+    PROLOGUE 16
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    mov [rsp + 12], ecx
+    mov r8d, edi                # across: max(x, the clip's left) below min(x + w, its right)
+    mov eax, [rip + g_cv + CV_cx0]
+    cmp r8d, eax
+    cmovl r8d, eax
+    lea r9d, [rdi + rdx]
+    mov eax, [rip + g_cv + CV_cx1]
+    cmp r9d, eax
+    cmovg r9d, eax
+    cmp r8d, r9d
+    jge 1f
+    mov r8d, esi                # and down
+    mov eax, [rip + g_cv + CV_cy0]
+    cmp r8d, eax
+    cmovl r8d, eax
+    lea r9d, [rsi + rcx]
+    mov eax, [rip + g_cv + CV_cy1]
+    cmp r9d, eax
+    cmovg r9d, eax
+    cmp r8d, r9d
+    jge 1f
+    mov dword ptr [rip + caret_frame], 1
+1:  call ed_caret_shown
+    test eax, eax
+    jz 9f
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 12]
+    COLOR r8d, T_CURSOR
+    call gfx_fill
+9:  EPILOGUE
+
+# ed_blink_frame(): the frame is drawn: whether it had a caret to blink
+FN ed_blink_frame
+    mov eax, [rip + caret_frame]
+    mov [rip + caret_seen], eax
+    mov dword ptr [rip + caret_frame], 0
+    ret
 
 # ed_blink_tick(): a frame each time the caret turns on or off, and when it stops blinking
 FN ed_blink_tick

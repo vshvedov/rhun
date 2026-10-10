@@ -7,12 +7,13 @@ w=$(mktemp -d)
 trap 'rm -rf "$w"' EXIT HUP INT TERM
 mkdir -p "$w/proj"
 # run NAME LINES...: rhun headless with the script LINES in an empty folder, with the agents panel
-# (it refreshes every second) closed; output in $w/NAME
+# (it refreshes every second) closed; output in $w/NAME. Each run has its own settings, as rhun saves
+# them on exit (the panel's toggle would carry over).
 run() {
     n=$1
     shift
     printf '%s\n' 'cmd toggle_agents' 'cmd new_file' "$@" quit > "$w/$n.rsc"
-    HOME="$w" XDG_CONFIG_HOME="$w/c" XDG_STATE_HOME="$w/s" \
+    HOME="$w" XDG_CONFIG_HOME="$w/c-$n" XDG_STATE_HOME="$w/s-$n" \
         build/rhun "$w/proj" --headless 800x600 --script "$w/$n.rsc" > "$w/$n" 2>&1
 }
 # frames N: the Nth count print-frames printed
@@ -28,4 +29,20 @@ fail=0
 run toggles 'type x' print-frames 'wait 1800' print-frames
 f=$(frames 2)
 check "3 frames in 1.8 s, not ${f:-none}" between "$f" 3 4
+# a text field's caret blinks as well (the find bar here; tests/field-blink.py has them all)
+run field 'cmd find' 'type x' print-frames 'wait 1800' print-frames
+f=$(frames 2)
+check "3 frames in 1.8 s, not ${f:-none}" between "$f" 3 4
+# without a caret that has the keyboard nothing blinks, and nothing is drawn while idle
+run no-caret 'cmd toggle_sidebar' 'cmd focus_explorer' 'wait 100' print-frames 'wait 1800' print-frames
+f=$(frames 2)
+check "no frames in 1.8 s, not ${f:-none}" between "$f" 0 0
+# nor vim's command line once the keyboard has gone to the explorer
+run vim-elsewhere 'cmd toggle_vim' 'type :' 'cmd toggle_sidebar' 'cmd focus_explorer' 'wait 100' print-frames 'wait 1800' print-frames
+f=$(frames 2)
+check "no frames in 1.8 s, not ${f:-none}" between "$f" 0 0
+# nor with the find bar's keyboard focus where it is not shown (no text file)
+run hidden-field 'cmd close_tab' 'cmd find' 'type x' 'wait 100' print-frames 'wait 1800' print-frames
+f=$(frames 2)
+check "no frames in 1.8 s, not ${f:-none}" between "$f" 0 0
 exit $fail

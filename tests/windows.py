@@ -117,7 +117,7 @@ with tempfile.TemporaryDirectory(prefix='rhun-windows-', dir=OUT) as temporary:
         check('clipboard/contention-copy-and-paste', lambda: subprocess.run(
             [sys.executable, str(ROOT / 'tests/windows-clipboard.py')], check=True))
         for name in ('settings-ui', 'appearance', 'editor-matrix', 'stress', 'splitter', 'scroll-sensitivity',
-                     'file-launch', 'readonly-save'):
+                     'file-launch', 'readonly-save', 'field-blink'):
             check('ui/' + name, lambda name=name: subprocess.run(
                 [sys.executable, str(ROOT / ('tests/' + name + '.py'))], check=True,
                 env=dict(os.environ, RHUN_TEST_EXE=str(OUT / 'rhun.com'))))
@@ -151,7 +151,7 @@ with tempfile.TemporaryDirectory(prefix='rhun-windows-', dir=OUT) as temporary:
                      'tests/scripts/' + name + '.rsc', env=environment('ui-' + name))
         equal(result.stdout, (ROOT / 'tests/data' / (name + '.ui.expected')).read_bytes())
 
-    for name in ['editing', 'clipboard', 'movelines', 'find', 'findcase', 'replace', 'tabs', 'vim', 'wrap', 'togglecomment',
+    for name in ['editing', 'clipboard', 'movelines', 'find', 'findcase', 'replace', 'tabs', 'reopen', 'vim', 'wrap', 'togglecomment',
                  'highlight', 'image', 'mouse', 'cursor', 'compose', 'contextmenu',
                  'titlebar', 'titlebar-tap']:
         check('ui/' + name, lambda name=name: ui(name))
@@ -335,6 +335,22 @@ with tempfile.TemporaryDirectory(prefix='rhun-windows-', dir=OUT) as temporary:
         equal(file.read_bytes(), 'saved Ω\n'.encode())
         assert 'saved Ω'.encode() in output, output
     check('paths/backslash-save-as-and-open', path_prompts)
+
+    def shift_wheel():
+        # Shift turns the editor's wheel sideways, as in other Windows apps (discussion 67)
+        project = temp / 'shift wheel'
+        project.mkdir()
+        wide = project / 'wide.txt'
+        wide.write_text(''.join(f'line {i:02d} ' + 'wide ' * 60 + '\n' for i in range(80)),
+                        encoding='utf-8', newline='\n')
+        script = script_file('shift-wheel', 'move 500 350\nscroll 120 shift\nwait 50\nprint-scroll\n'
+                                            'scroll 120\nwait 50\nprint-scroll\nquit\n')
+        output = run('rhun.com', winpath(project), winpath(wide), '--headless', '1000x700', '--script',
+                     script, env=environment('shift-wheel')).stdout.decode()
+        sideways, down = [line.split()[:2] for line in output.splitlines() if line.startswith('x=')]
+        assert sideways == ['x=120', 'y=0'], output
+        assert down[0] == 'x=120' and down[1] != 'y=0', output
+    check('wheel/shift-scrolls-sideways', shift_wheel)
 
     def control():
         result = run('rhun.com', '--headless', '800x600', '--control', winpath(temp / 'control'), success=False,

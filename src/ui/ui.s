@@ -1482,9 +1482,12 @@ FN ui_textfield
     push rax
     call ui_text_v
     add rsp, 16
-7:  # caret
+7:  # caret, blinking as the editor's
     cmp dword ptr [rsp + 16], 0
     je 8f
+    call ed_caret_shown
+    test eax, eax
+    jz 8f
     lea rdi, [rip + g_face_ui]
     mov rsi, r14
     mov rdx, [rbx + TF_cur]
@@ -2043,6 +2046,9 @@ FN ui_textarea
 .Lta_caret:
     cmp dword ptr [rsp + 16], 0
     je 9f
+    call ed_caret_shown          # blinking as the editor's
+    test eax, eax
+    jz 9f
     mov eax, [rsp + 72]
     sub eax, [rbx + TF_top]
     imul eax, [rsp + 32]

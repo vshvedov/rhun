@@ -4291,7 +4291,10 @@ FN vim_cmdline_draw
     push rax
     call ui_text_v
     add rsp, 16
-    # caret: as tall as the text, centered like it
+    # caret: as tall as the text, centered like it, blinking as the editor's
+    call ed_caret_shown
+    test eax, eax
+    jz 9f
     lea rax, [rip + g_face_small]
     mov ecx, [rax + FACE_ascent]
     add ecx, [rax + FACE_descent]
@@ -4303,7 +4306,7 @@ FN vim_cmdline_draw
     M edx, MI_2
     COLOR r8d, T_CURSOR
     call gfx_fill
-    EPILOGUE
+9:  EPILOGUE
 
 # vim_ex(ptr, len): run a command typed after ':'
 FN vim_ex

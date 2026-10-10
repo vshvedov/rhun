@@ -1449,6 +1449,15 @@ FN app_on_pointer_leave
 # app_on_button(btn, pressed, mods)
 FN app_on_button
     mov [rip + g_mods], edx
+    # the caret shows at once, as after a key: a press or a release may have placed it
+    push rdi
+    push rsi
+    push rdx
+    call time_ms
+    mov [rip + g_blink_t0], rax
+    pop rdx
+    pop rsi
+    pop rdi
     call ui_input_button
     mov dword ptr [rip + g_dirty], 1
     ret
@@ -1551,6 +1560,23 @@ FN app_on_paste
     call ed_paste
 9:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
+
+# app_caret_focus() -> eax 1 when a caret has the keyboard: the editor's (with a text file) or a text
+#   field's (the palette and its prompts, the find bar, a setting, vim's command line, the commit
+#   message)
+FN app_caret_focus
+    mov eax, 1
+    cmp dword ptr [rip + g_focus], FOCUS_SCM
+    je 9f
+    cmp dword ptr [rip + g_focus], FOCUS_EDITOR
+    jne 1f
+    cmp qword ptr [rip + g_doc], 0
+    jne 9f
+1:  call focused_field
+    test rax, rax
+    setnz al
+    movzx eax, al
+9:  ret
 
 # focused_field() -> TF* that has keyboard focus, or 0
 focused_field:

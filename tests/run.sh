@@ -61,6 +61,7 @@ sh tests/update.sh || fail=1
 python3 tests/commit-ai.py || fail=1
 sh tests/detach.sh || fail=1
 sh tests/blink.sh || fail=1
+python3 tests/field-blink.py || fail=1
 sh tests/session.sh || fail=1
 python3 tests/desktop-ux.py || fail=1
 python3 tests/mac-launch.py || fail=1

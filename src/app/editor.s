@@ -33,6 +33,8 @@ widest_due: .quad 0             # time_ms when a long text paused in doc_widest 
 .p2align 3
 g_blink_t0: .quad 0
 blink_seen: .long 0             # the half of the blink the last frame was asked for
+caret_frame: .long 0            # this frame drew the caret that has the keyboard (ed_caret_shown)
+caret_seen: .long 0             # the last frame did: only then is there a caret to blink
 classes: .zero SB_SIZE          # per-byte syntax class for the line being drawn
 clip_sb: .zero SB_SIZE
 .globl g_ed_find, g_ed_find_case
@@ -3233,31 +3235,32 @@ FN ed_clip_linewise
     jmp memeq
 1:  ret
 
-# blink_elapsed() -> ms since the last caret activity, -1 if no caret blinks (turned off, no caret
-# has the keyboard, the window does not, BLINK_FOR idle); 0 while a mouse button is held (a drag
-# moves the caret)
+# blink_elapsed() -> ms since the last caret activity, -1 if no caret blinks (turned off, the last
+# frame drew no caret with the keyboard, the window does not have it, BLINK_FOR idle); 0 while the
+# mouse button is held (a drag moves the caret)
 blink_elapsed:
     cmp dword ptr [rip + cfg_cursor_blink], 0
     je 1f
     cmp dword ptr [rip + g_win_focused], 0
     je 1f
-    call app_caret_focus
-    test eax, eax
-    jz 1f
-    xor eax, eax
-    test dword ptr [rip + g_mdown], 1 << BTN_LEFT
-    jnz 2f
+    cmp dword ptr [rip + caret_seen], 0
+    je 1f
     call time_ms
     sub rax, [rip + g_blink_t0]
     cmp rax, BLINK_FOR
-    jbe 2f
-1:  mov rax, -1
+    ja 1f
+    test dword ptr [rip + g_mdown], 1 << BTN_LEFT
+    jz 2f
+    xor eax, eax
 2:  ret
+1:  mov rax, -1
+    ret
 
 # ed_caret_shown() -> eax 1 when the caret with the keyboard shows now: the window has the keyboard,
-#   and the caret is in an even half of its blink or does not blink. The editor's caret and the text
-#   fields' (ui_textfield, ui_textarea, vim's command line) follow it.
+#   and the caret is in an even half of its blink or does not blink. Whatever draws that caret asks
+#   (the editor, ui_textfield, ui_textarea, vim's command line), which also tells the blink there is one.
 FN ed_caret_shown
+    mov dword ptr [rip + caret_frame], 1
     xor eax, eax
     cmp dword ptr [rip + g_win_focused], 0
     je 9f
@@ -3292,6 +3295,13 @@ FN ed_blink_phase
     mov ecx, BLINK_MS
     div rcx
 1:  ret
+
+# ed_blink_frame(): the frame is drawn: whether it had a caret to blink
+FN ed_blink_frame
+    mov eax, [rip + caret_frame]
+    mov [rip + caret_seen], eax
+    mov dword ptr [rip + caret_frame], 0
+    ret
 
 # ed_blink_tick(): a frame each time the caret turns on or off, and when it stops blinking
 FN ed_blink_tick

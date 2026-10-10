@@ -1561,23 +1561,6 @@ FN app_on_paste
 9:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
-# app_caret_focus() -> eax 1 when a caret has the keyboard: the editor's (with a text file) or a text
-#   field's (the palette and its prompts, the find bar, a setting, vim's command line, the commit
-#   message)
-FN app_caret_focus
-    mov eax, 1
-    cmp dword ptr [rip + g_focus], FOCUS_SCM
-    je 9f
-    cmp dword ptr [rip + g_focus], FOCUS_EDITOR
-    jne 1f
-    cmp qword ptr [rip + g_doc], 0
-    jne 9f
-1:  call focused_field
-    test rax, rax
-    setnz al
-    movzx eax, al
-9:  ret
-
 # focused_field() -> TF* that has keyboard focus, or 0
 focused_field:
     mov eax, [rip + g_focus]
@@ -2221,7 +2204,8 @@ FN app_render
     jz 2f
     call edge_cursor
     mov [rip + g_cursor], eax
-2:  call ui_end
+2:  call ed_blink_frame
+    call ui_end
     # scripted screenshot
     mov rdi, [rip + g_shot_path]
     test rdi, rdi
@@ -2281,6 +2265,7 @@ resize_edges:
     push rax
     mov edi, eax
     PCALL P_resize
+    and dword ptr [rip + g_mdown], ~(1 << BTN_LEFT)   # the release goes to the compositor
     pop rax
     pop rax
 9:  ret

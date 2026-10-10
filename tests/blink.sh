@@ -37,4 +37,8 @@ check "3 frames in 1.8 s, not ${f:-none}" between "$f" 3 4
 run no-caret 'cmd toggle_sidebar' 'cmd focus_explorer' 'wait 100' print-frames 'wait 1800' print-frames
 f=$(frames 2)
 check "no frames in 1.8 s, not ${f:-none}" between "$f" 0 0
+# nor with the find bar's keyboard focus where it is not shown (no text file)
+run hidden-field 'cmd close_tab' 'cmd find' 'type x' 'wait 100' print-frames 'wait 1800' print-frames
+f=$(frames 2)
+check "no frames in 1.8 s, not ${f:-none}" between "$f" 0 0
 exit $fail

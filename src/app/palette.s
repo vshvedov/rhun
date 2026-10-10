@@ -2384,7 +2384,14 @@ FN palette_draw
     sub ecx, eax
     sub ecx, eax
     M r8d, MI_32
+    xor r9d, r9d                # focused while keys come to it
+    cmp dword ptr [rip + g_focus], FOCUS_PALETTE
+    je .Lpd_focused
+    cmp dword ptr [rip + g_focus], FOCUS_PROMPT
+    jne .Lpd_field
+.Lpd_focused:
     mov r9d, 1
+.Lpd_field:
     push r10
     push r10
     call ui_textfield

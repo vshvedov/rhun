@@ -1003,8 +1003,11 @@ FN settings_draw
     mov edx, [rsp + 60]
     mov ecx, [rsp + 44]
     M r8d, MI_32
+    xor r9d, r9d                # focused while keys come to it
+    cmp dword ptr [rip + g_focus], FOCUS_SETTINGS
+    jne 71f
     mov r9d, 1
-    lea rax, [rip + .Lbuiltin]
+71: lea rax, [rip + .Lbuiltin]
     push rax
     push rax
     call ui_textfield

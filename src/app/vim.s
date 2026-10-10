@@ -4291,7 +4291,10 @@ FN vim_cmdline_draw
     push rax
     call ui_text_v
     add rsp, 16
-    # caret: as tall as the text, centered like it, blinking as the editor's
+    # caret, while the command line has the keyboard: as tall as the text, centered like it,
+    # blinking as the editor's
+    cmp dword ptr [rip + g_focus], FOCUS_EDITOR
+    jne 9f
     call ed_caret_shown
     test eax, eax
     jz 9f

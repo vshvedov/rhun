@@ -15,6 +15,7 @@
 .equ SER_SCHEME, 4              # the serials of the two Read calls below
 .equ SER_GTK, 5
 .equ INI_DIR_EVENTS, IN_CLOSE_WRITE | IN_MOVED_TO | IN_MOVED_FROM | IN_CREATE | IN_DELETE | IN_ONLYDIR
+.equ AGAIN_MS, 250              # the second look at the folders after inotify activity (ini_again)
 
 .data
 .p2align 2
@@ -25,6 +26,12 @@ portal_name: .long -1           # each source's GTK theme: 1 a dark one, 0 anoth
 xs_name: .long -1
 ini_name: .long -1
 ini_prefer: .long -1            # settings.ini's gtk-application-prefer-dark-theme
+again_fd: .long -1              # a timerfd for ini_again
+seen_end: .long -1              # where ini_add_watches last left the watches: the search's end and the
+seen_gtk3: .long -1             # gtk folders' watches (or errors)
+seen_gtk4: .long -1
+.p2align 3
+again_in: .quad 0, 0, 0, AGAIN_MS * 1000000    # itimerspec: once, AGAIN_MS from now
 
 .bss
 .p2align 3
@@ -248,13 +255,26 @@ ini_watch:
     lea rdx, [rip + ini_readable]
     xor ecx, ecx
     call watch_add
+    mov edi, CLOCK_MONOTONIC
+    mov esi, O_NONBLOCK | O_CLOEXEC
+    SYS SYS_timerfd_create
+    test rax, rax
+    js 9f
+    mov [rip + again_fd], eax
+    mov edi, eax
+    mov esi, POLLIN
+    lea rdx, [rip + ini_again]
+    xor ecx, ecx
+    call watch_add
+    call again_arm              # folders may be in the making as rhun starts too
 9:  EPILOGUE
 
-# ini_add_watches(): the config folder (for gtk-3.0 and gtk-4.0 appearing), or while it does not
-# exist the nearest folder above it (for it appearing), and the gtk folders. Adding a watch again
-# only renews it. A folder made below the one found before its watch began sends nothing (mkdir -p
-# makes them all at once), so the search runs again until it ends at the same watch twice: the
-# same folder, watched since the last search looked below it, not one made again in its place.
+# ini_add_watches() -> eax 1 when the watches end elsewhere than last time: the config folder (for
+# gtk-3.0 and gtk-4.0 appearing), or while it does not exist the nearest folder above it (for it
+# appearing), and the gtk folders. Adding a watch again only renews it. A folder made below the one
+# found before its watch began sends nothing (mkdir -p makes them all at once), so the search runs
+# again until it ends at the same watch twice: the same folder, watched since the last search looked
+# below it, not one made again in its place.
 ini_add_watches:
     PROLOGUE
     lea rdi, [rip + cfg_root]
@@ -290,18 +310,31 @@ ini_add_watches:
     mov r12d, ebx
     dec r13d
     jnz 0b
-4:  lea rdi, [rip + .Lgtk3_dir]
+4:  xor r15d, r15d
+    cmp ebx, [rip + seen_end]
+    setne r15b
+    mov [rip + seen_end], ebx
+    lea rdi, [rip + .Lgtk3_dir]
     call user_path
     mov edi, [rip + ino_fd]
     mov rsi, rax
     mov edx, INI_DIR_EVENTS
     SYS SYS_inotify_add_watch
+    cmp eax, [rip + seen_gtk3]
+    setne cl
+    or r15b, cl
+    mov [rip + seen_gtk3], eax
     lea rdi, [rip + .Lgtk4_dir]
     call user_path
     mov edi, [rip + ino_fd]
     mov rsi, rax
     mov edx, INI_DIR_EVENTS
     SYS SYS_inotify_add_watch
+    cmp eax, [rip + seen_gtk4]
+    setne cl
+    or r15b, cl
+    mov [rip + seen_gtk4], eax
+    mov eax, r15d
     EPILOGUE
 
 # ini_readable(fd, revents, ctx)
@@ -316,7 +349,39 @@ ini_readable:
     call ini_add_watches
     call ini_read
     call report
+    call again_arm
     EPILOGUE
+
+# ini_again(fd, revents, ctx): a second look, AGAIN_MS after inotify spoke. A folder made in the
+# moment its parent's watch is added can go unreported even though the search looked below that
+# parent again once its watch was in place (a stress loop of tests/linux-appearance.py's made-at-once
+# rounds lost one in 1,000 to 12,000 that way), and so can settings.ini in a gtk folder just watched.
+# So the folders and the files are looked at again, and again for as long as the watches move.
+ini_again:
+    PROLOGUE
+    mov edi, [rip + again_fd]
+    lea rsi, [rip + ino_buf]
+    mov edx, 8
+    SYS SYS_read
+    call ini_add_watches
+    mov ebx, eax
+    call ini_read
+    call report
+    test ebx, ebx
+    jz 9f
+    call again_arm
+9:  EPILOGUE
+
+# again_arm(): ini_again AGAIN_MS from now (a later arming moves it)
+again_arm:
+    mov edi, [rip + again_fd]
+    test edi, edi
+    js 1f
+    xor esi, esi
+    lea rdx, [rip + again_in]
+    xor r10d, r10d
+    SYS SYS_timerfd_settime
+1:  ret
 
 # ---------------------------------------------------------------- the portal over D-Bus
 

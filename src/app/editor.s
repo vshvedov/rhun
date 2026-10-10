@@ -3123,12 +3123,14 @@ draw_caret:
     jne 9f
     cmp dword ptr [rip + g_focus], FOCUS_EDITOR
     jne 9f
+    mov edi, [rip + g_caret_x]
+    cmp edi, [rip + g_ed_tx]
+    jl 9f
+    mov dword ptr [rip + caret_frame], 1     # on screen: a caret to blink
     call ed_caret_shown
     test eax, eax
     jz 9f
     mov edi, [rip + g_caret_x]
-    cmp edi, [rip + g_ed_tx]
-    jl 9f
     # vim: a block over the character outside insert mode
     cmp dword ptr [rip + cfg_vim], 0
     je 11f
@@ -3257,10 +3259,8 @@ blink_elapsed:
     ret
 
 # ed_caret_shown() -> eax 1 when the caret with the keyboard shows now: the window has the keyboard,
-#   and the caret is in an even half of its blink or does not blink. Whatever draws that caret asks
-#   (the editor, ui_textfield, ui_textarea, vim's command line), which also tells the blink there is one.
+#   and the caret is in an even half of its blink or does not blink
 FN ed_caret_shown
-    mov dword ptr [rip + caret_frame], 1
     xor eax, eax
     cmp dword ptr [rip + g_win_focused], 0
     je 9f
@@ -3295,6 +3295,47 @@ FN ed_blink_phase
     mov ecx, BLINK_MS
     div rcx
 1:  ret
+
+# ed_caret_draw(x, y, w, h): a text field's caret with the keyboard (ui_textfield, ui_textarea,
+#   vim's command line), in its rect: noted for the blink when any of it is inside the clip (a field
+#   scrolled out of view does not blink), and drawn while the blink shows it
+FN ed_caret_draw
+    PROLOGUE 16
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    mov [rsp + 12], ecx
+    mov r8d, edi                # across: max(x, the clip's left) below min(x + w, its right)
+    mov eax, [rip + g_cv + CV_cx0]
+    cmp r8d, eax
+    cmovl r8d, eax
+    lea r9d, [rdi + rdx]
+    mov eax, [rip + g_cv + CV_cx1]
+    cmp r9d, eax
+    cmovg r9d, eax
+    cmp r8d, r9d
+    jge 1f
+    mov r8d, esi                # and down
+    mov eax, [rip + g_cv + CV_cy0]
+    cmp r8d, eax
+    cmovl r8d, eax
+    lea r9d, [rsi + rcx]
+    mov eax, [rip + g_cv + CV_cy1]
+    cmp r9d, eax
+    cmovg r9d, eax
+    cmp r8d, r9d
+    jge 1f
+    mov dword ptr [rip + caret_frame], 1
+1:  call ed_caret_shown
+    test eax, eax
+    jz 9f
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 12]
+    COLOR r8d, T_CURSOR
+    call gfx_fill
+9:  EPILOGUE
 
 # ed_blink_frame(): the frame is drawn: whether it had a caret to blink
 FN ed_blink_frame

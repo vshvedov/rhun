@@ -118,6 +118,31 @@ class FieldBlink(unittest.TestCase):
         y = settings_row_y('ui', 'font')
         self.check('setting', ['cmd settings', f'click 900 {y}', 'type x'], size='1400x900')
 
+    def test_a_field_scrolled_out_of_view_does_not_blink(self):
+        # a setting being typed, its page scrolled until the field is gone: no frames for a caret no
+        # one sees, and the blink again once it is back
+        config = self.work / 'config/rhun/config'
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text('[ui]\nsidebar = false\nagents_panel = false\ntooltips = false\n'
+                          'auto_hide_scrollbars = false\n'
+                          '[files]\nrestore_session = false\nrestore_project = false\n'
+                          '[git]\nenabled = false\n[updates]\ncheck = false\n', encoding='utf-8')
+        y = settings_row_y('ui', 'font')
+        script = self.work / 'actions.rsc'
+        script.write_text('\n'.join(['cmd settings', f'click 900 {y}', 'type x', 'move 700 450',
+                                     'scroll 3000', 'wait 150', 'print-frames', 'wait 1800', 'print-frames',
+                                     'scroll -3000', 'type y', 'wait 150', 'print-frames', 'wait 1800',
+                                     'print-frames', 'print-state', 'quit']) + '\n', encoding='utf-8')
+        result = subprocess.run([str(EXE), self.project.as_posix(), '--headless', '1400x900', '--scale', '1',
+                                 '--script', script.as_posix()], env=self.env, capture_output=True,
+                                text=True, encoding='utf-8', timeout=60)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        frames = [int(line.removeprefix('frames=')) for line in lines if line.startswith('frames=')]
+        self.assertLessEqual(frames[1], 1, result.stdout)     # at most the frame that ends the blink
+        self.assertIn(frames[3], (3, 4), result.stdout)
+        self.assertIn(' focus=4 ', lines[-1])
+
     def test_vims_command_line(self):
         self.check('vim command line', [f'open {(self.project / "notes.txt").as_posix()}', 'cmd toggle_vim', 'type :s'])
 

@@ -4295,9 +4295,6 @@ FN vim_cmdline_draw
     # blinking as the editor's
     cmp dword ptr [rip + g_focus], FOCUS_EDITOR
     jne 9f
-    call ed_caret_shown
-    test eax, eax
-    jz 9f
     lea rax, [rip + g_face_small]
     mov ecx, [rax + FACE_ascent]
     add ecx, [rax + FACE_descent]
@@ -4307,8 +4304,7 @@ FN vim_cmdline_draw
     add esi, r13d
     mov edi, [rsp + 8]
     M edx, MI_2
-    COLOR r8d, T_CURSOR
-    call gfx_fill
+    call ed_caret_draw
 9:  EPILOGUE
 
 # vim_ex(ptr, len): run a command typed after ':'

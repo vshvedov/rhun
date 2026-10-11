@@ -44,6 +44,8 @@ check agent-conn-bigline build/agent_conn_test bigline tests/scripts/fake-agent.
 check agent-auth-env sh -c 'for a in claude codex grok opencode; do build/agent_auth_test env $a; done'
 check agent-auth-classify sh -c 'for f in $(ls tests/data/agent-auth/* | LC_ALL=C sort); do build/agent_auth_test classify $f; done'
 python3 tests/agent-auth.py || fail=1
+check agent-auth-post sh -c 'for f in $(ls tests/data/agent-auth-post/* | LC_ALL=C sort); do build/agent_auth_test post $f; done'
+check agent-auth-lock build/agent_auth_test lock
 check textarea build/textarea_test
 check strfind build/str_test tests/data/strfind.txt
 check versions build/update_test tests/data/versions.txt

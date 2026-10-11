@@ -680,3 +680,617 @@ FN agent_auth_timeout
     je 9f
     mov eax, 100
 9:  ret
+
+# ---------- after-start checks: pure, on what each driver reads after its start handshake ----------
+.section .rodata
+.Lk_apiKeySource: .asciz "apiKeySource"
+.Lv_none: .asciz "none"
+.Lk_account: .asciz "account"
+.Lv_chatgpt: .asciz "chatgpt"
+.Lv_apiKey: .asciz "apiKey"
+.Lk_authMethods: .asciz "authMethods"
+.Lk_meta: .asciz "_meta"
+.Lk_default: .asciz "defaultAuthMethodId"
+.Lv_xai_key: .asciz "xai.api_key"
+.p2align 3
+grok_oauth_ids: .quad .Lv_cached, .Lv_grokcom, .Lv_oidc, 0
+.Lv_cached: .asciz "cached_token"
+.Lv_grokcom: .asciz "grok.com"
+.Lv_oidc: .asciz "oidc"
+.Lk_enabled: .asciz "enabled_providers"
+.Lk_small: .asciz "small_model"
+.Lk_model: .asciz "model"
+.Lk_agent: .asciz "agent"
+.Lk_provider: .asciz "provider"
+.Lk_models: .asciz "models"
+.Lk_name: .asciz "name"
+.Lp_agent_dot: .asciz "agent."
+.Lp_dot_model: .asciz ".model"
+.Lp_provider_dot: .asciz "provider."
+.Lp_dot: .asciz "."
+.Lt_model_dot: .ascii "model."
+.Lt_api_key: .asciz "api_key"
+.Lt_env_key: .asciz "env_key"
+.Lslash: .byte '/'
+.text
+
+# auth_claude_init(jv) -> AUTH_*: system/init's apiKeySource
+FN auth_claude_init
+    push rbx
+    lea rsi, [rip + .Lk_apiKeySource]
+    call json_get
+    mov rbx, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_STR
+    jne 3f
+    mov rdi, rbx
+    lea rsi, [rip + .Lv_none]
+    call json_is
+    test eax, eax
+    jz 2f
+    mov eax, AUTH_OK
+    pop rbx
+    ret
+2:  mov eax, AUTH_KEY
+    pop rbx
+    ret
+3:  mov eax, AUTH_UNKNOWN
+    pop rbx
+    ret
+
+# auth_codex_account(jv) -> AUTH_*: account/read's account.type
+FN auth_codex_account
+    push rbx
+    lea rsi, [rip + .Lk_account]
+    call json_get
+    mov rbx, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_NULL
+    je 1f
+    cmp eax, JT_OBJ
+    jne 3f
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_type]
+    call json_get
+    mov rbx, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lv_chatgpt]
+    call json_is
+    test eax, eax
+    jnz 0f
+    mov rdi, rbx
+    lea rsi, [rip + .Lv_apiKey]
+    call json_is
+    test eax, eax
+    jnz 2f
+    jmp 3f
+0:  mov eax, AUTH_OK
+    pop rbx
+    ret
+1:  mov eax, AUTH_OUT
+    pop rbx
+    ret
+2:  mov eax, AUTH_KEY
+    pop rbx
+    ret
+3:  mov eax, AUTH_UNKNOWN
+    pop rbx
+    ret
+
+# auth_grok_init(jv) -> AUTH_*: the initialize result's authMethods order and default
+FN auth_grok_init
+    PROLOGUE
+    mov rbx, rdi
+    lea rsi, [rip + .Lk_authMethods]
+    call json_get
+    mov r12, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_ARR
+    jne .Lagi_unknown
+    mov rdi, r12
+    xor esi, esi
+    call json_at
+    test rax, rax
+    jz .Lagi_unknown
+    mov rdi, rax
+    lea rsi, [rip + .Lk_id]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_xai_key]
+    call json_is
+    test eax, eax
+    jnz .Lagi_key
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_meta]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lk_default]
+    call json_get
+    mov r13, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_NULL
+    je .Lagi_out
+    cmp eax, JT_STR
+    jne .Lagi_unknown
+    lea r14, [rip + grok_oauth_ids]
+1:  mov rsi, [r14]
+    test rsi, rsi
+    jz .Lagi_unknown
+    mov rdi, r13
+    call json_is
+    test eax, eax
+    jnz .Lagi_ok
+    add r14, 8
+    jmp 1b
+.Lagi_ok:
+    mov eax, AUTH_OK
+    EPILOGUE
+.Lagi_out:
+    mov eax, AUTH_OUT
+    EPILOGUE
+.Lagi_key:
+    mov eax, AUTH_KEY
+    EPILOGUE
+.Lagi_unknown:
+    mov eax, AUTH_UNKNOWN
+    EPILOGUE
+
+# auth_opencode_lock(sb, ids, small): the OPENCODE_CONFIG_CONTENT value for the space-separated ids
+# (jw_begin empties sb first)
+FN auth_opencode_lock
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, rbx
+    call jw_begin
+    mov rdi, rbx
+    call jw_obj
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_enabled]
+    call jw_key
+    mov rdi, rbx
+    call jw_arr
+    mov rdi, r12
+    call strlen
+    mov r14, r12
+    mov r15, rax
+1:  mov rdi, r14
+    mov rsi, r15
+    call next_word
+    test rdx, rdx
+    jz 2f
+    add r14, rcx
+    sub r15, rcx
+    mov rdi, rbx
+    mov rsi, rax
+    call jw_str
+    jmp 1b
+2:  mov rdi, rbx
+    call jw_end_arr
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_small]
+    call jw_key
+    mov rdi, rbx
+    mov rsi, r13
+    call jw_cstr
+    mov rdi, rbx
+    call jw_end_obj
+    EPILOGUE
+
+# in_ids(ptr, len, ids) -> 1 if the word is one of the space-separated ids
+in_ids:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, rdx
+    call strlen
+    mov r14, rax
+1:  mov rdi, r13
+    mov rsi, r14
+    call next_word
+    test rdx, rdx
+    jz 8f
+    add r13, rcx
+    sub r14, rcx
+    mov rcx, rdx
+    mov rdx, rax
+    mov rdi, rbx
+    mov rsi, r12
+    call str_eq
+    test eax, eax
+    jz 1b
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# count_ids(ids) -> the number of words
+count_ids:
+    PROLOGUE
+    mov rbx, rdi
+    call strlen
+    mov r12, rax
+    xor r13d, r13d
+1:  mov rdi, rbx
+    mov rsi, r12
+    call next_word
+    test rdx, rdx
+    jz 2f
+    add rbx, rcx
+    sub r12, rcx
+    inc r13d
+    jmp 1b
+2:  mov eax, r13d
+    EPILOGUE
+
+# model_ok(jv, ids) -> 1 if jv is absent, or a string "provider/model" whose provider is in ids;
+# a value of any other type fails
+model_ok:
+    PROLOGUE
+    test rdi, rdi
+    jz 9f
+    mov r12, rsi
+    call json_str
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + .Lslash]
+    mov ecx, 1
+    call str_find
+    test rax, rax
+    js 8f
+    mov rdi, rbx
+    mov rsi, rax
+    mov rdx, r12
+    call in_ids
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+9:  mov eax, 1
+    EPILOGUE
+
+# refuse(sb, prefix cstr, ptr, len, suffix cstr): note the offending key path
+refuse:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov r15, r8
+    mov rdi, rbx
+    mov rsi, r12
+    call sb_push_cstr
+    test r14, r14
+    jz 1f
+    mov rdi, rbx
+    mov rsi, r13
+    mov rdx, r14
+    call sb_push
+1:  test r15, r15
+    jz 2f
+    mov rdi, rbx
+    mov rsi, r15
+    call sb_push_cstr
+2:  EPILOGUE
+
+# auth_opencode_config(jv, ids, small, sb) -> AUTH_OK or AUTH_UNKNOWN (the key path in sb):
+# the resolved configuration from `opencode debug config`, checked against the lock. enabled_providers
+# must be exactly the ids; model, small_model and every agent.<name>.model, where present, must name
+# one of them (small_model is checked like model, so small is not read); an allowed provider's
+# provider.<id> entry may hold nothing but models, each with only id and name.
+# Locals: [rsp] the id count, then the ids left; [rsp + 8] the index, then their length;
+# [rsp + 16] the id's length; [rsp + 24] the offending key.
+FN auth_opencode_config
+    PROLOGUE 32
+    mov rbx, rdi
+    mov r12, rsi
+    mov r14, rcx
+    # enabled_providers: exactly the ids
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_enabled]
+    call json_get
+    mov r15, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_ARR
+    jne .Laoc2_enabled
+    mov rdi, r12
+    call count_ids
+    mov [rsp], rax
+    mov rdi, r15
+    call json_len
+    cmp rax, [rsp]
+    jne .Laoc2_enabled
+    mov qword ptr [rsp + 8], 0
+1:  mov rax, [rsp + 8]
+    cmp rax, [rsp]
+    jae 2f
+    mov rdi, r15
+    mov rsi, rax
+    call json_at
+    mov rdi, rax
+    call json_str
+    mov rdi, rax
+    mov rsi, rdx
+    mov rdx, r12
+    call in_ids
+    test eax, eax
+    jz .Laoc2_enabled
+    inc qword ptr [rsp + 8]
+    jmp 1b
+2:  # model and small_model
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_model]
+    call json_get
+    mov rdi, rax
+    mov rsi, r12
+    call model_ok
+    test eax, eax
+    jz .Laoc2_model
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_small]
+    call json_get
+    mov rdi, rax
+    mov rsi, r12
+    call model_ok
+    test eax, eax
+    jz .Laoc2_small
+    # agent.<name>.model for every agent
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_agent]
+    call json_get
+    mov r15, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_OBJ
+    jne 5f
+    xor r13d, r13d              # the agent index
+3:  cmp r13d, [r15 + JV_n]
+    jae 5f
+    mov rax, [r15 + JV_ptr]
+    mov rcx, r13
+    shl rcx, 4
+    mov rdi, [rax + rcx + 8]    # the agent
+    lea rsi, [rip + .Lk_model]
+    call json_get
+    mov rdi, rax
+    mov rsi, r12
+    call model_ok
+    test eax, eax
+    jz .Laoc2_agent
+    inc r13d
+    jmp 3b
+5:  # provider.<id> for each allowed id: only "models", each with only id and name
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_provider]
+    call json_get
+    mov r15, rax
+    test rax, rax
+    jz .Laoc2_ok
+    mov rdi, r12
+    call strlen
+    mov [rsp], r12
+    mov [rsp + 8], rax
+6:  mov rdi, [rsp]
+    mov rsi, [rsp + 8]
+    call next_word
+    test rdx, rdx
+    jz .Laoc2_ok
+    add [rsp], rcx
+    sub [rsp + 8], rcx
+    mov [rsp + 16], rdx
+    mov rdi, rax
+    mov rsi, rdx
+    call mem_dup                # a cstr id for json_get
+    mov r13, rax
+    mov rdi, r15
+    mov rsi, rax
+    call json_get
+    mov rdi, rax
+    call provider_entry_ok
+    test rax, rax
+    jz 7f
+    mov [rsp + 24], rax
+    mov rdi, r14
+    lea rsi, [rip + .Lp_provider_dot]
+    mov rdx, r13
+    mov rcx, [rsp + 16]
+    lea r8, [rip + .Lp_dot]
+    call refuse
+    mov rax, [rsp + 24]
+    cmp rax, -1
+    je 61f
+    mov rdi, r14
+    mov rsi, [rax + JV_ptr]
+    mov edx, [rax + JV_n]
+    call sb_push
+    jmp 62f
+61: mov rdi, r14
+    lea rsi, [rip + .Lk_models]
+    call sb_push_cstr
+62: mov rdi, r13
+    call mem_free
+    mov eax, AUTH_UNKNOWN
+    EPILOGUE
+7:  mov rdi, r13
+    call mem_free
+    jmp 6b
+.Laoc2_ok:
+    mov eax, AUTH_OK
+    EPILOGUE
+.Laoc2_enabled:
+    mov rdi, r14
+    lea rsi, [rip + .Lk_enabled]
+    call sb_push_cstr
+    mov eax, AUTH_UNKNOWN
+    EPILOGUE
+.Laoc2_model:
+    mov rdi, r14
+    lea rsi, [rip + .Lk_model]
+    call sb_push_cstr
+    mov eax, AUTH_UNKNOWN
+    EPILOGUE
+.Laoc2_small:
+    mov rdi, r14
+    lea rsi, [rip + .Lk_small]
+    call sb_push_cstr
+    mov eax, AUTH_UNKNOWN
+    EPILOGUE
+.Laoc2_agent:
+    mov rax, [r15 + JV_ptr]
+    mov rcx, r13
+    shl rcx, 4
+    mov rax, [rax + rcx]        # the agent's name
+    mov rdi, r14
+    lea rsi, [rip + .Lp_agent_dot]
+    mov rdx, [rax + JV_ptr]
+    mov ecx, [rax + JV_n]
+    lea r8, [rip + .Lp_dot_model]
+    call refuse
+    mov eax, AUTH_UNKNOWN
+    EPILOGUE
+
+# provider_entry_ok(jv) -> 0 when absent or an object with nothing but "models" of {id, name}
+# entries; else the JV* of the offending key, or -1 for a bad models value or model entry
+provider_entry_ok:
+    PROLOGUE
+    mov rbx, rdi
+    call json_type
+    cmp eax, JT_OBJ
+    jne .Lpe_ok                 # absent, or not an object: nothing to configure with
+    xor r12d, r12d              # the key index
+1:  cmp r12d, [rbx + JV_n]
+    jae .Lpe_ok
+    mov rax, [rbx + JV_ptr]
+    mov rcx, r12
+    shl rcx, 4
+    mov r13, [rax + rcx]        # key
+    mov r14, [rax + rcx + 8]    # value
+    mov rdi, [r13 + JV_ptr]
+    mov esi, [r13 + JV_n]
+    lea rdx, [rip + .Lk_models]
+    call str_eq_cstr
+    test eax, eax
+    jz .Lpe_key
+    mov rdi, r14
+    call json_type
+    cmp eax, JT_OBJ
+    jne .Lpe_bad_model
+    xor r15d, r15d              # the model index
+2:  cmp r15d, [r14 + JV_n]
+    jae 4f
+    mov rax, [r14 + JV_ptr]
+    mov rcx, r15
+    shl rcx, 4
+    mov rdi, [rax + rcx + 8]    # the model entry
+    call model_entry_ok
+    test eax, eax
+    jz .Lpe_bad_model
+    inc r15d
+    jmp 2b
+4:  inc r12d
+    jmp 1b
+.Lpe_ok:
+    xor eax, eax
+    EPILOGUE
+.Lpe_key:
+    mov rax, r13
+    EPILOGUE
+.Lpe_bad_model:
+    mov rax, -1
+    EPILOGUE
+
+# model_entry_ok(jv) -> 1 if an object whose keys are only "id" and "name"
+model_entry_ok:
+    PROLOGUE
+    mov rbx, rdi
+    call json_type
+    cmp eax, JT_OBJ
+    jne 8f
+    xor r12d, r12d              # the key index
+1:  cmp r12d, [rbx + JV_n]
+    jae 9f
+    mov rax, [rbx + JV_ptr]
+    mov rcx, r12
+    shl rcx, 4
+    mov r13, [rax + rcx]        # key
+    mov rdi, [r13 + JV_ptr]
+    mov esi, [r13 + JV_n]
+    lea rdx, [rip + .Lk_id]
+    call str_eq_cstr
+    test eax, eax
+    jnz 2f
+    mov rdi, [r13 + JV_ptr]
+    mov esi, [r13 + JV_n]
+    lea rdx, [rip + .Lk_name]
+    call str_eq_cstr
+    test eax, eax
+    jz 8f
+2:  inc r12d
+    jmp 1b
+8:  xor eax, eax
+    EPILOGUE
+9:  mov eax, 1
+    EPILOGUE
+
+# auth_grok_models(ptr, len, sb): the [model.<name>] tables of a Grok config.toml with an api_key or
+# env_key key, names space-separated; values are never read. A table with both keys is named once.
+FN auth_grok_models
+    PROLOGUE INI_SIZE + 16
+    mov r12, rdx                # sb
+    mov rbx, rsp                # the iterator
+    mov rdx, rsi
+    mov rsi, rdi
+    mov rdi, rbx
+    call ini_init
+    xor r13d, r13d              # names written
+    xor r14d, r14d              # the section last named
+1:  mov rdi, rbx
+    call ini_next
+    test eax, eax
+    jz 9f
+    mov rax, [rbx + INI_sec]
+    cmp rax, r14
+    je 1b
+    cmp qword ptr [rbx + INI_seclen], 6
+    jbe 1b
+    mov rdi, [rbx + INI_sec]
+    mov rsi, [rbx + INI_seclen]
+    lea rdx, [rip + .Lt_model_dot]
+    mov ecx, 6
+    call str_starts
+    test eax, eax
+    jz 1b
+    mov rdi, rbx
+    lea rsi, [rip + .Lt_api_key]
+    call ini_key_is
+    test eax, eax
+    jnz 2f
+    mov rdi, rbx
+    lea rsi, [rip + .Lt_env_key]
+    call ini_key_is
+    test eax, eax
+    jz 1b
+2:  mov r14, [rbx + INI_sec]
+    test r13d, r13d
+    jz 3f
+    mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+3:  mov rdi, r12
+    mov rsi, [rbx + INI_sec]
+    add rsi, 6
+    mov rdx, [rbx + INI_seclen]
+    sub rdx, 6
+    call sb_push
+    inc r13d
+    jmp 1b
+9:  EPILOGUE

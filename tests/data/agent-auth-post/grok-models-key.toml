@@ -1,0 +1,6 @@
+[model.mine]
+api_key = "xai-secret"
+[model.other]
+name = "grok-4"
+[model.third]
+env_key = "MY_KEY"

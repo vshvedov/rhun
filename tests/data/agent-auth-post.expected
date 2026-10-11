@@ -1,0 +1,17 @@
+claude-init-key.json=2
+claude-init-missing.json=3
+claude-init-ok.json=0
+codex-account-key.json=2
+codex-account-ok.json=0
+codex-account-out.json=1
+grok-init-garbage.json=3
+grok-init-key.json=2
+grok-init-ok.json=0
+grok-init-out.json=1
+grok-models-key.toml=mine third
+grok-models-none.toml=
+opencode-config-managed.json=3 enabled_providers
+opencode-config-npm.json=3 provider.openai.npm
+opencode-config-ok.json=0
+opencode-config-options.json=3 provider.openai.options
+opencode-config-title.json=3 agent.title.model

@@ -1,7 +1,8 @@
 # agent_auth_test MODE ...: env AGENT prints the scrubbed environment and the lock arguments;
 # classify FILE prints <basename>=<AUTH_*>[ ids], the classifier picked by the name's prefix;
 # preflight AGENT [MS] runs auth_preflight in the current directory (MS sets g_auth_preflight_ms) and
-# prints preflight:<agent>=<AUTH_*>[ ids]
+# prints preflight:<agent>=<AUTH_*>[ ids]; post FILE prints <basename>=<AUTH_*>[ key path] for the after-start
+# checks (grok-models-* print the names instead); lock prints the OpenCode lock for openai and xai
 .include "rhun.inc"
 .bss
 .p2align 3
@@ -37,6 +38,15 @@ agents: .quad .La_claude, 1, .La_codex, 2, .La_grok, 3, .La_opencode, 4, 0
 .Lmode_env: .asciz "env"
 .Lmode_classify: .asciz "classify"
 .Lmode_preflight: .asciz "preflight"
+.Lmode_post: .asciz "post"
+.Lmode_lock: .asciz "lock"
+.Lp_grok_models: .ascii "grok-models-"
+.Lp_claude_init: .ascii "claude-init-"
+.Lp_codex_account: .ascii "codex-account-"
+.Lp_grok_init: .ascii "grok-init-"
+.Lids_openai: .asciz "openai"
+.Lids_two: .asciz "openai xai"
+.Lsmall: .asciz "openai/gpt-5-mini"
 .Ldot: .asciz "."
 .Lev_preflight: .asciz "preflight:"
 .Lp_claude: .ascii "claude-"
@@ -44,10 +54,12 @@ agents: .quad .La_claude, 1, .La_codex, 2, .La_grok, 3, .La_opencode, 4, 0
 .Llock: .asciz "lock:"
 .text
 
-# agent_of(cstr) -> kind or 0
+# agent_of(cstr) -> kind or 0 (also for a missing argument)
 agent_of:
     PROLOGUE
     mov rbx, rdi
+    test rdi, rdi
+    jz 8f
     call strlen
     mov r12, rax
     lea r13, [rip + agents]
@@ -140,6 +152,26 @@ FN main
     call str_eq_cstr
     test eax, eax
     jnz 80f
+    mov rcx, [rip + g_argv]
+    mov rdi, [rcx + 8]
+    call strlen
+    mov rcx, [rip + g_argv]
+    mov rdi, [rcx + 8]
+    mov rsi, rax
+    lea rdx, [rip + .Lmode_post]
+    call str_eq_cstr
+    test eax, eax
+    jnz 90f
+    mov rcx, [rip + g_argv]
+    mov rdi, [rcx + 8]
+    call strlen
+    mov rcx, [rip + g_argv]
+    mov rdi, [rcx + 8]
+    mov rsi, rax
+    lea rdx, [rip + .Lmode_lock]
+    call str_eq_cstr
+    test eax, eax
+    jnz 97f
     jmp 9f
 46: # classify FILE
     mov rax, [rip + g_argv]
@@ -254,6 +286,122 @@ FN main
     pop rdi
     call agent_auth_tick
     jmp 82b
+90: # post FILE
+    mov rax, [rip + g_argv]
+    mov rdi, [rax + 16]
+    mov r13, rdi
+    call file_read_all
+    test rax, rax
+    jz 9f
+    mov r14, rax
+    mov r15, rdx
+    # basename
+    mov rdi, r13
+    call strlen
+    mov rbx, r13
+    add rbx, rax
+86: cmp rbx, r13
+    jbe 87f
+    cmp byte ptr [rbx - 1], '/'
+    je 87f
+    dec rbx
+    jmp 86b
+87: lea rdi, [rip + out]
+    mov rsi, rbx
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, '='
+    call sb_push_byte
+    lea rdi, [rip + ids]
+    call sb_clear
+    # dispatch by prefix: rbx basename, r14/r15 file bytes
+    mov rdi, rbx
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    lea rdx, [rip + .Lp_grok_models]
+    mov ecx, 12
+    call str_starts
+    test eax, eax
+    jz 91f
+    mov rdi, r14
+    mov rsi, r15
+    lea rdx, [rip + ids]
+    call auth_grok_models
+    lea rdi, [rip + out]
+    mov rsi, [rip + ids + SB_ptr]
+    mov rdx, [rip + ids + SB_len]
+    call sb_push
+    jmp 96f
+91: mov rdi, r14
+    mov rsi, r15
+    call json_parse
+    mov r13, rax
+    mov rdi, rbx
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    lea rdx, [rip + .Lp_claude_init]
+    mov ecx, 12
+    call str_starts
+    test eax, eax
+    jz 92f
+    mov rdi, r13
+    call auth_claude_init
+    jmp 95f
+92: mov rdi, rbx
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    lea rdx, [rip + .Lp_codex_account]
+    mov ecx, 14
+    call str_starts
+    test eax, eax
+    jz 93f
+    mov rdi, r13
+    call auth_codex_account
+    jmp 95f
+93: mov rdi, rbx
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    lea rdx, [rip + .Lp_grok_init]
+    mov ecx, 10
+    call str_starts
+    test eax, eax
+    jz 94f
+    mov rdi, r13
+    call auth_grok_init
+    jmp 95f
+94: mov rdi, r13
+    lea rsi, [rip + .Lids_openai]
+    lea rdx, [rip + .Lsmall]
+    lea rcx, [rip + ids]
+    call auth_opencode_config
+95: lea rdi, [rip + out]
+    mov esi, eax
+    call sb_push_u64
+    cmp qword ptr [rip + ids + SB_len], 0
+    je 96f
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+    lea rdi, [rip + out]
+    mov rsi, [rip + ids + SB_ptr]
+    mov rdx, [rip + ids + SB_len]
+    call sb_push
+96: lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    jmp 9f
+97: # lock
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Lids_two]
+    lea rdx, [rip + .Lsmall]
+    call auth_opencode_lock
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
 9:  mov rdi, [rip + out + SB_ptr]
     mov rsi, [rip + out + SB_len]
     call log_write

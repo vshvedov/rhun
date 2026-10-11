@@ -1,0 +1,1 @@
+{"protocolVersion":1,"authMethods":[{"id":"cached_token","name":"Saved sign-in"},{"id":"grok.com","name":"Sign in with Grok"}],"_meta":{"grokShell":true,"defaultAuthMethodId":"cached_token"}}

@@ -1,0 +1,1 @@
+{"protocolVersion":1,"authMethods":[{"id":"xai.api_key","name":"API key"},{"id":"cached_token"}],"_meta":{"defaultAuthMethodId":"cached_token"}}

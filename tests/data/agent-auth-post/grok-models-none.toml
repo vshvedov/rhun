@@ -1,0 +1,4 @@
+[cli]
+use_leader = false
+[model.plain]
+name = "grok-4"

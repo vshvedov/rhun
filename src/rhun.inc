@@ -1009,6 +1009,11 @@ ENDSTRUCT CMD_SIZE
 .equ JT_STR, 4
 .equ JT_ARR, 5
 .equ JT_OBJ, 6
+STRUCT
+F JV_type, 4
+F JV_n, 4               # elements / pairs / string bytes
+F JV_ptr, 8             # string bytes, or child pointers (objects: key,value pairs)
+ENDSTRUCT JV_SIZE
 
 # theme registry entry
 STRUCT

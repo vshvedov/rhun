@@ -1,12 +1,6 @@
 # json: recursive-descent parser into an arena (one document at a time)
 .include "rhun.inc"
 
-STRUCT
-F JV_type, 4
-F JV_n, 4               # elements / pairs / string bytes
-F JV_ptr, 8             # string bytes, or child pointers (objects: key,value pairs)
-ENDSTRUCT JV_SIZE
-
 .bss
 .p2align 3
 arena: .quad 0

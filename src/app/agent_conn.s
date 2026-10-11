@@ -27,8 +27,9 @@ nonblock:
     ret
 
 # conn_open(conn, argv, envp, cwd) -> 1, or 0 with CN_err: CN_E_GUARD, CN_E_SPAWN or CN_E_WATCH.
-# argv[0] is a path (proc_which first), and must be executable. The child gets a session of its own, so a
-# stop signals the group.
+# argv[0] is a path (proc_which first). It must be executable: proc_spawn cannot see a failed exec (the
+# child just exits 127), so conn_open checks it first and reports CN_E_SPAWN rather than a later exit.
+# The child gets a session of its own, so a stop signals the group.
 FN conn_open
     PROLOGUE 32
     mov rbx, rdi
@@ -176,13 +177,17 @@ FN conn_open
 
 # deliver(conn): every complete line of CN_rbuf to CN_on_line; the remainder moves to the front.
 # The search starts at CN_scanned, so a long record is scanned once, not once per read.
-# Stops if a callback closed the connection (state CN_IDLE: its buffers are gone).
+# Stops if a callback closed the connection (state CN_IDLE: its buffers are gone) or closed and reopened
+# it (CN_gen moved: the buffers belong to the new child).
 deliver:
     PROLOGUE
     mov rbx, rdi
     xor r12d, r12d              # consumed bytes
     mov r14, [rbx + CN_scanned] # where the newline search starts
-1:  cmp dword ptr [rbx + CN_state], CN_IDLE
+    mov r15d, [rbx + CN_gen]
+1:  cmp r15d, [rbx + CN_gen]
+    jne 9f
+    cmp dword ptr [rbx + CN_state], CN_IDLE
     je 9f
     cmp dword ptr [rbx + CN_state], CN_DEAD
     je 2f
@@ -217,11 +222,13 @@ deliver:
     mov [rbx + CN_scanned], rax
 9:  EPILOGUE
 
-# drain_out(conn) -> 1 at EOF or error, 0 when more may come: read what stdout has, deliver lines
+# drain_out(conn) -> 1 at EOF or error, 0 when more may come: read what stdout has, deliver lines.
+# Also 1 when a callback reopened the connection (CN_gen moved): the caller checks CN_gen too.
 drain_out:
     PROLOGUE
     mov rbx, rdi
     mov r12d, 64                # at most 256 KiB per call
+    mov r13d, [rbx + CN_gen]
 1:  cmp dword ptr [rbx + CN_fd_out], 0
     jl 8f
     lea rdi, [rbx + CN_rbuf]
@@ -240,6 +247,8 @@ drain_out:
     add [rbx + CN_rbuf + SB_len], rax
     mov rdi, rbx
     call deliver
+    cmp r13d, [rbx + CN_gen]
+    jne 8f
     cmp dword ptr [rbx + CN_state], CN_IDLE
     je 8f
     cmp qword ptr [rbx + CN_rbuf + SB_len], CN_LINE_MAX
@@ -258,10 +267,13 @@ drain_out:
 on_out:
     PROLOGUE
     mov rbx, rdx
+    mov r12d, [rbx + CN_gen]
     mov rdi, rbx
     call drain_out
     test eax, eax
     jz 9f
+    cmp r12d, [rbx + CN_gen]    # a callback reopened it: nothing here is ours any more
+    jne 9f
     cmp dword ptr [rbx + CN_state], CN_IDLE
     je 9f
     cmp dword ptr [rbx + CN_state], CN_DEAD
@@ -278,6 +290,8 @@ on_out:
     mov rdi, rbx
     mov rsi, [rbx + CN_rbuf + SB_ptr]
     call [rbx + CN_on_line]
+    cmp r12d, [rbx + CN_gen]
+    jne 9f
     cmp dword ptr [rbx + CN_state], CN_IDLE
     je 9f
     mov qword ptr [rbx + CN_rbuf + SB_len], 0
@@ -453,12 +467,15 @@ FN conn_close
 reap:
     PROLOGUE
     mov rbx, rdi
+    mov r12d, [rbx + CN_gen]
     mov [rbx + CN_exit], esi
     mov dword ptr [rbx + CN_err], CN_E_EXIT
     mov rdi, rbx
     call drain_err
     mov rdi, rbx
     call drain_out
+    cmp r12d, [rbx + CN_gen]    # a callback reopened it: the new child is not this one
+    jne 9f
     cmp dword ptr [rbx + CN_state], CN_IDLE
     je 9f
     cmp dword ptr [rbx + CN_state], CN_DEAD
@@ -469,6 +486,8 @@ reap:
     mov rdi, rbx
     mov rsi, [rbx + CN_rbuf + SB_ptr]
     call [rbx + CN_on_line]
+    cmp r12d, [rbx + CN_gen]
+    jne 9f
     cmp dword ptr [rbx + CN_state], CN_IDLE
     je 9f
     mov qword ptr [rbx + CN_rbuf + SB_len], 0

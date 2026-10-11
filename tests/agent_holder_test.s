@@ -1,10 +1,12 @@
-# agent_holder_test KIND SID [OWNPID]: the holder answer for a session
+# agent_holder_test KIND SID [OWNPID]: the holder answer for a session (for KIND opencode, SID is the
+# project root)
 .include "rhun.inc"
 .bss
 .p2align 3
 out: .zero SB_SIZE
 .section .rodata
 .Lclaude: .asciz "claude"
+.Lopencode: .asciz "opencode"
 .Lholder: .asciz "holder="
 .text
 FN main
@@ -34,7 +36,21 @@ FN main
     jz 2f
     call holder_claude
     jmp 3f
-2:  call holder_grok
+2:  mov rax, [rip + g_argv]
+    mov rdi, [rax + 8]
+    call strlen
+    mov rcx, [rip + g_argv]
+    mov rdi, [rcx + 8]
+    mov rsi, rax
+    lea rdx, [rip + .Lopencode]
+    call str_eq_cstr
+    mov rcx, [rip + g_argv]
+    mov rdi, [rcx + 16]
+    test eax, eax
+    jz 21f
+    call holder_opencode
+    jmp 3f
+21: call holder_grok
 3:  mov ebx, eax
     lea rdi, [rip + out]
     lea rsi, [rip + .Lholder]

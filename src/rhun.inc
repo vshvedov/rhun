@@ -111,6 +111,7 @@
 .equ IN_CLOEXEC, 0x80000
 
 .equ EPERM, 1
+.equ ENOENT, 2
 .equ ESRCH, 3
 .equ EAGAIN, 11
 .equ EIO, 5

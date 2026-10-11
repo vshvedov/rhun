@@ -264,6 +264,36 @@ FN mac_pid_cwd
 9:  LEAVE
     XRET
 
+// mac_proc_list(buf, cap) -> x8: the number of pids written to buf (4 bytes each), or -1
+FN mac_proc_list
+    ENTER
+    mov x19, x0
+    mov x20, x1
+    mov w0, #1                  // PROC_ALL_PIDS
+    mov w1, #0
+    mov x2, x19
+    mov w3, w20
+    bl _proc_listpids
+    cmp w0, #0
+    b.le 8f
+    lsr w8, w0, #2              // bytes to pids; the int result's upper half is not defined
+    b 9f
+8:  mov x8, #-1
+9:  LEAVE
+    XRET
+
+// mac_proc_name(pid, buf, size) -> x8: the process name's length, written with a NUL, or -1
+FN mac_proc_name
+    ENTER
+    bl _proc_name               // pid, buf and size are already in w0, x1 and w2
+    cmp w0, #0
+    b.le 8f
+    mov w8, w0
+    b 9f
+8:  mov x8, #-1
+9:  LEAVE
+    XRET
+
 // mac_exe_path(buf, size) -> x8: the length of the running program's real path, written to buf with
 // a NUL, or -1
 FN mac_exe_path

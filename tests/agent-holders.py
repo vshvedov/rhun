@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-# holder_claude / holder_grok against a fake home: alive, dead, own, foreign-platform and broken records
-import json, os, platform, subprocess, sys, tempfile, unittest
+# holder_claude / holder_grok against a fake home: alive, dead, own, foreign-platform and broken records;
+# holder_opencode against processes named opencode in and out of a project
+import json, os, platform, shutil, subprocess, sys, tempfile, time, unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
-DOMAIN = 'darwin' if platform.system() == 'Darwin' else 'linux'
+IS_MAC = platform.system() == 'Darwin'
+DOMAIN = 'darwin' if IS_MAC else 'linux'
 
 def dead_pid():
     p = subprocess.Popen(['true']); p.wait(); return p.pid
@@ -72,5 +74,56 @@ class Holders(unittest.TestCase):
         (other / 'active_sessions.json').write_text(json.dumps([{'session_id': 'g1', 'pid': os.getpid()}]))
         self.env['GROK_HOME'] = str(other)
         self.assertEqual(self.ask('grok', 'g1'), 'holder=1')
+
+class OpenCodeHolders(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # a program named opencode: its name is what the listing sees. macOS kills a copied system binary
+        # and names a script after its interpreter, so there it is built; elsewhere a copy of sh will do
+        cls.bin = tempfile.TemporaryDirectory(prefix='rhun-oc-bin-')
+        cls.exe = Path(cls.bin.name) / 'bin/opencode'; cls.exe.parent.mkdir()
+        if IS_MAC:
+            src = Path(cls.bin.name) / 'opencode.c'
+            src.write_text('#include <unistd.h>\nint main(void) { for (;;) pause(); }\n')
+            subprocess.run(['cc', '-o', str(cls.exe), str(src)], check=True)
+        else:
+            shutil.copy(shutil.which('sh'), cls.exe); cls.exe.chmod(0o755)
+    @classmethod
+    def tearDownClass(cls): cls.bin.cleanup()
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix='rhun-oc-')
+        self.w = Path(self.tmp.name); self.project = self.w / 'project'; self.project.mkdir()
+        (self.w / 'elsewhere').mkdir()
+        self.procs = []
+    def tearDown(self):
+        for p in self.procs: p.kill(); p.wait(); p.stdin.close()
+        self.tmp.cleanup()
+    def start(self, cwd, *extra):
+        # sh waits on a read of its stdin: no child to leave behind, nothing to exec in its place (the
+        # macOS program ignores its arguments and waits)
+        p = subprocess.Popen([str(self.exe), '-c', 'read x', *extra], cwd=cwd, stdin=subprocess.PIPE)
+        self.procs.append(p)
+        time.sleep(0.3); return p
+    def ask(self, own=None):
+        args = [str(ROOT / 'build/agent_holder_test'), 'opencode', str(self.project.resolve())] + ([str(own)] if own else [])
+        return subprocess.run(args, capture_output=True, text=True, timeout=30).stderr.strip()
+    def test_none(self): self.assertEqual(self.ask(), 'holder=0')
+    def test_in_project(self):
+        p = self.start(self.project)
+        self.assertEqual(self.ask(), 'holder=1')
+        self.assertEqual(self.ask(own=p.pid), 'holder=0')
+    def test_subdirectory_counts(self):
+        sub = self.project / 'src'; sub.mkdir(); self.start(sub)
+        self.assertEqual(self.ask(), 'holder=1')
+    def test_elsewhere(self):
+        self.start(self.w / 'elsewhere')
+        # Linux knows the arguments and exempts it; macOS has no arguments, so it holds (spec 5.4)
+        self.assertEqual(self.ask(), 'holder=1' if IS_MAC else 'holder=0')
+    def test_serve_anywhere(self):
+        self.start(self.w / 'elsewhere', 'serve')
+        self.assertEqual(self.ask(), 'holder=1')
+    def test_sibling_prefix_is_outside(self):
+        other = self.w / 'projectile'; other.mkdir(); self.start(other)
+        self.assertEqual(self.ask(), 'holder=1' if IS_MAC else 'holder=0')
 
 if __name__ == '__main__': unittest.main()

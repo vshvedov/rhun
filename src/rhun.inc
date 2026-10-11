@@ -114,6 +114,7 @@
 .equ WNOHANG, 1
 .equ SIGHUP, 1
 .equ SIGKILL, 9
+.equ SIGTERM, 15
 .equ EINTR, 4
 
 # ---- function helpers ----
@@ -342,6 +343,50 @@ F PW_handler, 8         # handler(fd, revents, ctx)
 F PW_ctx, 8
 ENDSTRUCT PW_SIZE
 .equ MAX_WATCH, 256
+
+# ---- agent connections (src/app/agent_conn.s): a child with three pipes ----
+STRUCT
+F CN_pid, 4
+F CN_fd_in, 4           # rhun writes the child's stdin here; -1 once closed
+F CN_fd_out, 4          # the child's stdout; -1 after EOF
+F CN_fd_err, 4          # the child's stderr; -1 after EOF
+F CN_state, 4           # CN_IDLE, CN_UP, CN_STOPPING, CN_DEAD
+F CN_exit, 4            # exit status once reaped, -1 before
+F CN_gen, 4             # incremented by every conn_open
+F CN_err, 4             # CN_E_* of the last failure
+F CN_wwatch, 4          # 1 while CN_fd_in has a POLLOUT watch
+F CN_eof_in, 4          # 1: close CN_fd_in once the queue drains
+F CN_rbuf, SB_SIZE      # stdout bytes not yet delivered (a partial line)
+F CN_scanned, 8         # bytes at the front of CN_rbuf known to hold no newline
+F CN_ebuf, SB_SIZE      # the last CN_ERR_KEEP bytes of stderr
+F CN_wbuf, SB_SIZE      # bytes queued for stdin
+F CN_wpos, 8            # bytes at the front of CN_wbuf already written
+F CN_on_line, 8         # (conn, ptr, len): one stdout line, without its newline
+F CN_on_close, 8        # (conn, err): once, when the child is gone or the connection broke
+F CN_ctx, 8
+F CN_moved, 8           # time_ms when the queue last shrank (stall detection)
+F CN_kill_at, 8         # time_ms when a SIGTERM escalates to SIGKILL
+ENDSTRUCT CN_SIZE
+.equ CN_IDLE, 0
+.equ CN_UP, 1
+.equ CN_STOPPING, 2
+.equ CN_DEAD, 3
+.equ CN_E_NONE, 0
+.equ CN_E_SPAWN, 1
+.equ CN_E_WATCH, 2
+.equ CN_E_LINE, 3       # a record above CN_LINE_MAX
+.equ CN_E_STALL, 4      # the queue did not move for g_conn_stall_ms
+.equ CN_E_WRITE, 5      # EPIPE or another error writing stdin
+.equ CN_E_READ, 6
+.equ CN_E_EXIT, 7       # the child exited; CN_exit holds its status
+.equ CN_E_GUARD, 8      # CN_MAX connections are open
+.equ CN_MAX, 32
+.equ CN_LINE_MAX, 64 << 20
+.equ CN_QUEUE_MAX, 16 << 20
+.equ CN_STALL_MS, 30000
+.equ CN_KILL_MS, 500
+.equ CN_ERR_KEEP, 65536
+.equ CN_ZOMBIES, 64
 
 # ---- platform vtable (wayland / x11 / headless) ----
 STRUCT

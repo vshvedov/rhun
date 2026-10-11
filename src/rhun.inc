@@ -389,6 +389,19 @@ ENDSTRUCT CN_SIZE
 .equ CN_ERR_KEEP, 65536
 .equ CN_ZOMBIES, 64
 
+# ---- agents: kinds, sign-in results (src/app/agent_auth.s), holders (src/app/agent_holder.s) ----
+.equ AG_CLAUDE, 1
+.equ AG_CODEX, 2
+.equ AG_GROK, 3
+.equ AG_OPENCODE, 4
+.equ AUTH_OK, 0
+.equ AUTH_OUT, 1        # signed out
+.equ AUTH_KEY, 2        # an API key or another credential that is not a subscription sign-in
+.equ AUTH_UNKNOWN, 3    # a report rhun cannot classify: refused, fail closed
+.equ HOLDER_NONE, 0
+.equ HOLDER_OTHER, 1    # another program holds the session
+.equ HOLDER_UNKNOWN, 2  # cannot tell: treated as held
+
 # ---- platform vtable (wayland / x11 / headless) ----
 STRUCT
 F P_flush, 8            # ()

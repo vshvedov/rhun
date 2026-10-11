@@ -262,18 +262,12 @@ has:
     movzx eax, al
     ret
 
-# auth_codex_login(ptr, len) -> AUTH_*: `codex login status` text
+# auth_codex_login(ptr, len) -> AUTH_*: `codex login status` text. Signed out and API key are tested
+# before ChatGPT, so a report that mentions ChatGPT and either of them fails toward the stricter class.
 FN auth_codex_login
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
-    lea rdx, [rip + .Lcx_ok]
-    mov ecx, 23
-    call has
-    test eax, eax
-    jnz 1f
-    mov rdi, rbx
-    mov rsi, r12
     lea rdx, [rip + .Lcx_out]
     mov ecx, 13
     call has
@@ -293,6 +287,13 @@ FN auth_codex_login
     call has
     test eax, eax
     jnz 3f
+    mov rdi, rbx
+    mov rsi, r12
+    lea rdx, [rip + .Lcx_ok]
+    mov ecx, 23
+    call has
+    test eax, eax
+    jnz 1f
     mov eax, AUTH_UNKNOWN
     EPILOGUE
 1:  mov eax, AUTH_OK
@@ -362,7 +363,7 @@ allowed_id:
 # `opencode auth list --format json` prints.
 # Locals: [rsp] the id, [rsp + 8] its length, [rsp + 16] the connection index.
 FN auth_opencode_creds
-    PROLOGUE 24
+    PROLOGUE 32
     mov r15, rdx
     call json_parse
     test rax, rax
@@ -438,3 +439,232 @@ FN auth_opencode_creds
 .Laoc_unknown:
     mov eax, AUTH_UNKNOWN
     EPILOGUE
+
+# ---------- the preflight runner: one sign-in report command at a time ----------
+.bss
+.p2align 3
+pf_conn: .zero CN_SIZE
+pf_out: .zero SB_SIZE
+.globl g_auth_ids
+g_auth_ids: .zero SB_SIZE       # OpenCode: the allowed provider ids of the last preflight
+pf_cb: .quad 0
+pf_ctx: .quad 0
+pf_deadline: .quad 0
+pf_argv: .zero 8 * 8
+pf_agent: .long 0
+pf_busy: .long 0
+pf_timed: .long 0
+.data
+.globl g_auth_preflight_ms
+g_auth_preflight_ms: .long 10000
+.section .rodata
+.p2align 3
+cli_names: .quad 0, .Lcli_claude, .Lcli_codex, .Lcli_grok, .Lcli_opencode
+.Lcli_claude: .asciz "claude"
+.Lcli_codex: .asciz "codex"
+.Lcli_grok: .asciz "grok"
+.Lcli_opencode: .asciz "opencode"
+.Lcodex_bundled: .asciz "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex"
+.p2align 3
+pf_args_claude: .quad .Lpa_auth, .Lpa_status, 0
+pf_args_codex: .quad .Lpa_login, .Lpa_status, 0
+pf_args_opencode: .quad .Lpa_auth, .Lpa_list, .Lpa_format, .Lpa_json, 0
+pf_args: .quad 0, pf_args_claude, pf_args_codex, 0, pf_args_opencode
+no_extras: .quad 0
+.Lpa_auth: .asciz "auth"
+.Lpa_status: .asciz "status"
+.Lpa_login: .asciz "login"
+.Lpa_list: .asciz "list"
+.Lpa_format: .asciz "--format"
+.Lpa_json: .asciz "json"
+.text
+
+# auth_find_cli(agent) -> path to run (mem_free it) or 0; Codex falls back to the ChatGPT app's copy on macOS
+FN auth_find_cli
+    PROLOGUE
+    mov ebx, edi
+    cmp ebx, AG_OPENCODE
+    ja 8f
+    lea rax, [rip + cli_names]
+    mov rdi, [rax + rbx*8]
+    test rdi, rdi
+    jz 8f
+    call proc_which
+    test rax, rax
+    jnz 9f
+.ifdef MACOS
+    cmp ebx, AG_CODEX
+    jne 8f
+    lea rdi, [rip + .Lcodex_bundled]
+    mov esi, 1                  # X_OK
+    SYS SYS_access
+    test rax, rax
+    jnz 8f
+    lea rdi, [rip + .Lcodex_bundled]
+    call strlen
+    lea rdi, [rip + .Lcodex_bundled]
+    mov rsi, rax
+    call mem_dup
+    jmp 9f
+.endif
+8:  xor eax, eax
+9:  EPILOGUE
+
+# pf_line(conn, ptr, len): collect the report
+pf_line:
+    PROLOGUE
+    mov r12, rsi
+    mov r13, rdx
+    lea rdi, [rip + pf_out]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    lea rdi, [rip + pf_out]
+    mov esi, 10
+    call sb_push_byte
+    EPILOGUE
+
+# pf_close(conn, err): classify the report of a child that exited in time, release, report
+pf_close:
+    PROLOGUE
+    mov eax, AUTH_UNKNOWN
+    cmp dword ptr [rip + pf_timed], 0
+    jne 5f
+    cmp esi, CN_E_EXIT
+    jne 5f
+    mov eax, [rip + pf_agent]
+    mov rdi, [rip + pf_out + SB_ptr]
+    mov rsi, [rip + pf_out + SB_len]
+    cmp eax, AG_CLAUDE
+    je 1f
+    cmp eax, AG_CODEX
+    je 2f
+    lea rdx, [rip + g_auth_ids]
+    call auth_opencode_creds
+    jmp 5f
+1:  call auth_claude_status
+    jmp 5f
+2:  call auth_codex_login
+5:  mov ebx, eax
+    lea rdi, [rip + pf_conn]
+    call conn_close
+    mov dword ptr [rip + pf_busy], 0
+    mov rdi, [rip + pf_ctx]
+    mov esi, ebx
+    mov rdx, [rip + pf_out + SB_ptr]
+    mov rcx, [rip + pf_out + SB_len]
+    test rcx, rcx
+    jnz 6f
+    xor edx, edx                # no output
+6:  call [rip + pf_cb]
+    EPILOGUE
+
+# auth_preflight(agent, cwd, cb, ctx): runs the agent's sign-in report command in cwd with the scrubbed
+# environment; cb(ctx, result, ptr, len) once, from here or from a later tick, with the AUTH_* result and
+# the output (ptr 0 when there was none). Grok has none: AUTH_OK at once. A call while one runs, an
+# unknown agent, a missing CLI or a failed start: AUTH_UNKNOWN at once.
+# Locals: [rsp] the environment.
+FN auth_preflight
+    PROLOGUE 16
+    mov ebx, edi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    cmp ebx, AG_GROK            # its check is the initialize response; it runs nothing here
+    je .Lpf_ok_now
+    cmp dword ptr [rip + pf_busy], 0
+    jne .Lpf_unknown_now
+    cmp ebx, AG_OPENCODE
+    ja .Lpf_unknown_now
+    lea rax, [rip + pf_args]
+    cmp qword ptr [rax + rbx*8], 0
+    je .Lpf_unknown_now
+    mov edi, ebx
+    call auth_find_cli
+    test rax, rax
+    jz .Lpf_unknown_now
+    mov r15, rax                # the path
+    lea rdi, [rip + pf_argv]
+    mov [rdi], rax
+    lea rax, [rip + pf_args]
+    mov rsi, [rax + rbx*8]
+    lea rdi, [rdi + 8]
+1:  mov rax, [rsi]
+    mov [rdi], rax
+    test rax, rax
+    jz 2f
+    add rsi, 8
+    add rdi, 8
+    jmp 1b
+2:  mov edi, ebx
+    lea rsi, [rip + no_extras]
+    call auth_envp
+    mov [rsp], rax
+    lea rdi, [rip + pf_out]
+    call sb_clear
+    lea rdi, [rip + g_auth_ids]
+    call sb_clear
+    mov [rip + pf_agent], ebx
+    mov [rip + pf_cb], r13
+    mov [rip + pf_ctx], r14
+    mov dword ptr [rip + pf_timed], 0
+    lea rdi, [rip + pf_conn]
+    lea rax, [rip + pf_line]
+    mov [rdi + CN_on_line], rax
+    lea rax, [rip + pf_close]
+    mov [rdi + CN_on_close], rax
+    lea rsi, [rip + pf_argv]
+    mov rdx, [rsp]
+    mov rcx, r12
+    call conn_open
+    mov ebx, eax
+    mov rdi, [rsp]              # the child has its own copy now
+    call mem_free
+    mov rdi, r15
+    call mem_free
+    test ebx, ebx
+    jz .Lpf_unknown_now
+    lea rdi, [rip + pf_conn]
+    call conn_end_input         # the report commands read nothing
+    mov dword ptr [rip + pf_busy], 1
+    call time_ms
+    mov ecx, [rip + g_auth_preflight_ms]
+    add rax, rcx
+    mov [rip + pf_deadline], rax
+    EPILOGUE
+.Lpf_ok_now:
+    mov rdi, r14
+    mov esi, AUTH_OK
+    xor edx, edx
+    xor ecx, ecx
+    call r13
+    EPILOGUE
+.Lpf_unknown_now:
+    mov rdi, r14
+    mov esi, AUTH_UNKNOWN
+    xor edx, edx
+    xor ecx, ecx
+    call r13
+    EPILOGUE
+
+# agent_auth_tick(now_ms): a report command that overran its deadline is stopped and counts as unknown
+# (pf_close reports it once the child is reaped)
+FN agent_auth_tick
+    cmp dword ptr [rip + pf_busy], 0
+    je 9f
+    cmp dword ptr [rip + pf_timed], 0
+    jne 9f
+    cmp rdi, [rip + pf_deadline]
+    jb 9f
+    mov dword ptr [rip + pf_timed], 1
+    lea rdi, [rip + pf_conn]
+    jmp conn_stop
+9:  ret
+
+# agent_auth_timeout() -> ms until the tick has work, or -1
+FN agent_auth_timeout
+    mov eax, -1
+    cmp dword ptr [rip + pf_busy], 0
+    je 9f
+    mov eax, 100
+9:  ret

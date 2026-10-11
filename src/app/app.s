@@ -2035,12 +2035,20 @@ FN app_timeout
 21: mov ebx, eax
 22: call agent_conn_timeout
     cmp eax, -1
-    je 2f
+    je 24f
     cmp ebx, -1
     je 23f
     cmp eax, ebx
-    jge 2f
+    jge 24f
 23: mov ebx, eax
+24: call agent_auth_timeout
+    cmp eax, -1
+    je 2f
+    cmp ebx, -1
+    je 25f
+    cmp eax, ebx
+    jge 2f
+25: mov ebx, eax
 2:  call git_timeout
     cmp eax, -1
     je 3f
@@ -2134,6 +2142,9 @@ FN app_tick
     call time_ms
     mov rdi, rax
     call agent_conn_tick
+    call time_ms
+    mov rdi, rax
+    call agent_auth_tick
     call term_tick
     call git_tick
     call update_tick

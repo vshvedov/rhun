@@ -1,10 +1,14 @@
 # agent_auth_test MODE ...: env AGENT prints the scrubbed environment and the lock arguments;
-# classify FILE prints <basename>=<AUTH_*>[ ids], the classifier picked by the name's prefix
+# classify FILE prints <basename>=<AUTH_*>[ ids], the classifier picked by the name's prefix;
+# preflight AGENT [MS] runs auth_preflight in the current directory (MS sets g_auth_preflight_ms) and
+# prints preflight:<agent>=<AUTH_*>[ ids]
 .include "rhun.inc"
 .bss
 .p2align 3
 out: .zero SB_SIZE
 ids: .zero SB_SIZE
+agent_name: .quad 0
+done: .long 0
 .section .rodata
 .p2align 3
 sample_env:
@@ -32,6 +36,9 @@ agents: .quad .La_claude, 1, .La_codex, 2, .La_grok, 3, .La_opencode, 4, 0
 .La_opencode: .asciz "opencode"
 .Lmode_env: .asciz "env"
 .Lmode_classify: .asciz "classify"
+.Lmode_preflight: .asciz "preflight"
+.Ldot: .asciz "."
+.Lev_preflight: .asciz "preflight:"
 .Lp_claude: .ascii "claude-"
 .Lp_codex: .ascii "codex-"
 .Llock: .asciz "lock:"
@@ -122,8 +129,19 @@ FN main
     lea rdx, [rip + .Lmode_classify]
     call str_eq_cstr
     test eax, eax
-    jz 9f
-    # classify FILE
+    jnz 46f
+    mov rcx, [rip + g_argv]
+    mov rdi, [rcx + 8]
+    call strlen
+    mov rcx, [rip + g_argv]
+    mov rdi, [rcx + 8]
+    mov rsi, rax
+    lea rdx, [rip + .Lmode_preflight]
+    call str_eq_cstr
+    test eax, eax
+    jnz 80f
+    jmp 9f
+46: # classify FILE
     mov rax, [rip + g_argv]
     mov rdi, [rax + 16]
     mov r13, rdi
@@ -196,8 +214,85 @@ FN main
 76: lea rdi, [rip + out]
     mov esi, 10
     call sb_push_byte
+    jmp 9f
+80: # preflight AGENT [MS]
+    mov rax, [rip + g_argv]
+    mov rdi, [rax + 24]
+    test rdi, rdi
+    jz 81f
+    call strlen
+    mov rcx, [rip + g_argv]
+    mov rdi, [rcx + 24]
+    mov rsi, rax
+    call parse_u64
+    mov [rip + g_auth_preflight_ms], eax
+81: mov rax, [rip + g_argv]
+    mov rdi, [rax + 16]
+    mov [rip + agent_name], rdi
+    call agent_of
+    mov edi, eax
+    lea rsi, [rip + .Ldot]
+    lea rdx, [rip + pf_done]
+    xor ecx, ecx
+    call auth_preflight
+    call time_ms
+    mov rbx, rax
+    add rbx, 15000
+82: cmp dword ptr [rip + done], 0
+    jne 9f
+    call time_ms
+    cmp rax, rbx
+    jae 9f
+    mov edi, 50
+    call loop_poll
+    call time_ms
+    mov rdi, rax
+    push rdi
+    push rdi
+    call agent_conn_tick
+    pop rdi
+    pop rdi
+    call agent_auth_tick
+    jmp 82b
 9:  mov rdi, [rip + out + SB_ptr]
     mov rsi, [rip + out + SB_len]
     call log_write
     xor eax, eax
+    EPILOGUE
+
+# pf_done(ctx, result, ptr, len)
+pf_done:
+    PROLOGUE
+    mov r12d, esi
+    mov r13, rdx
+    mov r14, rcx
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Lev_preflight]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov rsi, [rip + agent_name]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, '='
+    call sb_push_byte
+    lea rdi, [rip + out]
+    mov esi, r12d
+    call sb_push_u64
+    lea rdi, [rip + ids]
+    mov rsi, [rip + g_auth_ids + SB_ptr]
+    mov rdx, [rip + g_auth_ids + SB_len]
+    call sb_push
+    cmp qword ptr [rip + ids + SB_len], 0
+    je 1f
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+    lea rdi, [rip + out]
+    mov rsi, [rip + ids + SB_ptr]
+    mov rdx, [rip + ids + SB_len]
+    call sb_push
+1:  lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    mov dword ptr [rip + done], 1
     EPILOGUE

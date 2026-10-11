@@ -502,6 +502,7 @@ FN json_type
 # ---------- builder: one message at a time, into an SB ----------
 .bss
 .p2align 3
+# limits: nesting at most 64 deep; jw_key and jw_end_* at depth 0 are caller errors (unguarded)
 jw_first: .quad 0           # bit d set: no item written yet at depth d
 jw_depth: .long 0
 
@@ -737,3 +738,29 @@ FN jw_line
 .Ljw_u00: .asciz "\\u00"
 .Ljw_hex: .ascii "0123456789abcdef"
 .text
+
+# json_trim(): after a large parse, drop the oversized newest block for a fresh 1 MiB one.
+# Every JV* from the last parse is invalid afterwards, as after the next json_parse.
+FN json_trim
+    push rbx
+    call json_reset             # older blocks go in any case
+    mov rax, [rip + arena]
+    test rax, rax
+    jz 9f
+    cmp qword ptr [rip + arena_cap], 1 << 20
+    jbe 9f
+    mov rdi, rax
+    call mem_free
+    mov edi, 1 << 20
+    call mem_alloc
+    mov qword ptr [rax], 0
+    mov [rip + arena], rax
+    mov qword ptr [rip + arena_cap], 1 << 20
+    mov qword ptr [rip + arena_top], 8
+9:  pop rbx
+    ret
+
+# json_arena_cap() -> the newest block's capacity (tests)
+FN json_arena_cap
+    mov rax, [rip + arena_cap]
+    ret

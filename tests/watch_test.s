@@ -1,25 +1,19 @@
-# watch_add: counts registrations until the table refuses, frees them, registers once more
+# watch_add: counts registrations until the table refuses, frees them, registers once more.
+# The fds are plain numbers 0..299: watch_add and watch_remove only store and compare them,
+# so the count does not depend on how many descriptors the host lets a process open.
 .include "rhun.inc"
 .bss
 .p2align 3
 out: .zero SB_SIZE
-fds: .zero 8 * 300
 .text
 noop:
     ret
 FN main
     PROLOGUE 16
-    xor ebx, ebx                # registrations that succeeded
+    xor ebx, ebx                # registrations that succeeded; also the next fd
 1:  cmp ebx, 300
     jae 2f
-    lea rdi, [rip + fds]
-    lea rdi, [rdi + rbx*8]
-    mov esi, O_CLOEXEC
-    SYS SYS_pipe2
-    test rax, rax
-    js 2f
-    lea rax, [rip + fds]
-    mov edi, [rax + rbx*8]
+    mov edi, ebx
     mov esi, POLLIN
     lea rdx, [rip + noop]
     xor ecx, ecx
@@ -41,13 +35,11 @@ FN main
     xor r12d, r12d
 3:  cmp r12d, ebx
     jae 4f
-    lea rax, [rip + fds]
-    mov edi, [rax + r12*8]
+    mov edi, r12d
     call watch_remove
     inc r12d
     jmp 3b
-4:  lea rax, [rip + fds]
-    mov edi, [rax]
+4:  xor edi, edi
     mov esi, POLLIN
     lea rdx, [rip + noop]
     xor ecx, ecx

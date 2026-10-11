@@ -36,6 +36,8 @@ check base64 build/base64_test tests/data/base64.txt
 check agent-conn-exit build/agent_conn_test exit tests/scripts/fake-agent.py
 check agent-conn-stderr build/agent_conn_test stderr tests/scripts/fake-agent.py
 check agent-conn-spawnfail build/agent_conn_test spawnfail tests/scripts/fake-agent.py
+check agent-conn-echo build/agent_conn_test echo tests/scripts/fake-agent.py
+check agent-conn-fill build/agent_conn_test fill tests/scripts/fake-agent.py
 check textarea build/textarea_test
 check strfind build/str_test tests/data/strfind.txt
 check versions build/update_test tests/data/versions.txt

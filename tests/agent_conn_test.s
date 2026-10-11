@@ -150,8 +150,65 @@ FN main
     mov rsi, [rip + line + SB_len]
     call log_write
     jmp 8f
-2:  # scenario stimulus (Tasks 6 and 7 add cases here)
-    mov edi, 20000
+2:  lea rdi, [rip + .Lecho]
+    call scen_is
+    test eax, eax
+    jz 21f
+    # a short line, a 200 KiB line (longer than any pipe buffer), then end of input
+    lea rdi, [rip + conn]
+    lea rsi, [rip + .Lhello]
+    mov edx, 6
+    call conn_write
+    mov edi, 204801
+    call mem_alloc
+    mov r12, rax
+    mov rdi, rax
+    mov esi, 'y'
+    mov edx, 204800
+    call memset
+    mov byte ptr [r12 + 204800], 10
+    lea rdi, [rip + conn]
+    mov rsi, r12
+    mov edx, 204801
+    call conn_write
+    lea rdi, [rip + conn]
+    call conn_end_input
+21: lea rdi, [rip + .Lfill]
+    call scen_is
+    test eax, eax
+    jz 22f
+    # 2 MiB chunks until the queue refuses; then a short stall limit
+    mov edi, 2 << 20
+    call mem_alloc
+    mov r12, rax
+    mov rdi, rax
+    mov esi, 'z'
+    mov edx, 2 << 20
+    call memset
+    xor r13d, r13d
+23: inc r13d
+    lea rdi, [rip + conn]
+    mov rsi, r12
+    mov edx, 2 << 20
+    call conn_write
+    test eax, eax
+    jnz 23b
+    lea rdi, [rip + line]
+    call sb_clear
+    lea rdi, [rip + line]
+    lea rsi, [rip + .Lev_refused]
+    call sb_push_cstr
+    lea rdi, [rip + line]
+    mov esi, r13d
+    call sb_push_u64
+    lea rdi, [rip + line]
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, [rip + line + SB_ptr]
+    mov rsi, [rip + line + SB_len]
+    call log_write
+    mov dword ptr [rip + g_conn_stall_ms], 500
+22: mov edi, 20000
     call pump
     # the stderr tail: its length and last 5 bytes
     lea rdi, [rip + .Lstderr]
@@ -187,6 +244,10 @@ FN main
 .Lnowhere: .asciz "/nonexistent/rhun-test-agent"
 .Lspawnfail: .asciz "spawnfail"
 .Lstderr: .asciz "stderr"
+.Lecho: .asciz "echo"
+.Lfill: .asciz "fill"
+.Lhello: .asciz "hello\n"
+.Lev_refused: .asciz "refused_at:"
 .Lready: .asciz "ready"
 .Lev_line: .asciz "line:"
 .Lev_close: .asciz "close:"

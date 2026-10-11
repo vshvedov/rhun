@@ -8,7 +8,6 @@
 .equ TCGETS, 0x5401
 .equ TCSETS, 0x5402
 .equ IUTF8, 0x4000
-.equ F_SETFL, 4
 
 .bss
 .p2align 3

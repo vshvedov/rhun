@@ -70,6 +70,7 @@
 .equ O_TRUNC, 0x200
 .equ O_APPEND, 0x400
 .equ O_NONBLOCK, 0x800
+.equ F_SETFL, 4
 .equ O_DIRECTORY, 0x10000
 .equ O_CLOEXEC, 0x80000
 

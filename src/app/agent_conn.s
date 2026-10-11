@@ -2,8 +2,6 @@
 # stderr keeps its tail, stdin is a bounded queue flushed on POLLOUT (Task 6)
 .include "rhun.inc"
 
-.equ F_SETFL, 4
-
 .bss
 .p2align 3
 conns: .zero 8 * CN_MAX         # open connections, compacted
@@ -29,14 +27,24 @@ nonblock:
 # conn_open(conn, argv, envp, cwd) -> 1, or 0 with CN_err: CN_E_GUARD, CN_E_SPAWN or CN_E_WATCH.
 # argv[0] is a path (proc_which first). It must be executable: proc_spawn cannot see a failed exec (the
 # child just exits 127), so conn_open checks it first and reports CN_E_SPAWN rather than a later exit.
-# The child gets a session of its own, so a stop signals the group.
+# The child gets a session of its own, so a stop signals the group. A broken connection (CN_DEAD) may be
+# reopened without conn_close: its buffers are freed first, so a failed reopen leaks nothing.
 FN conn_open
     PROLOGUE 32
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
     mov r14, rcx
-    mov dword ptr [rbx + CN_err], CN_E_GUARD
+    cmp dword ptr [rbx + CN_state], CN_DEAD
+    jne 1f
+    lea rdi, [rbx + CN_rbuf]
+    call sb_free
+    lea rdi, [rbx + CN_ebuf]
+    call sb_free
+    lea rdi, [rbx + CN_wbuf]
+    call sb_free
+    mov dword ptr [rbx + CN_state], CN_IDLE
+1:  mov dword ptr [rbx + CN_err], CN_E_GUARD
     cmp dword ptr [rip + nconns], CN_MAX
     jae .Lco_fail
     mov dword ptr [rbx + CN_err], CN_E_SPAWN
@@ -344,6 +352,152 @@ on_err:
     mov rdi, rdx
     jmp drain_err
 
+# conn_write(conn, ptr, len) -> 1, or 0 when the connection is not up or the queue would pass
+# CN_QUEUE_MAX. Bytes the pipe cannot take now wait in CN_wbuf, behind anything already waiting,
+# and go out from on_in.
+FN conn_write
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    cmp dword ptr [rbx + CN_state], CN_UP
+    jne .Lcw_no
+    cmp dword ptr [rbx + CN_fd_in], 0
+    jl .Lcw_no
+    mov rax, [rbx + CN_wbuf + SB_len]
+    sub rax, [rbx + CN_wpos]
+    add rax, r13
+    cmp rax, CN_QUEUE_MAX
+    ja .Lcw_no
+    mov rax, [rbx + CN_wbuf + SB_len]
+    cmp rax, [rbx + CN_wpos]
+    jne .Lcw_queue
+    # the queue is empty: the stall clock starts now, not at the last write
+    call time_ms
+    mov [rbx + CN_moved], rax
+1:  test r13, r13
+    jz .Lcw_ok
+    mov edi, [rbx + CN_fd_in]
+    mov rsi, r12
+    mov rdx, r13
+    SYS SYS_write
+    cmp rax, -EINTR
+    je 1b
+    cmp rax, -EAGAIN
+    je .Lcw_queue
+    test rax, rax
+    js .Lcw_broken
+    add r12, rax
+    sub r13, rax
+    call time_ms
+    mov [rbx + CN_moved], rax
+    jmp 1b
+.Lcw_queue:
+    lea rdi, [rbx + CN_wbuf]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    cmp dword ptr [rbx + CN_wwatch], 0
+    jne .Lcw_ok
+    mov edi, [rbx + CN_fd_in]
+    mov esi, POLLOUT
+    lea rdx, [rip + on_in]
+    mov rcx, rbx
+    call watch_add
+    test eax, eax
+    jz .Lcw_nowatch
+    mov dword ptr [rbx + CN_wwatch], 1
+.Lcw_ok:
+    mov eax, 1
+    EPILOGUE
+.Lcw_broken:
+    mov rdi, rbx
+    mov esi, CN_E_WRITE
+    call conn_break
+    mov eax, 1                  # accepted; the connection reports its end through on_close
+    EPILOGUE
+.Lcw_nowatch:
+    mov rdi, rbx
+    mov esi, CN_E_WATCH
+    call conn_break
+    mov eax, 1
+    EPILOGUE
+.Lcw_no:
+    xor eax, eax
+    EPILOGUE
+
+# on_in(fd, revents, ctx): the child's stdin can take more. CN_wpos avoids moving the queue after
+# every write; the queue is compacted when it is drained or when the front half is dead.
+# The only callback it triggers is conn_break's on_close, after which it touches nothing.
+on_in:
+    PROLOGUE
+    mov rbx, rdx
+1:  mov r13, [rbx + CN_wbuf + SB_len]
+    sub r13, [rbx + CN_wpos]
+    test r13, r13
+    jz 3f
+    mov edi, [rbx + CN_fd_in]
+    mov rsi, [rbx + CN_wbuf + SB_ptr]
+    add rsi, [rbx + CN_wpos]
+    mov rdx, r13
+    SYS SYS_write
+    cmp rax, -EINTR
+    je 1b
+    cmp rax, -EAGAIN
+    je 9f
+    test rax, rax
+    js 6f
+    add [rbx + CN_wpos], rax
+    call time_ms
+    mov [rbx + CN_moved], rax
+    mov rax, [rbx + CN_wpos]
+    mov rcx, [rbx + CN_wbuf + SB_len]
+    shr rcx, 1
+    cmp rax, rcx
+    jb 1b
+    # compact: move the live tail to the front
+    mov rdi, [rbx + CN_wbuf + SB_ptr]
+    lea rsi, [rdi + rax]
+    mov rdx, [rbx + CN_wbuf + SB_len]
+    sub rdx, rax
+    call memmove
+    mov rax, [rbx + CN_wpos]
+    sub [rbx + CN_wbuf + SB_len], rax
+    mov qword ptr [rbx + CN_wpos], 0
+    jmp 1b
+3:  mov qword ptr [rbx + CN_wbuf + SB_len], 0
+    mov qword ptr [rbx + CN_wpos], 0
+    mov edi, [rbx + CN_fd_in]
+    call watch_remove
+    mov dword ptr [rbx + CN_wwatch], 0
+    cmp dword ptr [rbx + CN_eof_in], 0
+    je 9f
+    mov edi, [rbx + CN_fd_in]
+    SYS SYS_close
+    mov dword ptr [rbx + CN_fd_in], -1
+    jmp 9f
+6:  mov rdi, rbx
+    mov esi, CN_E_WRITE
+    call conn_break             # on_close may have closed or reopened the connection: return at once
+9:  EPILOGUE
+
+# conn_end_input(conn): close the child's stdin once the queue has drained
+FN conn_end_input
+    PROLOGUE
+    mov rbx, rdi
+    cmp dword ptr [rbx + CN_state], CN_IDLE     # never opened: CN_fd_in is not a pipe
+    je 9f
+    mov dword ptr [rbx + CN_eof_in], 1
+    cmp dword ptr [rbx + CN_fd_in], 0
+    jl 9f
+    mov rax, [rbx + CN_wbuf + SB_len]
+    cmp rax, [rbx + CN_wpos]
+    jne 9f
+    mov edi, [rbx + CN_fd_in]
+    SYS SYS_close
+    mov dword ptr [rbx + CN_fd_in], -1
+9:  EPILOGUE
+
 # unwatch_close(conn): remove every watch and close every pipe
 unwatch_close:
     PROLOGUE
@@ -390,7 +544,9 @@ forget:
     mov [r8 + rcx*8], rax
 9:  ret
 
-# zombie(pid, killed, kill_at): remember a child to reap; killed 1 means SIGKILL was already sent
+# zombie(pid, killed, kill_at): remember a child to reap; killed 1 means SIGKILL was already sent.
+# The list holds CN_ZOMBIES: a child stopped when it is full is dropped (it keeps whatever signal it was
+# sent, a SIGTERM is never escalated, and rhun never reaps it).
 zombie:
     mov eax, [rip + nzombies]
     cmp eax, CN_ZOMBIES
@@ -421,6 +577,9 @@ FN conn_break
     call forget
     mov edi, [rbx + CN_pid]
     neg edi
+    mov esi, SIGKILL
+    SYS SYS_kill
+    mov edi, [rbx + CN_pid]     # the child itself too: on macOS (fork) it may not have called setsid yet
     mov esi, SIGKILL
     SYS SYS_kill
     mov edi, [rbx + CN_pid]
@@ -502,7 +661,7 @@ reap:
     call [rbx + CN_on_close]
 9:  EPILOGUE
 
-# agent_conn_tick(now_ms): reap exited children, escalate stops, reap zombies (Task 6 adds stalls)
+# agent_conn_tick(now_ms): reap exited children, break stalled connections, escalate stops, reap zombies
 FN agent_conn_tick
     PROLOGUE
     mov rbx, rdi
@@ -515,12 +674,26 @@ FN agent_conn_tick
     mov esi, 1
     call proc_wait
     cmp eax, -1
-    je 2f
+    je 21f
     cmp eax, -2
     je 2f
     mov rdi, r13
     mov esi, eax
     call reap                   # forget() shifted the list: look at r12 again
+    jmp 1b
+21: cmp dword ptr [r13 + CN_state], CN_UP
+    jne 2f
+    mov rax, [r13 + CN_wbuf + SB_len]
+    cmp rax, [r13 + CN_wpos]
+    je 2f
+    mov rax, rbx
+    sub rax, [r13 + CN_moved]
+    mov ecx, [rip + g_conn_stall_ms]
+    cmp rax, rcx
+    jbe 2f
+    mov rdi, r13
+    mov esi, CN_E_STALL
+    call conn_break             # forget() shifted the list: look at r12 again
     jmp 1b
 2:  inc r12d
     jmp 1b
@@ -559,15 +732,29 @@ FN agent_conn_tick
     jmp 4b
 9:  EPILOGUE
 
-# agent_conn_timeout() -> ms until the tick has something to do, or -1
+# agent_conn_timeout() -> ms until the tick has work, or -1: zombies to reap or queues to watch for
+# stalls want 50 ms; a child that closed its pipes but runs on (its exit wakes no poll) wants 1 s
 FN agent_conn_timeout
-    mov eax, -1
     cmp dword ptr [rip + nzombies], 0
     jne 1f
-    cmp dword ptr [rip + nconns], 0
-    je 2f
+    xor ecx, ecx
+    mov eax, -1
+2:  cmp ecx, [rip + nconns]
+    jae 9f
+    lea rdx, [rip + conns]
+    mov rdx, [rdx + rcx*8]
+    mov r8, [rdx + CN_wbuf + SB_len]
+    cmp r8, [rdx + CN_wpos]
+    jne 1f
+    cmp dword ptr [rdx + CN_fd_out], 0
+    jge 3f
+    cmp dword ptr [rdx + CN_fd_err], 0
+    jge 3f
+    mov eax, 1000
+3:  inc ecx
+    jmp 2b
 1:  mov eax, 50
-2:  ret
+9:  ret
 
 # agent_conn_zombies() -> stopped children not yet reaped (tests)
 FN agent_conn_zombies
@@ -586,6 +773,11 @@ FN conn_open
 FN conn_break
     ret
 FN conn_close
+    ret
+FN conn_write
+    xor eax, eax
+    ret
+FN conn_end_input
     ret
 FN agent_conn_tick
     ret

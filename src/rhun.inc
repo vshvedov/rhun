@@ -341,7 +341,7 @@ F PW_events, 4
 F PW_handler, 8         # handler(fd, revents, ctx)
 F PW_ctx, 8
 ENDSTRUCT PW_SIZE
-.equ MAX_WATCH, 96
+.equ MAX_WATCH, 256
 
 # ---- platform vtable (wayland / x11 / headless) ----
 STRUCT

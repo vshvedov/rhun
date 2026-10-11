@@ -14,7 +14,7 @@ g_dirty: .long 0
 
 .text
 
-# watch_add(fd, events, handler, ctx)
+# watch_add(fd, events, handler, ctx) -> 1, or 0 when the table is full
 FN watch_add
     mov eax, [rip + nwatch]
     cmp eax, MAX_WATCH
@@ -27,7 +27,10 @@ FN watch_add
     mov [r9 + PW_handler], rdx
     mov [r9 + PW_ctx], rcx
     inc dword ptr [rip + nwatch]
-1:  ret
+    mov eax, 1
+    ret
+1:  xor eax, eax
+    ret
 
 # watch_remove(fd)
 FN watch_remove

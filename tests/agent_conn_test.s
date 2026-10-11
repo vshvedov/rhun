@@ -103,6 +103,27 @@ pump:
     jmp 1b
 9:  EPILOGUE
 
+# wait_ready(): pump until the "ready" line arrived (5 s at most)
+wait_ready:
+    PROLOGUE
+    call time_ms
+    mov rbx, rax
+    add rbx, 5000
+1:  cmp dword ptr [rip + ready], 0
+    jne 9f
+    cmp dword ptr [rip + closed], 0
+    jne 9f
+    call time_ms
+    cmp rax, rbx
+    jae 9f
+    mov edi, 50
+    call loop_poll
+    call time_ms
+    mov rdi, rax
+    call agent_conn_tick
+    jmp 1b
+9:  EPILOGUE
+
 FN main
     PROLOGUE 16
     mov rax, [rip + g_argv]
@@ -176,7 +197,7 @@ FN main
 21: lea rdi, [rip + .Lfill]
     call scen_is
     test eax, eax
-    jz 22f
+    jz 27f
     # 2 MiB chunks until the queue refuses; then a short stall limit
     mov edi, 2 << 20
     call mem_alloc
@@ -208,6 +229,70 @@ FN main
     mov rsi, [rip + line + SB_len]
     call log_write
     mov dword ptr [rip + g_conn_stall_ms], 500
+27: lea rdi, [rip + .Lstop]
+    call scen_is
+    test eax, eax
+    jz 24f
+    # wait for "ready", then ask it to leave; it ignores SIGTERM, so the tick must SIGKILL it
+    call wait_ready
+    lea rdi, [rip + conn]
+    call conn_stop
+24: lea rdi, [rip + .Llinger]
+    call scen_is
+    test eax, eax
+    jz 22f
+    # stdout closes but the child runs on: still up after 300 ms; conn_close must reap it
+    call wait_ready
+    mov edi, 300
+    call pump
+    lea rdi, [rip + line]
+    call sb_clear
+    lea rdi, [rip + line]
+    lea rsi, [rip + .Lev_state]
+    call sb_push_cstr
+    lea rdi, [rip + line]
+    mov esi, [rip + conn + CN_state]
+    call sb_push_u64
+    lea rdi, [rip + line]
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, [rip + line + SB_ptr]
+    mov rsi, [rip + line + SB_len]
+    call log_write
+    lea rdi, [rip + conn]
+    call conn_close
+    mov dword ptr [rip + closed], 1
+    call time_ms
+    mov r12, rax
+    add r12, 3000
+25: call agent_conn_zombies
+    test eax, eax
+    jz 26f
+    call time_ms
+    cmp rax, r12
+    jae 26f
+    mov edi, 50
+    call loop_poll
+    call time_ms
+    mov rdi, rax
+    call agent_conn_tick
+    jmp 25b
+26: lea rdi, [rip + line]
+    call sb_clear
+    lea rdi, [rip + line]
+    lea rsi, [rip + .Lev_zombies]
+    call sb_push_cstr
+    call agent_conn_zombies
+    lea rdi, [rip + line]
+    mov esi, eax
+    call sb_push_u64
+    lea rdi, [rip + line]
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, [rip + line + SB_ptr]
+    mov rsi, [rip + line + SB_len]
+    call log_write
+    jmp 8f
 22: mov edi, 20000
     call pump
     # the stderr tail: its length and last 5 bytes
@@ -246,6 +331,8 @@ FN main
 .Lstderr: .asciz "stderr"
 .Lecho: .asciz "echo"
 .Lfill: .asciz "fill"
+.Lstop: .asciz "stop"
+.Llinger: .asciz "linger"
 .Lhello: .asciz "hello\n"
 .Lev_refused: .asciz "refused_at:"
 .Lready: .asciz "ready"
@@ -253,3 +340,5 @@ FN main
 .Lev_close: .asciz "close:"
 .Lev_open0: .asciz "open=0 err="
 .Lev_err: .asciz "stderr:"
+.Lev_state: .asciz "state:"
+.Lev_zombies: .asciz "zombies:"

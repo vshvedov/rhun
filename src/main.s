@@ -103,6 +103,7 @@ FN main
 .Lm_exit:
     call agents_shutdown
     call ai_shutdown
+    call agent_conn_shutdown
     call session_remember_project
     call session_save
     cmp dword ptr [rip + g_settings_changed], 0

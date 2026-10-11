@@ -352,15 +352,17 @@ on_err:
     mov rdi, rdx
     jmp drain_err
 
-# conn_write(conn, ptr, len) -> 1, or 0 when the connection is not up or the queue would pass
-# CN_QUEUE_MAX. Bytes the pipe cannot take now wait in CN_wbuf, behind anything already waiting,
-# and go out from on_in.
+# conn_write(conn, ptr, len) -> 1, or 0 when the connection is not up, its input has ended
+# (conn_end_input) or the queue would pass CN_QUEUE_MAX. Bytes the pipe cannot take now wait in
+# CN_wbuf, behind anything already waiting, and go out from on_in.
 FN conn_write
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
     cmp dword ptr [rbx + CN_state], CN_UP
+    jne .Lcw_no
+    cmp dword ptr [rbx + CN_eof_in], 0      # conn_end_input was called: the input has ended
     jne .Lcw_no
     cmp dword ptr [rbx + CN_fd_in], 0
     jl .Lcw_no
@@ -591,7 +593,7 @@ FN conn_break
     call [rbx + CN_on_close]
 9:  EPILOGUE
 
-# conn_close(conn): stop the child (Task 7 adds SIGTERM first), release everything; no on_close
+# conn_close(conn): SIGTERM the child (the tick escalates to SIGKILL), release everything; no on_close
 FN conn_close
     PROLOGUE
     mov rbx, rdi
@@ -621,6 +623,52 @@ FN conn_close
     call sb_free
     mov dword ptr [rbx + CN_state], CN_IDLE
 9:  EPILOGUE
+
+# conn_stop(conn): ask the child to leave; the tick sends SIGKILL after CN_KILL_MS,
+# and on_close(CN_E_EXIT) comes once it is reaped
+FN conn_stop
+    cmp dword ptr [rdi + CN_state], CN_UP
+    jne 9f
+    mov dword ptr [rdi + CN_state], CN_STOPPING
+    push rdi
+    call time_ms
+    pop rdi
+    add rax, CN_KILL_MS
+    mov [rdi + CN_kill_at], rax
+    mov edi, [rdi + CN_pid]
+    neg edi
+    mov esi, SIGTERM
+    SYS SYS_kill
+9:  ret
+
+# agent_conn_shutdown(): rhun is leaving; no child outlives it
+FN agent_conn_shutdown
+    push rbx
+    xor ebx, ebx
+1:  cmp ebx, [rip + nconns]
+    jae 2f
+    lea rax, [rip + conns]
+    mov rax, [rax + rbx*8]
+    mov edi, [rax + CN_pid]
+    neg edi
+    mov esi, SIGKILL
+    SYS SYS_kill
+    inc ebx
+    jmp 1b
+2:  xor ebx, ebx
+3:  cmp ebx, [rip + nzombies]
+    jae 9f
+    mov eax, ebx
+    shl eax, 4
+    lea rcx, [rip + zombies]
+    mov edi, [rcx + rax]
+    neg edi
+    mov esi, SIGKILL
+    SYS SYS_kill
+    inc ebx
+    jmp 3b
+9:  pop rbx
+    ret
 
 # reap(conn, status): the child exited: drain what the pipes still hold, then on_close(CN_E_EXIT)
 reap:
@@ -681,16 +729,29 @@ FN agent_conn_tick
     mov esi, eax
     call reap                   # forget() shifted the list: look at r12 again
     jmp 1b
-21: cmp dword ptr [r13 + CN_state], CN_UP
+21: cmp dword ptr [r13 + CN_state], CN_STOPPING
+    jne 22f
+    mov rax, [r13 + CN_kill_at]
+    test rax, rax
+    jz 2f
+    cmp rbx, rax
+    jb 2f
+    mov qword ptr [r13 + CN_kill_at], 0
+    mov edi, [r13 + CN_pid]
+    neg edi
+    mov esi, SIGKILL
+    SYS SYS_kill
+    jmp 2f
+22: cmp dword ptr [r13 + CN_state], CN_UP
     jne 2f
     mov rax, [r13 + CN_wbuf + SB_len]
     cmp rax, [r13 + CN_wpos]
     je 2f
     mov rax, rbx
-    sub rax, [r13 + CN_moved]
+    sub rax, [r13 + CN_moved]   # signed: a now sampled before the last write is not a huge age
     mov ecx, [rip + g_conn_stall_ms]
     cmp rax, rcx
-    jbe 2f
+    jle 2f
     mov rdi, r13
     mov esi, CN_E_STALL
     call conn_break             # forget() shifted the list: look at r12 again
@@ -732,8 +793,9 @@ FN agent_conn_tick
     jmp 4b
 9:  EPILOGUE
 
-# agent_conn_timeout() -> ms until the tick has work, or -1: zombies to reap or queues to watch for
-# stalls want 50 ms; a child that closed its pipes but runs on (its exit wakes no poll) wants 1 s
+# agent_conn_timeout() -> ms until the tick has work, or -1: zombies to reap, stops to escalate or
+# queues to watch for stalls want 50 ms; a child that closed its pipes but runs on (its exit wakes
+# no poll) wants 1 s
 FN agent_conn_timeout
     cmp dword ptr [rip + nzombies], 0
     jne 1f
@@ -743,6 +805,8 @@ FN agent_conn_timeout
     jae 9f
     lea rdx, [rip + conns]
     mov rdx, [rdx + rcx*8]
+    cmp dword ptr [rdx + CN_state], CN_STOPPING
+    je 1f
     mov r8, [rdx + CN_wbuf + SB_len]
     cmp r8, [rdx + CN_wpos]
     jne 1f
@@ -773,6 +837,10 @@ FN conn_open
 FN conn_break
     ret
 FN conn_close
+    ret
+FN conn_stop
+    ret
+FN agent_conn_shutdown
     ret
 FN conn_write
     xor eax, eax

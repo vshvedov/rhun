@@ -2027,12 +2027,20 @@ FN app_timeout
 12: mov ebx, ecx
 1:  call agents_timeout
     cmp eax, -1
-    je 2f
+    je 22f
     cmp ebx, -1
     je 21f
     cmp eax, ebx
-    jge 2f
+    jge 22f
 21: mov ebx, eax
+22: call agent_conn_timeout
+    cmp eax, -1
+    je 2f
+    cmp ebx, -1
+    je 23f
+    cmp eax, ebx
+    jge 2f
+23: mov ebx, eax
 2:  call git_timeout
     cmp eax, -1
     je 3f
@@ -2123,6 +2131,9 @@ FN app_tick
     mov qword ptr [rip + g_toast_until], 0
     mov dword ptr [rip + g_dirty], 1
 2:  call agents_tick
+    call time_ms
+    mov rdi, rax
+    call agent_conn_tick
     call term_tick
     call git_tick
     call update_tick

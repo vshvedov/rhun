@@ -605,6 +605,9 @@ FN conn_close
     neg edi
     mov esi, SIGTERM
     SYS SYS_kill
+    mov edi, [rbx + CN_pid]     # here and below, the pid after its group: a child forked an instant
+    mov esi, SIGTERM            # ago may not have called setsid yet (macOS vfork is a plain fork)
+    SYS SYS_kill
     call time_ms
     add rax, CN_KILL_MS
     mov edi, [rbx + CN_pid]
@@ -635,8 +638,13 @@ FN conn_stop
     pop rdi
     add rax, CN_KILL_MS
     mov [rdi + CN_kill_at], rax
+    push rdi
     mov edi, [rdi + CN_pid]
     neg edi
+    mov esi, SIGTERM
+    SYS SYS_kill
+    pop rdi
+    mov edi, [rdi + CN_pid]
     mov esi, SIGTERM
     SYS SYS_kill
 9:  ret
@@ -653,6 +661,11 @@ FN agent_conn_shutdown
     neg edi
     mov esi, SIGKILL
     SYS SYS_kill
+    lea rax, [rip + conns]
+    mov rax, [rax + rbx*8]
+    mov edi, [rax + CN_pid]
+    mov esi, SIGKILL
+    SYS SYS_kill
     inc ebx
     jmp 1b
 2:  xor ebx, ebx
@@ -663,6 +676,12 @@ FN agent_conn_shutdown
     lea rcx, [rip + zombies]
     mov edi, [rcx + rax]
     neg edi
+    mov esi, SIGKILL
+    SYS SYS_kill
+    mov eax, ebx
+    shl eax, 4
+    lea rcx, [rip + zombies]
+    mov edi, [rcx + rax]
     mov esi, SIGKILL
     SYS SYS_kill
     inc ebx
@@ -741,6 +760,9 @@ FN agent_conn_tick
     neg edi
     mov esi, SIGKILL
     SYS SYS_kill
+    mov edi, [r13 + CN_pid]
+    mov esi, SIGKILL
+    SYS SYS_kill
     jmp 2f
 22: cmp dword ptr [r13 + CN_state], CN_UP
     jne 2f
@@ -776,6 +798,9 @@ FN agent_conn_tick
     jb 6f
     mov edi, [r13]
     neg edi
+    mov esi, SIGKILL
+    SYS SYS_kill
+    mov edi, [r13]
     mov esi, SIGKILL
     SYS SYS_kill
     mov dword ptr [r13 + 4], 1

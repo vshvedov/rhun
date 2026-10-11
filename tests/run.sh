@@ -46,6 +46,7 @@ check agent-auth-classify sh -c 'for f in $(ls tests/data/agent-auth/* | LC_ALL=
 python3 tests/agent-auth.py || fail=1
 check agent-auth-post sh -c 'for f in $(ls tests/data/agent-auth-post/* | LC_ALL=C sort); do build/agent_auth_test post $f; done'
 check agent-auth-lock build/agent_auth_test lock
+python3 tests/agent-holders.py || fail=1
 check textarea build/textarea_test
 check strfind build/str_test tests/data/strfind.txt
 check versions build/update_test tests/data/versions.txt

@@ -469,6 +469,7 @@ cli_names: .quad 0, .Lcli_claude, .Lcli_codex, .Lcli_grok, .Lcli_opencode
 pf_args_claude: .quad .Lpa_auth, .Lpa_status, 0
 pf_args_codex: .quad .Lpa_login, .Lpa_status, 0
 pf_args_opencode: .quad .Lpa_auth, .Lpa_list, .Lpa_format, .Lpa_json, 0
+# OpenCode: `--format json` is what 1.17 accepted; 1.19 prints usage and the preflight fails closed
 pf_args: .quad 0, pf_args_claude, pf_args_codex, 0, pf_args_opencode
 no_extras: .quad 0
 .Lpa_auth: .asciz "auth"
@@ -524,10 +525,20 @@ pf_line:
     call sb_push_byte
     EPILOGUE
 
-# pf_close(conn, err): classify the report of a child that exited in time, release, report
+# pf_close(conn, err): classify the report of a child that exited in time, release, report. Stdout's
+# lines and then stderr are classified: the CLIs do not agree on which stream carries the report
+# (codex login status writes it to stderr).
 pf_close:
     PROLOGUE
-    mov eax, AUTH_UNKNOWN
+    mov rdx, [rip + pf_conn + CN_ebuf + SB_len]
+    test rdx, rdx
+    jz 3f
+    mov ebx, esi
+    lea rdi, [rip + pf_out]
+    mov rsi, [rip + pf_conn + CN_ebuf + SB_ptr]
+    call sb_push
+    mov esi, ebx
+3:  mov eax, AUTH_UNKNOWN
     cmp dword ptr [rip + pf_timed], 0
     jne 5f
     cmp esi, CN_E_EXIT
@@ -562,7 +573,8 @@ pf_close:
 # auth_preflight(agent, cwd, cb, ctx): runs the agent's sign-in report command in cwd with the scrubbed
 # environment; cb(ctx, result, ptr, len) once, from here or from a later tick, with the AUTH_* result and
 # the output (ptr 0 when there was none). Grok has none: AUTH_OK at once. A call while one runs, an
-# unknown agent, a missing CLI or a failed start: AUTH_UNKNOWN at once.
+# unknown agent, a missing CLI or a failed start: AUTH_UNKNOWN at once. The ptr handed to cb lives in
+# pf_out until the next auth_preflight starts. g_auth_ids is cleared on every call.
 # Locals: [rsp] the environment.
 FN auth_preflight
     PROLOGUE 16
@@ -570,6 +582,8 @@ FN auth_preflight
     mov r12, rsi
     mov r13, rdx
     mov r14, rcx
+    lea rdi, [rip + g_auth_ids]
+    call sb_clear
     cmp ebx, AG_GROK            # its check is the initialize response; it runs nothing here
     je .Lpf_ok_now
     cmp dword ptr [rip + pf_busy], 0
@@ -601,8 +615,6 @@ FN auth_preflight
     call auth_envp
     mov [rsp], rax
     lea rdi, [rip + pf_out]
-    call sb_clear
-    lea rdi, [rip + g_auth_ids]
     call sb_clear
     mov [rip + pf_agent], ebx
     mov [rip + pf_cb], r13

@@ -23,7 +23,7 @@ elif name == 'codex':
 else:
     out = {'ok': '[{"id":"openai","name":"OpenAI","connections":[{"type":"credential","label":"OAuth"}]}]',
            'out': '[]', 'key': '[{"id":"openai","name":"OpenAI","connections":[{"type":"credential","label":"API key"}]}]'}[mode]
-print(out)
+print(out, file=sys.stderr if name == 'codex' else sys.stdout)  # where each CLI writes its report
 '''
 
 class Preflight(unittest.TestCase):

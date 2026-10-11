@@ -1,0 +1,6 @@
+[
+  {"id": "openai", "name": "OpenAI", "connections": [{"type": "credential", "label": "OAuth (ChatGPT)"}]},
+  {"id": "anthropic", "name": "Anthropic", "connections": [{"type": "credential", "label": "OAuth"}]},
+  {"id": "xai", "name": "xAI", "connections": [{"type": "credential", "label": "API key"}]},
+  {"id": "github-copilot", "name": "GitHub Copilot", "connections": [{"type": "credential", "label": "oauth device"}, {"type": "environment", "name": "GITHUB_TOKEN"}]}
+]

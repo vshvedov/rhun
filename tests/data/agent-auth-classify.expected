@@ -1,0 +1,10 @@
+claude-garbage.txt=3
+claude-key.json=2
+claude-ok.json=0
+claude-out.json=1
+codex-key.txt=2
+codex-ok.txt=0
+codex-out.txt=1
+opencode-garbage.txt=3
+opencode-none.json=1
+opencode-ok.json=0 openai github-copilot

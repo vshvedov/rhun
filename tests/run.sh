@@ -31,6 +31,7 @@ check images build/image_test $(ls tests/data/images/* | LC_ALL=C sort)
 check cpu build/cpu_test
 check cols build/cols_test
 check watch build/watch_test
+check jsonw build/jsonw_test
 check textarea build/textarea_test
 check strfind build/str_test tests/data/strfind.txt
 check versions build/update_test tests/data/versions.txt

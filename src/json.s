@@ -498,3 +498,242 @@ FN json_type
     jz 1f
     mov eax, [rdi + JV_type]
 1:  ret
+
+# ---------- builder: one message at a time, into an SB ----------
+.bss
+.p2align 3
+jw_first: .quad 0           # bit d set: no item written yet at depth d
+jw_depth: .long 0
+
+.text
+# jw_begin(sb): empty the buffer and the nesting state
+FN jw_begin
+    mov qword ptr [rip + jw_first], 0
+    mov dword ptr [rip + jw_depth], 0
+    jmp sb_clear
+
+# jw_sep(sb): a comma before any item but the first of its container
+jw_sep:
+    mov ecx, [rip + jw_depth]
+    test ecx, ecx
+    jz 1f
+    dec ecx
+    bt qword ptr [rip + jw_first], rcx
+    jnc 2f
+    btr qword ptr [rip + jw_first], rcx
+1:  ret
+2:  mov esi, ','
+    jmp sb_push_byte
+
+# jw_open(sb, byte): a container; the next item at the new depth is first
+jw_open:
+    push rsi
+    push rdi
+    call jw_sep
+    pop rdi
+    pop rsi
+    push rdi
+    call sb_push_byte
+    pop rdi
+    mov ecx, [rip + jw_depth]
+    bts qword ptr [rip + jw_first], rcx
+    inc dword ptr [rip + jw_depth]
+    ret
+
+FN jw_obj
+    mov esi, '{'
+    jmp jw_open
+FN jw_arr
+    mov esi, '['
+    jmp jw_open
+
+# jw_close(sb, byte)
+jw_close:
+    mov ecx, [rip + jw_depth]
+    dec ecx
+    mov [rip + jw_depth], ecx
+    btr qword ptr [rip + jw_first], rcx
+    jmp sb_push_byte
+FN jw_end_obj
+    mov esi, '}'
+    jmp jw_close
+FN jw_end_arr
+    mov esi, ']'
+    jmp jw_close
+
+# jw_key(sb, cstr): "key": with the separator; the value that follows is not an item
+FN jw_key
+    push rbx
+    push r12
+    mov rbx, rdi
+    mov r12, rsi
+    call jw_sep
+    mov rdi, rbx
+    mov rsi, r12
+    call jw_cstr_raw
+    mov rdi, rbx
+    mov esi, ':'
+    call sb_push_byte
+    # the value is written next without a separator: mark the depth as "first" again
+    mov ecx, [rip + jw_depth]
+    dec ecx
+    bts qword ptr [rip + jw_first], rcx
+    pop r12
+    pop rbx
+    ret
+
+# jw_cstr(sb, cstr) / jw_str(sb, ptr, len): a quoted, escaped string item
+FN jw_cstr
+    push rdi
+    push rsi
+    mov rdi, rsi
+    call strlen
+    mov rdx, rax
+    pop rsi
+    pop rdi
+    jmp jw_str
+FN jw_str
+    push rbx
+    push r12
+    push r13
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    call jw_sep
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call jw_quote
+    pop r13
+    pop r12
+    pop rbx
+    ret
+# jw_cstr_raw(sb, cstr): quoted without a separator (keys)
+jw_cstr_raw:
+    push rdi
+    push rsi
+    mov rdi, rsi
+    call strlen
+    mov rdx, rax
+    pop rsi
+    pop rdi
+    jmp jw_quote
+
+# jw_quote(sb, ptr, len): "..." with \" \\ \n \r \t and \u00XX for other bytes below 0x20 and for 0x7f
+jw_quote:
+    push rbx
+    push r12
+    push r13
+    push r14
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, rbx
+    mov esi, '"'
+    call sb_push_byte
+1:  test r13, r13
+    jz 8f
+    movzx r14d, byte ptr [r12]
+    cmp r14d, '"'
+    je 2f
+    cmp r14d, '\\'
+    je 2f
+    cmp r14d, 0x20
+    jb 3f
+    cmp r14d, 0x7f
+    je 4f
+    mov rdi, rbx
+    mov esi, r14d
+    call sb_push_byte
+    jmp 7f
+2:  mov rdi, rbx
+    mov esi, '\\'
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, r14d
+    call sb_push_byte
+    jmp 7f
+3:  cmp r14d, 10
+    jne 31f
+    mov esi, 'n'
+    jmp 32f
+31: cmp r14d, 13
+    jne 33f
+    mov esi, 'r'
+    jmp 32f
+33: cmp r14d, 9
+    jne 4f
+    mov esi, 't'
+32: push rsi
+    mov rdi, rbx
+    mov esi, '\\'
+    call sb_push_byte
+    pop rsi
+    mov rdi, rbx
+    call sb_push_byte
+    jmp 7f
+4:  # \u00XX
+    mov rdi, rbx
+    lea rsi, [rip + .Ljw_u00]
+    call sb_push_cstr
+    lea rcx, [rip + .Ljw_hex]
+    mov eax, r14d
+    shr eax, 4
+    movzx esi, byte ptr [rcx + rax]
+    mov rdi, rbx
+    call sb_push_byte
+    lea rcx, [rip + .Ljw_hex]
+    mov eax, r14d
+    and eax, 15
+    movzx esi, byte ptr [rcx + rax]
+    mov rdi, rbx
+    call sb_push_byte
+7:  inc r12
+    dec r13
+    jmp 1b
+8:  mov rdi, rbx
+    mov esi, '"'
+    call sb_push_byte
+    pop r14
+    pop r13
+    pop r12
+    pop rbx
+    ret
+
+# jw_u64(sb, n): an unsigned number item
+FN jw_u64
+    push rbx
+    push r12
+    mov rbx, rdi
+    mov r12, rsi
+    call jw_sep
+    mov rdi, rbx
+    mov rsi, r12
+    call sb_push_u64
+    pop r12
+    pop rbx
+    ret
+
+# jw_raw(sb, cstr): true, false, null or a number already formatted
+FN jw_raw
+    push rbx
+    push r12
+    mov rbx, rdi
+    mov r12, rsi
+    call jw_sep
+    mov rdi, rbx
+    mov rsi, r12
+    call sb_push_cstr
+    pop r12
+    pop rbx
+    ret
+
+# jw_line(sb): the record terminator
+FN jw_line
+    mov esi, 10
+    jmp sb_push_byte
+
+.section .rodata
+.Ljw_u00: .asciz "\\u00"
+.Ljw_hex: .ascii "0123456789abcdef"
+.text

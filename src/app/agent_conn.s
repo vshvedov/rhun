@@ -1,5 +1,8 @@
 # agent connections: a child with pipes for its stdin, stdout and stderr; stdout arrives as lines,
 # stderr keeps its tail, stdin is a bounded queue flushed on POLLOUT (Task 6)
+# A child reaped by the tick sets CN_exit before reap drains its pipes; a callback during that drain may
+# close, stop or break the connection, so no signal and no zombie entry goes to a pid whose CN_exit is set
+# (the kernel may already have given the number to another process).
 .include "rhun.inc"
 
 .bss
@@ -577,6 +580,8 @@ FN conn_break
     call unwatch_close
     mov rdi, rbx
     call forget
+    cmp dword ptr [rbx + CN_exit], -1   # reaped already (a callback during reap): the pid is not ours
+    jne 2f
     mov edi, [rbx + CN_pid]
     neg edi
     mov esi, SIGKILL
@@ -588,7 +593,7 @@ FN conn_break
     mov esi, 1
     xor edx, edx
     call zombie
-    mov rdi, rbx
+2:  mov rdi, rbx
     mov esi, r12d
     call [rbx + CN_on_close]
 9:  EPILOGUE
@@ -601,6 +606,10 @@ FN conn_close
     je 9f
     cmp dword ptr [rbx + CN_state], CN_DEAD
     je 2f
+    mov rdi, rbx
+    call forget
+    cmp dword ptr [rbx + CN_exit], -1   # reaped already (a callback during reap): the pid is not ours
+    jne 2f
     mov edi, [rbx + CN_pid]
     neg edi
     mov esi, SIGTERM
@@ -614,8 +623,6 @@ FN conn_close
     xor esi, esi
     mov rdx, rax
     call zombie
-    mov rdi, rbx
-    call forget
 2:  mov rdi, rbx
     call unwatch_close
     lea rdi, [rbx + CN_rbuf]
@@ -638,6 +645,8 @@ FN conn_stop
     pop rdi
     add rax, CN_KILL_MS
     mov [rdi + CN_kill_at], rax
+    cmp dword ptr [rdi + CN_exit], -1   # reaped already (a callback during reap): the pid is not ours
+    jne 9f
     push rdi
     mov edi, [rdi + CN_pid]
     neg edi
@@ -657,6 +666,8 @@ FN agent_conn_shutdown
     jae 2f
     lea rax, [rip + conns]
     mov rax, [rax + rbx*8]
+    cmp dword ptr [rax + CN_exit], -1   # reaped already (a callback during reap): the pid is not ours
+    jne 11f
     mov edi, [rax + CN_pid]
     neg edi
     mov esi, SIGKILL
@@ -666,7 +677,7 @@ FN agent_conn_shutdown
     mov edi, [rax + CN_pid]
     mov esi, SIGKILL
     SYS SYS_kill
-    inc ebx
+11: inc ebx
     jmp 1b
 2:  xor ebx, ebx
 3:  cmp ebx, [rip + nzombies]
@@ -689,7 +700,8 @@ FN agent_conn_shutdown
 9:  pop rbx
     ret
 
-# reap(conn, status): the child exited: drain what the pipes still hold, then on_close(CN_E_EXIT)
+# reap(conn, status): the child exited: drain what the pipes still hold, then on_close(CN_E_EXIT).
+# CN_exit is set first: from here on the pid is not rhun's to signal (see the file's header).
 reap:
     PROLOGUE
     mov rbx, rdi

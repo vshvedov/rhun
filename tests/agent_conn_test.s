@@ -1,6 +1,7 @@
 # agent_conn_test SCENARIO SCRIPT: a connection to "python3 SCRIPT SCENARIO", events printed as they come.
-# The failure-path scenarios run another fake agent: watchfull and reopen run exit, watchlate runs echo,
-# guard runs fill. watchfull and watchlate fill the watch table with dummy watches on plain numbers from
+# The failure-path scenarios run another fake agent: watchfull, reopen and breaklast run exit, watchlate
+# runs echo, guard runs fill. breaklast breaks the connection (CN_E_READ) from the callback for the
+# unterminated last line, which reap delivers: it never polls, so the tick reaps the child first. watchfull and watchlate fill the watch table with dummy watches on plain numbers from
 # 1000 (watch_add only stores them; poll would report POLLNVAL, which noop ignores) and remove them
 # before anything is pumped.
 .include "rhun.inc"
@@ -67,6 +68,20 @@ on_line:                    # (conn, ptr, len)
     lea rdx, [rip + .Lready]
     call str_eq_cstr
     mov [rip + ready], eax
+    # breaklast: the unterminated last line breaks the connection
+    mov rdi, r12
+    mov esi, 5
+    lea rdx, [rip + .Lthree]
+    call str_eq_cstr
+    test eax, eax
+    jz 9f
+    lea rdi, [rip + .Lbreaklast]
+    call scen_is
+    test eax, eax
+    jz 9f
+    lea rdi, [rip + conn]
+    mov esi, CN_E_READ
+    call conn_break
 9:  EPILOGUE
 
 on_close:                   # (conn, err)
@@ -260,6 +275,10 @@ FN main
     lea rdi, [rip + .Lreopen]
     call scen_is
     test eax, eax
+    jnz 11f
+    lea rdi, [rip + .Lbreaklast]
+    call scen_is
+    test eax, eax
     jz 12f
 11: lea rax, [rip + .Lexit]
     mov [rip + child], rax
@@ -304,6 +323,10 @@ FN main
     call scen_is
     test eax, eax
     jnz .Lt_reopen
+    lea rdi, [rip + .Lbreaklast]
+    call scen_is
+    test eax, eax
+    jnz .Lt_breaklast
     lea rdi, [rip + conn]
     lea rax, [rip + on_line]
     mov [rdi + CN_on_line], rax
@@ -605,8 +628,38 @@ FN main
     xor esi, esi
     call report_open
     jmp .Lmain_done
+.Lt_breaklast:
+    # no poll until the child has exited: the tick reaps it, and reap delivers "three" and breaks
+    lea rdi, [rip + conn]
+    call open_on
+    test eax, eax
+    jz 3f
+    call time_ms
+    lea r12, [rax + 20000]
+1:  cmp dword ptr [rip + closed], 0
+    jne 2f
+    call time_ms
+    cmp rax, r12
+    jae 2f
+    xor edi, edi                # poll on no descriptors: a 50 ms sleep that dispatches nothing
+    xor esi, esi
+    mov edx, 50
+    SYS SYS_poll
+    call time_ms
+    mov rdi, rax
+    call agent_conn_tick
+    jmp 1b
+2:  lea rdi, [rip + conn]
+    call conn_close
+    jmp .Lmain_done
+3:  lea rdi, [rip + conn]
+    xor esi, esi
+    call report_open
+    jmp .Lmain_done
 .section .rodata
 .Lpython: .asciz "python3"
+.Lbreaklast: .asciz "breaklast"
+.Lthree: .asciz "three"
 .Lnowhere: .asciz "/nonexistent/rhun-test-agent"
 .Lspawnfail: .asciz "spawnfail"
 .Lstderr: .asciz "stderr"

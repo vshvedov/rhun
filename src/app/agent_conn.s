@@ -738,6 +738,8 @@ reap:
     jne 9f
     cmp dword ptr [rbx + CN_state], CN_IDLE
     je 9f
+    cmp dword ptr [rbx + CN_state], CN_DEAD   # the callback broke it: on_close has been delivered
+    je 9f
     mov qword ptr [rbx + CN_rbuf + SB_len], 0
     mov qword ptr [rbx + CN_scanned], 0
 1:  mov dword ptr [rbx + CN_state], CN_DEAD

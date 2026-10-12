@@ -634,6 +634,8 @@ ho_cb:
 # holder_opencode(root) -> HOLDER_* (spec 5.4): any opencode process but rhun's own holds every OpenCode
 #   session rhun holds or would resume, except one whose cwd is readable and outside root and whose
 #   arguments are known and contain neither serve nor acp; a failed listing is unknown. It parses no JSON.
+#   root must be a resolved path (the listing's cwds are canonical: readlink /proc/<pid>/cwd on Linux,
+#   PROC_PIDVNODEPATHINFO on macOS), or an in-project process would be exempted.
 FN holder_opencode
     PROLOGUE
     mov [rip + ho_root], rdi

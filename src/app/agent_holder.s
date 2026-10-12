@@ -4,7 +4,7 @@
 
 .bss
 .p2align 3
-own: .zero 4 * 64
+own: .zero 4 * (CN_MAX + CN_ZOMBIES)     # every live connection and every stopped child
 nown: .long 0
 .p2align 3
 hc_sid: .quad 0             # the session looked for (cstr)
@@ -30,10 +30,10 @@ hc_result: .long 0          # HOLDER_* so far; UNKNOWN sticks
 .endif
 .text
 
-# holder_own_add(pid): one of rhun's own agent children (at most 64 are remembered)
+# holder_own_add(pid): one of rhun's own agent children (agent_conn.s keeps at most CN_MAX + CN_ZOMBIES)
 FN holder_own_add
     mov eax, [rip + nown]
-    cmp eax, 64
+    cmp eax, CN_MAX + CN_ZOMBIES
     jae 9f
     lea rcx, [rip + own]
     mov [rcx + rax*4], edi

@@ -3,6 +3,9 @@
 # A child reaped by the tick sets CN_exit before reap drains its pipes; a callback during that drain may
 # close, stop or break the connection, so no signal and no zombie entry goes to a pid whose CN_exit is set
 # (the kernel may already have given the number to another process).
+# rhun's own children (holder_own_add, src/app/agent_holder.s): conn_open adds the pid once the child is
+# spawned and watched; reap removes it, and so does the zombie list when an entry leaves it (reaped, or
+# dropped because the list is full). A stopped child stays rhun's own until it is reaped.
 .include "rhun.inc"
 
 .bss
@@ -139,6 +142,8 @@ FN conn_open
     lea rcx, [rip + conns]
     mov [rcx + rax*8], rbx
     inc dword ptr [rip + nconns]
+    mov edi, r15d
+    call holder_own_add
     mov eax, 1
     EPILOGUE
 .Lco_nowatch2:
@@ -551,7 +556,7 @@ forget:
 
 # zombie(pid, killed, kill_at): remember a child to reap; killed 1 means SIGKILL was already sent.
 # The list holds CN_ZOMBIES: a child stopped when it is full is dropped (it keeps whatever signal it was
-# sent, a SIGTERM is never escalated, and rhun never reaps it).
+# sent, a SIGTERM is never escalated, and rhun never reaps it), and it stops counting as rhun's own.
 zombie:
     mov eax, [rip + nzombies]
     cmp eax, CN_ZOMBIES
@@ -562,7 +567,8 @@ zombie:
     mov [rcx + rax + 4], esi
     mov [rcx + rax + 8], rdx
     inc dword ptr [rip + nzombies]
-9:  ret
+    ret
+9:  jmp holder_own_remove
 
 # conn_break(conn, err): the connection is unusable; kill the group, deliver on_close once.
 # Buffers stay (CN_ebuf is shown in error cards) until conn_close.
@@ -709,6 +715,8 @@ reap:
     mov rbx, rdi
     mov r12d, [rbx + CN_gen]
     mov [rbx + CN_exit], esi
+    mov edi, [rbx + CN_pid]
+    call holder_own_remove
     mov dword ptr [rbx + CN_err], CN_E_EXIT
     mov rdi, rbx
     call drain_err
@@ -820,7 +828,9 @@ FN agent_conn_tick
     mov dword ptr [r13 + 4], 1
 6:  inc r12d
     jmp 4b
-5:  # gone: move the last entry here
+5:  # gone: no longer rhun's own; move the last entry here
+    mov edi, [r13]
+    call holder_own_remove
     dec dword ptr [rip + nzombies]
     mov eax, [rip + nzombies]
     shl eax, 4

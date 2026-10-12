@@ -46,6 +46,12 @@ class Holders(unittest.TestCase):
     def test_claude_no_pid_is_unknown(self):
         self.claude_record('1.json', sessionId='s1', pidDomain=DOMAIN)
         self.assertEqual(self.ask('claude', 's1'), 'holder=2')
+    def test_claude_no_session_id_is_unknown(self):
+        self.claude_record('1.json', pid=dead_pid(), pidDomain=DOMAIN)
+        self.assertEqual(self.ask('claude', 's1'), 'holder=2')
+    def test_claude_number_session_id_is_unknown(self):
+        self.claude_record('1.json', sessionId=42, pid=dead_pid(), pidDomain=DOMAIN)
+        self.assertEqual(self.ask('claude', 's1'), 'holder=2')
     def test_claude_no_domain_still_holds(self):
         self.claude_record('1.json', sessionId='s1', pid=os.getpid())
         self.assertEqual(self.ask('claude', 's1'), 'holder=1')
@@ -66,6 +72,8 @@ class Holders(unittest.TestCase):
         self.assertEqual(self.ask('grok', 'g2'), 'holder=0')
         self.assertEqual(self.ask('grok', 'g3'), 'holder=0')
         self.grok_records([{'session_id': 'g1'}])
+        self.assertEqual(self.ask('grok', 'g1'), 'holder=2')
+        self.grok_records([{'pid': dead_pid(), 'cwd': '/p'}])
         self.assertEqual(self.ask('grok', 'g1'), 'holder=2')
         (self.home / '.grok/active_sessions.json').write_text('[{')
         self.assertEqual(self.ask('grok', 'g1'), 'holder=2')

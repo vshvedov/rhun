@@ -102,7 +102,8 @@ num:
     xor edx, edx
     ret
 
-# judge(record jv, sid key, pid key, domain key or 0): fold one record into hc_result
+# judge(record jv, sid key, pid key, domain key or 0): fold one record into hc_result. A record without a
+#   string session id, or with the session's id and no pid, makes the answer unknown (spec 5.4).
 judge:
     PROLOGUE
     mov rbx, rdi
@@ -112,7 +113,12 @@ judge:
     mov rdi, rbx
     mov rsi, r12
     call json_get
+    mov r15, rax
     mov rdi, rax
+    call json_type
+    cmp eax, JT_STR
+    jne .Ljudge_unknown         # no session id rhun can read: a format it does not know
+    mov rdi, r15
     mov rsi, [rip + hc_sid]
     call json_is
     test eax, eax

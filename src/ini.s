@@ -40,7 +40,7 @@ FN trim
     jnz 4b
 3:  ret
 
-# ini_next(it) -> 1 when key/value filled, 0 at end
+# ini_next(it) -> 1 when key/value filled, 0 at end; a [section] line may end in a # comment
 FN ini_next
     push rbx
     push r12
@@ -77,11 +77,54 @@ FN ini_next
     je .Lin_line
     cmp cl, '['
     jne .Lin_kv
-    cmp byte ptr [rax + rdx - 1], ']'
+    # a section: the first ']' outside quotes that only blanks or a # comment follow
+    xor r8d, r8d                # the open quote, 0 outside one
+    mov ecx, 1
+6:  cmp rcx, rdx
+    jae 12f
+    movzx r9d, byte ptr [rax + rcx]
+    test r8d, r8d
+    jz 7f
+    cmp r9d, r8d                # inside a quote
+    jne 61f
+    xor r8d, r8d
+    jmp 11f
+61: cmp r8d, 34
+    jne 11f
+    cmp r9d, 92                 # a backslash in "...": the next byte is escaped
+    jne 11f
+    inc rcx
+    jmp 11f
+7:  cmp r9d, 34
+    je 71f
+    cmp r9d, 39
+    jne 8f
+71: mov r8d, r9d
+    jmp 11f
+8:  cmp r9d, ']'
+    jne 11f
+    lea r10, [rcx + 1]
+9:  cmp r10, rdx
+    jae 10f
+    movzx r11d, byte ptr [rax + r10]
+    cmp r11d, '#'
+    je 10f
+    cmp r11d, ' '
+    je 91f
+    cmp r11d, 9
+    jne 11f
+91: inc r10
+    jmp 9b
+10: lea rdi, [rax + 1]
+    lea rsi, [rcx - 1]
+    jmp 13f
+11: inc rcx
+    jmp 6b
+12: cmp byte ptr [rax + rdx - 1], ']'   # unbalanced quotes: the line's last ']' as before
     jne .Lin_kv
     lea rdi, [rax + 1]
     lea rsi, [rdx - 2]
-    call trim
+13: call trim
     mov [rbx + INI_sec], rax
     mov [rbx + INI_seclen], rdx
     jmp .Lin_line

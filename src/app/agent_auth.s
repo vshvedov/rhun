@@ -1099,13 +1099,18 @@ FN auth_opencode_config
     test rax, rax
     jz 7f
     mov [rsp + 24], rax
-    mov rdi, r14
+    xor r8d, r8d                # not an object: the key path is the entry itself
+    cmp rax, -2
+    je 60f
+    lea r8, [rip + .Lp_dot]
+60: mov rdi, r14
     lea rsi, [rip + .Lp_provider_dot]
     mov rdx, r13
     mov rcx, [rsp + 16]
-    lea r8, [rip + .Lp_dot]
     call refuse
     mov rax, [rsp + 24]
+    cmp rax, -2
+    je 62f
     cmp rax, -1
     je 61f
     mov rdi, r14
@@ -1159,13 +1164,16 @@ FN auth_opencode_config
     EPILOGUE
 
 # provider_entry_ok(jv) -> 0 when absent or an object with nothing but "models" of {id, name}
-# entries; else the JV* of the offending key, or -1 for a bad models value or model entry
+# entries; else the JV* of the offending key, -1 for a bad models value or model entry, or -2 when
+# present but not an object
 provider_entry_ok:
     PROLOGUE
     mov rbx, rdi
     call json_type
+    cmp eax, -1
+    je .Lpe_ok                  # absent: nothing to configure with
     cmp eax, JT_OBJ
-    jne .Lpe_ok                 # absent, or not an object: nothing to configure with
+    jne .Lpe_not_obj
     xor r12d, r12d              # the key index
 1:  cmp r12d, [rbx + JV_n]
     jae .Lpe_ok
@@ -1206,6 +1214,9 @@ provider_entry_ok:
     EPILOGUE
 .Lpe_bad_model:
     mov rax, -1
+    EPILOGUE
+.Lpe_not_obj:
+    mov rax, -2
     EPILOGUE
 
 # model_entry_ok(jv) -> 1 if an object whose keys are only "id" and "name"

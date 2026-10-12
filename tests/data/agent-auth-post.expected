@@ -14,4 +14,5 @@ opencode-config-managed.json=3 enabled_providers
 opencode-config-npm.json=3 provider.openai.npm
 opencode-config-ok.json=0
 opencode-config-options.json=3 provider.openai.options
+opencode-config-string.json=3 provider.openai
 opencode-config-title.json=3 agent.title.model

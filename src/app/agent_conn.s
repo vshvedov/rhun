@@ -577,6 +577,8 @@ FN conn_break
 1:  mov [rbx + CN_err], r12d
     mov dword ptr [rbx + CN_state], CN_DEAD
     mov rdi, rbx
+    call drain_err              # the last stderr lines are the error card's details; drain_err calls no one
+    mov rdi, rbx
     call unwatch_close
     mov rdi, rbx
     call forget

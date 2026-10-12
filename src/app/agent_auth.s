@@ -708,7 +708,6 @@ grok_oauth_ids: .quad .Lv_cached, .Lv_grokcom, .Lv_oidc, 0
 .Lp_dot_model: .asciz ".model"
 .Lp_provider_dot: .asciz "provider."
 .Lp_dot: .asciz "."
-.Lt_model_dot: .ascii "model."
 .Lt_api_key: .asciz "api_key"
 .Lt_env_key: .asciz "env_key"
 .Lslash: .byte '/'
@@ -1252,10 +1251,235 @@ model_entry_ok:
 9:  mov eax, 1
     EPILOGUE
 
-# auth_grok_models(ptr, len, sb): the [model.<name>] tables of a Grok config.toml with an api_key or
-# env_key key, names space-separated; values are never read. A table with both keys is named once.
+# toml_seg(ptr, len) -> rax the segment, rdx its length, rcx the bytes taken with the blanks around it and
+#   a following dot; rcx -1 when no key segment starts there. Quotes are stripped; a "..." holding a
+#   backslash is refused rather than decoded.
+toml_seg:
+    xor ecx, ecx
+1:  cmp rcx, rsi                # blanks before
+    jae 8f
+    movzx r8d, byte ptr [rdi + rcx]
+    cmp r8d, ' '
+    je 2f
+    cmp r8d, 9
+    jne 3f
+2:  inc rcx
+    jmp 1b
+3:  cmp r8d, 34
+    je 4f
+    cmp r8d, 39
+    je 4f
+    lea rax, [rdi + rcx]        # bare: A-Z a-z 0-9 _ -
+    mov r9, rcx
+31: cmp rcx, rsi
+    jae 32f
+    movzx r10d, byte ptr [rdi + rcx]
+    cmp r10d, '-'
+    je 33f
+    cmp r10d, '_'
+    je 33f
+    lea r11d, [r10 - 48]
+    cmp r11d, 10
+    jb 33f
+    or r10d, 0x20
+    sub r10d, 'a'
+    cmp r10d, 26
+    jae 32f
+33: inc rcx
+    jmp 31b
+32: mov rdx, rcx
+    sub rdx, r9
+    jz 8f
+    jmp 5f
+4:  inc rcx                     # quoted: r8 the quote
+    lea rax, [rdi + rcx]
+    mov r9, rcx
+41: cmp rcx, rsi
+    jae 8f
+    movzx r10d, byte ptr [rdi + rcx]
+    cmp r10d, r8d
+    je 42f
+    cmp r10d, 92
+    jne 43f
+    cmp r8d, 34
+    je 8f
+43: inc rcx
+    jmp 41b
+42: mov rdx, rcx
+    sub rdx, r9
+    inc rcx
+5:  cmp rcx, rsi                # blanks after, then the end or a dot with more to come
+    jae 9f
+    movzx r10d, byte ptr [rdi + rcx]
+    cmp r10d, ' '
+    je 51f
+    cmp r10d, 9
+    jne 52f
+51: inc rcx
+    jmp 5b
+52: cmp r10d, '.'
+    jne 8f
+    inc rcx
+    cmp rcx, rsi
+    jae 8f
+9:  ret
+8:  mov rcx, -1
+    ret
+
+# toml_path(ptr, len, out, max) -> the segments of a TOML dotted key, the first max of them stored at out
+#   as (ptr, len) pairs, or -1 when it is not a key
+toml_path:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    xor r15d, r15d
+1:  test r12, r12
+    jz 9f
+    mov rdi, rbx
+    mov rsi, r12
+    call toml_seg
+    test rcx, rcx
+    js 8f
+    add rbx, rcx
+    sub r12, rcx
+    cmp r15, r14
+    jae 2f
+    mov r8, r15
+    shl r8, 4
+    mov [r13 + r8], rax
+    mov [r13 + r8 + 8], rdx
+2:  inc r15
+    jmp 1b
+8:  mov rax, -1
+    EPILOGUE
+9:  mov rax, r15
+    EPILOGUE
+
+# value_end(it) -> 1, or 0 when the current key's value runs unclosed to the end of the text. INI_p moves
+#   past the line the value ends on: a multi-line string or array spans lines, and a bracket, a # or a
+#   [section] line inside a string does not count.
+value_end:
+    mov rax, [rdi + INI_val]
+    mov rsi, [rdi + INI_end]
+    xor edx, edx                # [ { depth
+1:  cmp rax, rsi
+    jae 7f
+    movzx ecx, byte ptr [rax]
+    cmp ecx, 10
+    je 5f
+    cmp ecx, '#'
+    je 6f
+    cmp ecx, 34
+    je 3f
+    cmp ecx, 39
+    je 3f
+    cmp ecx, '['
+    je 21f
+    cmp ecx, '{'
+    je 21f
+    cmp ecx, ']'
+    je 22f
+    cmp ecx, '}'
+    je 22f
+2:  inc rax
+    jmp 1b
+21: inc edx
+    jmp 2b
+22: test edx, edx
+    jz 2b
+    dec edx
+    jmp 2b
+5:  test edx, edx               # a newline ends the value outside brackets
+    jnz 2b
+    inc rax
+    cmp rax, [rdi + INI_p]
+    jbe 51f
+    mov [rdi + INI_p], rax
+51: mov eax, 1
+    ret
+6:  inc rax                     # a comment: to the end of its line
+    cmp rax, rsi
+    jae 7f
+    cmp byte ptr [rax], 10
+    jne 6b
+    jmp 1b
+3:  lea r8, [rax + 2]           # a string, ecx its quote; three quotes open a multi-line one
+    cmp r8, rsi
+    jae 4f
+    cmp byte ptr [rax + 1], cl
+    jne 4f
+    cmp byte ptr [rax + 2], cl
+    jne 4f
+    add rax, 3
+31: cmp rax, rsi
+    jae 9f
+    movzx r8d, byte ptr [rax]
+    cmp r8d, 92
+    jne 32f
+    cmp ecx, 34
+    jne 32f
+    add rax, 2                  # an escape in """..."""
+    jmp 31b
+32: cmp r8d, ecx
+    jne 33f
+    lea r9, [rax + 2]
+    cmp r9, rsi
+    jae 9f
+    cmp byte ptr [rax + 1], cl
+    jne 33f
+    cmp byte ptr [rax + 2], cl
+    jne 33f
+    add rax, 3
+34: cmp rax, rsi                # quotes right after the closing three belong to the string
+    jae 7f
+    cmp byte ptr [rax], cl
+    jne 1b
+    inc rax
+    jmp 34b
+33: inc rax
+    jmp 31b
+4:  inc rax                     # one line: to the closing quote or the line's end
+41: cmp rax, rsi
+    jae 7f
+    movzx r8d, byte ptr [rax]
+    cmp r8d, 10
+    je 1b
+    inc rax
+    cmp r8d, ecx
+    je 1b
+    cmp r8d, 92
+    jne 41b
+    cmp ecx, 34
+    jne 41b
+    cmp rax, rsi                # "\x": skip x, but never the line's end
+    jae 7f
+    cmp byte ptr [rax], 10
+    je 1b
+    inc rax
+    jmp 41b
+7:  mov [rdi + INI_p], rsi      # the end of the text
+    xor eax, eax
+    test edx, edx
+    setz al
+    ret
+9:  mov [rdi + INI_p], rsi      # an unclosed multi-line string
+    xor eax, eax
+    ret
+
+# auth_grok_models(ptr, len, sb) -> 1, or 0 when the file says something about model tables this scan
+#   cannot follow (spec 5.3, fail closed: the caller refuses Grok). sb gets the names of the
+#   [model.<name>] tables with an api_key or env_key key, space-separated; values are never read. A table
+#   with both keys is named once. Keys and names are compared with their quotes stripped. Not followed:
+#   a dotted key that reaches into a model table (model.x.api_key at the top, x.api_key under [model]),
+#   an inline table for the model tables or one model ([model] x = { ... }), an array of tables under
+#   model, a key or a table name that is not one, a name with a blank, and a value left unclosed.
+.equ GM_PATH, INI_SIZE          # the key's full path, its first three segments as (ptr, len)
+.equ GM_N, INI_SIZE + 48        # its segment count
+.equ GM_OK, INI_SIZE + 56       # the result
 FN auth_grok_models
-    PROLOGUE INI_SIZE + 16
+    PROLOGUE INI_SIZE + 64
     mov r12, rdx                # sb
     mov rbx, rsp                # the iterator
     mov rdx, rsi
@@ -1264,44 +1488,118 @@ FN auth_grok_models
     call ini_init
     xor r13d, r13d              # names written
     xor r14d, r14d              # the section last named
+    mov qword ptr [rsp + GM_OK], 1
 1:  mov rdi, rbx
     call ini_next
     test eax, eax
     jz 9f
-    mov rax, [rbx + INI_sec]
-    cmp rax, r14
-    je 1b
-    cmp qword ptr [rbx + INI_seclen], 6
-    jbe 1b
+    mov rdi, rbx
+    call value_end
+    test eax, eax
+    jz 8f
     mov rdi, [rbx + INI_sec]
     mov rsi, [rbx + INI_seclen]
-    lea rdx, [rip + .Lt_model_dot]
-    mov ecx, 6
-    call str_starts
+    test rsi, rsi
+    jz 2f
+    cmp byte ptr [rdi], '['     # [[an array of tables]]: unclassifiable under model, ignored elsewhere
+    jne 2f
+    cmp rsi, 2
+    jb 8f
+    cmp byte ptr [rdi + rsi - 1], ']'
+    jne 8f
+    inc rdi
+    sub rsi, 2
+    lea rdx, [rsp + GM_PATH]
+    mov ecx, 1
+    call toml_path
+    test rax, rax
+    jle 8f
+    mov rdi, [rsp + GM_PATH]
+    mov rsi, [rsp + GM_PATH + 8]
+    lea rdx, [rip + .Lk_model]
+    call str_eq_cstr
     test eax, eax
-    jz 1b
-    mov rdi, rbx
-    lea rsi, [rip + .Lt_api_key]
-    call ini_key_is
+    jnz 8f
+    jmp 1b
+2:  lea rdx, [rsp + GM_PATH]    # the table's path, then the key's after it
+    mov ecx, 3
+    call toml_path
+    test rax, rax
+    js 8f
+    mov r15, rax                # the table's segments
+    mov ecx, 3
+    mov rdx, r15
+    cmp rdx, 3
+    jbe 3f
+    mov edx, 3
+3:  sub ecx, edx
+    shl rdx, 4
+    lea rdx, [rsp + GM_PATH + rdx]
+    mov rdi, [rbx + INI_key]
+    mov rsi, [rbx + INI_keylen]
+    call toml_path
+    test rax, rax
+    jle 8f
+    add rax, r15
+    mov [rsp + GM_N], rax
+    mov rdi, [rsp + GM_PATH]
+    mov rsi, [rsp + GM_PATH + 8]
+    lea rdx, [rip + .Lk_model]
+    call str_eq_cstr
     test eax, eax
-    jnz 2f
-    mov rdi, rbx
-    lea rsi, [rip + .Lt_env_key]
-    call ini_key_is
+    jz 1b                       # not about models
+    cmp qword ptr [rsp + GM_N], 2
+    ja 4f
+    cmp qword ptr [rbx + INI_vallen], 0   # model or model.<name> itself: an inline table is unfollowed
+    je 1b
+    mov rax, [rbx + INI_val]
+    cmp byte ptr [rax], '{'
+    je 8f
+    jmp 1b
+4:  mov rdi, [rsp + GM_PATH + 32]
+    mov rsi, [rsp + GM_PATH + 40]
+    lea rdx, [rip + .Lt_api_key]
+    call str_eq_cstr
     test eax, eax
-    jz 1b
-2:  mov r14, [rbx + INI_sec]
+    jnz 5f
+    mov rdi, [rsp + GM_PATH + 32]
+    mov rsi, [rsp + GM_PATH + 40]
+    lea rdx, [rip + .Lt_env_key]
+    call str_eq_cstr
+    test eax, eax
+    jz 1b                       # another key of a model, or of a table below one
+5:  cmp r15, 2                  # a credential key: named only as a plain key of [model.<name>]
+    jne 8f
+    cmp qword ptr [rsp + GM_N], 3
+    jne 8f
+    mov rdi, [rsp + GM_PATH + 16]
+    mov rsi, [rsp + GM_PATH + 24]
+    test rsi, rsi
+    jz 8f
+    xor ecx, ecx
+6:  cmp byte ptr [rdi + rcx], ' '   # names are space-separated: a blank in one is unfollowed
+    je 8f
+    cmp byte ptr [rdi + rcx], 9
+    je 8f
+    inc rcx
+    cmp rcx, rsi
+    jb 6b
+    mov rax, [rbx + INI_sec]
+    cmp rax, r14
+    je 1b                       # named already
+    mov r14, rax
     test r13d, r13d
-    jz 3f
+    jz 7f
     mov rdi, r12
     mov esi, ' '
     call sb_push_byte
-3:  mov rdi, r12
-    mov rsi, [rbx + INI_sec]
-    add rsi, 6
-    mov rdx, [rbx + INI_seclen]
-    sub rdx, 6
+7:  mov rdi, r12
+    mov rsi, [rsp + GM_PATH + 16]
+    mov rdx, [rsp + GM_PATH + 24]
     call sb_push
     inc r13d
     jmp 1b
-9:  EPILOGUE
+8:  mov qword ptr [rsp + GM_OK], 0
+    jmp 1b
+9:  mov rax, [rsp + GM_OK]
+    EPILOGUE

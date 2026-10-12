@@ -1,0 +1,4 @@
+[model.mine] # custom model
+api_key = "secret"
+[cli]
+use_leader = false

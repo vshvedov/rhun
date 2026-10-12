@@ -2,7 +2,7 @@
 # classify FILE prints <basename>=<AUTH_*>[ ids], the classifier picked by the name's prefix;
 # preflight AGENT [MS] runs auth_preflight in the current directory (MS sets g_auth_preflight_ms) and
 # prints preflight:<agent>=<AUTH_*>[ ids]; post FILE prints <basename>=<AUTH_*>[ key path] for the after-start
-# checks (grok-models-* print the names instead); lock prints the OpenCode lock for openai and xai
+# checks (grok-models-* print the names instead, then ? when the scan returns 0); lock prints the OpenCode lock for openai and xai
 .include "rhun.inc"
 .bss
 .p2align 3
@@ -328,10 +328,21 @@ FN main
     mov rsi, r15
     lea rdx, [rip + ids]
     call auth_grok_models
+    mov r13, rax
     lea rdi, [rip + out]
     mov rsi, [rip + ids + SB_ptr]
     mov rdx, [rip + ids + SB_len]
     call sb_push
+    test r13, r13
+    jnz 96f
+    cmp qword ptr [rip + ids + SB_len], 0   # not classified: "?" after the names
+    je 89f
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+89: lea rdi, [rip + out]
+    mov esi, '?'
+    call sb_push_byte
     jmp 96f
 91: mov rdi, r14
     mov rsi, r15

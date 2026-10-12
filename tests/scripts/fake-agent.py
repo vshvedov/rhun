@@ -14,6 +14,9 @@ if s == 'stderr':               # a stderr tail longer than rhun keeps
     sys.stderr.flush(); sys.exit(0)
 if s == 'bigline':              # one record over the 64 MiB limit
     out.write('x' * (65 << 20)); out.write('\n'); out.flush(); sys.exit(0)
+if s == 'biglinenl':            # a line one byte over the 64 MiB limit whose last byte and newline come
+    out.write('x' * (64 << 20)); out.flush()     # in one read: the rest is read before they are written
+    time.sleep(1); out.write('x\n'); out.flush(); sys.exit(0)
 if s == 'fill':                 # never reads stdin
     time.sleep(60)
 if s == 'stop':                 # ignores SIGTERM

@@ -192,7 +192,8 @@ FN conn_open
     EPILOGUE
 
 # deliver(conn): every complete line of CN_rbuf to CN_on_line; the remainder moves to the front.
-# The search starts at CN_scanned, so a long record is scanned once, not once per read.
+# The search starts at CN_scanned, so a long record is scanned once, not once per read. A line above
+# CN_LINE_MAX breaks the connection (CN_E_LINE) instead; drain_out checks the remainder.
 # Stops if a callback closed the connection (state CN_IDLE: its buffers are gone) or closed and reopened
 # it (CN_gen moved: the buffers belong to the new child).
 deliver:
@@ -218,6 +219,8 @@ deliver:
     js 2f
     lea r13, [r14 + rax]
     sub r13, r12                # the line's length
+    cmp r13, CN_LINE_MAX        # a complete line can pass the limit within one read: never deliver it
+    ja 4f
     mov rdi, rbx
     mov rsi, [rbx + CN_rbuf + SB_ptr]
     add rsi, r12
@@ -225,6 +228,10 @@ deliver:
     call [rbx + CN_on_line]
     lea r12, [r12 + r13 + 1]
     mov r14, r12
+    jmp 1b
+4:  mov rdi, rbx                # on_close may close or reopen it: the loop's checks come first
+    mov esi, CN_E_LINE
+    call conn_break
     jmp 1b
 2:  test r12, r12
     jz 3f

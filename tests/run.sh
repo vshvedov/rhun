@@ -41,6 +41,10 @@ check agent-conn-fill build/agent_conn_test fill tests/scripts/fake-agent.py
 check agent-conn-stop build/agent_conn_test stop tests/scripts/fake-agent.py
 check agent-conn-linger build/agent_conn_test linger tests/scripts/fake-agent.py
 check agent-conn-bigline build/agent_conn_test bigline tests/scripts/fake-agent.py
+check agent-conn-watchfull build/agent_conn_test watchfull tests/scripts/fake-agent.py
+check agent-conn-watchlate build/agent_conn_test watchlate tests/scripts/fake-agent.py
+check agent-conn-guard build/agent_conn_test guard tests/scripts/fake-agent.py
+check agent-conn-reopen build/agent_conn_test reopen tests/scripts/fake-agent.py
 check agent-auth-env sh -c 'for a in claude codex grok opencode; do build/agent_auth_test env $a; done'
 check agent-auth-classify sh -c 'for f in $(ls tests/data/agent-auth/* | LC_ALL=C sort); do build/agent_auth_test classify $f; done'
 python3 tests/agent-auth.py || fail=1

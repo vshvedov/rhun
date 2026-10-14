@@ -1,4 +1,5 @@
 build/
+/rust/target/
 *.o
 docs/superpowers/
 .DS_Store

@@ -1,0 +1,17 @@
+[package]
+name = "rhun-native-core"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+eframe = { version = "0.31", default-features = false, features = ["default_fonts", "glow", "wayland", "x11"] }
+ignore = "0.4"
+
+[lib]
+name = "rhun_native_core"
+path = "src/lib.rs"
+
+[[bin]]
+name = "rhun"
+path = "src/main.rs"

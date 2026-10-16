@@ -1,0 +1,176 @@
+diff --git a/desktop/framebuffer_server.v b/desktop/framebuffer_server.v
+index f484633..6ed4de6 100644
+--- a/desktop/framebuffer_server.v
++++ b/desktop/framebuffer_server.v
+@@ -17,6 +17,7 @@ mut:
+ 
+ struct FramebufferApp {
+ mut:
++	pid            int
+ 	connection     &windowfb.Connection = unsafe { nil }
+ 	surface        windowfb.Surface
+ 	path           string
+@@ -71,6 +72,7 @@ fn framebuffer_title_valid(title string) bool {
+ }
+ 
+ fn (mut d Desktop) attach_framebuffer(mut s FramebufferServer, mut c windowfb.Connection, request &windowfb.Message) ! {
++	peer := session_peer(c.fd) or { return error('window peer credentials unavailable') }
+ 	if request.kind != .create || request.value < 0 || request.value & ~windowfb.client_features != 0 || !framebuffer_title_valid(request.text()) {
+ 		return error('invalid window creation request')
+ 	}
+@@ -109,6 +111,7 @@ fn (mut d Desktop) attach_framebuffer(mut s FramebufferServer, mut c windowfb.Co
+ 	}
+ 	if app == unsafe { nil } { app = &FramebufferApp{} }
+ 	app.connection = &c
++	app.pid = int(peer.pid)
+ 	app.surface = surface
+ 	app.path = path
+ 	app.image = vinix_surface_image_prefix + path
+diff --git a/desktop/session_exchange.v b/desktop/session_exchange.v
+index 032eb0a..716bd17 100644
+--- a/desktop/session_exchange.v
++++ b/desktop/session_exchange.v
+@@ -45,6 +45,10 @@ fn (d &Desktop) session_sender_has_gesture(pid int) bool {
+ 		if app is RemoteApp {
+ 			return app.pid == d.hub.gesture_pid && !app.closed && (app.pid == pid || session_descendant(pid, app.pid))
+ 		}
++		if app is FramebufferApp {
++			return app.pid == d.hub.gesture_pid && !app.closed && !app.failed
++				&& (app.pid == pid || session_descendant(pid, app.pid))
++		}
+ 	}
+ 	return false
+ }
+@@ -58,6 +62,7 @@ fn (mut d Desktop) mark_session_gesture() {
+ 		}
+ 		app := d.apps[window.app_index]
+ 		if app is RemoteApp { d.hub.gesture_pid = app.pid }
++		if app is FramebufferApp && !app.closed && !app.failed { d.hub.gesture_pid = app.pid }
+ 	}
+ }
+ 
+diff --git a/desktop/session_hub.v b/desktop/session_hub.v
+index d1547e4..7c8d09a 100644
+--- a/desktop/session_hub.v
++++ b/desktop/session_hub.v
+@@ -24,6 +24,7 @@ mut:
+ 	available           bool
+ 	initialized         bool
+ 	polled_at           i64
++	actions_polled_at   i64
+ 	tab                 int
+ 	page                int
+ 	notice_actions      [64]string
+@@ -123,6 +124,9 @@ fn (mut d Desktop) open_session_hub(tab int) {
+ fn (mut d Desktop) poll_shell_services() {
+ 	d.initialize_shell_hub()
+ 	now := monotonic_millis()
++	// Framebuffer clients submit asynchronous clipboard offers and grants.
++	// Drain actions promptly after input, before the next input changes focus.
++	if d.framebuffer_session_actions_due(now) { d.poll_session_actions() }
+ 	d.poll_hot_corner(now)
+ 	if d.hub.banner_until > 0 && now >= d.hub.banner_until {
+ 		d.hub.banner_until = 0
+@@ -191,6 +195,19 @@ fn (mut d Desktop) poll_shell_services() {
+ 		d.hub.history_loaded = true
+ 		d.dirty = true
+ 	}
++	d.poll_session_actions()
++	if d.hub.tab == 3 {
++		for w in d.windows {
++			if w.page == .session && !w.minimized && w.workspace == d.current_workspace {
++				d.refresh_service_status()
++				break
++			}
++		}
++	}
++}
++
++fn (mut d Desktop) poll_session_actions() {
++	d.hub.actions_polled_at = monotonic_millis()
+ 	for _ in 0 .. 8 {
+ 		queued := session_call('take', []) or { break }
+ 		if queued == 'empty' {
+@@ -210,14 +227,17 @@ fn (mut d Desktop) poll_shell_services() {
+ 		}
+ 		unsafe { queued.free() }
+ 	}
+-	if d.hub.tab == 3 {
+-		for w in d.windows {
+-			if w.page == .session && !w.minimized && w.workspace == d.current_workspace {
+-				d.refresh_service_status()
+-				break
+-			}
+-		}
++}
++
++fn (d &Desktop) framebuffer_session_actions_due(now i64) bool {
++	if !d.hub.attached || now - d.hub.actions_polled_at < 20 { return false }
++	for w in d.windows {
++		if w.id != d.focus || w.app_index < 0 || w.app_index >= d.apps.len { continue }
++		app := d.apps[w.app_index]
++		if app is FramebufferApp { return d.session_sender_has_gesture(app.pid) }
++		break
+ 	}
++	return false
+ }
+ 
+ fn (mut d Desktop) refresh_service_status() {
+diff --git a/desktop/tools/test-framebuffer-windows.v b/desktop/tools/test-framebuffer-windows.v
+index 3b53db7..23010f3 100644
+--- a/desktop/tools/test-framebuffer-windows.v
++++ b/desktop/tools/test-framebuffer-windows.v
+@@ -68,7 +68,7 @@ fn main() {
+ 	// sessions have unrelated edits and generated sources in this checkout.
+ 	workflowbuild.run('git', ['-C', root, 'archive', 'HEAD', 'desktop', '-o', work + '/source.tar'])!
+ 	workflowbuild.run('tar', ['-xf', work + '/source.tar', '-C', work + '/source'])!
+-	for name in ['main.v', 'wm.v', 'framebuffer_server.v', 'input.v', 'keyboard_protocol.v', 'keyboard_events.v'] {
++	for name in ['main.v', 'wm.v', 'framebuffer_server.v', 'input.v', 'keyboard_protocol.v', 'keyboard_events.v', 'session_exchange.v', 'session_hub.v'] {
+ 		os.cp(root + '/desktop/' + name, work + '/source/desktop/' + name)!
+ 	}
+ 	os.cp(root + '/desktop/ptycore/pty.c.v', work + '/source/desktop/ptycore/pty.c.v')!
+diff --git a/desktop/tools/tests/framebuffer_window_test.v b/desktop/tools/tests/framebuffer_window_test.v
+index 0912242..c3c23bd 100644
+--- a/desktop/tools/tests/framebuffer_window_test.v
++++ b/desktop/tools/tests/framebuffer_window_test.v
+@@ -26,6 +26,40 @@ fn fb_test_client(mut desktop Desktop, mut server FramebufferServer) !&windowfb.
+ 	return fb_test_client_features(mut desktop, mut server, 0)
+ }
+ 
++fn test_framebuffer_session_gesture_uses_authenticated_focused_peer() {
++	directory := os.join_path(os.temp_dir(), 'vinix-fb-clipboard-${os.getpid()}')
++	mut server := fb_test_server(directory)!
++	mut desktop := Desktop{ canvas: new_canvas(800, 600) }
++	defer {
++		desktop.close_apps(); server.close(); os.rmdir_all(directory) or {}
++		unsafe { directory.free(); free(desktop.canvas.pixels) }
++	}
++	mut client := fb_test_client(mut desktop, mut server)!
++	defer { client.close(); unsafe { free(client) } }
++	mut app := desktop.apps[desktop.windows[0].app_index]
++	if mut app is FramebufferApp {
++		assert app.pid == os.getpid()
++		assert !desktop.session_sender_has_gesture(app.pid)
++		desktop.mark_session_gesture()
++		assert desktop.session_sender_has_gesture(app.pid)
++		desktop.hub.attached = true
++		now := monotonic_millis()
++		desktop.hub.actions_polled_at = now
++		assert !desktop.framebuffer_session_actions_due(now + 19)
++		assert desktop.framebuffer_session_actions_due(now + 20)
++		assert !desktop.session_sender_has_gesture(-1)
++		desktop.focus = 0
++		assert !desktop.session_sender_has_gesture(app.pid)
++		assert !desktop.framebuffer_session_actions_due(now + 20)
++		desktop.focus = desktop.windows[0].id
++		desktop.hub.gesture_at = monotonic_millis() - 6000
++		assert !desktop.session_sender_has_gesture(app.pid)
++		desktop.mark_session_gesture()
++		app.failed = true
++		assert !desktop.session_sender_has_gesture(app.pid)
++	} else { assert false }
++}
++
+ fn test_resize_handoff_with_pending_frame_coalescing_and_title() {
+ 	directory := os.join_path(os.temp_dir(), 'vinix-fb-resize-${os.getpid()}')
+ 	mut server := fb_test_server(directory)!

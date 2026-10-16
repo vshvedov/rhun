@@ -793,10 +793,12 @@ reload_changed:
     call file_stamp
     test rax, rax
     jz 9f                      # a removed file keeps its current contents
+.ifndef VINIX
     cmp rax, [rbx + DOC_mtime]
     je 9f                      # includes our own saves
     cmp rax, [rbx + DOC_disk_seen]
     je 9f
+.endif
     mov rdi, rbx
     call doc_dirty
     test eax, eax
@@ -813,7 +815,25 @@ reload_changed:
     add rax, DISK_FADE_MS
     mov [rbx + DOC_disk_until], rax
     jmp 9f
-7:  or dword ptr [rbx + DOC_flags], DF_DISK_CHANGED
+7:
+.ifdef VINIX
+    # A confirmed write can keep both size and second-resolution mtime.
+    # Compare with the saved bytes before warning, including our own late saves.
+    mov rdi, [rbx + DOC_path]
+    call file_read_all
+    test rax, rax
+    jz 9f
+    mov r12, rax
+    mov rdi, rax
+    mov rsi, rdx
+    call hash_line
+    mov r13, rax
+    mov rdi, r12
+    call mem_free
+    cmp r13, [rbx + DOC_disk_hash]
+    je 9f
+.endif
+    or dword ptr [rbx + DOC_flags], DF_DISK_CHANGED
     mov qword ptr [rbx + DOC_disk_until], 0
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
@@ -920,7 +940,7 @@ disk_range:
 
 # app_reload_doc(doc) -> 1 if text changed, 0 if identical, unreadable or an image; keep cursor and scroll
 FN app_reload_doc
-    PROLOGUE 32
+    PROLOGUE 48
     mov rbx, rdi
     mov rdi, [rbx + DOC_path]
     test rdi, rdi
@@ -935,6 +955,32 @@ FN app_reload_doc
     jz 9f
     mov r12, rax
     mov r13, rdx
+.ifdef VINIX
+    mov rdi, r12
+    mov rsi, r13
+    call hash_line
+    mov [rsp + 32], rax
+    test r13, r13
+    jnz .Lrd_nonempty
+    mov rdi, rbx
+    call doc_len
+    test rax, rax
+    jz .Lrd_nonempty
+    # The next in-place save can truncate the file while a previous reload
+    # is due. Confirm empty bytes twice, so a short write cannot lose the caret.
+    call time_ms
+    mov rcx, [rbx + DOC_empty_since]
+    test rcx, rcx
+    jnz .Lrd_empty_again
+    mov [rbx + DOC_empty_since], rax
+    jmp .Lrd_unstable
+.Lrd_empty_again:
+    sub rax, rcx
+    cmp rax, RELOAD_DELAY_MS
+    jb .Lrd_unstable
+.Lrd_nonempty:
+    mov qword ptr [rbx + DOC_empty_since], 0
+.endif
     mov rdi, [rbx + DOC_path]
     call file_stamp
     cmp rax, [rsp + 24]
@@ -991,6 +1037,10 @@ FN app_reload_doc
 .Lrd_same:
     mov dword ptr [rsp], 0
 .Lrd_done:
+.ifdef VINIX
+    mov rax, [rsp + 32]
+    mov [rbx + DOC_disk_hash], rax
+.endif
     mov rdi, r12
     call mem_free
     mov rdi, rbx

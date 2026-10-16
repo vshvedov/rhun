@@ -629,9 +629,10 @@ STRING_OPS = ('rep movsb', 'rep stosb', 'rep stosd', 'repe cmpsb', 'repz cmpsb',
 
 
 class Translator:
-    def __init__(self, src, path):
+    def __init__(self, src, path, elf=False):
         self.src = src
         self.path = path
+        self.elf = elf
         self.stmts = src.stmts
         self.out = []
         self.nlabel = 0
@@ -662,6 +663,8 @@ class Translator:
         parts = re.split(r'("(?:\\.|[^"\\])*")', s)
         for k in range(0, len(parts), 2):
             parts[k] = re.sub(r'(?<![\w.$])\.L([\w.$]+)', r'L\1', parts[k])
+            if self.elf:
+                parts[k] = re.sub(r'(?<![\w.$])([A-Za-z_$][\w.$]*)', r'rhun_\1', parts[k])
         return ''.join(parts)
 
     def value(self, text):
@@ -1156,7 +1159,12 @@ class Translator:
                     raise
                 self.err(st, str(e))
         out.append('')
-        return '\n'.join(out)
+        text = '\n'.join(out)
+        if self.elf:
+            text = re.sub(r'([\w.$]+)@PAGEOFF', r':lo12:\1', text)
+            text = text.replace('@PAGE', '')
+            text += '\n.section .note.GNU-stack,"",@progbits\n'
+        return text
 
     SECT = {'.text': '.text', '.data': '.data', '.bss': '.bss'}
 
@@ -1164,8 +1172,12 @@ class Translator:
         name = name.split(',')[0].strip().strip('"')
         # ELF sections stay apart: their contents must not interleave
         if name == '.rodata':
+            if self.elf:
+                return '.section .rodata'
             return '.section __DATA,__const'
         if name.startswith('.rodata.str'):
+            if self.elf:
+                return '.section ' + name
             return '.section __DATA,__rodata_str'
         if name.startswith('.data'):
             return '.data'
@@ -2247,9 +2259,14 @@ def main(argv):
     inc = []
     defs = {}
     files = []
+    elf = False
     i = 0
     while i < len(argv):
         a = argv[i]
+        if a == '--elf':
+            elf = True
+            i += 1
+            continue
         if a == '-I':
             inc.append(argv[i + 1])
             i += 2
@@ -2268,13 +2285,13 @@ def main(argv):
             files.append(a)
         i += 1
     if len(files) != 2:
-        sys.stderr.write('usage: arm64.py [-I DIR] [-D SYM] in.s out.s\n')
+        sys.stderr.write('usage: arm64.py [--elf] [-I DIR] [-D SYM] in.s out.s\n')
         return 2
     threading.Thread(target=guard, args=(files[0],), daemon=True).start()
     try:
         src = Source(inc, defs)
         src.run(files[0])
-        text = Translator(src, files[0]).run()
+        text = Translator(src, files[0], elf=elf).run()
     except Error as e:
         sys.stderr.write('arm64.py: %s\n' % e)
         return 1

@@ -78,7 +78,7 @@ cfg_agent_sources: .quad .Ldef_sources  # the switched-on providers' names, for 
 
 .bss
 .p2align 3
-cfg_seen_mtime: .quad 0         # the config file's mtime (ns) when rhun last read or wrote it
+cfg_seen_stamp: .quad 0         # the config file last read or written: mtime, or bytes on Vinix
 cfg_theme_keys: .long 0         # theme keys the last read found: 1 theme, 2 dark_theme, 4 light_theme
 old_sources: .long 0            # the last read found [agents] sources = claude codex, the old default
 agent_sources_buf: .zero 32
@@ -354,8 +354,8 @@ FN config_load
     # taken before the read: a write that lands during it still counts as a change
     call config_path
     mov rdi, rax
-    call file_mtime_ns
-    mov [rip + cfg_seen_mtime], rax
+    call config_file_stamp
+    mov [rip + cfg_seen_stamp], rax
     call config_path
     mov rdi, rax
     call file_read_all
@@ -650,8 +650,8 @@ FN config_save
     mov rbx, rax
     call config_path
     mov rdi, rax
-    call file_mtime_ns
-    mov [rip + cfg_seen_mtime], rax
+    call config_file_stamp
+    mov [rip + cfg_seen_stamp], rax
     lea rdi, [rsp]
     call sb_free
     mov rax, rbx
@@ -664,12 +664,33 @@ FN config_changed
     PROLOGUE
     call config_path
     mov rdi, rax
-    call file_mtime_ns
+    call config_file_stamp
     xor ecx, ecx
-    cmp rax, [rip + cfg_seen_mtime]
+    cmp rax, [rip + cfg_seen_stamp]
     setne cl
     mov eax, ecx
     EPILOGUE
+
+# config_file_stamp(path): Vinix ext2 can give different writes the same mtime.
+# Compare contents there, including late notifications of our own settings saves.
+config_file_stamp:
+.ifdef VINIX
+    PROLOGUE
+    call file_read_all
+    test rax, rax
+    jz 9f
+    mov rbx, rax
+    mov rdi, rax
+    mov rsi, rdx
+    call hash_line
+    mov r12, rax
+    mov rdi, rbx
+    call mem_free
+    mov rax, r12
+9:  EPILOGUE
+.else
+    jmp file_mtime_ns
+.endif
 
 # config_dir_each(subdir, ext, cb): cb(path, name) for ~/.config/rhun/<subdir>/*<ext>
 FN config_dir_each

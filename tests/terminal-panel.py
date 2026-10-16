@@ -5,6 +5,7 @@ hides it at once."""
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -13,6 +14,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 EXE = Path(os.environ.get('RHUN_TEST_EXE', ROOT / 'build/rhun')).resolve()
+# Vinix's Python build can leave sys.executable empty.
+PYTHON = sys.executable or shutil.which('python3') or 'python3'
 HEIGHT = 260
 # 1280x800 at scale 1: the status bar starts at 774, so the panel's top edge is at 774 - HEIGHT
 EDGE = 774 - HEIGHT
@@ -46,7 +49,7 @@ class TerminalPanel(unittest.TestCase):
     def run_editor(self, actions, agents=False):
         self.config.write_text(
             '[ui]\nsidebar = false\nagents_panel = ' + str(agents).lower() + '\n'
-            '[terminal]\nheight = ' + str(HEIGHT) + '\nshell = ' + Path(sys.executable).as_posix() + '\n'
+            '[terminal]\nheight = ' + str(HEIGHT) + '\nshell = ' + Path(PYTHON).as_posix() + '\n'
             '[editor]\ncursor_blink = false\nscroll_past_end = true\n'
             '[files]\nrestore_session = false\nrestore_project = false\n'
             '[updates]\ncheck = false\n[git]\nenabled = false\n', encoding='utf-8')

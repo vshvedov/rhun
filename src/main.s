@@ -59,6 +59,12 @@ FN main
     call mac_open_window
     jmp .Lm_open
 .else
+.ifdef VINIX
+    call scale_from_env
+    lea rdi, [rip + .Ltitle]
+    call vinix_open_window
+    jmp .Lm_open
+.else
     # RHUN_BACKEND=x11 skips Wayland
     lea rdi, [rip + .Lenv_backend]
     call getenv
@@ -84,6 +90,7 @@ FN main
     lea rdi, [rip + .Ltitle]
     call x_open_window
     jmp .Lm_open
+.endif
 .endif
 .endif
 .Lm_headless:

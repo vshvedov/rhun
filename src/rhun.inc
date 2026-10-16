@@ -527,6 +527,10 @@ F DOC_real, 8           # a symlink's file: its path (owned) and name, and its f
 F DOC_rname, 8
 F DOC_wd2, 8
 F DOC_hops, 8           # the symlinks it leads through before that file (watch.s), or 0
+.ifdef VINIX
+F DOC_disk_hash, 8      # saved raw bytes: ext2 timestamps have only whole seconds
+F DOC_empty_since, 8    # confirm a transient truncation before replacing nonempty text
+.endif
 ENDSTRUCT DOC_SIZE
 
 .equ DISK_FADE_MS, 800

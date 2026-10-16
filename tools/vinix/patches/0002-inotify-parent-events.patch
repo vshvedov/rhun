@@ -1,0 +1,107 @@
+diff --git a/kernel/fs/inotify.v b/kernel/fs/inotify.v
+index 149d8ad..10bc7e4 100644
+--- a/kernel/fs/inotify.v
++++ b/kernel/fs/inotify.v
+@@ -141,10 +141,16 @@ pub fn inotify_emit(node &VFSNode, name string, mask u32, cookie u32) {
+ 		instance.l.acquire()
+ 		mut remove := []int{}
+ 		for i, watch in instance.watches {
+-			if voidptr(watch.node) != voidptr(node) || watch.mask & mask == 0 {
++			if watch.mask & mask == 0 {
++				continue
++			}
++			if voidptr(watch.node) == voidptr(node) {
++				instance.enqueue_locked(watch.wd, mask, cookie, name)
++			} else if inotify_parent_event(watch.node, node, name, mask, watch.mask) {
++				instance.enqueue_locked(watch.wd, mask, cookie, node.name)
++			} else {
+ 				continue
+ 			}
+-			instance.enqueue_locked(watch.wd, mask, cookie, name)
+ 			if watch.mask & in_oneshot != 0 { remove << i }
+ 		}
+ 		for i := remove.len - 1; i >= 0; i-- {
+diff --git a/kernel/fs/inotify_route.v b/kernel/fs/inotify_route.v
+new file mode 100644
+index 0000000..297fb81
+--- /dev/null
++++ b/kernel/fs/inotify_route.v
+@@ -0,0 +1,11 @@
++module fs
++
++// Access, write, attribute and open/close events on a child also reach its
++// directory's watch, with the child's name. Namespace operations already emit
++// their named parent events and must not be forwarded a second time.
++fn inotify_parent_event(watched &VFSNode, node &VFSNode, name string, mask u32, watch_mask u32) bool {
++	return name.len == 0 && mask & u32(0x3f) != 0
++		&& node.parent != unsafe { nil } && voidptr(node.parent) != voidptr(node)
++		&& voidptr(watched) == voidptr(node.parent) && node.name.len > 0
++		&& (!node.orphan || watch_mask & in_excl_unlink == 0)
++}
+diff --git a/tests/inotify-route/route_test.v b/tests/inotify-route/route_test.v
+new file mode 100644
+index 0000000..bdd7ff8
+--- /dev/null
++++ b/tests/inotify-route/route_test.v
+@@ -0,0 +1,23 @@
++module fs
++
++fn test_file_activity_reaches_only_its_parent() {
++	mut parent := VFSNode{}
++	mut other := VFSNode{}
++	mut file := VFSNode{parent: unsafe { &parent }, name: 'note.txt'}
++	for mask in [u32(1), 2, 4, 8, 16, 32] {
++		assert inotify_parent_event(&parent, &file, '', mask, mask)
++		assert !inotify_parent_event(&other, &file, '', mask, mask)
++		assert !inotify_parent_event(&file, &file, '', mask, mask)
++		assert !inotify_parent_event(&parent, &file, 'note.txt', mask, mask)
++	}
++	for mask in [u32(0x40), 0x80, 0x100, 0x200, 0x400, 0x800, 0x8000] {
++		assert !inotify_parent_event(&parent, &file, '', mask, mask)
++	}
++	file.orphan = true
++	assert inotify_parent_event(&parent, &file, '', 8, 8)
++	assert !inotify_parent_event(&parent, &file, '', 8, 8 | in_excl_unlink)
++	file.parent = unsafe { nil }
++	assert !inotify_parent_event(&parent, &file, '', 8, 8)
++	file.parent = unsafe { &file }
++	assert !inotify_parent_event(&file, &file, '', 8, 8)
++}
+diff --git a/tests/inotify-route/run.v b/tests/inotify-route/run.v
+new file mode 100644
+index 0000000..5c03285
+--- /dev/null
++++ b/tests/inotify-route/run.v
+@@ -0,0 +1,16 @@
++import os
++
++fn main() {
++	root := os.real_path(os.join_path(os.dir(@FILE), '..', '..'))
++	work := os.join_path(os.temp_dir(), 'vinix-inotify-route-${os.getpid()}')
++	os.mkdir_all(work)!
++	defer { os.rmdir_all(work) or {} }
++	os.cp(os.join_path(root, 'kernel', 'fs', 'inotify_route.v'), os.join_path(work, 'route.v'))!
++	for name in ['types.v', 'route_test.v'] {
++		os.cp(os.join_path(root, 'tests', 'inotify-route', name), os.join_path(work, name))!
++	}
++	v := os.getenv_opt('V') or { @VEXE }
++	result := os.execute('${os.quoted_path(v)} test ${os.quoted_path(work)}')
++	print(result.output)
++	if result.exit_code != 0 { exit(result.exit_code) }
++}
+diff --git a/tests/inotify-route/types.v b/tests/inotify-route/types.v
+new file mode 100644
+index 0000000..64831d1
+--- /dev/null
++++ b/tests/inotify-route/types.v
+@@ -0,0 +1,10 @@
++module fs
++
++const in_excl_unlink = u32(0x04000000)
++
++struct VFSNode {
++mut:
++	parent &VFSNode = unsafe { nil }
++	name string
++	orphan bool
++}

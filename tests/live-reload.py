@@ -42,8 +42,9 @@ class LiveReload(unittest.TestCase):
     def start(self, *paths):
         control = self.work / 'control'
         control.unlink(missing_ok=True)
+        backend = ['--wait'] if os.environ.get('RHUN_TEST_NATIVE') == '1' else ['--headless', '1000x700']
         self.process = subprocess.Popen([str(EXE), str(self.project), *map(str, paths),
-                                         '--headless', '1000x700', '--scale', '1',
+                                         *backend, '--scale', '1',
                                          '--control', str(control)], env=self.env,
                                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         self.client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

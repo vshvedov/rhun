@@ -947,6 +947,9 @@ FN doc_set_path
     mov qword ptr [rbx + DOC_reload_at], 0
     mov qword ptr [rbx + DOC_disk_seen], 0
     mov qword ptr [rbx + DOC_disk_until], 0
+.ifdef VINIX
+    mov qword ptr [rbx + DOC_empty_since], 0
+.endif
     and dword ptr [rbx + DOC_flags], ~DF_DISK_CHANGED
     # Every path assignment participates: explorer, pickers, restored tabs, images and rename.
     mov rdi, rbx
@@ -1057,6 +1060,12 @@ FN doc_load
     call doc_is_binary
     test eax, eax
     jnz .Ldl_binary
+.ifdef VINIX
+    mov rdi, r13
+    mov rsi, r14
+    call hash_line
+    mov [rbx + DOC_disk_hash], rax
+.endif
     mov rdi, rbx
     mov rsi, r13
     mov rdx, r14
@@ -1297,6 +1306,15 @@ FN doc_save
     mov rdx, [rsp + SB_len]
     call file_write_all
     mov r12, rax
+.ifdef VINIX
+    test r12, r12
+    js 51f
+    mov rdi, [rsp + SB_ptr]
+    mov rsi, [rsp + SB_len]
+    call hash_line
+    mov [rbx + DOC_disk_hash], rax
+51:
+.endif
     lea rdi, [rsp]
     call sb_free
     test r12, r12

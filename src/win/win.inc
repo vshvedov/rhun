@@ -44,6 +44,8 @@
 .equ FD_flags, 20
 .equ FD_path, 24
 .equ FD_aux, 32
+.equ FD_wend, 40                # a pipe's write end (rhun writes, the child reads)
+.equ FD_full, 48                # GetTickCount64 when a non-blocking write last found it full
 .equ FD_SIZE, 64
 .equ FD_MAX, 1024
 .equ FD_FILE, 1

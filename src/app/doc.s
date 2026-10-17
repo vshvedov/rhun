@@ -1,6 +1,13 @@
 # document: gap buffer, line index, undo/redo, file io
 .include "rhun.inc"
 
+.data
+.p2align 3
+doc_next_id: .quad 0            # DOC_id of the last document made (extensions name documents by it)
+.globl g_edit_lo, g_edit_hi
+g_edit_lo: .quad -1             # the lowest and highest offset an edit started at since the completion
+g_edit_hi: .quad 0              # list last looked (complete.s): typing in its word is all it allows
+
 .equ GAP_MIN, 4096
 
 .bss
@@ -15,6 +22,20 @@ FN doc_new
     mov edi, DOC_SIZE
     call mem_alloc
     mov rbx, rax
+    inc qword ptr [rip + doc_next_id]
+    mov rax, [rip + doc_next_id]
+    mov [rbx + DOC_id], rax
+    # the extension fields start clear (mem_alloc reuses blocks)
+    xor eax, eax
+    mov [rbx + DOC_xedits], rax
+    mov [rbx + DOC_xmarks], rax
+    mov [rbx + DOC_xresync], eax
+    mov [rbx + DOC_oval], rax
+    mov [rbx + DOC_oval + 8], rax
+    mov [rbx + DOC_oown], rax
+    mov [rbx + DOC_oown + 8], rax
+    mov [rbx + DOC_oown + 16], rax
+    mov [rbx + DOC_oown + 24], rax
     mov edi, GAP_MIN
     call mem_alloc
     mov [rbx + DOC_buf], rax
@@ -38,6 +59,10 @@ FN doc_new
 FN doc_free
     push rbx
     mov rbx, rdi
+    call extmarks_free
+    mov rdi, rbx
+    call ext_hover_forget
+    mov rdi, rbx
     cmp rdi, [rip + g_long_doc]   # its long line's classes and matched brackets go too (another doc
     jne 1f                        # may get its address)
     mov qword ptr [rip + g_long_doc], 0
@@ -376,7 +401,13 @@ gb_reserve:
 
 # raw_insert(doc, pos, ptr, len)
 FN raw_insert
-    PROLOGUE 16
+    cmp rsi, [rip + g_edit_lo]
+    jae 1f
+    mov [rip + g_edit_lo], rsi
+1:  cmp rsi, [rip + g_edit_hi]
+    jbe 2f
+    mov [rip + g_edit_hi], rsi
+2:  PROLOGUE 16
     mov qword ptr [rsp], 0
     mov rbx, rdi
     mov r12, rsi
@@ -488,12 +519,25 @@ FN raw_insert
     jbe 81f
     add [rbx + DOC_anchor], r14
 81: inc qword ptr [rbx + DOC_version]
+    cmp dword ptr [rip + g_ext_hooks], 0
+    je .Lri_ret
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    mov rcx, r14
+    call ext_note_insert
 .Lri_ret:
     EPILOGUE
 
 # raw_delete(doc, pos, len)
 FN raw_delete
-    PROLOGUE 16
+    cmp rsi, [rip + g_edit_lo]
+    jae 1f
+    mov [rip + g_edit_lo], rsi
+1:  cmp rsi, [rip + g_edit_hi]
+    jbe 2f
+    mov [rip + g_edit_hi], rsi
+2:  PROLOGUE 16
     mov qword ptr [rsp], 0
     mov rbx, rdi
     mov r12, rsi
@@ -572,6 +616,12 @@ FN raw_delete
     lea rdi, [rbx + DOC_anchor]
     call .Lrd_marker
     inc qword ptr [rbx + DOC_version]
+    cmp dword ptr [rip + g_ext_hooks], 0
+    je .Lrd_ret
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call ext_note_delete
 .Lrd_ret:
     EPILOGUE
 .Lrd_marker:
@@ -1040,6 +1090,8 @@ FN doc_load
     mov rbx, rdi
     mov r12, rsi
     mov rdi, rbx
+    call ext_note_resync
+    mov rdi, rbx
     mov rsi, r12
     call doc_set_path
     mov rdi, r12
@@ -1177,8 +1229,11 @@ FN doc_save
     je .Lds_nopath
     mov rdi, rbx
     call doc_begin_group
-    cmp dword ptr [rip + cfg_trim_trailing], 0
-    je .Lds_final
+    mov rdi, rbx
+    mov esi, OPT_TRIM
+    call ext_opt_bool
+    test eax, eax
+    jz .Lds_final
     # trim trailing blanks on every line (last to first)
     mov r12, [rbx + DOC_nlines]
 .Lds_trim:
@@ -1215,8 +1270,11 @@ FN doc_save
     call doc_delete
     jmp .Lds_trim
 .Lds_final:
-    cmp dword ptr [rip + cfg_final_newline], 0
-    je .Lds_write
+    mov rdi, rbx
+    mov esi, OPT_FINAL
+    call ext_opt_bool
+    test eax, eax
+    jz .Lds_write
     mov rdi, rbx
     call doc_len
     test rax, rax
@@ -1596,8 +1654,8 @@ FN doc_col_of
     jne 2f
     mov eax, ebx
     xor edx, edx
-    div dword ptr [rip + cfg_tab_width]
-    mov eax, [rip + cfg_tab_width]
+    div dword ptr [rip + g_tab_width]
+    mov eax, [rip + g_tab_width]
     sub eax, edx
     add ebx, eax
     inc r13
@@ -1666,8 +1724,8 @@ FN doc_pos_at_col
     jne 2f
     mov eax, r12d
     xor edx, edx
-    div dword ptr [rip + cfg_tab_width]
-    mov eax, [rip + cfg_tab_width]
+    div dword ptr [rip + g_tab_width]
+    mov eax, [rip + g_tab_width]
     sub eax, edx
     mov ecx, 1
     jmp 3f

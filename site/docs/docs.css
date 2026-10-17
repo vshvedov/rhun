@@ -129,3 +129,9 @@
 @media (prefers-reduced-motion: reduce) {
   .rail-links a, .page-toc a { transform: none !important; transition: none; }
 }
+.spec .table-wrap { overflow-x: auto; margin: 18px 0 26px; }
+.spec table { border-collapse: collapse; width: 100%; font-size: 14px; line-height: 1.5; }
+.spec th, .spec td { text-align: left; vertical-align: top; padding: 8px 12px 8px 0; border-bottom: 1px solid var(--line); }
+.spec th { color: var(--muted); font-weight: 500; }
+.spec h3 { margin-top: 34px; }
+.spec h2 { margin-top: 52px; padding-top: 20px; border-top: 1px solid var(--line); scroll-margin-top: 24px; }

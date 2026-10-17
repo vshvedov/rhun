@@ -20,6 +20,8 @@ ol_on: .zero MAXPTS
 ol_ends: .zero 4 * MAXCONT
 ol_n: .long 0
 ol_nc: .long 0
+.globl g_face_gen
+g_face_gen: .long 0             # counts face_init calls: what is drawn with faces is stale when it moves
 
 .text
 
@@ -552,6 +554,7 @@ f2dot14:
 
 # face_init(face, font, px)
 FN face_init
+    inc dword ptr [rip + g_face_gen]
     push rbx
     push r12
     mov rbx, rdi

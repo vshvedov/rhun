@@ -43,6 +43,8 @@ FN closed_note
     and ecx, TF_PIN
     mov [rbx + CT_pin], rcx
     mov rcx, [rax + TAB_kind]
+    cmp rcx, TAB_VIEW
+    je 9f                       # an extension's view: it is gone with its extension's picture
     mov [rbx + CT_kind], rcx
     mov r13, [rax + TAB_doc]
     test r13, r13
@@ -155,6 +157,8 @@ reopen_probe:
     mov rax, [rbx + CT_kind]
     cmp rax, TAB_SETTINGS
     je .Lrp_settings
+    cmp rax, TAB_EXT
+    je .Lrp_ext
     cmp rax, TAB_GIT
     je .Lrp_git
     cmp rax, CK_DIFF
@@ -194,6 +198,9 @@ reopen_probe:
 .Lrp_settings:
     call cmd_settings
     jmp .Lrp_place
+.Lrp_ext:
+    call cmd_extensions
+    jmp .Lrp_place
 .Lrp_git:
     cmp dword ptr [rip + g_git_on], 0
     je 8f
@@ -228,6 +235,8 @@ probe_open:
     lea r12, [rip + probe]
     mov r13, [r12 + CT_kind]
     cmp r13, TAB_SETTINGS
+    je 1f
+    cmp r13, TAB_EXT
     je 1f
     cmp r13, TAB_GIT
     je 1f

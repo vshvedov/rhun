@@ -422,8 +422,13 @@ if (-not $PrepareUpdate -and (Test-Path -LiteralPath $InstallDir)) {
         throw "The installation folder contains other files. Move them before updating: $InstallDir"
     }
 }
+# a process path may come in the \\?\ form, which .NET Framework's path functions refuse: such a
+# path is compared without it, and one that still cannot be read is left to the probe below
 $running = @(Get-Process -Name rhun,rhun.com -ErrorAction SilentlyContinue | Where-Object {
-    $_.Path -and ([IO.Path]::GetDirectoryName($_.Path) -ieq $InstallDir)
+    $path = $_.Path
+    if (-not $path) { return $false }
+    if ($path.StartsWith('\\?\')) { $path = $path.Substring(4) }
+    try { [IO.Path]::GetDirectoryName($path) -ieq $InstallDir } catch { $false }
 })
 if (-not $PrepareUpdate -and $running.Count -gt 0) { throw 'Close rhun before updating or uninstalling it.' }
 # Process metadata is not always available. Loaded PE files cannot be opened for writing.

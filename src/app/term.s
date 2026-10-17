@@ -3033,6 +3033,26 @@ FN term_paste
     call reply_cstr
 9:  EPILOGUE
 
+# term_write(t, ptr, len): bytes typed into the program as they are (no bracketed paste; LF is
+# Enter, as a key would send it)
+FN term_write
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    xor r14d, r14d
+1:  cmp r14, r13
+    jae 9f
+    movzx esi, byte ptr [r12 + r14]
+    inc r14
+    cmp esi, 10
+    jne 2f
+    mov esi, 13
+2:  lea rdi, [rbx + TM_out]
+    call sb_push_byte
+    jmp 1b
+9:  EPILOGUE
+
 # term_mouse(t, button, kind, col, row, mods) -> 1 if the program gets the event
 #   button 0 left, 1 middle, 2 right, 3 none, 64/65 wheel; kind 0 press, 1 release, 2 motion
 FN term_mouse

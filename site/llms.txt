@@ -16,6 +16,14 @@ Facts:
 - [Full guide](https://rhun.app/guide.md): features, install and update, usage, shortcuts, configuration, grammars and themes
 - [README](https://github.com/vshvedov/rhun/blob/main/README.md): overview
 
+## Extensions
+
+- [Extensions guide](https://rhun.app/docs/extensions/): installing from GitHub, what extensions can do, writing your own
+- [Protocol v1](https://rhun.app/extensions/v1/v1.md): the whole extension protocol as Markdown, written for coding agents; [grammar](https://raw.githubusercontent.com/rhun-editor/extension-protocol/main/v1/v1.abnf) and [manifest schema](https://raw.githubusercontent.com/rhun-editor/extension-protocol/main/v1/v1.json)
+- [Rust template](https://github.com/rhun-editor/template-rust), [Go template](https://github.com/rhun-editor/template-go), [C/C++ header](https://raw.githubusercontent.com/rhun-editor/extension-protocol/main/c/rhunext.h): start here; each template has AGENTS.md
+- [Skills](https://github.com/rhun-editor/skills): a Claude Code and Codex plugin for writing, testing and releasing extensions
+- Extensions are native programs (Rust preferred, Go, C, C++) talking to rhun over stdin/stdout, one line per message; they can add commands, edit documents, mark diagnostics, answer hover, draw charts and pictures in tabs (views), and provide completion, signature help, go to definition, references, document symbols, code actions, rename and format (workspace edits checked whole before applying). Test with `rhun-ext-check` and `rhun --headless --script`.
+
 ## Get it
 
 - [Installer](https://github.com/vshvedov/rhun/releases/latest/download/install.sh): the one-command install script for Linux and macOS

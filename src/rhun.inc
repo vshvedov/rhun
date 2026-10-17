@@ -10,6 +10,7 @@
 .equ SYS_lstat, 6
 .equ SYS_poll, 7
 .equ SYS_lseek, 8
+.equ SYS_pread, 17
 .equ SYS_mmap, 9
 .equ SYS_munmap, 11
 .equ SYS_rt_sigaction, 13
@@ -28,6 +29,7 @@
 .equ SYS_recvmsg, 47
 .equ SYS_bind, 49
 .equ SYS_listen, 50
+.equ SYS_fork, 57
 .equ SYS_vfork, 58
 .equ SYS_execve, 59
 .equ SYS_exit, 60
@@ -60,6 +62,58 @@
 .equ SYS_inotify_init1, 294
 .equ SYS_memfd_create, 319
 .equ SYS_close_range, 436
+.equ SYS_prctl, 157
+.equ PR_SET_PDEATHSIG, 1
+.equ PR_SET_NO_NEW_PRIVS, 38
+# confinement (src/app/confine.s): Landlock, namespaces, the macOS sandbox
+.equ SYS_getuid, 102
+.equ SYS_getgid, 104
+.equ SYS_unshare, 272
+.equ SYS_landlock_create_ruleset, 444
+.equ SYS_landlock_add_rule, 445
+.equ SYS_landlock_restrict_self, 446
+.equ SYS_sandbox_init, 290          # macOS only: a pseudo number the translator maps to sandbox_init
+.equ SYS_realpath, 291              # macOS only: realpath(path, buf) -> buf or 0
+.equ CLONE_NEWUSER, 0x10000000
+.equ CLONE_NEWNET, 0x40000000
+.equ O_PATH, 0x200000
+.equ LL_VERSION, 1                  # landlock_create_ruleset flag: report the ABI
+.equ LL_RULE_PATH_BENEATH, 1
+.equ LL_EXECUTE, 1
+.equ LL_WRITE_FILE, 2
+.equ LL_READ_FILE, 4
+.equ LL_READ_DIR, 8
+.equ LL_REMOVE_DIR, 16
+.equ LL_REMOVE_FILE, 32
+.equ LL_MAKE_CHAR, 64
+.equ LL_MAKE_DIR, 128
+.equ LL_MAKE_REG, 256
+.equ LL_MAKE_SOCK, 512
+.equ LL_MAKE_FIFO, 1024
+.equ LL_MAKE_BLOCK, 2048
+.equ LL_MAKE_SYM, 4096
+.equ LL_REFER, 8192                 # ABI 2
+.equ LL_TRUNCATE, 16384             # ABI 3
+.equ LL_IOCTL_DEV, 32768            # ABI 5
+.equ LL_FILE_RIGHTS, LL_READ_FILE | LL_WRITE_FILE | LL_EXECUTE | LL_TRUNCATE | LL_IOCTL_DEV
+.equ LL_RO, LL_READ_FILE | LL_READ_DIR
+.equ LL_RW, LL_RO | LL_WRITE_FILE | LL_TRUNCATE | LL_REMOVE_DIR | LL_REMOVE_FILE | LL_MAKE_DIR | LL_MAKE_REG | LL_MAKE_SYM | LL_MAKE_FIFO | LL_MAKE_SOCK | LL_REFER
+.equ LL_NET_BIND_TCP, 1             # ABI 4
+.equ LL_NET_CONNECT_TCP, 2
+.equ CF_LANDLOCK, 1                 # confinement flags for the child
+.equ CF_NETNS, 2                    # a user and network namespace
+.equ CF_SANDBOX, 4                  # macOS: sandbox_init with the profile
+.equ EXITC_NNP, 70                  # the child's exit codes when confinement fails
+.equ EXITC_NETNS, 71
+.equ EXITC_LANDLOCK, 72
+.equ EXITC_RULE, 73
+.equ EXITC_RESTRICT, 74
+.equ EXITC_SANDBOX, 75
+.equ CONFINED_NO, 0                 # EXT_confined: how the running program is held
+.equ CONFINED_FULL, 1
+.equ CONFINED_TCP, 2                # network cut by TCP rules only (no user namespaces)
+.equ SIGTERM, 15
+.equ F_SETFL, 4
 
 .equ O_RDONLY, 0
 .equ O_WRONLY, 1
@@ -527,7 +581,40 @@ F DOC_real, 8           # a symlink's file: its path (owned) and name, and its f
 F DOC_rname, 8
 F DOC_wd2, 8
 F DOC_hops, 8           # the symlinks it leads through before that file (watch.s), or 0
+F DOC_id, 8             # extensions: session-unique id, given by doc_new
+F DOC_saves, 8          # extensions: times the document was written (the "saved" event)
+F DOC_xedits, 8         # extensions: SB* of edit records since the last frame (section 6a), or 0
+F DOC_xmarks, 8         # extensions: VEC* of MK marks (diagnostics), or 0
+F DOC_xresync, 4        # extensions: 1 when records were lost: the resync event is due
+F DOC_xpad, 4
+F DOC_oval, 16          # extensions: option overrides (section 6c), u32 each: OPT_TAB the width,
+                        #   the booleans 1 = no, 2 = yes; 0 = no override
+F DOC_oown, 32          # extensions: the EXT* that set each of them
 ENDSTRUCT DOC_SIZE
+.equ OPT_TAB, 0
+.equ OPT_SPACES, 1
+.equ OPT_TRIM, 2
+.equ OPT_FINAL, 3
+
+# a diagnostic mark on a document
+STRUCT
+F MK_owner, 8           # EXT*
+F MK_start, 8           # byte positions, half-open
+F MK_end, 8
+F MK_sev, 4             # SEV_*
+F MK_pad, 4
+F MK_msg, 8             # cstr (owned)
+ENDSTRUCT MK_SIZE
+.equ SEV_ERROR, 0
+.equ SEV_WARNING, 1
+.equ SEV_INFO, 2
+.equ SEV_HINT, 3
+.equ MARKS_MAX, 2000
+.equ MARK_MSG_MAX, 200
+.equ HOVER_MAX, 4000
+.equ HOVER_REST_MS, 500
+.equ EDITS_MAX, 1048576
+.equ ID_EXT_HOVER, 0x3e00
 
 .equ DISK_FADE_MS, 800
 .equ DISK_FRAME_MS, 50
@@ -829,7 +916,9 @@ ENDSTRUCT TF_SIZE
 .equ IC_F_ZIP, 144
 .equ IC_OPENCODE, 145
 .equ IC_PIN, 146
-.equ IC_COUNT, 147
+.equ IC_PUZZLE, 147
+.equ IC_MORE, 148
+.equ IC_COUNT, 149
 # end of the icons from SVG files
 
 # explorer header buttons; the title bar's tooltips name them too
@@ -847,6 +936,26 @@ ENDSTRUCT TF_SIZE
 .equ IMF_PNM, 7
 .equ IMF_TGA, 8
 .equ IMG_MAXDIM, 32768
+.equ FEAT_VIEWS, 1               # section 12 of the spec: features agreed after hello
+.equ FEAT_COMPLETE, 2
+.equ FEAT_SIGNATURE, 4
+.equ FEAT_DEFINITION, 8
+.equ FEAT_REFERENCES, 16
+.equ FEAT_SYMBOLS, 32
+.equ FEAT_ACTIONS, 64
+.equ FEAT_RENAME, 128
+.equ FEAT_FORMAT, 256
+# the features whose requests rhun sends (and whose ok ID LEN replies it frames)
+.equ FEAT_PROVIDERS, FEAT_COMPLETE | FEAT_SIGNATURE | FEAT_DEFINITION | FEAT_REFERENCES | FEAT_SYMBOLS | FEAT_ACTIONS | FEAT_RENAME | FEAT_FORMAT
+.equ FEAT_HOST, FEAT_VIEWS | FEAT_PROVIDERS   # what this rhun implements: only these are agreed
+.equ CP_MAX_ITEMS, 4096          # section 12b: a completion list's items and body at most
+.equ CP_BODY_MAX, 1048576
+.equ SG_BODY_MAX, 65536          # 12c: signature help's body
+.equ REPLY_BODY_MAX, 4194304     # any answer's body (a workspace edit, 12g); each feature has its own cap
+.equ ID_COMPLETE, 0x7800         # + row: the completion list's rows
+.equ ICON_SLOTS, 4              # badge sizes an extension's icon is kept at
+.equ ICON_MAXBYTES, 65536       # an extension's icon file, at most
+.equ ICON_MAXDIM, 256           # and its width and height
 .equ IMG_MAXPX, 1 << 26
 
 # decoded image
@@ -863,6 +972,16 @@ ENDSTRUCT IMG_SIZE
 .equ TAB_SETTINGS, 2
 .equ TAB_IMAGE, 3               # TAB_doc is a DOC without text; DOC_img holds the view
 .equ TAB_GIT, 4
+.equ TAB_EXT, 5                 # the Extensions page (extpage.s)
+.equ TAB_VIEW, 6                # an extension's view (extview.s); TAB_flags >> TF_VIEW_SHIFT is its slot + 1
+.equ TF_VIEW_SHIFT, 16
+.equ ID_VIEW, 0x7700            # + slot: a view's area
+.equ VW_MAX, 32                 # views open at once, all extensions
+.equ VIEWS_PER_EXT, 8
+.equ VIEW_BODY_MAX, 1048576     # a draw body
+.equ VIEW_SHAPES_MAX, 20000
+.equ VIEW_POINTS_MAX, 10000     # points of one poly or fill
+.equ ID_XB_PUZZLE, 0x7400       # the extensions button in the title bar; + 1 + i: a pinned one
 STRUCT
 F TAB_kind, 8
 F TAB_doc, 8
@@ -934,6 +1053,11 @@ ENDSTRUCT REG_SIZE
 .equ PROMPT_NEW_FILE, 2
 .equ PROMPT_NEW_FOLDER, 3
 .equ PROMPT_RENAME, 4
+.equ PROMPT_ASK, 5              # an extension's text prompt (ask)
+.equ PROMPT_TERM, 6             # an extension's command for the terminal (term)
+.equ PROMPT_EXT_INSTALL, 7      # Install from GitHub: owner/name
+.equ PROMPT_EXT_SETTING, 8      # a text setting of an extension (extpage.s)
+.equ PROMPT_RENAME_SYMBOL, 9    # the new name of a symbol (langfeat.s)
 
 # vim modes (g_vim_mode)
 .equ VM_NORMAL, 0
@@ -948,6 +1072,200 @@ F CMD_title, 8
 F CMD_fn, 8
 F CMD_keys, 8           # default bindings, space separated
 ENDSTRUCT CMD_SIZE
+
+# ---- extensions (src/app/ext.s, extproto.s) ----
+STRUCT
+F EXT_name, 8           # cstr, the folder name ("echo")
+F EXT_owner, 8          # cstr, the parent folder name
+F EXT_title, 8          # cstr
+F EXT_version, 8        # cstr
+F EXT_dir, 8            # cstr, the extension folder
+F EXT_state, 8          # cstr, its writable state folder
+F EXT_prog, 8           # cstr, the program to run (the runtime for a script), or 0 when unusable
+F EXT_script, 8         # cstr, the script given to the runtime, or 0
+F EXT_args, 8           # cstr, extra arguments (space separated), or 0
+F EXT_on, 4             # ON_* bits
+F EXT_needs, 4          # NEEDS_* bits
+F EXT_manifest_ok, 4    # full manifest validation passed; failed installs cannot be restarted
+F EXT_status, 4         # ES_*
+F EXT_pid, 4
+F EXT_in, 4             # the pipe to the program's input, -1 when not running
+F EXT_out, 4            # the pipe from its output
+F EXT_log, 4            # its error output, a file
+F EXT_hello, 4          # 1 once hello arrived
+F EXT_crashes, 4        # within the current minute
+F EXT_syntax_errs, 4    # in a row
+F EXT_flood, 4          # frames in a row that used up the budget
+F EXT_cmd0, 4           # its commands: first index into g_ext_cmds and count
+F EXT_ncmd, 4
+F EXT_reason, 8         # cstr, why it is stopped or failed, or 0
+F EXT_started, 8        # time_ms of the start (hello deadline) or of the stop request (bye)
+F EXT_crash_t0, 8       # time_ms of the first crash in the window
+F EXT_full_since, 8     # time_ms since the outgoing queue has been full, 0 when not
+F EXT_rbuf, SB_SIZE     # bytes read from the program, not yet parsed
+F EXT_wq, SB_SIZE       # bytes to write to the program
+F EXT_wq_off, 8         # of them, already written
+F EXT_body, 8           # a pending message that waits for its body (owned cstr), or 0
+F EXT_body_len, 8       # that body's length
+F EXT_on_langs, 8       # cstr lists for on = lang:X and on = open:GLOB, or 0
+F EXT_on_globs, 8
+F EXT_sub_opened, 8     # [subscribe] patterns per event (cstr) or 0 when not subscribed
+F EXT_sub_saved, 8
+F EXT_sub_changed, 8
+F EXT_sub_cursor, 8
+F EXT_sub_selection, 8
+F EXT_sub_edits, 8
+F EXT_sub_hover, 8
+F EXT_status_text, 8    # cstr, its status-bar text, or 0
+F EXT_known, VEC_SIZE   # XK records: the documents this extension has seen, and what it was told
+F EXT_active, 8         # DOC id last reported active, -1 before catch-up
+F EXT_pending, 8        # a command invoked before hello: its g_ext_cmds index + 1, or 0
+F EXT_throttled, 4      # 1 while its reads wait for the next frame's budget
+F EXT_wait_slot, 4      # 1 while it waits for one of the 16 slots
+F EXT_fbytes, 8         # bytes parsed in the current 16 ms window
+F EXT_win_t0, 8         # when that window began
+F EXT_win_msgs, 8       # messages parsed in it
+F EXT_win_hit, 4        # 1 when the window reached a cap (the rest waited)
+F EXT_win_pad, 4
+F EXT_in_closed_at, 8   # time_ms when the program closed its input, 0 otherwise
+F EXT_mname, 8          # the manifest's name and owner (checked against the folders)
+F EXT_mowner, 8
+F EXT_rtcmds, 4         # commands registered at runtime (removed when it stops)
+F EXT_confined, 4       # CONFINED_* of the running program
+F EXT_runs, 8           # cstr: the [needs] run list (program names), or 0
+F EXT_pinned, 4         # 1: its button is in the title bar (extensions.ini)
+F EXT_disabled, 4       # 1: turned off (extensions.ini)
+F EXT_confine_why, 8    # cstr: why rhun cannot hold it to its permissions on this system, or 0
+F EXT_restart, 4        # 1: start again once the stop in progress completes (a settings change)
+F EXT_noconfine, 4      # 1: confinement failed in the child once: it runs without (EXT_confine_why)
+F EXT_desc, 8           # cstr: the manifest's description, or 0
+F EXT_sdefs, VEC_SIZE   # SD records: its own settings ([settings] in the manifest)
+F EXT_color, 4          # the badge's background from the manifest's color (ARGB), 0 without
+F EXT_icon_state, 4     # 0 not read yet, 1 read, 2 cannot be shown (the letter stands in)
+F EXT_icon, 8           # cstr: the manifest's icon, a PNG in the extension's folder, or 0
+F EXT_icon_img, IMG_SIZE    # the decoded icon
+F EXT_icon_px, 8*ICON_SLOTS   # copies at the sizes badges ask for, corners rounded
+F EXT_icon_sz, 4*ICON_SLOTS
+F EXT_icon_next, 4      # the slot the next new size replaces
+F EXT_icon_pad, 4
+F EXT_features, 4       # FEAT_*: what was agreed after hello (section 12 of the spec)
+F EXT_feat_pad, 4
+F EXT_pv_complete, 8    # [provides] complete: the files it completes in (patterns, cstr) or 0
+F EXT_pv_ctrig, 8       # complete.triggers: characters that ask at once, space separated, or 0
+F EXT_pv_signature, 8   # signature: the files it gives signature help in, or 0
+F EXT_pv_strig, 8       # signature.triggers
+F EXT_hreq, 8           # the id of the last request rhun sent it (ids are never reused)
+F EXT_pv_definition, 8  # [provides] definition, references, symbols, actions, rename, format
+F EXT_pv_references, 8
+F EXT_pv_symbols, 8
+F EXT_pv_actions, 8
+F EXT_pv_rename, 8
+F EXT_pv_format, 8
+ENDSTRUCT EXT_SIZE
+
+# an extension's view (extview.s)
+STRUCT
+F VW_ext, 8             # its extension, 0 when the slot is free
+F VW_title, 8           # cstr, mem_alloc'd
+F VW_pic, SB_SIZE       # the picture, compiled into records
+F VW_px, 8              # its pixels, VW_pw x VW_ph, rendered from the picture
+F VW_id, 4              # the number the extension knows it by
+F VW_pw, 4
+F VW_ph, 4
+F VW_dirty, 4           # to be rendered again before it is shown
+F VW_lw, 4              # the size last sent, logical pixels (-1: none yet)
+F VW_lh, 4
+F VW_theme, 4           # the theme and background it was rendered with
+F VW_bg, 4
+F VW_in, 4              # the pointer is over it
+F VW_mx, 4              # where the pointer was last said to be, logical
+F VW_my, 4
+F VW_shapes, 4          # how many shapes the picture has
+F VW_scale, 4           # g_s's bits when the metrics were last sent
+F VW_sx, 4              # where it was last drawn, physical (tests point at it)
+F VW_sy, 4
+F VW_down, 4             # the left button went down over it and is still down
+F VW_fgen, 4             # g_face_gen when the metrics were last sent
+F VW_ax, 4               # where the button went down, logical: a click is a release near it
+F VW_ay, 4
+ENDSTRUCT VW_SIZE
+.equ EXT_CAP, 128               # extension records; g_exts never moves (EXT* are held elsewhere)
+# an extension's own setting: [settings] in its manifest, its value in extensions.ini
+STRUCT
+F SD_key, 8             # cstr
+F SD_title, 8           # cstr, or 0 (the key is shown)
+F SD_desc, 8            # cstr, or 0
+F SD_default, 8         # cstr, or 0 (empty)
+F SD_value, 8           # cstr, owned: the value in force
+F SD_opts, 8            # cstr: a choice's options, space separated, or 0
+F SD_type, 4            # SDT_*
+F SD_min, 4
+F SD_max, 4
+F SD_pad, 4
+ENDSTRUCT SD_SIZE
+.equ SDT_STRING, 0
+.equ SDT_BOOL, 1
+.equ SDT_INT, 2
+.equ SDT_CHOICE, 3
+.equ EXT_RTCMDS_MAX, 64         # register: commands per extension
+.equ EXT_CHOOSE_MAX, 1000       # choose: items
+.equ EXT_TERM_MAX, 4096         # term: the command's bytes
+
+# a prepared rule: struct landlock_path_beneath_attr (u64 allowed_access, s32 parent_fd), padded
+STRUCT
+F CR_access, 8
+F CR_fd, 4
+F CR_pad, 4
+ENDSTRUCT CR_SIZE
+
+# what an extension was last told about a document
+STRUCT
+F XK_id, 8
+F XK_ver, 8
+F XK_saves, 8
+F XK_cur, 8
+F XK_anchor, 8
+F XK_seen, 8            # scratch: 1 when the document is still open (events pass)
+F XK_eoff, 8            # edit records (DOC_xedits) delivered so far, as a byte offset
+ENDSTRUCT XK_SIZE
+
+.equ ES_IDLE, 0                 # not started
+.equ ES_STARTING, 1             # running, no hello yet
+.equ ES_RUNNING, 2
+.equ ES_STOPPING, 3             # bye sent, waiting before SIGTERM / SIGKILL
+.equ ES_STOPPED, 4              # by the user or a limit: EXT_reason
+.equ ES_CRASHED, 5              # exited on its own: EXT_reason
+.equ ES_FAILED, 6               # could not start, or a bad manifest: EXT_reason
+.equ ES_DISABLED, 7
+.equ ES_REMOVED, 8              # uninstalled this session: hidden, its commands inert
+
+.equ ON_STARTUP, 1
+.equ ON_COMMAND, 2
+.equ ON_LANG, 4
+.equ ON_OPEN, 8
+.equ ON_PROJECT, 16
+
+.equ NEEDS_DOC_READ, 1
+.equ NEEDS_DOC_WRITE, 2
+.equ NEEDS_PROJECT_READ, 4
+.equ NEEDS_PROJECT_WRITE, 8
+.equ NEEDS_HOME_READ, 16
+.equ NEEDS_NETWORK, 32
+.equ NEEDS_TERMINAL, 64
+
+.equ EXT_MAX_RUNNING, 16
+.equ EXT_HELLO_MS, 5000
+.equ EXT_LINE_MAX, 65536
+.equ EXT_BODY_MAX, 4194304
+.equ EXT_WQ_MAX, 1048576
+.equ EXT_WQ_HARD, 8388608       # a queue this long ends the program at once
+.equ EXT_LOG_MAX, 1048576
+.equ EXT_READ_CHUNK, 65536      # one read
+.equ EXT_WIN_MS, 16             # the window: a frame at 60 Hz
+.equ EXT_WIN_BYTES, 262144      # per extension per window
+.equ EXT_WIN_MSGS, 500
+.equ EXT_PUMP_MS, 2             # one parsing run
+.equ EXT_FLOOD_FRAMES, 30       # windows in a row at a cap
 
 # json
 .equ JT_NULL, 0

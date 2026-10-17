@@ -126,8 +126,14 @@ with tempfile.TemporaryDirectory(prefix='rhun-update-') as temporary:
         return False
 
     def stop_restarted(ids):
+        # a restarted editor may already have exited (taskkill: 128, no such process); any other
+        # failure leaves it running and is an error
         for process_id in ids:
-            subprocess.run(['taskkill', '/F', '/PID', process_id.decode()], check=True, stdout=subprocess.PIPE)
+            result = subprocess.run(['taskkill', '/F', '/PID', process_id.decode()],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            if result.returncode not in (0, 128):
+                raise AssertionError('taskkill %s: %d %s' % (process_id.decode(), result.returncode,
+                                                             result.stderr.decode(errors='replace')))
 
     def standalone_restart(name, paths, before=(), after=(), expected=None):
         # Each scenario applies the same synthetic release to a fresh portable installation.

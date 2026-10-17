@@ -674,20 +674,31 @@ FN config_changed
 # config_dir_each(subdir, ext, cb): cb(path, name) for ~/.config/rhun/<subdir>/*<ext>
 FN config_dir_each
     PROLOGUE 16
-    mov [rip + dir_ext], rsi
-    mov [rip + dir_cb], rdx
+    mov r12, rsi
+    mov r13, rdx
     mov rbx, rdi
     call config_dir
     mov rdi, rax
     mov rsi, rbx
     call path_join
-    mov [rip + dir_path], rax
+    mov rbx, rax
     mov rdi, rax
+    mov rsi, r12
+    mov rdx, r13
+    call dir_each_suffix
+    mov rdi, rbx
+    call mem_free
+    EPILOGUE
+
+# dir_each_suffix(path, ext, cb): cb(path, name) for every entry of the folder ending in ext
+FN dir_each_suffix
+    PROLOGUE
+    mov [rip + dir_ext], rsi
+    mov [rip + dir_cb], rdx
+    mov [rip + dir_path], rdi
     lea rsi, [rip + dir_each_cb]
     xor edx, edx
     call dir_each
-    mov rdi, [rip + dir_path]
-    call mem_free
     EPILOGUE
 
 dir_each_cb:

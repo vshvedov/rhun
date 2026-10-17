@@ -9,6 +9,9 @@
 g_cv: .zero CV_SIZE
 clip_stack: .zero 16 * CLIP_DEPTH
 clip_sp: .quad 0
+saved_cv: .zero CV_SIZE         # gfx_target_push's one saved target, its clip stack and depth
+saved_stack: .zero 16 * CLIP_DEPTH
+saved_sp: .quad 0
 
 .text
 
@@ -23,6 +26,41 @@ FN gfx_set_target
     mov [rip + g_cv + CV_cx1], esi
     mov [rip + g_cv + CV_cy1], edx
     mov qword ptr [rip + clip_sp], 0
+    ret
+
+# gfx_target_push(pixels, w, h): draw into another buffer (stride w) for a while, the window's
+# target, clip and clip stack kept; gfx_target_pop() goes back to them. One level.
+FN gfx_target_push
+    push rdi
+    push rsi
+    push rdx
+    lea rdi, [rip + saved_cv]
+    lea rsi, [rip + g_cv]
+    mov ecx, CV_SIZE
+    rep movsb
+    lea rdi, [rip + saved_stack]
+    lea rsi, [rip + clip_stack]
+    mov ecx, 16 * CLIP_DEPTH
+    rep movsb
+    mov rax, [rip + clip_sp]
+    mov [rip + saved_sp], rax
+    pop rdx
+    pop rsi
+    pop rdi
+    mov ecx, esi
+    jmp gfx_set_target
+
+FN gfx_target_pop
+    lea rdi, [rip + g_cv]
+    lea rsi, [rip + saved_cv]
+    mov ecx, CV_SIZE
+    rep movsb
+    lea rdi, [rip + clip_stack]
+    lea rsi, [rip + saved_stack]
+    mov ecx, 16 * CLIP_DEPTH
+    rep movsb
+    mov rax, [rip + saved_sp]
+    mov [rip + clip_sp], rax
     ret
 
 # gfx_clip_push(x, y, w, h): intersect clip with rect
@@ -522,6 +560,268 @@ FN gfx_mask
     jmp .Lmk_row
 .Lmk_ret:
     EPILOGUE
+
+# gfx_mask_exact(x, y, bits, w, h, argb): gfx_mask with the coverage times the color's alpha rounded,
+# so full coverage of an opaque color is that color (the views' shapes; text keeps gfx_mask)
+FN gfx_mask_exact
+    PROLOGUE 32
+    mov [rsp], edi              # x
+    mov [rsp + 4], esi          # y
+    mov r12, rdx                # bits
+    mov [rsp + 8], ecx          # w (mask stride)
+    mov [rsp + 12], r8d         # h
+    mov ebx, r9d                # color
+    mov eax, ebx
+    shr eax, 24
+    mov [rsp + 16], eax         # color alpha
+    # clipped span
+    mov r13d, edi               # x0
+    lea r14d, [rdi + rcx]       # x1
+    mov eax, [rip + g_cv + CV_cx0]
+    cmp r13d, eax
+    cmovl r13d, eax
+    mov eax, [rip + g_cv + CV_cx1]
+    cmp r14d, eax
+    cmovg r14d, eax
+    cmp r14d, r13d
+    jle .Lmx_ret
+    mov r15d, esi               # y0
+    lea eax, [rsi + r8]
+    mov [rsp + 20], eax         # y1
+    mov eax, [rip + g_cv + CV_cy0]
+    cmp r15d, eax
+    cmovl r15d, eax
+    mov eax, [rip + g_cv + CV_cy1]
+    cmp [rsp + 20], eax
+    jle 1f
+    mov [rsp + 20], eax
+1:
+.Lmx_row:
+    cmp r15d, [rsp + 20]
+    jge .Lmx_ret
+    # src row = bits + (y - y0)*w
+    mov eax, r15d
+    sub eax, [rsp + 4]
+    imul eax, [rsp + 8]
+    movsxd rax, eax
+    lea rsi, [r12 + rax]
+    movsxd rax, dword ptr [rsp]
+    sub rsi, rax                # so that rsi[x] is the mask byte for canvas x
+    mov eax, r15d
+    imul eax, [rip + g_cv + CV_stride]
+    movsxd rax, eax
+    mov rdi, [rip + g_cv + CV_pixels]
+    lea rdi, [rdi + rax*4]
+    movsxd r10, r13d
+.Lmx_px:
+    movzx edx, byte ptr [rsi + r10]
+    test edx, edx
+    jz .Lmx_next
+    imul edx, [rsp + 16]
+    add edx, 128                # (x + 128 + (x + 128) / 256) / 256: x / 255 rounded, 255 * 255 is 255
+    mov eax, edx
+    shr eax, 8
+    add edx, eax
+    shr edx, 8
+    mov eax, [rdi + r10*4]
+    mov ecx, ebx
+    push r10
+    BLEND
+    pop r10
+    mov [rdi + r10*4], eax
+.Lmx_next:
+    inc r10
+    cmp r10d, r14d
+    jl .Lmx_px
+    inc r15d
+    jmp .Lmx_row
+.Lmx_ret:
+    EPILOGUE
+
+# one channel of a premultiplied source over the canvas: \sh is its bit position; ecx source,
+# edx destination, r9d 255 - source alpha; the channel goes into eax
+.macro OVER sh
+    mov r8d, edx
+    shr r8d, \sh
+    and r8d, 255
+    imul r8d, r9d
+    add r8d, 128
+    mov r11d, r8d
+    shr r11d, 8
+    add r8d, r11d
+    shr r8d, 8                  # destination * (255 - a) / 255
+    mov r11d, ecx
+    shr r11d, \sh
+    and r11d, 255
+    add r8d, r11d
+    cmp r8d, 255
+    jbe 1f
+    mov r8d, 255
+1:  shl r8d, \sh
+    or eax, r8d
+.endm
+
+# gfx_blit(x, y, px, w, h): premultiplied ARGB pixels, w of them a row, over the canvas, clipped
+FN gfx_blit
+    PROLOGUE 32
+    mov [rsp], edi              # x
+    mov [rsp + 4], esi          # y
+    mov r12, rdx                # pixels
+    mov [rsp + 8], ecx          # w
+    # the clipped span
+    mov r13d, edi               # x0
+    lea r14d, [rdi + rcx]       # x1
+    mov eax, [rip + g_cv + CV_cx0]
+    cmp r13d, eax
+    cmovl r13d, eax
+    mov eax, [rip + g_cv + CV_cx1]
+    cmp r14d, eax
+    cmovg r14d, eax
+    cmp r14d, r13d
+    jle .Lbl_ret
+    mov r15d, esi               # y0
+    lea eax, [rsi + r8]
+    mov [rsp + 20], eax         # y1
+    mov eax, [rip + g_cv + CV_cy0]
+    cmp r15d, eax
+    cmovl r15d, eax
+    mov eax, [rip + g_cv + CV_cy1]
+    cmp [rsp + 20], eax
+    jle .Lbl_row
+    mov [rsp + 20], eax
+.Lbl_row:
+    cmp r15d, [rsp + 20]
+    jge .Lbl_ret
+    # source row, so that rsi[x] is the pixel for canvas x
+    mov eax, r15d
+    sub eax, [rsp + 4]
+    imul eax, [rsp + 8]
+    sub eax, [rsp]
+    movsxd rax, eax
+    lea rsi, [r12 + rax*4]
+    mov eax, r15d
+    imul eax, [rip + g_cv + CV_stride]
+    movsxd rax, eax
+    mov rdi, [rip + g_cv + CV_pixels]
+    lea rdi, [rdi + rax*4]
+    movsxd r10, r13d
+.Lbl_px:
+    mov ecx, [rsi + r10*4]
+    mov ebx, ecx
+    shr ebx, 24
+    jz .Lbl_next                # transparent
+    cmp ebx, 255
+    jne 2f
+    mov [rdi + r10*4], ecx      # opaque
+    jmp .Lbl_next
+2:  mov edx, [rdi + r10*4]
+    mov r9d, 255
+    sub r9d, ebx
+    mov eax, 0xff000000
+    OVER 0
+    OVER 8
+    OVER 16
+    mov [rdi + r10*4], eax
+.Lbl_next:
+    inc r10
+    cmp r10d, r14d
+    jl .Lbl_px
+    inc r15d
+    jmp .Lbl_row
+.Lbl_ret:
+    EPILOGUE
+
+# gfx_round_mask(px, size, r): a size x size premultiplied image with its corners rounded to radius
+# r, by the same coverage gfx_round_rect gives its corner pixels (an icon then covers a badge's
+# rounded square exactly)
+FN gfx_round_mask
+    PROLOGUE 32
+    mov r12, rdi
+    mov r13d, esi               # size
+    mov eax, esi
+    sar eax, 1
+    cmp edx, eax
+    cmovg edx, eax
+    mov ebx, edx                # r
+    test ebx, ebx
+    jle .Lrm_ret
+    mov dword ptr [rsp], 0      # i, the row from the corner's edge
+.Lrm_rows:
+    mov eax, [rsp]
+    cmp eax, ebx
+    jge .Lrm_ret
+    mov dword ptr [rsp + 4], 0  # j, the column
+.Lrm_cols:
+    mov eax, [rsp + 4]
+    cmp eax, ebx
+    jge .Lrm_nextrow
+    cvtsi2ss xmm0, ebx
+    cvtsi2ss xmm1, eax
+    subss xmm0, xmm1
+    subss xmm0, [rip + f_half]
+    cvtsi2ss xmm2, ebx
+    cvtsi2ss xmm1, dword ptr [rsp]
+    subss xmm2, xmm1
+    subss xmm2, [rip + f_half]
+    mulss xmm0, xmm0
+    mulss xmm2, xmm2
+    addss xmm0, xmm2
+    sqrtss xmm0, xmm0
+    cvtsi2ss xmm1, ebx
+    addss xmm1, [rip + f_half]
+    subss xmm1, xmm0
+    maxss xmm1, [rip + f_zero]
+    minss xmm1, [rip + f_one]
+    mulss xmm1, [rip + f_255]
+    cvtss2si r14d, xmm1         # coverage 0..255
+    # the four corners: (i, j), (i, size-1-j), (size-1-i, j), (size-1-i, size-1-j)
+    mov r15d, [rsp]
+    mov ecx, [rsp + 4]
+    call .Lrm_scale
+    mov r15d, [rsp]
+    mov ecx, r13d
+    dec ecx
+    sub ecx, [rsp + 4]
+    call .Lrm_scale
+    mov r15d, r13d
+    dec r15d
+    sub r15d, [rsp]
+    mov ecx, [rsp + 4]
+    call .Lrm_scale
+    mov r15d, r13d
+    dec r15d
+    sub r15d, [rsp]
+    mov ecx, r13d
+    dec ecx
+    sub ecx, [rsp + 4]
+    call .Lrm_scale
+    inc dword ptr [rsp + 4]
+    jmp .Lrm_cols
+.Lrm_nextrow:
+    inc dword ptr [rsp]
+    jmp .Lrm_rows
+.Lrm_ret:
+    EPILOGUE
+# the pixel at row r15d, column ecx, every channel times r14d / 255
+.Lrm_scale:
+    mov eax, r15d
+    imul eax, r13d
+    add eax, ecx
+    lea rdi, [r12 + rax*4]
+    xor esi, esi
+4:  movzx r8d, byte ptr [rdi + rsi]
+    imul r8d, r14d
+    add r8d, 128
+    mov r11d, r8d
+    shr r11d, 8
+    add r8d, r11d
+    shr r8d, 8
+    mov eax, r8d
+    mov [rdi + rsi], al
+    inc esi
+    cmp esi, 4
+    jb 4b
+    ret
 
 # color_mix(a, b, t 0..255) -> a*(1-t) + b*t, opaque
 FN color_mix

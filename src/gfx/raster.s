@@ -8,6 +8,8 @@ acc_cap: .quad 0                # floats
 .globl g_acc_w, g_acc_h
 g_acc_w: .long 0
 g_acc_h: .long 0
+acc_stride: .long 0             # cells a row: w and two more, where what lies right of the area lands
+acc_wf: .long 0                   # w, as a float: x is clamped to it
 .p2align 4
 gamma_tab: .zero 256
 
@@ -38,6 +40,10 @@ FN raster_begin
     push rbx
     mov [rip + g_acc_w], edi
     mov [rip + g_acc_h], esi
+    cvtsi2ss xmm0, edi
+    movss [rip + acc_wf], xmm0
+    add edi, 2
+    mov [rip + acc_stride], edi
     mov eax, edi
     imul eax, esi
     lea ebx, [rax + rdi + 8]
@@ -89,7 +95,7 @@ FN raster_line
     jle 2f
     mov edx, [rip + g_acc_h]
 2:  mov rdi, [rip + acc_buf]
-    mov r9d, [rip + g_acc_w]
+    mov r9d, [rip + acc_stride]
 .Lrl_row:
     cmp ecx, edx
     jge .Lrl_ret
@@ -112,6 +118,8 @@ FN raster_line
     maxss xmm12, xmm9           # xb
     maxss xmm11, [rip + f_zero]
     maxss xmm12, [rip + f_zero]
+    minss xmm11, [rip + acc_wf]     # right of the area: into the row's spare cells
+    minss xmm12, [rip + acc_wf]
     roundss xmm13, xmm11, 1     # floor(xa)
     cvttss2si r10d, xmm13       # xai
     roundss xmm14, xmm12, 2     # ceil(xb)
@@ -300,20 +308,27 @@ FN raster_quad
 .Lrq_ret:
     EPILOGUE
 
-# raster_end(out): accumulate coverage into w*h alpha bytes
+# raster_end(out): accumulate coverage into w*h alpha bytes (a row's spare cells count toward the
+# running sum but are not written)
 FN raster_end
     mov rsi, [rip + acc_buf]
-    mov ecx, [rip + g_acc_w]
-    imul ecx, [rip + g_acc_h]
+    mov r9d, [rip + g_acc_w]
+    mov r10d, [rip + acc_stride]
+    mov r11d, [rip + g_acc_h]
     lea r8, [rip + gamma_tab]
     xorps xmm0, xmm0
     movss xmm2, [rip + f_one]
     movss xmm3, [rip + f_255]
     movss xmm4, [rip + abs_mask]
-    xor edx, edx
-1:  cmp edx, ecx
-    jge 2f
+    xor ecx, ecx                # the row
+1:  cmp ecx, r11d
+    jge 9f
+    xor edx, edx                # the cell
+2:  cmp edx, r10d
+    jge 5f
     addss xmm0, [rsi + rdx*4]
+    cmp edx, r9d
+    jge 3f
     movss xmm1, xmm0
     andps xmm1, xmm4
     minss xmm1, xmm2
@@ -321,9 +336,15 @@ FN raster_end
     cvtss2si eax, xmm1
     movzx eax, byte ptr [r8 + rax]
     mov [rdi + rdx], al
-    inc edx
+3:  inc edx
+    jmp 2b
+5:  movsxd rax, r10d
+    lea rsi, [rsi + rax*4]
+    movsxd rax, r9d
+    add rdi, rax
+    inc ecx
     jmp 1b
-2:  ret
+9:  ret
 
 .section .rodata
 .p2align 4

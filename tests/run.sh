@@ -28,6 +28,7 @@ check themes build/theme_test
 check term build/term_test
 check diff build/diff_test
 check images build/image_test $(ls tests/data/images/* | LC_ALL=C sort)
+python3 tests/image-fuzz.py 1 20 || fail=1
 check cpu build/cpu_test
 check cols build/cols_test
 check textarea build/textarea_test
@@ -91,6 +92,10 @@ python3 tests/tab-view.py || fail=1
 python3 tests/terminal-font.py || fail=1
 python3 tests/shift-wheel.py || fail=1
 python3 tests/stress.py || fail=1
+python3 tests/ext-host.py || fail=1
+python3 tests/ext-confine.py || fail=1
+python3 tests/ext-ui.py || fail=1
+python3 tests/ext-fuzz.py 1 4 || fail=1
 if [ "$(uname -s)" = Darwin ] || command -v strace >/dev/null; then
     status=0
     sh tests/file-faults.sh || status=$?

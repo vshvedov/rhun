@@ -497,6 +497,7 @@ FN ws_wait
 
 FN ws_kill
     PROLOGUE 96
+    mov r12d, esi
     test edi, edi
     jns 1f
     neg edi
@@ -509,10 +510,13 @@ FN ws_kill
     jnz 2b
     mov rax, -3
     EPILOGUE
-3:  mov rcx, [rbx + 16]
-    mov edx, 1
+3:  test r12d, r12d
+    jz 4f                       # signal 0: only whether it is there
+    # the job ends with 128 + the signal as its exit code, as a shell reports a signalled program
+    mov rcx, [rbx + 16]
+    lea edx, [r12 + 128]
     API TerminateJobObject
-    xor eax, eax
+4:  xor eax, eax
     EPILOGUE
 
 FN pty_open

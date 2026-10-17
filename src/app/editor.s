@@ -21,6 +21,7 @@ g_ed_y: .long 0
 g_ed_w: .long 0
 g_ed_h: .long 0
 g_ed_tx: .long 0                # x of column 0 (before horizontal scroll)
+ed_hovered: .long 0             # the pointer was over the editor this frame (hover tracking)
 g_dragging: .long 0
 hs_on: .long 0                  # the horizontal scrollbar is shown (hscroll_measure)
 hs_content: .long 0             # px: the widest line and a margin
@@ -156,8 +157,8 @@ FN line_indent
     jne 3f
     mov eax, r14d
     xor edx, edx
-    div dword ptr [rip + cfg_tab_width]
-    mov eax, [rip + cfg_tab_width]
+    div dword ptr [rip + g_tab_width]
+    mov eax, [rip + g_tab_width]
     sub eax, edx
     add r14d, eax
     inc rcx
@@ -650,11 +651,11 @@ FN ed_newline
 # push_indent_unit(): append one indentation unit to the sb at [rsp+8] of the caller frame
 push_indent_unit:
     lea rdi, [rsp + 8]
-    cmp dword ptr [rip + cfg_insert_spaces], 0
+    cmp dword ptr [rip + g_insert_spaces], 0
     je 2f
     push rbx
     push rdi
-    mov ebx, [rip + cfg_tab_width]
+    mov ebx, [rip + g_tab_width]
 1:  mov rdi, [rsp]
     mov esi, ' '
     call sb_push_byte
@@ -691,7 +692,7 @@ FN ed_backspace
 1:  # inside leading blanks with spaces indentation: remove to previous tab stop
     call doc_prev_char
     mov r14, rax
-    cmp dword ptr [rip + cfg_insert_spaces], 0
+    cmp dword ptr [rip + g_insert_spaces], 0
     je 4f
     mov rdi, rbx
     mov rsi, r14
@@ -728,8 +729,8 @@ FN ed_backspace
     call doc_col_of
     dec eax
     xor edx, edx
-    div dword ptr [rip + cfg_tab_width]
-    imul eax, [rip + cfg_tab_width]
+    div dword ptr [rip + g_tab_width]
+    imul eax, [rip + g_tab_width]
     mov rcx, r13
     sub rcx, r15                # current col (all spaces)
     sub rcx, rax
@@ -908,7 +909,7 @@ FN ed_indent
     mov edx, 1
     cmp al, 9
     je 1f
-    mov edx, [rip + cfg_tab_width]
+    mov edx, [rip + g_tab_width]
     cmp rdx, r15
     cmova rdx, r15
 1:  mov rdi, rbx
@@ -949,7 +950,7 @@ FN ed_tab
     mov edi, 1
     call ed_indent
     jmp 9f
-1:  cmp dword ptr [rip + cfg_insert_spaces], 0
+1:  cmp dword ptr [rip + g_insert_spaces], 0
     jne 2f
     mov byte ptr [rsp], 9
     mov edx, 1
@@ -958,8 +959,8 @@ FN ed_tab
     mov rsi, [rbx + DOC_cur]
     call doc_col_of
     xor edx, edx
-    div dword ptr [rip + cfg_tab_width]
-    mov eax, [rip + cfg_tab_width]
+    div dword ptr [rip + g_tab_width]
+    mov eax, [rip + g_tab_width]
     sub eax, edx
     mov edx, eax
     lea rdi, [rsp]
@@ -1961,7 +1962,13 @@ draw_wrapped:
     lea rcx, [rsp + 40]
     mov r8, r15
     call text_draw
-1:  mov rax, [rsp]
+1:  mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    mov ecx, [rip + g_lh]
+    imul ecx, r14d
+    call extmarks_gutter        # an extension's diagnostic on the line
+    mov rax, [rsp]
     test rax, rax
     jz 13f
     movzx edi, byte ptr [rax + r12]
@@ -2129,11 +2136,25 @@ FN editor_draw
     jz .Led_noinput
     mov eax, [rip + g_mx]
     cmp eax, [rip + g_ed_tx]
-    jl 1f
+    jl 12f
     cmp dword ptr [rip + g_cursor], CUR_DEFAULT
     jne 1f
     mov dword ptr [rip + g_cursor], CUR_TEXT
-1:  # wheel (sideways with Shift: wheel_xy)
+1:  # the position the pointer rests on, for extensions' hovers and diagnostics' messages
+    mov rdi, rbx
+    mov esi, [rip + g_mx]
+    mov edx, [rip + g_my]
+    call pos_at_point
+    mov rdi, rbx
+    mov rsi, rax
+    call ext_hover_track
+    call ext_hover_tip
+    jmp 13f
+12: xor edi, edi
+    xor esi, esi
+    call ext_hover_track
+13: mov dword ptr [rip + ed_hovered], 1
+    # wheel (sideways with Shift: wheel_xy)
     call wheel_xy
     mov eax, edx
     test eax, eax
@@ -2242,6 +2263,12 @@ FN editor_draw
     call cmd_select_line
     mov dword ptr [rip + g_reveal], 0
 .Led_noinput:
+    cmp dword ptr [rip + ed_hovered], 0
+    jne 1f
+    xor edi, edi
+    xor esi, esi
+    call ext_hover_track
+1:  mov dword ptr [rip + ed_hovered], 0
     call hscroll_clamp           # a wheel or trackpad stops at the widest line
     # drag selection
     cmp dword ptr [rip + g_dragging], 0
@@ -2427,7 +2454,12 @@ FN editor_draw
     mov esi, r13d
     mov edx, [rip + g_lh]
     call mark_draw
-21: # text area clip
+21: mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    mov ecx, [rip + g_lh]
+    call extmarks_gutter        # an extension's diagnostic on the line
+    # text area clip
     mov edi, [rip + g_ed_tx]
     sub edi, [rip + g_mt + 4*MI_4]
     mov esi, [rip + g_ed_y]
@@ -2972,8 +3004,8 @@ draw_line:
     jne 8f
     mov eax, [rsp + 64]
     xor edx, edx
-    div dword ptr [rip + cfg_tab_width]
-    mov eax, [rip + cfg_tab_width]
+    div dword ptr [rip + g_tab_width]
+    mov eax, [rip + g_tab_width]
     sub eax, edx
     mov [rsp + 84], eax
     cmp dword ptr [rip + cfg_whitespace], 0
@@ -3063,12 +3095,12 @@ draw_line:
     jne 10f
     mov edx, [rip + last_indent]
 10: mov [rip + last_indent], edx
-    mov ecx, [rip + cfg_tab_width]
+    mov ecx, [rip + g_tab_width]
     mov [rsp + 64], ecx
 11: mov eax, [rsp + 64]
     cmp eax, [rip + last_indent]
     jg .Ldl_ret
-    sub eax, [rip + cfg_tab_width]
+    sub eax, [rip + g_tab_width]
     imul eax, [rip + g_cw]
     add eax, [rsp + 40]
     mov edi, eax
@@ -3077,10 +3109,18 @@ draw_line:
     mov ecx, [rip + g_lh]
     COLOR r8d, T_GUIDE
     call gfx_fill
-    mov eax, [rip + cfg_tab_width]
+    mov eax, [rip + g_tab_width]
     add [rsp + 64], eax
     jmp 11b
 .Ldl_ret:
+    # the extensions' marks on this row
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, [rsp + 96]
+    mov rcx, [rsp + 32]
+    mov r8d, [rsp + 40]
+    mov r9d, [rsp]
+    call extmarks_row
     EPILOGUE
 
 # draw_box(x, y, w, h, argb): 1px outline, softened
@@ -3506,7 +3546,7 @@ FN doc_widest
     imul rdx, rcx
     add rdx, rax
     imul rdx, rcx
-    mov eax, [rip + cfg_tab_width]
+    mov eax, [rip + g_tab_width]
     add rdx, rax
     or rdx, 1                   # never 0, the key of a document not measured yet
     cmp rdx, [rbx + DOC_wkey]
@@ -3638,7 +3678,7 @@ widest_span:
     lea r12, [rdi + rsi]
     mov r13d, [rip + ww_col]
     mov r14d, [rip + ww_max]
-    mov r15d, [rip + cfg_tab_width]
+    mov r15d, [rip + g_tab_width]
     test r15d, r15d
     jnz 1f
     mov r15d, 1

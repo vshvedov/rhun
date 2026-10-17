@@ -116,6 +116,11 @@ LIBC sys_execve, _execve, 32
 
 // vfork: a fork, as the child only reads memory before it execs (proc_spawn)
 LIBC sys_vfork, _fork, 32
+LIBC sys_fork, _fork, 32
+// the extension sandbox: sandbox_init(profile, flags, &errorbuf) -> 0 or -1
+LIBC sys_sandbox_init, _sandbox_init, 32
+// realpath(path, buf) -> buf, or 0 (the Linux side sees 0 as failure)
+LIBC sys_realpath, _realpath
 
 // wait4(pid, status, options, rusage): Darwin encodes the status alike; rusage is not filled
 sys_wait4:
@@ -800,6 +805,7 @@ sys_table:
     SYS 42, sys_connect
     SYS 49, sys_bind
     SYS 50, sys_listen
+    SYS 57, sys_fork
     SYS 58, sys_vfork
     SYS 59, sys_execve
     SYS 60, sys_exit
@@ -824,6 +830,8 @@ sys_table:
     SYS 255, sys_inotify_rm_watch
     SYS 257, sys_openat
     SYS 288, sys_accept4
+    SYS 290, sys_sandbox_init
+    SYS 291, sys_realpath
     SYS 293, sys_pipe2
     SYS 294, sys_inotify_init1
     .org sys_table + NSYS * 8

@@ -79,6 +79,12 @@ ICONS.append(('OPENCODE', [('F', len(points), *[v for point in points for v in p
 ICONS.append(('PIN', [('W', 10)] + line([(40, 14), (88, 14)])
                      + line([(50, 14), (50, 54), (30, 76), (30, 84), (98, 84), (98, 76), (78, 54), (78, 14)])
                      + [('M', 64, 84), ('L', 64, 118)]))
+# the extensions button: a puzzle piece (a square with a knob on top and one on the right), and a
+# "more" button of three dots
+ICONS.append(('PUZZLE', [('W', 10)] + line([(22, 38), (46, 38), (46, 30)] + arc(58, 30, 12, 180, 360, 8)
+                                           + [(70, 38), (90, 38), (90, 60), (98, 60)] + arc(98, 72, 12, 270, 450, 8)
+                                           + [(90, 84), (90, 108), (22, 108), (22, 38)])))
+ICONS.append(('MORE', [('D', 64, 28, 10), ('D', 64, 64, 10), ('D', 64, 100, 10)]))
 # icon_mask keys its cache by icon | size << 8
 assert len(ICONS) <= 256, len(ICONS)
 # the color names of file icons, in the order of their theme slots from T_ICON (src/app/theme.s)

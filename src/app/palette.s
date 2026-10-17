@@ -11,6 +11,8 @@
 .equ PM_PROMPT, 6
 .equ PM_GREP, 7
 .equ PM_BROWSE, 8
+.equ PM_CHOOSE, 9               # an extension's pick list (choose)
+.equ PM_RESULTS, 10             # results from extensions: locations, symbols, code actions (langfeat.s)
 
 .equ ID_PAL_ROW, 0x200000         # + row: a range of its own, as results run to MAXFILES
 .equ ID_PAL_FIELD, 0x3fff
@@ -104,6 +106,7 @@ FN palette_field
 palette_open:
     PROLOGUE
     mov ebx, edi
+    call extproto_prompt_abort  # an extension's prompt that was open is cancelled
     # from the theme list to another list (its shortcut): the settings' theme again, as on closing
     cmp dword ptr [rip + pal_mode], PM_THEMES
     jne 1f
@@ -150,6 +153,7 @@ palette_open:
 
 FN palette_close
     push rbx
+    call extproto_prompt_abort
     # themes: the settings' theme again, after a preview or a change of the system's mode
     cmp dword ptr [rip + pal_mode], PM_THEMES
     jne 1f
@@ -822,6 +826,93 @@ prompt_initial:
     call sb_push_byte
 9:  EPILOGUE
 
+# ---- an extension's prompts (extproto.s owns the request; the palette shows it) ----
+
+# palette_choose_open(label cstr): an empty pick list with the label as its placeholder; items
+# follow with palette_choose_add, then palette_choose_ready
+FN palette_choose_open
+    push rbx
+    mov rbx, rdi
+    mov edi, PM_CHOOSE
+    call palette_open
+    mov [rip + pal_label], rbx
+    pop rbx
+    ret
+
+# palette_choose_add(ptr, len, n): item number n (its IT_data)
+FN palette_choose_add
+    xor ecx, ecx
+    xchg rcx, rdx
+    jmp item_add
+
+FN palette_choose_ready
+    jmp palette_filter
+
+# palette_results_open(label cstr), palette_results_add(ptr, len, detail cstr or 0, n),
+# palette_results_ready(), palette_results_close(): a list of langfeat's results; choosing item n
+# calls langfeat_chosen(n). The strings stay langfeat's until it closes the list
+FN palette_results_open
+    push rbx
+    mov rbx, rdi
+    mov edi, PM_RESULTS
+    call palette_open
+    mov [rip + pal_label], rbx
+    pop rbx
+    ret
+
+FN palette_results_add
+    jmp item_add
+
+FN palette_results_ready
+    jmp palette_filter
+
+FN palette_results_close
+    cmp dword ptr [rip + pal_mode], PM_RESULTS
+    jne 1f
+    jmp palette_close
+1:  ret
+
+# palette_ext_prompt_open(label cstr, PROMPT_ASK | PROMPT_TERM, text, len): a text prompt with
+# the field preset
+FN palette_ext_prompt_open
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rdx
+    mov r14, rcx
+    mov edi, PM_PROMPT
+    call palette_open
+    mov [rip + pal_label], rbx
+    mov [rip + pal_prompt], r12d
+    mov dword ptr [rip + g_focus], FOCUS_PROMPT
+    lea rdi, [rip + pal_tf]
+    mov rsi, r13
+    mov rdx, r14
+    call tf_set
+    EPILOGUE
+
+# palette_close_commands(): the command list holds CMD* and titles of extension commands that
+# just moved or went: a palette showing it closes
+FN palette_close_commands
+    cmp dword ptr [rip + pal_mode], PM_COMMANDS
+    jne 1f
+    jmp palette_close
+1:  ret
+
+# palette_ext_keys_reset(): the extensions' commands changed: their shortcut labels are stale
+FN palette_ext_keys_reset
+    PROLOGUE
+    xor ebx, ebx
+1:  cmp rbx, [rip + ext_keys_cache + VEC_len]
+    jae 2f
+    mov rax, [rip + ext_keys_cache + VEC_ptr]
+    mov rdi, [rax + rbx*8]
+    call mem_free
+    inc rbx
+    jmp 1b
+2:  mov qword ptr [rip + ext_keys_cache + VEC_len], 0
+    EPILOGUE
+
 # ---- item sources ----
 
 item_add:   # (label, len, detail, data)
@@ -889,6 +980,60 @@ load_commands:
     mov rcx, rbx
     call item_add
 2:  add rbx, CMD_SIZE
+    jmp 1b
+9:  # the extensions' commands (no shortcut cache: there are few of them)
+    xor r14d, r14d
+5:  cmp r14, [rip + g_ext_cmds + VEC_len]
+    jae 8f
+    mov rdi, r14
+    call ext_cmd_live
+    imul rbx, r14, CMD_SIZE
+    add rbx, [rip + g_ext_cmds + VEC_ptr]
+    inc r14
+    test eax, eax
+    jz 5b                       # an extension removed this session
+    mov r12, [rbx + CMD_title]
+    mov rdi, r12
+    call strlen
+    mov r13, rax
+    lea rdi, [rip + ext_keys_cache]
+    mov esi, 8
+    call vec_ensure             # one slot per extension command
+    mov rax, [rip + ext_keys_cache + VEC_ptr]
+    mov rax, [rax + r14*8 - 8]
+    test rax, rax
+    jnz 6f
+    mov rdi, rbx
+    call keys_for
+    test rax, rax
+    jz 6f
+    mov rdi, rax
+    push rax
+    call strlen
+    pop rdi
+    mov rsi, rax
+    call mem_dup
+    mov rcx, [rip + ext_keys_cache + VEC_ptr]
+    mov [rcx + r14*8 - 8], rax
+6:  mov rdi, r12
+    mov rsi, r13
+    mov rdx, rax
+    mov rcx, rbx
+    call item_add
+    jmp 5b
+8:  EPILOGUE
+
+# vec_ensure(vec, item size): grow vec to g_ext_cmds' length (zeroed slots)
+vec_ensure:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+1:  mov rax, [rbx + VEC_len]
+    cmp rax, [rip + g_ext_cmds + VEC_len]
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r12
+    call vec_push
     jmp 1b
 9:  EPILOGUE
 
@@ -1514,9 +1659,15 @@ FN palette_print
     call sb_push_cstr
     EPILOGUE
 1:  cmp dword ptr [rip + pal_mode], PM_PROMPT
+    je 10f
+    cmp dword ptr [rip + pal_mode], PM_CHOOSE
+    je 13f
+    cmp dword ptr [rip + pal_mode], PM_RESULTS
     jne 11f
-    lea rsi, [rip + .Lpp_prompt]
-    call sb_push_cstr
+13: lea rsi, [rip + .Lpp_choose]
+    jmp 12f
+10: lea rsi, [rip + .Lpp_prompt]
+12: call sb_push_cstr
     mov rdi, rbx
     mov rsi, [rip + pal_label]
     call sb_push_cstr
@@ -1938,6 +2089,7 @@ palette_accept:
     mov dword ptr [rip + pal_mode], PM_NONE
     call pal_return_focus
     mov rax, [r12 + IT_data]
+    mov rdi, rax
     call [rax + CMD_fn]
     jmp .Lpa_ret
 2:  cmp ebx, PM_THEMES
@@ -1948,7 +2100,7 @@ palette_accept:
     call theme_set
     jmp .Lpa_close
 3:  cmp ebx, PM_LANGS
-    jne .Lpa_close
+    jne 31f
     cmp qword ptr [rip + g_doc], 0
     je .Lpa_close
     mov rdi, [r12 + IT_data]
@@ -1957,6 +2109,24 @@ palette_accept:
     mov [rcx + DOC_lang], rax
     mov qword ptr [rcx + DOC_svalid], 0
     jmp .Lpa_close
+31: cmp ebx, PM_RESULTS
+    jne 32f
+    mov dword ptr [rip + pal_mode], PM_NONE
+    call pal_return_focus
+    mov rdi, [r12 + IT_data]
+    call langfeat_chosen
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lpa_ret
+32: cmp ebx, PM_CHOOSE
+    jne .Lpa_close
+    # the extension's pick: the item's number, with the palette closed first (the reply may
+    # open another prompt)
+    mov dword ptr [rip + pal_mode], PM_NONE
+    call pal_return_focus
+    mov rdi, [r12 + IT_data]
+    call extproto_prompt_chose
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lpa_ret
 .Lpa_goto:
     lea rdi, [rip + pal_tf]
     call tf_text
@@ -1996,7 +2166,64 @@ palette_accept:
     mov dword ptr [rip + g_reveal], 0
     jmp .Lpa_close
 .Lpa_prompt:
+    cmp dword ptr [rip + pal_prompt], PROMPT_EXT_INSTALL
+    jne 68f
     lea rdi, [rip + pal_tf]
+    call tf_text
+    mov dword ptr [rip + pal_mode], PM_NONE
+    push rax
+    push rdx
+    call pal_return_focus
+    pop rsi
+    pop rdi
+    call ext_install_start
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lpa_ret
+68: cmp dword ptr [rip + pal_prompt], PROMPT_EXT_SETTING
+    jne 69f
+    lea rdi, [rip + pal_tf]
+    call tf_text
+    mov dword ptr [rip + pal_mode], PM_NONE
+    push rax
+    push rdx
+    call pal_return_focus
+    pop rsi
+    pop rdi
+    call extpage_prompt_done
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lpa_ret
+69: cmp dword ptr [rip + pal_prompt], PROMPT_RENAME_SYMBOL
+    jne 691f
+    lea rdi, [rip + pal_tf]
+    call tf_text
+    mov dword ptr [rip + pal_mode], PM_NONE
+    push rax
+    push rdx
+    call pal_return_focus
+    pop rsi
+    pop rdi
+    call langfeat_rename_to
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lpa_ret
+691: cmp dword ptr [rip + pal_prompt], PROMPT_ASK
+    jb 70f
+    # an extension's prompt: the field's text goes back to it. A terminal command's prompt that
+    # just appeared ignores Enter: a keystroke meant for the editor must not run it
+    call extproto_prompt_fresh
+    test eax, eax
+    jnz .Lpa_ret
+    lea rdi, [rip + pal_tf]
+    call tf_text
+    mov ebx, [rip + pal_prompt]
+    mov dword ptr [rip + pal_mode], PM_NONE
+    mov dword ptr [rip + g_focus], FOCUS_EDITOR
+    mov rdi, rax
+    mov rsi, rdx
+    mov edx, ebx
+    call extproto_prompt_text
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lpa_ret
+70: lea rdi, [rip + pal_tf]
     call tf_text
     test rdx, rdx
     jz .Lpa_close
@@ -2545,7 +2772,20 @@ FN palette_draw
     mov rdx, rax
     call text_width
     add eax, [rip + g_mt + 4*MI_16]
-    mov [rsp + 56], eax
+    mov [rsp + 60], eax
+    # at most 2/5 of the row: a longer one (a deep folder) shows its end
+    lea ecx, [r12 + r12]
+    push rax
+    mov eax, ecx
+    xor edx, edx
+    mov ecx, 5
+    div ecx
+    mov ecx, eax
+    pop rax
+    cmp eax, ecx
+    jbe 103f
+    mov eax, ecx
+103:mov [rsp + 56], eax
 101: # label with matched characters highlighted, clipped before the detail; not the path
     # browser's "Open <folder>" rows
     mov rax, [rsp + 24]
@@ -2576,9 +2816,16 @@ FN palette_draw
     # detail on the right
     cmp dword ptr [rsp + 56], 0
     je 11f
+    mov edi, r13d
+    add edi, r12d
+    sub edi, [rsp + 56]
+    mov esi, [rsp + 20]
+    mov edx, [rsp + 56]
+    mov ecx, ebx
+    call gfx_clip_push
     mov esi, r13d
     add esi, r12d
-    sub esi, [rsp + 56]
+    sub esi, [rsp + 60]
     lea rdi, [rip + g_face_small]
     mov edx, [rsp + 20]
     mov ecx, ebx
@@ -2589,6 +2836,7 @@ FN palette_draw
     push rax
     call ui_text_v
     add rsp, 16
+    call gfx_clip_pop
 11: test dword ptr [rsp + 32], UB_CLICK
     jz 12f
     mov eax, [rsp + 16]
@@ -2615,8 +2863,11 @@ prompt_title:
     jne 1f
     mov edi, IC_FILE_PLUS
 1:  cmp eax, PROMPT_NEW_FOLDER
-    jne 2f
+    jne 21f
     mov edi, IC_FOLDER_PLUS
+21: cmp eax, PROMPT_RENAME_SYMBOL
+    jne 2f
+    mov edi, IC_F_CODE
 2:  M ecx, MI_16
     mov esi, r12d
     add esi, ecx
@@ -2789,6 +3040,11 @@ hint_text:
     lea rax, [rip + .Lhint_rename]
     cmp dword ptr [rip + pal_prompt], PROMPT_RENAME
     je 1f
+    cmp dword ptr [rip + pal_prompt], PROMPT_RENAME_SYMBOL
+    je 1f
+    lea rax, [rip + .Lhint_ext_install]
+    cmp dword ptr [rip + pal_prompt], PROMPT_EXT_INSTALL
+    je 1f
     lea rax, [rip + .Lhint_path]
 1:  ret
 
@@ -2813,6 +3069,7 @@ hint_text:
 .Lnl: .ascii "\n"
 .Lhint_goto: .asciz "Enter a line number and press Enter"
 .Lhint_path: .asciz "Enter a path and press Enter, Esc to cancel"
+.Lhint_ext_install: .asciz "Enter continues, Esc cancels"
 .Lhint_new_file: .asciz "Enter creates the file, Esc cancels"
 .Lhint_new_folder: .asciz "Enter creates the folder, Esc cancels"
 .Lhint_rename: .asciz "Enter renames, Esc cancels"
@@ -2825,10 +3082,12 @@ hint_text:
 .Lpp_field: .asciz "field="
 .Lpp_reading: .asciz "reading\n"
 .Lpp_prompt: .asciz "prompt="
+.Lpp_choose: .asciz "choose="
 .Lpp_row: .asciz "  "
 .Lpp_sel: .asciz "> "
 .bss
 .p2align 3
 keys_cache: .zero 8 * 256
+ext_keys_cache: .zero VEC_SIZE  # the extensions' shortcut labels, one slot per command
 .globl g_ed_h_lines
 g_ed_h_lines: .long 0

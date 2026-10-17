@@ -649,7 +649,7 @@ FN ws_poll
     cmp dword ptr [rax + FD_kind], FD_WATCH
     je .Lpoll_watch
     cmp dword ptr [rax + FD_kind], FD_PIPE
-    je .Lpoll_pipe
+    je .Lpoll_pipe_kind
     cmp dword ptr [rax + FD_kind], FD_PTY
     jne .Lpoll_ready
     test word ptr [r12 + rbx*8 + 4], POLLOUT
@@ -680,6 +680,24 @@ FN ws_poll
     jmp .Lpoll_next
 .Lpoll_hup:
     or word ptr [r12 + rbx*8 + 6], POLLHUP
+    jmp .Lpoll_next
+.Lpoll_pipe_kind:
+    cmp dword ptr [rax + FD_wend], 0
+    je .Lpoll_pipe
+    # a write end cannot be peeked: it is writable unless the last write found it full less than
+    # 10 ms ago (a broken pipe shows as EPIPE on the next write)
+    test word ptr [r12 + rbx*8 + 4], POLLOUT
+    jz .Lpoll_next
+    cmp qword ptr [rax + FD_full], 0
+    je 1f
+    mov [rsp + 88], rax
+    mov qword ptr [rsp + 96], 10
+    API GetTickCount64
+    mov rcx, [rsp + 88]
+    sub rax, [rcx + FD_full]
+    cmp rax, 10
+    jb .Lpoll_next
+1:  or word ptr [r12 + rbx*8 + 6], POLLOUT
     jmp .Lpoll_next
 .Lpoll_watch:
     call win_watch_ready

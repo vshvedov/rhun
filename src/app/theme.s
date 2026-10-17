@@ -358,6 +358,12 @@ FN theme_scan
     call config_dir_each
     EPILOGUE
 
+# theme_add_dir(dir): the .theme files of a folder (an extension's), after the user's
+FN theme_add_dir
+    lea rsi, [rip + .Ltheme_ext]
+    lea rdx, [rip + add_user_theme]
+    jmp dir_each_suffix
+
 # add_user_theme(path, name): callback from config_dir_each
 add_user_theme:
     push rbx
@@ -365,7 +371,27 @@ add_user_theme:
     push r13
     mov r12, rdi
     mov r13, rsi
-    lea rdi, [rip + g_themes]
+    # the same file again (an extension installed over itself): its entry is read again
+    xor ebx, ebx
+1:  cmp rbx, [rip + g_themes + VEC_len]
+    jae 3f
+    imul rax, rbx, TH_SIZE
+    add rax, [rip + g_themes + VEC_ptr]
+    inc rbx
+    mov rdi, [rax + TH_path]
+    test rdi, rdi
+    jz 1b
+    push rax
+    push rax
+    mov rsi, r12
+    call strcmp_eq
+    test eax, eax
+    pop rax
+    pop rdx
+    jz 1b
+    mov rbx, rax
+    jmp 4f
+3:  lea rdi, [rip + g_themes]
     mov esi, TH_SIZE
     call vec_push
     mov rbx, rax
@@ -378,7 +404,7 @@ add_user_theme:
     mov rdi, r13
     call stem_dup
     mov [rbx + TH_id], rax
-    mov rdi, rbx
+4:  mov rdi, rbx
     call theme_read_header
     pop r13
     pop r12

@@ -37,6 +37,7 @@
 
 .bss
 .p2align 3
+.globl g_open_keep_tab
 .globl g_focus, g_win_focused, g_tabs, g_tab_cur, g_project, g_project_name, g_branch
 g_focus: .long 0
 g_tabs: .zero VEC_SIZE
@@ -96,6 +97,7 @@ ro_path: .zero 4096              # Save As onto a read-only file: that path
 ro_dir: .zero 4096
 switch_pending: .long 0          # a project switch waits on unsaved files
 switch_link: .long 0             # and a rhun:// link asked for it
+g_open_keep_tab: .long 0         # app_open_file opens a tab of its own (ws_apply)
 g_link_open: .long 0             # app_open_path is opening a rhun:// link's path (set_project notes it)
 trust_closed: .long 0            # the trust bar was closed for this project
 trust_sb: .zero SB_SIZE          # its text
@@ -134,6 +136,7 @@ FN app_init
     call theme_apply_config
     call app_load_fonts
     call syntax_load_all
+    call ext_init               # manifests: their commands take keys below
     call keys_init
     call vim_sync
     call watch_init
@@ -694,6 +697,12 @@ FN tab_at
 
 # app_sync_doc(): g_doc and g_file from the active tab
 FN app_sync_doc
+    push rbx
+    call app_sync_doc_1
+    call ext_options_apply
+    pop rbx
+    ret
+app_sync_doc_1:
     mov qword ptr [rip + g_doc], 0
     mov qword ptr [rip + g_file], 0
     mov rdi, [rip + g_tab_cur]
@@ -1061,7 +1070,10 @@ FN app_open_file
     call app_detect_lang
     mov rdi, rbx
     call git_doc_opened
-    # replace an untouched untitled tab, unless it is pinned
+    # replace an untouched untitled tab, unless it is pinned (or a workspace edit opens files:
+    # the untitled document may be one it changes)
+    cmp dword ptr [rip + g_open_keep_tab], 0
+    jne 3f
     mov rax, [rip + g_tab_cur]
     test rax, rax
     js 3f
@@ -1302,7 +1314,14 @@ FN app_tab_label
     cmp qword ptr [rcx + TAB_kind], TAB_GIT
     jne 2f
     lea rax, [rip + .Lgit_tab]
-2:  ret
+2:  cmp qword ptr [rcx + TAB_kind], TAB_EXT
+    jne 3f
+    lea rax, [rip + .Lext_tab]
+3:  cmp qword ptr [rcx + TAB_kind], TAB_VIEW
+    jne 4f
+    mov rdi, [rcx + TAB_flags]
+    jmp extview_title
+4:  ret
 
 # app_detect_lang(doc)
 FN app_detect_lang
@@ -1353,7 +1372,15 @@ FN app_close_tab_now
     jne .Lclose_focus_saved
     mov r13d, 1
 .Lclose_focus_saved:
-    mov rbx, [rax + TAB_doc]
+    cmp qword ptr [rax + TAB_kind], TAB_VIEW
+    jne 0f
+    push rax
+    push rax
+    mov rdi, [rax + TAB_flags]
+    call extview_tab_closed     # its extension hears it, the view's slot is freed
+    pop rax
+    pop rax
+0:  mov rbx, [rax + TAB_doc]
     test rbx, rbx
     jz 1f
     mov rdi, rbx
@@ -1408,6 +1435,7 @@ FN app_close_tab
     call doc_dirty
     test eax, eax
     jz 1f
+    call dlg_drop
     mov [rip + dlg_tab], rbx
     mov dword ptr [rip + dlg_kind], 1
     mov dword ptr [rip + g_focus], FOCUS_DIALOG
@@ -1777,6 +1805,7 @@ ask_readonly_named:
 FN app_after_save
     PROLOGUE
     mov rbx, rdi
+    inc qword ptr [rbx + DOC_saves]
     cmp qword ptr [rbx + DOC_lang], 0
     jne 1f
     mov rdi, rbx
@@ -2104,13 +2133,18 @@ FN app_on_key
     mov edi, r12d
     call dialog_key
     jmp 9f
-1:  # Esc closes a context menu
+1:  # Esc closes a context menu, then the extensions dropdown
     cmp r12d, KEY_ESCAPE
     jne 10f
     call explorer_menu_open
     test eax, eax
-    jz 10f
+    jz 11f
     call ctx_menu_close
+    jmp 9f
+11: call extbar_menu_open
+    test eax, eax
+    jz 10f
+    call extbar_close
     jmp 9f
 10: # focused components get the first chance
     mov eax, [rip + g_focus]
@@ -2184,6 +2218,12 @@ FN app_on_key
     mov edi, r12d
     mov esi, r13d
     mov edx, r14d
+    call complete_key           # the completion list, when it shows, takes its keys first
+    test eax, eax
+    jnz 9f
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, r14d
     call vim_key
     test eax, eax
     jnz 9f
@@ -2192,6 +2232,7 @@ FN app_on_key
     call keys_lookup
     test rax, rax
     jz .Lk_editor
+    mov rdi, rdx
     call rax
     jmp 9f
 .Lk_editor:
@@ -2354,6 +2395,8 @@ FN editor_key
     je 9f
     mov edi, r13d
     call ed_type
+    mov edi, r13d
+    call complete_typed         # completion and signature help follow typing
 9:  EPILOGUE
 
 # ---------------- timers ----------------
@@ -2457,11 +2500,38 @@ FN app_timeout
     cmp eax, ebx
     jge 86f
 87: mov ebx, eax
-86: mov eax, ebx
+86: call ext_timeout
+    cmp eax, -1
+    je 88f
+    cmp ebx, -1
+    je 89f
+    cmp eax, ebx
+    jge 88f
+89: mov ebx, eax
+88: call complete_timeout
+    cmp eax, -1
+    je 90f
+    cmp ebx, -1
+    je 91f
+    cmp eax, ebx
+    jge 90f
+91: mov ebx, eax
+90: call langfeat_timeout
+    cmp eax, -1
+    je 92f
+    cmp ebx, -1
+    je 93f
+    cmp eax, ebx
+    jge 92f
+93: mov ebx, eax
+92: mov eax, ebx
     EPILOGUE
 
 FN app_tick
     PROLOGUE
+    call complete_tick
+    call langfeat_tick
+    call ext_options_apply
     call watch_tick
     call tip_tick
     call sb_tick
@@ -2481,6 +2551,7 @@ FN app_tick
     call ai_tick
     call palette_tick
     call editor_tick
+    call ext_tick
     EPILOGUE
 
 # ---------------- rendering ----------------
@@ -2503,7 +2574,7 @@ FN app_render
     test eax, eax
     jz 1f
     mov dword ptr [rip + g_block], 1
-1:
+1:  call complete_hole          # the completion list drawn last frame keeps the pointer
     # no background: the bars, panels, dividers and the editor column cover the window, each with
     # its own color (a whole-window fill under them was a fifth of every frame). A theme with a
     # translucent color (#rrggbbaa) still gets it, so nothing blends with the frame before.
@@ -2721,6 +2792,8 @@ FN app_render
     call statusbar_draw
     # overlays (not blocked)
     mov dword ptr [rip + g_block], 0
+    call complete_draw
+    call extbar_draw
     call explorer_menu_draw
     call palette_draw
     call dialog_draw
@@ -2747,6 +2820,9 @@ app_modal_open:
     cmp dword ptr [rip + dlg_kind], 0
     jne 1f
     call explorer_menu_open
+    test eax, eax
+    jnz 1f
+    call extbar_menu_open
     test eax, eax
     jnz 1f
     call palette_is_open
@@ -2982,12 +3058,28 @@ FN center_draw
     call gitview_draw
     EPILOGUE
 1:  cmp qword ptr [rax + TAB_kind], TAB_SETTINGS
-    jne 2f
+    jne 11f
     mov edi, [rip + g_editor_rect]
     mov esi, [rip + g_editor_rect + 4]
     mov edx, [rip + g_editor_rect + 8]
     mov ecx, [rip + g_editor_rect + 12]
     call settings_draw
+    EPILOGUE
+11: cmp qword ptr [rax + TAB_kind], TAB_EXT
+    jne 12f
+    mov edi, [rip + g_editor_rect]
+    mov esi, [rip + g_editor_rect + 4]
+    mov edx, [rip + g_editor_rect + 8]
+    mov ecx, [rip + g_editor_rect + 12]
+    call extpage_draw
+    EPILOGUE
+12: cmp qword ptr [rax + TAB_kind], TAB_VIEW
+    jne 2f
+    mov edi, [rip + g_editor_rect]
+    mov esi, [rip + g_editor_rect + 4]
+    mov edx, [rip + g_editor_rect + 8]
+    mov ecx, [rip + g_editor_rect + 12]
+    call extview_draw
     EPILOGUE
 2:  mov rbx, [rip + g_doc]
     mov rdi, rbx
@@ -3037,7 +3129,10 @@ FN titlebar_draw
     mov [rsp + 52], eax         # window control width
     M eax, MI_6
     mov [rsp + 56], eax         # project padding
-    mov ecx, 160
+    call extbar_count
+    mov [rsp + 60], eax         # the extensions button and the pinned ones
+    imul ecx, eax, 36
+    add ecx, 160
     cmp dword ptr [rip + g_csd], 0
     je 21f
     add ecx, 144
@@ -3105,7 +3200,11 @@ FN titlebar_draw
     je 31f
     add eax, [rsp + 40]
     add eax, [rsp + 48]
-31: cmp dword ptr [rip + g_csd], 0
+31: mov ecx, [rsp + 40]
+    add ecx, [rsp + 48]
+    imul ecx, [rsp + 60]
+    add eax, ecx
+    cmp dword ptr [rip + g_csd], 0
     je 32f
     mov ecx, [rsp + 52]
     imul ecx, ecx, 3
@@ -3301,7 +3400,14 @@ FN titlebar_draw
     test eax, UB_CLICK
     jz 8f
     call cmd_settings
-8:  sub r12d, r13d
+8:  # the extensions button, and the pinned extensions to its left
+    mov edi, r12d
+    mov esi, [rsp + 12]
+    mov edx, r13d
+    mov ecx, [rsp + 48]
+    call extbar_buttons
+    mov r12d, eax
+    sub r12d, r13d
     sub r12d, [rsp + 48]
     mov edi, ID_TOG_AGENTS
     mov esi, r12d
@@ -4343,6 +4449,10 @@ FN statusbar_draw
     mov esi, [rsp + 4]
     mov edx, [rsp + 12]
     call statusbar_update
+    mov edi, eax
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 12]
+    call ext_status_draw        # the extensions' status texts, left of the updater's item
     mov [rsp + 20], eax
     # Keep branch and position glyphs out of the updater's reserved area.
     mov edx, eax
@@ -4458,13 +4568,13 @@ FN statusbar_draw
     lea r13, [rip + .Lcrlf]
 2:  call .Lsb_item
     lea r13, [rip + .Ltabs]
-    cmp dword ptr [rip + cfg_insert_spaces], 0
+    cmp dword ptr [rip + g_insert_spaces], 0
     je 3f
     lea rdi, [rsp + 32]
     lea rsi, [rip + .Lspaces]
     call cstr_copy
     mov rdi, rax
-    mov esi, [rip + cfg_tab_width]
+    mov esi, [rip + g_tab_width]
     call fmt_u64
     mov byte ptr [rdi], 0      # fmt_u64 leaves rdi after the digits
     lea r13, [rsp + 32]
@@ -5192,6 +5302,17 @@ dialog_key:
 # app_confirm(question cstr, line cstr, button cstr, fn): a dialog with Cancel and the button, which calls
 #   fn; the strings must last while it is open
 FN app_confirm
+    push rdi
+    push rsi
+    push rdx
+    push rcx
+    sub rsp, 8
+    call dlg_drop
+    add rsp, 8
+    pop rcx
+    pop rdx
+    pop rsi
+    pop rdi
     mov [rip + dlg_title], rdi
     mov [rip + dlg_text], rsi
     mov [rip + dlg_ok], rdx
@@ -5201,6 +5322,71 @@ FN app_confirm
     mov dword ptr [rip + g_focus], FOCUS_DIALOG
     mov dword ptr [rip + g_dirty], 1
     ret
+
+# dlg_drop(): a new dialog replaces an open confirmation: its Cancel runs, as if chosen (an install
+# waiting for Add discards its download instead of waiting forever)
+dlg_drop:
+    cmp dword ptr [rip + dlg_kind], 4
+    jne 1f
+    mov rax, [rip + dlg_cancel]
+    test rax, rax
+    jz 1f
+    mov qword ptr [rip + dlg_cancel], 0
+    mov dword ptr [rip + dlg_kind], 0
+    jmp rax
+1:  ret
+
+# app_confirm_cancel(fn): the open app_confirm's Cancel calls fn
+FN app_confirm_cancel
+    mov [rip + dlg_cancel], rdi
+    ret
+
+# app_dialog_dump(sb): "dialog=none", or "dialog=QUESTION" and its line and button (tests)
+FN app_dialog_dump
+    PROLOGUE
+    mov rbx, rdi
+    cmp dword ptr [rip + dlg_kind], 4
+    je 1f
+    lea rsi, [rip + .Ldd_none]
+    call sb_push_cstr
+    EPILOGUE
+1:  lea rsi, [rip + .Ldd_head]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + dlg_title]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, rbx
+    lea rsi, [rip + .Ldd_text]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + dlg_text]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, rbx
+    lea rsi, [rip + .Ldd_button]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + dlg_ok]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    EPILOGUE
+
+# app_dialog_answer(yes): the open dialog's button (1) or Cancel (0)
+FN app_dialog_answer
+    cmp dword ptr [rip + dlg_kind], 0
+    je 1f
+    test edi, edi
+    jz 2f
+    mov edi, 2
+2:  jmp dialog_choose
+1:  ret
 
 # ---------------- tooltips (debounced hover) ----------------
 # A button notes itself while it is drawn and hovered; tip_commit, once everything is drawn,
@@ -5749,12 +5935,12 @@ FN cmd_newline_above
     je 2f
     cmp eax, ']'
     jne 4f
-2:  cmp dword ptr [rip + cfg_insert_spaces], 0
+2:  cmp dword ptr [rip + g_insert_spaces], 0
     jne 3f
     mov byte ptr [rsp + r14], 9
     inc r14
     jmp 4f
-3:  mov ecx, [rip + cfg_tab_width]
+3:  mov ecx, [rip + g_tab_width]
     cmp ecx, 16
     jbe 31f
     mov ecx, 16
@@ -5834,6 +6020,7 @@ tip_table:
     .quad ID_TOG_TERM, .Ltip_term, cmd_toggle_terminal
     .quad ID_TOG_AGENTS, .Ltip_agents, cmd_toggle_agents
     .quad ID_SETTINGS_BTN, .Ltip_settings, cmd_settings
+    .quad ID_XB_PUZZLE, .Ltip_extensions, 0
     .quad ID_TOG_SIDE, .Ltip_side, cmd_toggle_sidebar
     .quad ID_EXP_NEW, .Ltip_exp_new, 0
     .quad ID_EXP_NEW_FOLDER, .Ltip_exp_new_folder, 0
@@ -5845,6 +6032,12 @@ tip_table:
 .Ltip_term: .asciz "Terminal"
 .Ltip_agents: .asciz "Agents"
 .Ltip_settings: .asciz "Settings"
+.Ldd_none: .asciz "dialog=none\n"
+.Ldd_head: .asciz "dialog="
+.Ldd_text: .asciz "text="
+.Ldd_button: .asciz "button="
+.Ltip_extensions: .asciz "Extensions"
+.Lext_tab: .asciz "Extensions"
 .Ltip_side: .asciz "File explorer"
 .Ltip_exp_new: .asciz "New file"
 .Ltip_exp_new_folder: .asciz "New folder"

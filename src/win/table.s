@@ -80,7 +80,7 @@ win_systable:
     .quad ws_fsync # 74
     .quad ws_nosys # 75
     .quad ws_nosys # 76
-    .quad ws_nosys # 77
+    .quad ws_ftruncate # 77
     .quad ws_nosys # 78
     .quad ws_cwd # 79
     .quad ws_chdir # 80

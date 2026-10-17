@@ -56,8 +56,8 @@ FN break_text
     push rcx
     push rdx
     xor edx, edx
-    div dword ptr [rip + cfg_tab_width]
-    mov eax, [rip + cfg_tab_width]
+    div dword ptr [rip + g_tab_width]
+    mov eax, [rip + g_tab_width]
     sub eax, edx
     pop rdx
     pop rcx
@@ -171,8 +171,8 @@ FN pos_in_row
     push rcx
     push rdx
     xor edx, edx
-    div dword ptr [rip + cfg_tab_width]
-    mov eax, [rip + cfg_tab_width]
+    div dword ptr [rip + g_tab_width]
+    mov eax, [rip + g_tab_width]
     sub eax, edx
     pop rdx
     pop rcx
@@ -231,8 +231,8 @@ FN seg_cols_from
     jne 2f
     mov eax, ebx
     xor edx, edx
-    div dword ptr [rip + cfg_tab_width]
-    mov eax, [rip + cfg_tab_width]
+    div dword ptr [rip + g_tab_width]
+    mov eax, [rip + g_tab_width]
     sub eax, edx
     add ebx, eax
     inc r13

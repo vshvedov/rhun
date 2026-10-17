@@ -8,7 +8,6 @@
 .equ TCGETS, 0x5401
 .equ TCSETS, 0x5402
 .equ IUTF8, 0x4000
-.equ F_SETFL, 4
 
 .bss
 .p2align 3
@@ -158,6 +157,8 @@ FN proc_which
     mov rbx, rdi
     call strlen
     mov r12, rax
+    cmp r12, 4096
+    jae 8f
     mov rdi, rbx
     mov rsi, rax
     lea rdx, [rip + .Lslash]
@@ -187,7 +188,8 @@ FN proc_which
     inc rcx
     jmp 3b
 4:  mov r14, rcx
-    cmp rcx, 3000
+    lea rax, [rcx + r12 + 1]    # directory, slash, name and its terminating NUL
+    cmp rax, 4096
     jae 6f
     lea rdi, [rip + tmp_path]
     mov rsi, r13
@@ -220,7 +222,8 @@ FN proc_which
 .endif
 
 # proc_spawn(argv, envp, cwd, fd_in, fd_out, fd_err, ctty) -> pid or -errno
-#   argv[0] is the path to run; cwd may be 0; ctty makes fd_in the controlling terminal of a new session
+#   argv[0] is the path to run; cwd may be 0; ctty 1 makes fd_in the controlling terminal of a new
+#   session; ctty 2 makes a new session without one that dies with rhun (extensions)
 .ifndef WINDOWS
 FN proc_spawn
     PROLOGUE 32
@@ -232,17 +235,37 @@ FN proc_spawn
     mov [rsp + 8], r9d
     mov eax, [rbp + 16]
     mov [rsp + 12], eax
-    # vfork: the child borrows this stack until exec, so below it only reads memory
+    # vfork: the child borrows this stack until exec, so below it only reads memory. An
+    # extension (ctty 2) is a real fork: its confinement makes a user namespace, which a process
+    # sharing its address space may not, and it may use the stack
+    cmp dword ptr [rsp + 12], 2
+    je 10f
     SYS SYS_vfork
-    test rax, rax
+    jmp 12f
+10: SYS SYS_fork
+12: test rax, rax
     jnz 9f
     cmp dword ptr [rsp + 12], 0
     je 1f
     SYS SYS_setsid
+    cmp dword ptr [rsp + 12], 2
+    je 11f
     mov edi, [rsp]
     mov esi, TIOCSCTTY
     xor edx, edx
     SYS SYS_ioctl
+    jmp 1f
+11:
+.ifndef MACOS
+    # ctty 2: an extension; it dies with rhun
+    mov edi, PR_SET_PDEATHSIG
+    mov esi, SIGKILL
+    xor edx, edx
+    xor r10d, r10d
+    xor r8d, r8d
+    SYS SYS_prctl
+.endif
+    call confine_child          # what confine_prepare set up, if anything; exits on failure
 1:  mov edi, [rsp]
     xor esi, esi
     SYS SYS_dup2

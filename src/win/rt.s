@@ -311,6 +311,8 @@ FN win_fd_alloc
     mov [r8 + FD_flags], edx
     mov qword ptr [r8 + FD_path], 0
     mov qword ptr [r8 + FD_aux], 0
+    mov qword ptr [r8 + FD_wend], 0
+    mov qword ptr [r8 + FD_full], 0
     ret
 
 # win_fd(fd) -> descriptor pointer or 0; does not change argument registers.

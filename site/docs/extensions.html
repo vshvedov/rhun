@@ -1,0 +1,26 @@
+<section id="install">
+<h2>Install an extension</h2>
+<p>Click the puzzle piece in the title bar and choose <strong>Install from GitHub…</strong>. Type the extension's <code>owner/name</code>, for example <code>rhun-editor/lsp</code>, or paste its repository's URL.</p>
+<p>rhun downloads the latest release for your system and checks its checksums. Before anything runs, it shows what the extension may do, such as read or change the files you have open, read your project, or run named programs, and asks you.</p>
+<p>The <strong>Extensions</strong> page turns each one on or off, pins its badge to the title bar, shows its settings and its log, and removes it.</p>
+<div class="doc-note"><strong>Start with language support</strong><p><code>rhun-editor/lsp</code> brings completion, signature help, errors, hover text, definitions, references, symbols, code actions, rename and format from the language servers you already have, such as gopls, rust-analyzer, clangd or pyright.</p></div>
+</section>
+<section id="what">
+<h2>What they can do</h2>
+<p>Extensions add commands to the palette with their own shortcuts, edit the open documents as one undo step, mark lines in the gutter with messages, answer hover, open prompts and pick lists, suggest terminal commands, and ship themes and grammars.</p>
+<p>They can also open <strong>views</strong>: tabs they draw in with shapes and text in your theme's colors, such as charts, diagrams and previews, which respond to the pointer. And they provide <strong>completion lists</strong> and <strong>signature help</strong> as you type. Press <kbd>Ctrl</kbd> + <kbd>Space</kbd> for the list and <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Space</kbd> for the signature; <kbd>Enter</kbd> or <kbd>Tab</kbd> puts the selected item in.</p>
+<p>They also answer the language commands: <kbd>F12</kbd> goes to the definition, <kbd>Shift</kbd> + <kbd>F12</kbd> lists the references, <kbd>Ctrl</kbd> + <kbd>R</kbd> lists the file's symbols, <kbd>Ctrl</kbd> + <kbd>.</kbd> shows the code actions, <kbd>F2</kbd> on a word renames it across files (each changed file opens unsaved, for you to review) and <kbd>Shift</kbd> + <kbd>Alt</kbd> + <kbd>F</kbd> formats the document. An edit across files is checked whole before anything changes.</p>
+<p>Each extension is a separate native program. It starts in milliseconds, a crash cannot take the editor with it, and on Linux and macOS the system holds it to the permissions it declared.</p>
+</section>
+<section id="write">
+<h2>Write your own</h2>
+<p>Start from <a href="https://github.com/rhun-editor/template-rust">the Rust template</a> or <a href="https://github.com/rhun-editor/template-go">the Go template</a>. For C and C++, one header, <a href="https://github.com/rhun-editor/extension-protocol/tree/main/c">rhunext.h</a>, does the talking. A template is a working extension with a test that drives rhun and a release workflow that builds Linux, macOS and Windows binaries.</p>
+<ol><li>Name it in <code>extension.ini</code> and list its commands and permissions.</li><li>Write what each command does.</li><li>Run the tests, then tag a version. Anyone can now install it from GitHub.</li></ol>
+<p>The <a href="/extensions/v1/">protocol</a> is one page: lines of text over the program's input and output.</p>
+</section>
+<section id="agents">
+<h2>With a coding agent</h2>
+<p>Extensions are made to be written by Claude Code, Codex or another agent. The templates carry <code>AGENTS.md</code>, and the <a href="https://github.com/rhun-editor/skills">rhun-editor/skills</a> plugin teaches the workflow, the SDKs and the tests to pass.</p>
+<p>In Claude Code: <code>/plugin marketplace add rhun-editor/skills</code>, then <code>/plugin install rhun@rhun-editor</code>. In Codex: <code>codex plugin marketplace add rhun-editor/skills</code>, then <code>codex plugin add rhun@rhun-editor</code>.</p>
+<p>Then ask for what you need, such as “a rhun extension in Rust that charts the size of each folder in my project”. The agent tests its work with the conformance checker, which plays rhun and names every protocol mistake, and with rhun running headless.</p>
+</section>

@@ -1324,7 +1324,12 @@ FN settings_draw
     COLOR r9d, T_MUTED
     call ui_text_c
     add r12d, [rip + g_mt + 4*MI_32]
-59: add r12d, [rip + g_mt + 4*MI_48]
+59: # the extensions, after the table (not under a search query)
+    lea rdi, [rip + set_search]
+    call tf_text
+    test rdx, rdx
+    jnz 58f
+58: add r12d, [rip + g_mt + 4*MI_48]
     sub r12d, [rsp + 24]
     mov [rip + set_content_h], r12d
     # clicking elsewhere ends string editing; clicking elsewhere on the page leaves the search field

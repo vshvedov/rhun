@@ -527,7 +527,14 @@ FN cmd_new_folder
     jmp prompt_open
 
 FN cmd_rename_file
-    call file_target
+    # in a document with a rename provider, F2 renames the symbol under the cursor (langfeat.s)
+    push rbx
+    call langfeat_rename_start
+    pop rbx
+    test eax, eax
+    jz 0f
+    ret
+0:  call file_target
     test eax, eax
     jz 1f
     lea rdi, [rip + .Lrename]
@@ -1382,7 +1389,7 @@ FN explorer_menu_draw
     sub edx, eax
     mov ecx, ebx
     M r8d, MI_RADIUS
-    COLOR r9d, T_HOVER
+    COLOR r9d, T_ACTIVE
     call gfx_round_rect
 4:  # the shortcut, right-aligned
     mov dword ptr [rsp + 20], 0 # its width and a gap
@@ -1580,6 +1587,40 @@ FN ctx_menu_list
     je 1f
     mov rax, [rip + menu_list]
 1:  ret
+
+# menu_pick(ptr, len) -> 1 when the open menu has an item with that label: it runs, as a click on
+# it would (tests)
+FN menu_pick
+    PROLOGUE
+    mov r13, rdi
+    mov r14, rsi
+    cmp dword ptr [rip + menu_open], 0
+    je 8f
+    mov r12, [rip + menu_list]
+    xor ebx, ebx
+1:  mov rdx, [r12]
+    test rdx, rdx
+    jz 8f
+    cmp qword ptr [r12 + 8], 0      # a line
+    je 2f
+    mov rdi, r13
+    mov rsi, r14
+    call str_eq_cstr
+    test eax, eax
+    jnz 3f
+2:  add r12, 16
+    inc ebx
+    jmp 1b
+3:  mov dword ptr [rip + menu_open], 0
+    mov dword ptr [rip + g_dirty], 1
+    mov [rip + g_menu_index], ebx
+    mov dword ptr [rip + g_menu_cmd], 1
+    call [r12 + 8]
+    mov dword ptr [rip + g_menu_cmd], 0
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
 
 # menu_print(sb): the open menu's labels, a line each ("-" for a separating line), or "none"
 FN menu_print

@@ -55,11 +55,13 @@ EXPORTS
     ResumeThread
     SearchPathW
     SetCurrentDirectoryW
+    SetEndOfFile
     SetEnvironmentVariableW
     SetEvent
     SetFileAttributesW
     SetFilePointerEx
     SetInformationJobObject
+    SetNamedPipeHandleState
     Sleep
     TerminateJobObject
     TerminateProcess

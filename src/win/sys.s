@@ -323,7 +323,8 @@ FN ws_write
     mov rdx, r13
     call win_pty_write
     EPILOGUE
-1:  mov rcx, [rax + FD_write]
+1:  mov rbx, rax
+    mov rcx, [rax + FD_write]
     mov rdx, r12
     mov r8d, 0x7fffffff
     cmp r13, r8
@@ -334,6 +335,51 @@ FN ws_write
     test eax, eax
     jz 7f
     mov eax, [rsp + 96]
+    cmp dword ptr [rbx + FD_wend], 0
+    je 2f
+    mov qword ptr [rbx + FD_full], 0
+    test eax, eax
+    jnz 2f
+    test r13, r13
+    jz 2f
+    # a non-blocking pipe with no room: EAGAIN, and poll waits 10 ms before saying POLLOUT again
+    API GetTickCount64
+    mov [rbx + FD_full], rax
+    mov rax, -11
+2:  EPILOGUE
+7:  API GetLastError
+    cmp eax, 232                # ERROR_NO_DATA: the pipe is being closed
+    je 71f
+    cmp eax, 109                # ERROR_BROKEN_PIPE
+    je 71f
+    call win_error
+    EPILOGUE
+71: mov rax, -32                # EPIPE
+    EPILOGUE
+8:  mov rax, -9
+    EPILOGUE
+
+# ws_ftruncate(fd, length): the file cut (or grown) to length, its position there; a program that
+# shares the handle (an extension's log) goes on writing at that position
+FN ws_ftruncate
+    PROLOGUE 112
+    mov r12, rsi
+    call win_fd
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    mov rcx, [rbx + FD_handle]
+    mov rdx, r12
+    xor r8d, r8d
+    xor r9d, r9d                # FILE_BEGIN
+    API SetFilePointerEx
+    test eax, eax
+    jz 7f
+    mov rcx, [rbx + FD_handle]
+    API SetEndOfFile
+    test eax, eax
+    jz 7f
+    xor eax, eax
     EPILOGUE
 7:  call win_error
     EPILOGUE
@@ -840,6 +886,13 @@ win_backup:
 
 # readlink resolves a final reparse point to its final opened target. An unresolved/dangling
 # reparse point is an error, never permission to replace the link itself.
+FN win_realpath
+    PROLOGUE 8320
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    jmp .Lrl_resolve
+
 FN ws_readlink
     PROLOGUE 8320
     mov rbx, rdi
@@ -872,6 +925,7 @@ FN ws_readlink
     je 7f
     test r15d, 0x400
     jz 81f
+.Lrl_resolve:
     mov rdi, rbx
     xor esi, esi
     xor edx, edx
@@ -1067,6 +1121,7 @@ FN ws_pipe
     call win_fd_alloc
     test rax, rax
     js 5f
+    mov dword ptr [r8 + FD_wend], 1     # win_fd_alloc leaves the slot in r8
     mov [rbx + 4], eax
     xor eax, eax
     EPILOGUE
@@ -1083,16 +1138,32 @@ FN ws_pipe
     EPILOGUE
 
 FN ws_fcntl
+    PROLOGUE 112
     call win_fd
     test rax, rax
     jz 8f
     cmp esi, 4
     jne 1f
     mov [rax + FD_flags], edx
+    cmp dword ptr [rax + FD_kind], FD_PIPE
+    jne 1f
+    cmp dword ptr [rax + FD_wend], 0
+    je 1f
+    # a pipe's write end: O_NONBLOCK makes WriteFile return at once when the reader is behind
+    # (PIPE_NOWAIT on this end only; the child's reads keep waiting)
+    xor ecx, ecx
+    test edx, O_NONBLOCK
+    setnz cl
+    mov [rsp + 96], ecx
+    mov rcx, [rax + FD_handle]
+    lea rdx, [rsp + 96]
+    xor r8d, r8d
+    xor r9d, r9d
+    API SetNamedPipeHandleState
 1:  xor eax, eax
-    ret
+    EPILOGUE
 8:  mov rax, -9
-    ret
+    EPILOGUE
 
 FN ws_getdents
     PROLOGUE 9120

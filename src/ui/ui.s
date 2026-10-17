@@ -5,7 +5,7 @@
 .p2align 3
 .globl g_mt, g_s, g_mx, g_my, g_mdown, g_pressed, g_released, g_scroll_x, g_scroll_y
 .globl g_hot, g_active, g_cursor, g_block, g_clicks, g_press_x, g_face_ui, g_face_small, g_face_big, g_face_code
-.globl g_hole
+.globl g_hole, g_hole2
 g_mt: .zero 4 * MI_COUNT
 g_s: .long 0                    # float scale
 g_mdown: .long 0                # buttons held (bit per button)
@@ -18,6 +18,7 @@ g_active: .long 0
 g_cursor: .long 0
 g_block: .long 0                # 1 while drawing layers under a modal
 g_hole: .zero 16                # x, y, w, h: a handle drawn later owns this strip, nothing drawn
+g_hole2: .zero 16               # the same for a popup drawn over the editor later in the frame
                                 # before it takes the pointer there (h 0: none)
 g_clicks: .long 0               # click count of the last press (1..3)
 last_press_t: .quad 0
@@ -248,6 +249,7 @@ FN ui_begin
     mov dword ptr [rip + g_cursor], CUR_DEFAULT
     mov dword ptr [rip + g_block], 0
     mov dword ptr [rip + g_hole + 12], 0
+    mov dword ptr [rip + g_hole2 + 12], 0
     ret
 
 FN ui_end
@@ -321,7 +323,24 @@ FN ui_in
     jge 2f
     xor eax, eax
     ret
-2:  mov eax, 1
+2:  mov eax, [rip + g_hole2 + 12]
+    test eax, eax
+    jz 3f
+    mov esi, [rip + g_hole2 + 4]
+    cmp r9d, esi
+    jl 3f
+    add esi, eax
+    cmp r9d, esi
+    jge 3f
+    mov edi, [rip + g_hole2]
+    cmp r8d, edi
+    jl 3f
+    add edi, [rip + g_hole2 + 8]
+    cmp r8d, edi
+    jge 3f
+    xor eax, eax
+    ret
+3:  mov eax, 1
 1:  ret
 
 # ui_btn(id, x, y, w, h) -> UB_* bits

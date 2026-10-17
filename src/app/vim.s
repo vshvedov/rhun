@@ -765,6 +765,7 @@ vfeed_edit:
     call keys_lookup
     test rax, rax
     jz 1f
+    mov rdi, rdx
     call rax
     EPILOGUE
 1:  mov edi, r12d

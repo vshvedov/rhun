@@ -15,6 +15,7 @@ rhun draws everything itself: it rasterizes TrueType fonts, icons and widgets in
   Git worktree registrations supply the checkout roots. Rhun remembers verified worktree paths in repository-specific state, so their agent history stays visible after the checkouts are deleted or Git prunes their registrations. Nested Claude worktree history can also be recovered from its exact recorded path without prior Rhun state. If another repository takes over a remembered checkout path, Rhun keeps previously verified sessions and excludes new sessions from that repository. When Git metadata is stored outside the main checkout and contains no reference to its path, open the main checkout to include its sessions.
 - Terminal panel: shells with 24-bit color, mouse, scrollback and full-screen programs; Cmd+click (Ctrl+click on Linux and Windows) opens links in the browser and files in a tab
 - Git: changed lines in the gutter, file status in tabs and the explorer, diffs, a history of all branches drawn as a graph, and source control as in VS Code: stage, commit, pull, push
+- Extensions: native programs in Rust, Go, C or C++ that add commands, edits, marks, hover, settings, completion lists, signature help, go to definition, references, symbols, code actions, rename, format and views (tabs they draw charts and pictures in), installed from GitHub and held to the permissions they declare; first-party ones bring language servers, formatters, `.editorconfig`, snippets and tasks (see [Extensions](#extensions))
 - Undo and redo, auto-indent, bracket pairs, comment toggling, moving and duplicating lines, soft word wrap; without it, lines wider than the editor get a horizontal scrollbar along its bottom
 - Vim mode, off by default: normal, insert and visual modes, operators, text objects, counts, `.`, search and `:` commands
 - Characters missing from the built-in fonts are drawn with the system's fonts
@@ -568,14 +569,77 @@ print-state
 
 Commands: `key`, `type`, `click x y [right|middle|shift|ctrl]` (ctrl is Cmd+click on macOS), `move`, `down`, `up`, `up-down` (a release and the next press in one frame), `scroll dy [MODS]` (modifiers as a key combination names them: `ctrl`, `shift+alt`), `open`, `cmd`, `shot`, `wait`, `wait-git`, `wait-agents` (until session discovery finishes), `agents-more`, `print-agents-page`, `print-agents-runs` (discovery runs started so far), `print-agents` (sessions and an optional open session number), `wait-grep` (until find in files has read the project), `wait-term TEXT` (until the terminal shows TEXT), `wait-update`, `resize`, `print-doc`, `print-state`, `print-project`, `print-panels` (whether the explorer, the agents panel and the terminal are shown), `print-palette`, `print-menu`, `print-tip` (the tooltip on screen), `print-term`, `print-term-cell ROW COL` (the middle of that terminal cell), `print-link` (the terminal link under the pointer), `print-settings` (the rows the Settings page shows, `section.key` each), `print-scroll` (the editor's horizontal scroll, its vertical one in 1/256 lines, the horizontal limit and the scrollbar's track), `scroll-x dx` (a sideways wheel), `print-git`, `print-gitlog`, `print-scm`, `print-update`, `print-frames`, `print-shape` (the mouse cursor's CUR_* value), `appearance dark|light|unknown` (the system's dark mode changes, as a platform reports it), `print-appearance` (that mode, `follow_system`, the three theme settings and the theme shown), `focus out|in` (the window loses or gets the keyboard, as a platform reports it), `echo`, `quit`. A headless run takes the system's mode from `RHUN_APPEARANCE` (`dark` or `light`). `cmd` runs anything from the command palette by its snake case name.
 
-## Extensions (planned)
+## Extensions
 
-Extensions will be separate programs, in any language, that talk to rhun over the control socket. rhun starts each one found in `~/.config/rhun/extensions/` and passes the socket path in `RHUN_SOCKET`. Two additions to the protocol cover most needs:
+Extensions are separate programs that rhun starts and talks to over their standard input and
+output, one text line per message ([the protocol](https://rhun.app/extensions/v1/)). They are
+native binaries, written in Rust, Go, C or C++, so they start in milliseconds and need nothing
+else installed. One that crashes or hangs cannot take the editor with it, and on Linux and macOS
+the kernel holds each one to the permissions its manifest declares.
 
-- `register name title [keys]` adds a command to the palette; invoking it sends `run name` back to the extension.
-- `subscribe open save change cursor` streams events as lines (`saved /path/file.c`), so formatters, linters and language servers can run outside the editor.
+They can add commands to the palette with their own keys, read and edit the open documents (each
+edit one undo step), put marks with messages in the gutter, answer hover, open prompts and pick
+lists, suggest terminal commands, set per-document options, ship themes and grammars, and keep
+settings on their page. They can also open **views**, tabs they draw in with shapes and text in
+the theme's colors (charts, pictures, previews) that hear the pointer, and provide **completion
+lists** and **signature help** as you type: `ctrl+space` asks for the list, `ctrl+shift+space`
+for the signature, Enter or Tab puts the selected item in. And they answer the language
+commands:
 
-An extension that crashes or hangs cannot take the editor with it.
+| Key | Command | What happens |
+| --- | --- | --- |
+| F12 | Go to Definition | one definition opens at once; several are listed in the palette |
+| shift+F12 | Find All References | the references in the palette, this file's first; choosing one opens it |
+| ctrl+r | Go to Symbol in File | the file's functions, types and variables, indented by nesting; type to filter |
+| ctrl+. | Show Code Actions | quick fixes first, then refactorings and other actions |
+| F2 | Rename | on a word, asks for the new name; every file it changes opens unsaved for you to review (on no word, F2 renames the file) |
+| shift+alt+f | Format Document | with the document's tab width and spaces |
+
+An edit across files is checked whole before anything changes: if a document changed meanwhile
+or a range is off, nothing changes and rhun says why. Each document's changes are one undo
+step.
+
+### Install and manage
+
+The extensions button in the title bar (the puzzle piece) opens a menu of what is installed.
+**Install from GitHub…** takes `owner/name` or the repository's URL: rhun downloads the latest
+release for your system, checks its checksums, shows what the extension may do (read or change
+the files you have open, read your project, use the network, run named programs) and asks. The
+**Extensions** page turns each one on or off, pins its badge to the title bar, shows its
+settings and its log, and removes it. Installed extensions live in
+`~/.config/rhun/extensions/OWNER/NAME/` (`%APPDATA%\rhun\extensions` on Windows).
+
+From [rhun-editor](https://github.com/rhun-editor):
+
+| Extension | What it does |
+| --- | --- |
+| `rhun-editor/lsp` | completion, signature help, errors, hover text, definitions, references, symbols, code actions, rename and format from the language servers you have installed (gopls, rust-analyzer, clangd, pyright and 18 more) |
+| `rhun-editor/format` | Format Document (shift+alt+f) with the formatter you already have, such as gofmt, prettier or ruff |
+| `rhun-editor/editorconfig` | applies your `.editorconfig` files |
+| `rhun-editor/snippets` | your snippets in the completion list as you type, and Expand Snippet for a short name |
+| `rhun-editor/tasks` | puts your project's tasks, such as make targets and npm scripts, in the command palette |
+| `rhun-editor/charts` | charts in a tab: the project's lines by language, the open file's line lengths (Rust) |
+| `rhun-editor/wordfreq` | the open file's most frequent words as a bar chart that follows your typing (C) |
+| `rhun-editor/words` | completion from the words in your open files (C++) |
+| `rhun-editor/showcase` | a tour of everything an extension can do |
+
+### Write your own
+
+Start from [template-rust](https://github.com/rhun-editor/template-rust) (Rust is the first
+choice) or [template-go](https://github.com/rhun-editor/template-go); for C and C++ one header,
+[rhunext.h](https://github.com/rhun-editor/extension-protocol/tree/main/c), does the protocol. A
+template is a working extension with a headless test and a release workflow that builds Linux,
+macOS and Windows binaries: tag `vX.Y.Z` and anyone can install it from GitHub.
+
+Extensions are meant to be written with a coding agent. The protocol is one document written for
+people and agents ([v1.md](https://raw.githubusercontent.com/rhun-editor/extension-protocol/main/v1/v1.md),
+with a grammar and a JSON Schema of the manifest), the templates carry `AGENTS.md`, and the
+[rhun-editor/skills](https://github.com/rhun-editor/skills) plugin gives Claude Code
+(`/plugin marketplace add rhun-editor/skills`, then `/plugin install rhun@rhun-editor`) and Codex
+(`codex plugin marketplace add rhun-editor/skills`, then `codex plugin add rhun@rhun-editor`) the
+workflow, the SDKs' reference and the tests to pass. `rhun-ext-check` plays rhun against an
+extension and names every protocol mistake; `rhun --headless --script` drives the real editor
+in tests.
 
 ## Source
 

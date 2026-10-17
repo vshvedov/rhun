@@ -175,7 +175,10 @@ FN cmd_find
     jnz 3f
     add rbx, CMD_SIZE
     jmp 1b
-2:  xor ebx, ebx
+2:  mov rdi, r12
+    mov rsi, r13
+    call ext_cmd_find
+    mov rbx, rax
 3:  mov rax, rbx
     EPILOGUE
 
@@ -202,7 +205,7 @@ FN keys_init
     lea rbx, [rip + g_commands]
 .Lki_cmd:
     cmp qword ptr [rbx + CMD_name], 0
-    je .Lki_user
+    je .Lki_ext
     mov r12, [rbx + CMD_keys]
     mov rdi, r12
     call strlen
@@ -222,6 +225,56 @@ FN keys_init
     jmp 1b
 2:  add rbx, CMD_SIZE
     jmp .Lki_cmd
+.Lki_ext:
+    # the extensions' commands: a key two extensions claim stays with the first
+    xor r14d, r14d
+3:  cmp r14, [rip + g_ext_cmds + VEC_len]
+    jae .Lki_user
+    mov rdi, r14
+    call ext_cmd_live
+    imul rbx, r14, CMD_SIZE
+    add rbx, [rip + g_ext_cmds + VEC_ptr]
+    inc r14
+    test eax, eax
+    jz 3b                       # an extension removed this session
+    mov r12, [rbx + CMD_keys]
+    mov rdi, r12
+    call strlen
+    mov r13, rax
+4:  test r13, r13
+    jz 3b
+    mov rdi, r12
+    mov rsi, r13
+    call next_word
+    add r12, rcx
+    sub r13, rcx
+    test rdx, rdx
+    jz 3b
+    push rax
+    push rdx
+    mov rdi, rax
+    mov rsi, rdx
+    call bound_key
+    mov r15d, eax
+    pop rdx
+    pop rax
+    test r15d, r15d
+    jnz 4b
+    # a bare key (a letter, Enter) would take typing away from the editor: a modifier is required
+    push rax
+    push rdx
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_combo
+    mov r15d, edx
+    pop rdx
+    pop rax
+    test r15d, r15d
+    jz 4b
+    mov rdi, rbx
+    mov rsi, rax
+    call bind
+    jmp 4b
 .Lki_user:
     xor r14d, r14d
 3:  cmp r14, [rip + g_keylines + VEC_len]
@@ -243,7 +296,30 @@ FN keys_init
     jmp 3b
 9:  EPILOGUE
 
-# keys_lookup(keysym, mods) -> handler fn or 0
+# bound_key(ptr, len) -> 1 when the combination already has a binding
+bound_key:
+    PROLOGUE
+    call parse_combo
+    test eax, eax
+    jz 8f
+    mov r12d, eax
+    mov r13d, edx
+    xor ecx, ecx
+1:  cmp rcx, [rip + bindings + VEC_len]
+    jae 8f
+    imul rax, rcx, KB_SIZE
+    add rax, [rip + bindings + VEC_ptr]
+    inc rcx
+    cmp [rax + KB_key], r12d
+    jne 1b
+    cmp [rax + KB_mods], r13d
+    jne 1b
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# keys_lookup(keysym, mods) -> rax handler fn or 0, rdx its CMD* (callers pass it in rdi)
 FN keys_lookup
     # letters bind lowercase; shift is part of mods
     lea eax, [rdi - 'A']
@@ -262,8 +338,8 @@ FN keys_lookup
     jne 4f
     cmp [rax + KB_mods], esi
     jne 4f
-    mov rax, [rax + KB_cmd]
-    mov rax, [rax + CMD_fn]
+    mov rdx, [rax + KB_cmd]
+    mov rax, [rdx + CMD_fn]
     ret
 4:  inc rcx
     jmp 3b
@@ -534,11 +610,21 @@ g_commands:
     COMMAND zoom_out, "Zoom Out", cmd_zoom_out, "ctrl+- ctrl+KP_Subtract"
     COMMAND zoom_reset, "Reset Zoom", cmd_zoom_reset, "ctrl+0 ctrl+KP_0"
     COMMAND toggle_word_wrap, "Toggle Word Wrap", cmd_toggle_word_wrap, "alt+z"
+    COMMAND complete, "Show Completions", cmd_complete, "ctrl+Space"
+    COMMAND signature_help, "Show Signature Help", cmd_signature_help, "ctrl+shift+Space"
+    COMMAND definition, "Go to Definition", cmd_definition, "F12"
+    COMMAND references, "Find All References", cmd_references, "shift+F12"
+    COMMAND symbols, "Go to Symbol in File", cmd_symbols, "ctrl+r"
+    COMMAND code_actions, "Show Code Actions", cmd_code_actions, "ctrl+."
+    COMMAND format_document, "Format Document", cmd_format_document, "shift+alt+f"
     COMMAND toggle_whitespace, "Toggle Whitespace", cmd_toggle_whitespace, ""
     COMMAND toggle_line_numbers, "Toggle Line Numbers", cmd_toggle_line_numbers, ""
     COMMAND toggle_vim, "Toggle Vim Mode", cmd_toggle_vim, ""
     COMMAND reload_file, "Revert File", cmd_reload_file, ""
     COMMAND toggle_terminal, "Toggle Terminal", cmd_toggle_terminal, "ctrl+`"
+    COMMAND extensions, "Extensions", cmd_extensions, ""
+    COMMAND extensions_menu, "Extensions Menu", extbar_open_menu, ""
+    COMMAND install_extension, "Install Extension from GitHub", cmd_install_extension, ""
     COMMAND new_terminal, "New Terminal", cmd_new_terminal, "ctrl+shift+` ctrl+shift+~"
     COMMAND kill_terminal, "Kill Terminal", cmd_kill_terminal, ""
     COMMAND clear_terminal, "Clear Terminal", cmd_clear_terminal, ""

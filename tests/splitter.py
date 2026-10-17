@@ -280,14 +280,14 @@ class SidebarSplit(unittest.TestCase):
 
     def test_tooltip_instant_after_first(self):
         # adjacent toolbar tips skip the delay once one is open
-        v = self.values(['wait 200', 'move 770 14', 'wait 650', 'echo first=', 'print-tip',
-                         'move 810 14', 'wait 60', 'echo second=', 'print-tip'])
+        v = self.values(['wait 200', 'move 734 14', 'wait 650', 'echo first=', 'print-tip',
+                         'move 774 14', 'wait 60', 'echo second=', 'print-tip'])
         self.assertIn('Terminal', v['first'])
         self.assertIn('Agents', v['second'])
 
     def test_tooltip_instant_across_the_gap_between_buttons(self):
-        actions = ['wait 200', 'move 770 14', 'wait 650']
-        actions += ['move %d 14' % x for x in range(772, 812, 4)]
+        actions = ['wait 200', 'move 734 14', 'wait 650']
+        actions += ['move %d 14' % x for x in range(736, 776, 4)]
         actions += ['wait 60', 'echo second=', 'print-tip']
         self.assertIn('Agents', self.values(actions)['second'])
 

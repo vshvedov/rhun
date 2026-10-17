@@ -71,6 +71,18 @@ def assets():
     script = base64.b64encode(bootstrap.encode('utf-16le')).decode('ascii')
     assert len(script) < 30000, 'AI helper exceeds the Windows command-line budget'
     lines += ['.globl commit_ai_script', 'commit_ai_script: .asciz "' + script + '"']
+    # Install from GitHub's job (src/app/extinstall.s); its inputs come in RHUN_EI_* variables
+    packed_install = base64.b64encode(gzip.compress(
+        without_comments((ROOT / 'runtime/windows/extinstall.ps1').read_text(encoding='utf-8')).encode(),
+        mtime=0)).decode('ascii')
+    bootstrap_install = ("$ProgressPreference='SilentlyContinue';$ErrorActionPreference='Stop';"
+                         "$b=[Convert]::FromBase64String('" + packed_install + "');"
+                         "$m=New-Object IO.MemoryStream(,$b);"
+                         "$g=New-Object IO.Compression.GzipStream($m,[IO.Compression.CompressionMode]::Decompress);"
+                         "$r=New-Object IO.StreamReader($g);& ([scriptblock]::Create($r.ReadToEnd()))")
+    encoded_install = base64.b64encode(bootstrap_install.encode('utf-16le')).decode('ascii')
+    assert len(encoded_install) < 30000, 'Extension installer exceeds the Windows command-line budget'
+    lines += ['.globl ext_install_script', 'ext_install_script: .asciz "' + encoded_install + '"']
     installer = without_comments((ROOT / 'install.ps1').read_text(encoding='utf-8'))
     assert "\n'@" not in installer, 'Installer contains the embedding here-string delimiter'
     update = ("$installer=[scriptblock]::Create(@'\n" + installer + "\n'@);" +

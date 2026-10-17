@@ -148,5 +148,30 @@
         "Your shortcuts"
       ]
     ]
+  },
+  {
+    "slug": "extensions",
+    "title": "Extensions",
+    "description": "Install extensions from GitHub, see what they can do, and write your own with a coding agent.",
+    "image": "extensions",
+    "alt": "A chart an extension draws in a rhun tab, with a tooltip on the hovered bar",
+    "sections": [
+      [
+        "install",
+        "Install an extension"
+      ],
+      [
+        "what",
+        "What they can do"
+      ],
+      [
+        "write",
+        "Write your own"
+      ],
+      [
+        "agents",
+        "With a coding agent"
+      ]
+    ]
   }
 ]

@@ -104,6 +104,7 @@ FN main
     jmp .Lm_exit
 3:  call loop_run
 .Lm_exit:
+    call ext_shutdown
     call agents_shutdown
     call ai_shutdown
     call session_remember_project
@@ -194,8 +195,19 @@ parse_args:
     lea rsi, [rip + .Lo_empty]
     call strcmp_eq
     test eax, eax
-    jz 41f
+    jz 42f
     mov dword ptr [rip + opt_empty], 1
+    jmp 9f
+42: mov rdi, r14
+    lea rsi, [rip + .Lo_extensions]
+    call strcmp_eq
+    test eax, eax
+    jz 41f
+    inc rbx
+    cmp rbx, r13
+    jae .Lpa_done
+    mov rax, [r12 + rbx*8]
+    mov [rip + g_ext_dir], rax
     jmp 9f
 41: lea rdi, [rip + g_start_paths]
     mov esi, 8
@@ -517,6 +529,7 @@ open_initial:
 .Lo_scale: .asciz "--scale"
 .Lo_wait: .asciz "--wait"
 .Lo_empty: .asciz "--empty"
+.Lo_extensions: .asciz "--extensions"
 .Lo_dashdash: .asciz "--"
 .Ldevnull: .asciz "/dev/null"
 .Lself_exe: .asciz "/proc/self/exe"
@@ -534,6 +547,7 @@ open_initial:
     .ascii "  --headless WxH   no display; use with --script or --control\n"
     .ascii "  --script FILE    run control commands from FILE and exit\n"
     .ascii "  --control PATH   accept control commands on a unix socket\n"
+    .ascii "  --extensions DIR load extensions from DIR instead of the config folder\n"
     .ascii "  --scale F        display scale where the platform has none\n"
     .ascii "  --               the arguments after it are paths (rhun://file/ links too)\n"
     .asciz "  --version        print the version\n"

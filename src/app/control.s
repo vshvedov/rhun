@@ -8,10 +8,14 @@
 .bss
 .p2align 3
 out: .zero SB_SIZE
+ctl_value: .zero 1024
 cbuf: .zero SB_SIZE
 tbuf: .zero SB_SIZE
 oc_busy: .long 0                # running the client's lines
 oc_eof: .long 0                 # the client closed meanwhile
+.p2align 3
+wait_ext_state: .quad 0         # wait-ext: the state waited for
+wait_ext_state_len: .quad 0
 addr: .zero 110
 .globl g_headless
 g_headless: .long 0
@@ -497,6 +501,7 @@ c_open:
     pop rdi
     pop rdi
     call mem_free
+    mov dword ptr [rip + g_dirty], 1    # the frame that shows it loads it (and tells extensions)
     xor eax, eax
     ret
 
@@ -506,6 +511,7 @@ c_cmd:
     call cmd_find
     test rax, rax
     jz 1f
+    mov rdi, rax                # commands get their CMD* (extensions' commands share one fn)
     call [rax + CMD_fn]
     mov dword ptr [rip + g_dirty], 1
     xor eax, eax
@@ -570,6 +576,10 @@ c_wait:
     push r15
     call next_int
     mov r13, rax
+    # what the step before queued (a file opened, a key typed) goes out now, as the main loop's
+    # tick after an input event would, not after the first sleep
+    call app_tick
+    call flush_frame
     call time_ms
     add r13, rax
 1:  call time_ms
@@ -709,6 +719,566 @@ c_print_ai:
     call sb_push_byte
     xor eax, eax
     ret
+
+# print-extensions: one line per extension: OWNER/NAME state=S [reason=R] pid=P cmds=a,b [status=T]
+c_print_extensions:
+    lea rdi, [rip + out]
+    call ext_dump
+    xor eax, eax
+    ret
+
+# wait-ext NAME STATE: until the extension (name or owner/name) is in that state (10 s at most);
+# prints "ext=NAME state=S" at the end either way
+c_wait_ext:
+    PROLOGUE
+    mov rdi, rbx
+    mov rsi, r12
+    call next_word
+    mov r13, rax                # name
+    mov r14, rdx
+    add rbx, rcx
+    sub r12, rcx
+    mov rdi, rbx
+    mov rsi, r12
+    call next_word
+    mov [rip + wait_ext_state], rax
+    mov [rip + wait_ext_state_len], rdx
+    mov rdi, r13
+    mov rsi, r14
+    call ext_by_name
+    test rax, rax
+    jz 8f
+    mov r15, rax
+    call time_ms
+    lea r13, [rax + 10000]
+1:  mov edi, [r15 + EXT_status]
+    call ext_state_name
+    mov rdi, [rip + wait_ext_state]
+    mov rsi, [rip + wait_ext_state_len]
+    mov rdx, rax
+    call str_eq_cstr
+    test eax, eax
+    jnz 2f
+    call time_ms
+    cmp rax, r13
+    jae 2f
+    mov edi, 20
+    call loop_poll
+    call app_tick
+    jmp 1b
+2:  lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_ext]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov rsi, [r15 + EXT_name]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_state]
+    call sb_push_cstr
+    mov edi, [r15 + EXT_status]
+    call ext_state_name
+    lea rdi, [rip + out]
+    mov rsi, rax
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    EPILOGUE
+8:  lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_no_ext]
+    call sb_push_cstr
+    mov rax, -1
+    EPILOGUE
+
+# ext-set NAME unconfined|disabled 0|1, or ext-set NAME stop|restart: what the Settings buttons do
+c_ext_set:
+    PROLOGUE 16
+    call next_arg               # rbx, r12 are the argument cursor: the extension goes to r15
+    mov rdi, rax
+    mov rsi, rdx
+    call ext_by_name
+    test rax, rax
+    jz 9f
+    mov r15, rax
+    call next_arg
+    mov r13, rax
+    mov r14, rdx
+    mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Lx_stop]
+    call str_eq_cstr
+    test eax, eax
+    jz 1f
+    mov rdi, r15
+    call ext_stop_user
+    jmp 9f
+1:  mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Lx_restart]
+    call str_eq_cstr
+    test eax, eax
+    jz 2f
+    mov rdi, r15
+    call ext_restart
+    jmp 9f
+2:  call next_int
+    mov [rsp], eax
+    mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Lx_pinned]
+    call str_eq_cstr
+    test eax, eax
+    jz 3f
+    mov rdi, r15
+    mov esi, [rsp]
+    call ext_set_pinned
+    jmp 9f
+3:  mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Lx_disabled]
+    call str_eq_cstr
+    test eax, eax
+    jz 9f
+    mov rdi, r15
+    mov esi, [rsp]
+    call ext_set_disabled
+9:  xor eax, eax
+    EPILOGUE
+
+# ext-install OWNER/NAME: as Install from GitHub with that answer
+c_ext_install:
+    PROLOGUE
+    call next_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call ext_install_start
+    xor eax, eax
+    EPILOGUE
+
+# wait-install: until the download is done (2 minutes at most), then "install=STATE"
+c_wait_install:
+    PROLOGUE
+    call time_ms
+    lea r13, [rax + 120000]
+1:  cmp dword ptr [rip + g_ext_install_state], 1
+    jne 2f
+    call time_ms
+    cmp rax, r13
+    jae 2f
+    mov edi, 50
+    call loop_poll
+    call app_tick
+    call flush_frame
+    jmp 1b
+2:  mov eax, [rip + g_ext_install_state]
+    lea rcx, [rip + .Lx_install_states]
+    mov rsi, [rcx + rax*8]
+    lea rdi, [rip + out]
+    call sb_push_cstr
+    xor eax, eax
+    EPILOGUE
+
+# print-dialog: the confirm dialog's question, line and button, or dialog=none
+c_print_dialog:
+    PROLOGUE
+    call flush_frame
+    lea rdi, [rip + out]
+    call app_dialog_dump
+    xor eax, eax
+    EPILOGUE
+
+# dialog yes|no: its button, or Cancel
+c_dialog:
+    PROLOGUE
+    call next_arg
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + .Lx_yes]
+    call str_eq_cstr
+    mov edi, eax
+    call app_dialog_answer
+    mov dword ptr [rip + g_dirty], 1
+    xor eax, eax
+    EPILOGUE
+
+# ext-setting NAME KEY VALUE: an extension's own setting, as its page sets it (VALUE: the rest)
+c_ext_setting:
+    PROLOGUE
+    call next_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call ext_by_name
+    test rax, rax
+    jz 9f
+    mov r15, rax
+    call next_arg
+    mov rdi, rax
+    mov rsi, rdx
+    mov rdx, r15
+    call sdef_find
+    test rax, rax
+    jz 9f
+    mov r14, rax
+    # the rest of the line, trimmed
+    mov rdi, rbx
+    mov rsi, r12
+    call trim
+    lea rdi, [rip + ctl_value]
+    mov rsi, rax
+    mov rcx, rdx
+    cmp rcx, 1000
+    jbe 1f
+    mov ecx, 1000
+1:  mov rdx, rcx
+    push rdx
+    push rdx
+    call memcpy
+    pop rdx
+    pop rdx
+    lea rax, [rip + ctl_value]
+    mov byte ptr [rax + rdx], 0
+    mov rdi, r15
+    mov rsi, r14
+    lea rdx, [rip + ctl_value]
+    call ext_setting_set
+9:  xor eax, eax
+    EPILOGUE
+
+# print-ext-page: the Extensions page's list, or the details shown
+c_print_ext_page:
+    PROLOGUE
+    call flush_frame
+    lea rdi, [rip + out]
+    call extpage_dump
+    xor eax, eax
+    EPILOGUE
+
+# print-extbar: the dropdown's state and the pinned extensions
+# print-views: a line per extension view: "view=ID title=T shapes=N size=WxH at=X,Y"
+c_print_views:
+    PROLOGUE
+    call flush_frame
+    lea rdi, [rip + out]
+    call extview_dump
+    xor eax, eax
+    EPILOGUE
+
+# print-complete: the completion list and the signature help (complete_dump)
+c_print_complete:
+    PROLOGUE
+    call flush_frame
+    lea rdi, [rip + out]
+    call complete_dump
+    xor eax, eax
+    EPILOGUE
+
+c_print_extbar:
+    PROLOGUE
+    call flush_frame
+    lea rdi, [rip + out]
+    call extbar_dump
+    xor eax, eax
+    EPILOGUE
+
+# ext-page NAME|list: the Extensions page with that extension's details, or the list
+c_ext_page:
+    PROLOGUE
+    call next_arg
+    mov r13, rax
+    mov r14, rdx
+    mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Lx_list]
+    call str_eq_cstr
+    xor edi, edi
+    test eax, eax
+    jnz 1f
+    mov rdi, r13
+    mov rsi, r14
+    call ext_by_name
+    mov rdi, rax
+1:  call extpage_show
+    xor eax, eax
+    EPILOGUE
+
+# ext-menu NAME: what a click on its title-bar button or its dropdown row does (a menu of its
+# commands when it has several)
+c_ext_menu:
+    PROLOGUE
+    call next_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call ext_by_name
+    test rax, rax
+    jz 9f
+    mov rdi, rax
+    mov esi, 500
+    mov edx, 40
+    call ext_action
+9:  xor eax, eax
+    EPILOGUE
+
+# menu-pick LABEL: the open menu's item with that label runs, as a click on it would
+c_menu_pick:
+    PROLOGUE
+    mov rdi, rbx
+    mov rsi, r12
+    call trim
+    mov rdi, rax
+    mov rsi, rdx
+    call menu_pick
+    xor eax, eax
+    EPILOGUE
+
+# ext-remove NAME: Remove (the dialog asks; dialog yes confirms)
+c_ext_remove:
+    PROLOGUE
+    call next_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call ext_by_name
+    test rax, rax
+    jz 9f
+    mov rdi, rax
+    call ext_remove_ask
+9:  xor eax, eax
+    EPILOGUE
+
+# print-options: "tab_width=N insert_spaces=B trim_trailing_whitespace=B final_newline=B", the
+# settings in force for the active document (an extension's overrides included)
+c_print_options:
+    PROLOGUE
+    mov rbx, [rip + g_doc]
+    call ext_options_apply
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_opts]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, [rip + g_tab_width]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_opt_spaces]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, [rip + g_insert_spaces]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_opt_trim]
+    call sb_push_cstr
+    mov eax, [rip + cfg_trim_trailing]
+    test rbx, rbx
+    jz 1f
+    mov rdi, rbx
+    mov esi, OPT_TRIM
+    call ext_opt_bool
+1:  lea rdi, [rip + out]
+    mov esi, eax
+    call sb_push_u64
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_opt_final]
+    call sb_push_cstr
+    mov eax, [rip + cfg_final_newline]
+    test rbx, rbx
+    jz 2f
+    mov rdi, rbx
+    mov esi, OPT_FINAL
+    call ext_opt_bool
+2:  lea rdi, [rip + out]
+    mov esi, eax
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    EPILOGUE
+
+# print-marks: the active document's diagnostic marks, "L1 C1 L2 C2 SEVERITY owner/name MESSAGE"
+# per line, in the order they are held; then "errors=N warnings=M"
+c_print_marks:
+    PROLOGUE
+    mov rbx, [rip + g_doc]
+    test rbx, rbx
+    jz 8f
+    mov rdi, [rbx + DOC_xmarks]
+    test rdi, rdi
+    jz 8f
+    xor r12d, r12d
+1:  mov rdi, [rbx + DOC_xmarks]
+    cmp r12, [rdi + VEC_len]
+    jae 8f
+    imul r13, r12, MK_SIZE
+    add r13, [rdi + VEC_ptr]
+    inc r12
+    mov rdi, rbx
+    mov rsi, [r13 + MK_start]
+    call pm_pos
+    mov rdi, rbx
+    mov rsi, [r13 + MK_end]
+    call pm_pos
+    mov eax, [r13 + MK_sev]
+    lea rcx, [rip + sev_words]
+    mov rsi, [rcx + rax*8]
+    lea rdi, [rip + out]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+    mov rax, [r13 + MK_owner]
+    lea rdi, [rip + out]
+    mov rsi, [rax + EXT_owner]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, '/'
+    call sb_push_byte
+    mov rax, [r13 + MK_owner]
+    lea rdi, [rip + out]
+    mov rsi, [rax + EXT_name]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+    lea rdi, [rip + out]
+    mov rsi, [r13 + MK_msg]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    jmp 1b
+8:  mov rdi, rbx
+    call extmarks_counts
+    mov r12d, eax
+    mov r13d, edx
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_errors]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, r12d
+    call sb_push_u64
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_warnings]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, r13d
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    EPILOGUE
+# pm_pos(doc, pos): "LINE COL " into out
+pm_pos:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    call doc_line_of
+    mov r13, rax
+    mov rdi, rbx
+    mov rsi, rax
+    call doc_line_start
+    sub r12, rax
+    lea rdi, [rip + out]
+    lea rsi, [r13 + 1]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+    lea rdi, [rip + out]
+    lea rsi, [r12 + 1]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+    EPILOGUE
+
+# print-hover: "hover=DOC LINE COL sent=S text=T" for the position the pointer rests on, or
+# "hover=none"
+c_print_hover:
+    PROLOGUE
+    mov rbx, [rip + g_hover_doc]
+    test rbx, rbx
+    jz 8f
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_hover]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov rsi, [rbx + DOC_id]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, [rip + g_hover_pos]
+    call pm_pos
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_sent]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, [rip + g_hover_sent]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_text]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    lea rsi, [rip + g_hover_text]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    EPILOGUE
+8:  lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_hover_none]
+    call sb_push_cstr
+    xor eax, eax
+    EPILOGUE
+
+# print-text-cell LINE COL: "X Y", the middle of that cell of the active document on screen
+# (without word wrap)
+c_print_text_cell:
+    PROLOGUE
+    call next_int               # (next_int reads the arguments through rbx and r12)
+    mov r14, rax                # line
+    call next_int
+    mov r15, rax                # col
+    mov dword ptr [rip + g_dirty], 1
+    call flush_frame            # the layout of a frame: g_ed_y, g_ed_tx, the metrics
+    mov rbx, [rip + g_doc]
+    test rbx, rbx
+    jz 8f
+    # y: rows from the first visible line
+    mov rax, [rbx + DOC_scrolly]
+    sar rax, 8
+    lea rcx, [r14 - 1]
+    sub rcx, rax
+    imul ecx, [rip + g_lh]
+    add ecx, [rip + g_ed_y]
+    mov eax, [rip + g_lh]
+    shr eax, 1
+    add ecx, eax
+    mov r14d, ecx
+    # x: columns from the left edge
+    lea rax, [r15 - 1]
+    imul eax, [rip + g_cw]
+    add eax, [rip + g_ed_tx]
+    sub rax, [rbx + DOC_scrollx]
+    mov ecx, [rip + g_cw]
+    shr ecx, 1
+    add eax, ecx
+    lea rdi, [rip + out]
+    mov esi, eax
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+    lea rdi, [rip + out]
+    mov esi, r14d
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+8:  xor eax, eax
+    EPILOGUE
 
 # print-frames: frames drawn since the last print-frames
 c_print_frames:
@@ -1313,6 +1883,7 @@ FN control_listen
 .endif
     PROLOGUE
     mov rbx, rdi
+    mov [rip + g_control_path], rdi
     # sun_path holds 104 bytes on macOS, 108 on Linux
     call strlen
     cmp rax, 103
@@ -1489,6 +2060,21 @@ on_client:
 .section .rodata
 .Llong_path: .asciz "rhun: the control socket path is too long (at most 103 bytes)"
 .Lno_listen: .asciz "rhun: cannot create the control socket"
+.Ls_ext: .asciz "ext="
+.Ls_errors: .asciz "errors="
+.Ls_warnings: .asciz " warnings="
+.Ls_hover: .asciz "hover="
+.Ls_sent: .asciz "sent="
+.Ls_text: .asciz " text="
+.Ls_hover_none: .asciz "hover=none\n"
+.Lsw_error: .asciz "error"
+.Lsw_warning: .asciz "warning"
+.Lsw_info: .asciz "info"
+.Lsw_hint: .asciz "hint"
+.p2align 3
+sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
+.Ls_state: .asciz " state="
+.Ls_no_ext: .asciz "no such extension\n"
 .Lunknown: .asciz "unknown command\n"
 .Leod: .asciz "\n<eod>\n"
 .Lok: .ascii "ok\n"
@@ -1544,6 +2130,42 @@ on_client:
 .Lc_wait_update: .asciz "wait-update"
 .Lc_print_update: .asciz "print-update"
 .Lc_print_frames: .asciz "print-frames"
+.Lc_print_extensions: .asciz "print-extensions"
+.Lc_wait_ext: .asciz "wait-ext"
+.Lc_print_marks: .asciz "print-marks"
+.Lc_print_hover: .asciz "print-hover"
+.Lc_print_text_cell: .asciz "print-text-cell"
+.Lc_print_options: .asciz "print-options"
+.Lc_ext_set: .asciz "ext-set"
+.Lc_ext_install: .asciz "ext-install"
+.Lc_wait_install: .asciz "wait-install"
+.Lc_print_dialog: .asciz "print-dialog"
+.Lc_dialog: .asciz "dialog"
+.Lc_ext_setting: .asciz "ext-setting"
+.Lc_print_ext_page: .asciz "print-ext-page"
+.Lc_print_extbar: .asciz "print-extbar"
+.Lc_ext_page: .asciz "ext-page"
+.Lc_ext_menu: .asciz "ext-menu"
+.Lc_print_views: .asciz "print-views"
+.Lc_print_complete: .asciz "print-complete"
+.Lc_menu_pick: .asciz "menu-pick"
+.Lc_ext_remove: .asciz "ext-remove"
+.Lx_yes: .asciz "yes"
+.Lx_list: .asciz "list"
+.Lx_install_states: .quad .Lxi_idle, .Lxi_busy, .Lxi_asking, .Lxi_done, .Lxi_failed
+.Lxi_idle: .asciz "install=idle\n"
+.Lxi_busy: .asciz "install=downloading\n"
+.Lxi_asking: .asciz "install=asking\n"
+.Lxi_done: .asciz "install=done\n"
+.Lxi_failed: .asciz "install=failed\n"
+.Lx_pinned: .asciz "pinned"
+.Lx_disabled: .asciz "disabled"
+.Lx_stop: .asciz "stop"
+.Lx_restart: .asciz "restart"
+.Ls_opts: .asciz "tab_width="
+.Ls_opt_spaces: .asciz " insert_spaces="
+.Ls_opt_trim: .asciz " trim_trailing_whitespace="
+.Ls_opt_final: .asciz " final_newline="
 .Lc_print_project: .asciz "print-project"
 .Lc_print_panels: .asciz "print-panels"
 .Lc_print_tabs: .asciz "print-tabs"
@@ -1609,7 +2231,15 @@ ctl_table:
     .quad .Lc_print_settings, c_print_settings
     .quad .Lc_scroll_x, c_scroll_x
     .quad .Lc_appearance, c_appearance, .Lc_print_appearance, c_print_appearance
-    .quad .Lc_focus, c_focus, 0, 0
+    .quad .Lc_print_extensions, c_print_extensions, .Lc_wait_ext, c_wait_ext
+    .quad .Lc_print_marks, c_print_marks, .Lc_print_hover, c_print_hover, .Lc_print_text_cell, c_print_text_cell
+    .quad .Lc_print_options, c_print_options, .Lc_ext_set, c_ext_set
+    .quad .Lc_ext_install, c_ext_install, .Lc_wait_install, c_wait_install
+    .quad .Lc_print_dialog, c_print_dialog, .Lc_dialog, c_dialog
+    .quad .Lc_ext_setting, c_ext_setting, .Lc_print_ext_page, c_print_ext_page
+    .quad .Lc_print_extbar, c_print_extbar, .Lc_ext_page, c_ext_page, .Lc_ext_remove, c_ext_remove
+    .quad .Lc_ext_menu, c_ext_menu, .Lc_menu_pick, c_menu_pick, .Lc_print_views, c_print_views
+    .quad .Lc_focus, c_focus, .Lc_print_complete, c_print_complete, 0, 0
 appearance_rows:
     .quad .Ls_theme_eq, cfg_theme, .Ls_dark_eq, cfg_dark_theme, .Ls_light_eq, cfg_light_theme, 0
 panel_rows:
@@ -1617,6 +2247,9 @@ panel_rows:
 
 .data
 lsock: .long -1
+.p2align 3
+.globl g_control_path
+g_control_path: .quad 0         # --control PATH while listening
 csock: .long -1
 oc_next: .long -1               # a client that came while oc_busy
 .bss

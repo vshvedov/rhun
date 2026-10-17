@@ -572,7 +572,7 @@ FN cmd_toggle_terminal
     ret
 
 # term_show(): open the panel with a shell in it
-term_show:
+FN term_show
     cmp qword ptr [rip + sessions + VEC_len], 0
     jne 1f
     push rax
@@ -687,6 +687,43 @@ FN term_panel_paste
     mov rax, [rbx + TS_term]
     mov dword ptr [rax + TM_view], 0
 9:  EPILOGUE
+
+.ifdef WINDOWS
+.equ CTRL_U_LEN, 12             # .Lctrl_u's bytes
+.else
+.equ CTRL_U_LEN, 1
+.endif
+# term_panel_write(ptr, len) -> 1 when a terminal took the bytes (as typed, after Ctrl-U clears
+# whatever was on the shell's line; on Windows Ctrl+End and Ctrl+Home, which PowerShell and the
+# console's own line editing take as delete to the end and to the start), 0 without a session
+FN term_panel_write
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    call cur_sess
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    mov rdi, [rbx + TS_term]
+    lea rsi, [rip + .Lctrl_u]
+    mov edx, CTRL_U_LEN
+    call term_write
+    mov rdi, [rbx + TS_term]
+    mov rsi, r12
+    mov rdx, r13
+    call term_write
+    call send_replies
+    mov rax, [rbx + TS_term]
+    mov dword ptr [rax + TM_view], 0
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+.ifdef WINDOWS
+.Lctrl_u: .ascii "\033[1;5F\033[1;5H"
+.else
+.Lctrl_u: .byte 0x15
+.endif
 
 # ---------------- keys ----------------
 

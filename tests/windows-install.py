@@ -8,6 +8,7 @@ import zipfile
 import http.server
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -90,20 +91,28 @@ with tempfile.TemporaryDirectory(prefix='rhun-installer-') as temporary:
         assert held == [True], f'the staging folder was not held while it was to move: {held}'
         return result
 
-    def paste(target):
-        """run the README's PowerShell command as pasted into PowerShell, plus options for a test install:
-        it fetches install.ps1 from the test server, which serves it as GitHub does"""
+    def paste(target, *, internet_mark=False, success=True):
+        """Run both README steps against the local server's application/octet-stream installer."""
         github = 'https://github.com/vshvedov/rhun/releases'
-        line = next(line for line in (ROOT / 'README.md').read_text(encoding='utf-8').splitlines()
-                    if line.startswith('powershell ') and github + '/latest/download/install.ps1' in line)
-        assert line.endswith('"'), line
+        blocks = re.findall(r'```powershell\n(.*?)\n```', (ROOT / 'README.md').read_text(encoding='utf-8'), re.S)
+        download = next(block for block in blocks if github + '/latest/download/install.ps1' in block)
+        run = next(block for block in blocks if block.startswith('powershell ') and '-File $rhunInstaller' in block)
+        download_dir = temp / 'Downloads café'
+        download_dir.mkdir(exist_ok=True)
+        download = download.replace(github, url).replace('$env:TEMP', "'" + str(download_dir).replace("'", "''") + "'")
         options = f" -InstallDir '{target}' -ReleasesUrl '{url}' -NoModifyPath -NoShortcut -NoFileAssociations"
+        mark = 'Set-Content -LiteralPath ($rhunInstaller + ":Zone.Identifier") -Value "[ZoneTransfer]`r`nZoneId=3"\n' if internet_mark else ''
         pasted = temp / 'pasted.ps1'
         # with a BOM, as Windows PowerShell reads a script without one in the ANSI code page
-        pasted.write_text(line.replace(github, url)[:-1] + options + '"\nexit $LASTEXITCODE\n', encoding='utf-8-sig')
+        pasted.write_text('$ErrorActionPreference = "Stop"\ntry {\n' + download + '\n' + mark + run + options +
+                          '\n$installExitCode = $LASTEXITCODE\n} finally {\n'
+                          'if ($rhunInstaller -and (Test-Path -LiteralPath $rhunInstaller)) { Remove-Item -LiteralPath $rhunInstaller }\n'
+                          '}\nexit $installExitCode\n', encoding='utf-8-sig')
         result = subprocess.run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', str(pasted)],
                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=60)
-        assert result.returncode == 0, result.stdout.decode(errors='replace')
+        assert (result.returncode == 0) == success, result.stdout.decode(errors='replace')
+        assert not list(download_dir.glob('rhun-install-*.ps1')), 'downloaded test installer was not removed'
+        return result
 
     def version():
         assert subprocess.check_output([str(destination / 'rhun.com'), '--version']).strip() == ('rhun ' + VERSION).encode()
@@ -115,6 +124,18 @@ with tempfile.TemporaryDirectory(prefix='rhun-installer-') as temporary:
         install('-Uninstall', target=documented)
         assert not documented.exists()
         print('ok   install/documented-command', flush=True)
+        blocked = paste(documented, internet_mark=True, success=False)
+        assert b'not digitally signed' in blocked.stdout, blocked.stdout
+        assert not documented.exists(), 'an internet-marked unsigned installer was executed'
+        print('ok   install/documented-command-remote-signed', flush=True)
+        (latest / 'install.ps1').rename(latest / 'installer-unavailable.ps1')
+        try:
+            failed = paste(documented, success=False)
+            assert b'404' in failed.stdout and b'Invoke-WebRequest' in failed.stdout, failed.stdout
+            assert not documented.exists(), 'installation proceeded after a failed download'
+        finally:
+            (latest / 'installer-unavailable.ps1').rename(latest / 'install.ps1')
+        print('ok   install/documented-command-download-failure', flush=True)
         install()  # latest lookup and first install, including a Unicode destination
         version()
         notice=(ROOT/'assets/licenses/LICENSE-Unicode.txt').read_bytes()

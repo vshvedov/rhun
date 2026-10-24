@@ -9,9 +9,11 @@ clangd, rust-analyzer; RHUN_TEST_SERVER_PATH may add a folder to PATH for them).
 """
 import os
 from pathlib import Path
+import errno
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,7 +53,15 @@ class Real(unittest.TestCase):
             self.env['PATH'] = EXTRA + os.pathsep + self.env['PATH']
 
     def tearDown(self):
-        self.tmp.cleanup()
+        # Xcode cache primers can finish just after the editor exits.
+        for attempt in range(30):
+            try:
+                self.tmp.cleanup()
+                return
+            except OSError as error:
+                if error.errno != errno.ENOTEMPTY or attempt == 29:
+                    raise
+                time.sleep(0.1)
 
     def run_editor(self, files, actions, timeout=180):
         script = self.work / 'script.rsc'
@@ -74,6 +84,59 @@ class Real(unittest.TestCase):
     def warm(self, wait=12000):
         """Until the server answers: completion asked a few times while it indexes."""
         return ['wait-ext rhun-editor/lsp running', f'wait {wait}']
+
+    def test_missing_server_offers_install_instructions_once(self):
+        # Hide installed servers without changing the machine's actual installations.
+        empty = self.work / 'empty-path'
+        empty.mkdir()
+        self.env['PATH'] = str(empty)
+        (self.proj / 'main.go').write_text('package main\n')
+        (self.proj / 'other.go').write_text('package main\n')
+        out = self.run_editor(['main.go', 'other.go'], [
+            *self.warm(1200), 'print-notes', 'note-press 0 1', 'wait 300',
+            'print-docview 1', 'print-tabs', 'print-side-tabs', 'print-extensions'])
+        text = '\n'.join(out)
+        notes = [line for line in out if line.startswith('note=')]
+        self.assertEqual(len(notes), 1, text + self.log())
+        self.assertIn('Install instructions', notes[0])
+        self.assertIn('Go language server is missing', notes[0])
+        self.assertIn('go install golang.org/x/tools/gopls@latest', text, text + self.log())
+        rendered = ' '.join(line.split(' text=', 1)[1] for line in out
+                            if line.startswith('item text ') and ' text=' in line)
+        self.assertIn('Executable missing:', rendered)
+        self.assertIn('https://go.dev/gopls/', text)
+        self.assertIn('Language Server Setup', next(line for line in out if line.startswith('tabs=')))
+        self.assertNotIn('place=side name=setup', text)
+
+    def test_setup_uses_the_configured_alternative(self):
+        state = self.work / 'state/rhun/extensions/rhun-editor--lsp'
+        state.mkdir(parents=True)
+        (state / 'lsp.ini').write_text('[servers]\nPython = ruff server\n')
+        (self.proj / 'main.py').write_text('answer = 42\n')
+        out = self.run_editor(['main.py'], [
+            *self.warm(1200), 'cmd rhun-editor/lsp.setup', 'wait 300', 'print-docview 1'])
+        text = '\n'.join(out)
+        self.assertIn('uv tool install ruff', text, text + self.log())
+        self.assertNotIn('npm install -g pyright', text)
+
+    def test_setup_command_copies_the_install_command(self):
+        (self.proj / 'main.go').write_text('package main\n')
+        (self.proj / 'paste.txt').write_text('')
+        out = self.run_editor(['main.go'], [
+            *self.warm(1200), 'cmd rhun-editor/lsp.setup', 'wait 300',
+            'key Tab', 'key Return', f'open {self.proj / "paste.txt"}',
+            'key ctrl+v', 'echo ===', 'print-doc'])
+        self.assertEqual(self.doc(out), 'go install golang.org/x/tools/gopls@latest', '\n'.join(out) + self.log())
+
+    def test_reopening_setup_keeps_one_editor_tab(self):
+        (self.proj / 'main.go').write_text('package main\n')
+        out = self.run_editor(['main.go'], [
+            *self.warm(1200), 'cmd rhun-editor/lsp.setup', 'wait 200',
+            'cmd rhun-editor/lsp.setup', 'wait 200', 'print-tabs', 'print-views'])
+        text = '\n'.join(out)
+        tabs = next(line for line in out if line.startswith('tabs='))
+        self.assertEqual(tabs.count('Language Server Setup'), 1, text + self.log())
+        self.assertEqual(len([line for line in out if line.startswith('view=') and 'kind=doc place=tab' in line]), 1, text)
 
     @unittest.skipUnless(have('gopls'), 'gopls is not on PATH')
     def test_gopls_completion_adds_the_import_and_a_native_field(self):
@@ -102,7 +165,7 @@ class Real(unittest.TestCase):
             *self.warm(), 'key ctrl+Home', 'key Down', 'key Down', 'key Home', 'key ctrl+Right', 'key Right',
             'key shift+F12', 'wait 3000', 'print-results', 'key Escape', 'hover-at 3 7', 'wait 3000',
             'print-hover-card', 'key F2', 'wait 2000', 'print-palette', 'key ctrl+a', 'type sum', 'key Return',
-            'wait 3000', 'print-palette', 'print-tabs', 'echo ===', 'print-doc'])
+            'wait 3000', 'print-palette', 'wait 2000', 'print-tabs', 'echo ===', 'print-doc'])
         text = '\n'.join(out)
         refs = [l for l in out if l.startswith('row ') and ' leaf ' in l]
         self.assertGreaterEqual(len(refs), 2, text + self.log())
@@ -114,6 +177,28 @@ class Real(unittest.TestCase):
         # the closed file: written on disk (or opened in a tab when the extension may not write)
         on_disk = 'sum()' in (self.proj / 'other.go').read_text()
         self.assertTrue(on_disk or any('other.go' in l for l in out if l.startswith('tabs=')), text)
+
+    @unittest.skipUnless(have('pyright-langserver') and have('node'), 'pyright or node is not on PATH')
+    def test_pyright_survives_the_parent_process_poll_and_reports_types(self):
+        (self.proj / 'main.py').write_text('answer: int = "wrong"\n')
+        out = self.run_editor(['main.py'], [
+            *self.warm(7000), 'print-marks', 'print-extensions',
+            'hover-at 1 3', 'wait 2000', 'print-hover-card'])
+        text = '\n'.join(out)
+        self.assertIn('not assignable', text, text + self.log())
+        self.assertNotIn('pyright-langserver exited', text, text + self.log())
+        self.assertIn('confined=1', text, text)
+
+    @unittest.skipUnless(have('terraform-ls'), 'terraform-ls is not on PATH')
+    def test_terraform_activates_for_the_hcl_grammar(self):
+        (self.proj / 'main.tf').write_text('variable "example" {\n  type = string\n}\n')
+        out = self.run_editor(['main.tf'], [
+            *self.warm(7000), 'print-extensions', 'print-state',
+            'key ctrl+r', 'wait 2000', 'print-palette'])
+        text = '\n'.join(out)
+        self.assertIn('lang=HCL', text, text)
+        self.assertIn('status=terraform-ls', text, text + self.log())
+        self.assertIn('example', text, text + self.log())
 
     @unittest.skipUnless(have('clangd'), 'clangd is not on PATH')
     def test_clangd_auto_fix_inserts_the_missing_semicolon(self):

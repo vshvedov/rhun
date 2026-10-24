@@ -3799,6 +3799,13 @@ draw_line:
     mov r8d, [rsp + 40]
     mov r9d, [rsp]
     call extmarks_row
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, [rsp + 96]
+    mov rcx, [rsp + 32]
+    mov r8d, [rsp + 40]
+    mov r9d, [rsp]
+    call definitionlink_row
     EPILOGUE
 
 # draw_box(x, y, w, h, argb): 1px outline, softened

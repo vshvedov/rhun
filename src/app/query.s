@@ -1054,6 +1054,10 @@ FN query_h_provides
     mov rsi, r12
     call scope_set
 .Lqhv_ok:
+    cmp r12, EXT_pv_definition
+    jne 8f
+    call definitionlink_ext_gone   # a cached confirmation cannot outlive its capability
+8:
     mov dword ptr [rip + g_dirty], 1
     call extproto_req_id
     mov rdi, rax

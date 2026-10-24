@@ -35,6 +35,7 @@ lc_rlen: .quad 0
     LCWRAP w_print_lightbulb, c_print_lightbulb
     LCWRAP w_print_lf_waits, c_print_lf_waits
     LCWRAP w_print_doc_links, c_print_doc_links
+    LCWRAP w_print_definition_link, c_print_definition_link
     LCWRAP w_print_point, c_print_point
 
 # lc_arg() -> rax ptr, rdx len of the next word of the rest (rdx 0 at its end)
@@ -192,6 +193,13 @@ c_print_doc_links:
     pop rbx
     ret
 
+c_print_definition_link:
+    push rbx
+    mov rdi, [rip + lc_out]
+    call definitionlink_dump
+    pop rbx
+    ret
+
 # print-point LINE COL: "point X Y", the window pixel of that place of the editor's text
 c_print_point:
     push rbx
@@ -297,6 +305,7 @@ c_print_query:
 .Lw_hover: .asciz " hover="
 .Lw_bulb: .asciz " lightbulb="
 .Lc_print_doc_links: .asciz "print-doc-links"
+.Lc_print_definition_link: .asciz "print-definition-link"
 .Lc_print_point: .asciz "print-point"
 .Lpoint: .asciz "point "
 .p2align 3
@@ -314,5 +323,6 @@ langfeat_ctl:
     .quad .Lc_print_lightbulb, w_print_lightbulb
     .quad .Lc_print_lf_waits, w_print_lf_waits
     .quad .Lc_print_doc_links, w_print_doc_links
+    .quad .Lc_print_definition_link, w_print_definition_link
     .quad .Lc_print_point, w_print_point
     .quad 0, 0

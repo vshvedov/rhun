@@ -393,6 +393,11 @@ FN mdview_link
     test rdi, rdi
     jz 9f
     mov esi, r12d
+    call md_open_link          # native code-copy actions must run before testing anchor text
+    test eax, eax
+    jnz 9f
+    mov rdi, [rbx + DC_md]
+    mov esi, r12d
     call md_link
     test rdx, rdx
     jz 9f
@@ -409,12 +414,7 @@ FN mdview_link
     mov [rbx + DC_scroll], eax
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
-1:  mov rdi, [rbx + DC_md]
-    mov esi, r12d
-    call md_open_link
-    test eax, eax
-    jnz 9f
-    mov edi, [rbx + DC_slot]
+1:  mov edi, [rbx + DC_slot]
     mov rsi, r13
     mov rdx, r14
     call rview_link_event

@@ -125,6 +125,39 @@ class Confine(host.Host):
         self.assertIn('toast=probe ok', toasts, out)
         self.assertTrue((self.work / 'state/rhun/extensions/rhun-tests--echo/xcrun_db').is_file())
 
+    @unittest.skipUnless(sys.platform == 'darwin' or sys.platform.startswith('linux'), 'native executable fixture')
+    def test_build_programs_require_explicit_run_permission(self):
+        program = self.work / 'state/rhun/extensions/rhun-tests--echo/compiled-program'
+        program.parent.mkdir(parents=True, exist_ok=True)
+        if not shutil.which('cc'):
+            self.skipTest('no C compiler for generated-program probe')
+        source = b'#include <signal.h>\n#include <unistd.h>\nint main(void) { return kill(getppid(), 0) == 0 ? 0 : 1; }\n'
+        compiler = ['cc', '-x', 'c']
+        if sys.platform == 'darwin':
+            compiler = ['cc', '-x', 'objective-c', '-framework', 'Foundation']
+            source = b'''#import <Foundation/Foundation.h>
+#include <signal.h>
+#include <unistd.h>
+int main(void) { @autoreleasepool {
+    if (kill(getppid(), 0) != 0) return 1;
+    NSString *home = [NSString stringWithUTF8String:getenv("HOME")];
+    NSString *path = [home stringByAppendingPathComponent:@"atomic-build-file"];
+    return [@"build metadata" writeToFile:path atomically:YES encoding:NSUTF8StringEncoding error:nil] ? 0 : 1;
+} }
+'''
+        subprocess.run([*compiler, '-o', str(program), '-'], input=source, capture_output=True, check=True)
+        self.env['ECHO_MODE'] = 'build'
+        out = self.probe('echo.exec', 'documents = read')
+        self.skip_unless_confined(out[1])
+        self.assertEqual(out[0], 'toast=probe refused', out)
+        out = self.probe('echo.exec', 'documents = read\nrun = @build')
+        self.assertEqual(out[0], 'toast=probe ok', out)
+        self.env.pop('ECHO_MODE')
+        out = self.probe('echo.exec', 'documents = read\nrun = @build')
+        self.assertEqual(out[0], 'toast=probe refused', out)
+        out = self.probe('echo.hread', 'documents = read\nproject = read\nrun = @build')
+        self.assertEqual(out[0], 'toast=probe refused', out)
+
     def test_xcode_shims_do_not_hold_up_the_start(self):
         # filling the cache for several shims takes seconds: the extension says hello meanwhile
         shims = self.xcode_shims(['git', 'clang', 'clangd', 'swift', 'sourcekit-lsp', 'lldb'])

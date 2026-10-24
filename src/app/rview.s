@@ -5858,6 +5858,10 @@ FN rview_tab
     shl rcx, TF_VIEW_SHIFT
     or rcx, TF_RVIEW
     or [rax + TAB_flags], rcx
+    # app_add_tab activated it before the retained-view flags existed. Give the new
+    # view the keyboard now, so Tab and Enter work without an extra pointer click.
+    mov edi, r12d
+    call place_focus
     mov edi, r15d
     call send_open
     mov edi, r15d

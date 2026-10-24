@@ -2219,6 +2219,12 @@ FN app_on_motion
     mov dword ptr [rip + g_dirty], 1
     ret
 
+# Modifier changes must redraw even when the pointer and caret stay still.
+FN app_on_modifiers
+    mov [rip + g_mods], edi
+    mov dword ptr [rip + g_dirty], 1
+    jmp viewpic_modifiers
+
 FN app_on_pointer_leave
     mov edi, -10000
     mov esi, -10000
@@ -2301,6 +2307,10 @@ FN wheel_xy
 
 FN app_on_focus
     mov [rip + g_win_focused], edi
+    test edi, edi
+    jnz 0f
+    mov dword ptr [rip + g_mods], 0
+0:
     push rdi
     call viewpic_window_focus
     mov edi, [rsp]

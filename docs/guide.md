@@ -873,7 +873,7 @@ commands:
 | ctrl+t | Go to Symbol in Project | symbols of the whole project as you type (also `#` first in Go to File) |
 | shift+alt+Right, shift+alt+Left | Expand/Shrink Selection | each selection grows to the enclosing expression, statement, block…; shrink goes back |
 | F8, shift+F8 | Next/Previous Problem | the next problem in the file, with its message in the hover card |
-| ctrl+click | | on a link (an `#include`, a URL in a comment) opens it; on other text goes to the definition (cmd+click on macOS; alt+click when ctrl adds carets) |
+| ctrl+click | | on a link (an `#include`, a URL in a comment) opens it; on a symbol goes to its definition. Hold ctrl to underline the symbol when a definition is available (cmd on macOS; alt when ctrl adds carets). |
 | ctrl+. | Show Code Actions | quick fixes first, then refactorings and other actions |
 | shift+alt+. | Auto Fix | applies the preferred quick fix at the cursor, else lists the quick fixes |
 | shift+alt+o | Organize Imports | applied at once when the extension offers exactly one |

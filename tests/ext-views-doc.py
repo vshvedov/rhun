@@ -107,6 +107,30 @@ class Docs(ViewsBase):
         self.assertTrue(any('The end.' in l for l in out), out)
         self.assertTrue(any(l.startswith('Readme') or 'Readme' in l for l in out))
 
+    def test_copy_button_copies_code_without_fences_or_a_final_newline(self):
+        (self.proj / 'paste.txt').write_text('')
+        out = self.shown('cmd viewfake.doccopy', 'wait 100')
+        head = self.head(out)
+        ox, oy = map(int, head['at'].split(','))
+        copy = next(line for line in out if line.startswith('item copy '))
+        fields = dict(kv.split('=', 1) for kv in copy.split()[2:] if '=' in kv)
+        x = ox + int(fields['x']) + int(fields['w']) // 2
+        y = oy + int(fields['y']) + int(fields['h']) // 2
+        out = self.run_editor(['view-show readme', 'wait 200', 'cmd viewfake.doccopy', 'wait 100',
+                               f'click {x} {y}', f'open {self.proj / "paste.txt"}', 'key ctrl+v',
+                               'echo pasted', 'print-doc'])
+        pasted = '\n'.join(out[out.index('pasted') + 1:out.index('<eod>')])
+        self.assertEqual(pasted, '# install tools\nprintf "café"\n\techo done')
+        self.assertFalse(any(' link ' in line and line.startswith('0 view ') for line in self.fake_log()))
+
+    def test_copy_buttons_are_keyboard_accessible_and_keep_their_own_code(self):
+        (self.proj / 'paste.txt').write_text('')
+        out = self.shown('cmd viewfake.doccopy', 'wait 100', 'view-focus readme',
+                         'key Tab', 'key Tab', 'key Return', f'open {self.proj / "paste.txt"}',
+                         'key ctrl+v', 'echo pasted', 'print-doc')
+        pasted = '\n'.join(out[out.index('pasted') + 1:out.index('<eod>')])
+        self.assertEqual(pasted, 'echo second')
+
     def test_ops_rhun_refuses(self):
         self.shown('cmd viewfake.docbad', 'cmd viewfake.docbig', 'cmd viewfake.doctree', 'wait 400')
         errs = [l for l in self.fake_log() if l.startswith('error ')]

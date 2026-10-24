@@ -1240,7 +1240,12 @@ ns_mods:
 2:  tst x0, #NS_OPTION
     b.eq 3f
     orr w9, w9, #MOD_ALT
-3:  mov w0, w9
+3:  mov w10, #0
+    tst x0, #NS_CONTROL
+    b.eq 4f
+    mov w10, #1
+4:  STW w10, g_mac_control_click
+    mov w0, w9
     ret
 
 // Paired releases for extension pictures that negotiated view-key-state.
@@ -1274,7 +1279,7 @@ v_flagsChanged:
     mov x0, x2
     MSG modifierFlags
     bl ns_mods
-    XCALL viewpic_modifiers
+    XCALL app_on_modifiers
     IMPRET
 
 // keyDown:(event)

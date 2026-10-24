@@ -44,6 +44,8 @@
 .equ MDK_BOX, 4                 # a task item's box; MDI_style 1 when checked
 .equ MDK_LINE, 5                # a 1 px line (strikethrough, underline, rules)
 .equ MDK_IMAGE, 6               # an image; MDI_style its MD_imgs entry
+.equ MDK_COPY, 7                # a code block's native Copy button; MDI_link its action
+.equ MDL_COPY, 0x80000000       # a link's length flag: copy code, never follow its text as a URL
 .equ MD_IMG_FILE_MAX, 8388608   # an image file's bytes
 .equ MD_IMG_SIDE_MAX, 4096
 .equ MD_IMG_BYTES, 33554432     # decoded images per document
@@ -124,6 +126,7 @@ F MDB_ncols, 4          # a table header: its columns, and their aligns (2 bits 
 F MDB_aligns, 4
 F MDB_hdr, 4            # 1 for a table's header row
 F MDB_y, 4              # its top, laid out
+F MDB_copy, 4           # code: its Copy action's link index, -1 without one
 ENDSTRUCT MDB_SIZE
 
 # a run of text in one style
@@ -137,7 +140,7 @@ ENDSTRUCT MDR_SIZE
 # a link's target
 STRUCT
 F MDL_off, 4            # in MD_text
-F MDL_len, 4
+F MDL_len, 4            # length, with MDL_COPY for a code block's native Copy action
 ENDSTRUCT MDL_SIZE
 
 # a reference definition
@@ -338,6 +341,7 @@ FN md_link
     mov rax, [rdi + MD_links + VEC_ptr]
     mov ecx, [rax + rsi*8 + MDL_off]
     mov edx, [rax + rsi*8 + MDL_len]
+    and edx, 0x7fffffff
     mov rax, [rdi + MD_text + SB_ptr]
     add rax, rcx
 9:  ret
@@ -346,6 +350,11 @@ FN md_link
 FN md_open_link
     PROLOGUE
     mov r14, rdi
+    cmp rsi, [rdi + MD_links + VEC_len]
+    jae 8f
+    mov rax, [rdi + MD_links + VEC_ptr]
+    test dword ptr [rax + rsi*8 + MDL_len], MDL_COPY
+    jnz .Lmol_copy
     call md_link
     test rdx, rdx
     jz 8f
@@ -390,6 +399,26 @@ FN md_open_link
     mov eax, r15d
     EPILOGUE
 8:  xor eax, eax
+    EPILOGUE
+.Lmol_copy:
+    call md_link
+    # A code block ends in LF for layout. Leave it off the clipboard so a command pasted
+    # into a terminal remains available to review before pressing Enter.
+    test rdx, rdx
+    jz 1f
+    cmp byte ptr [rax + rdx - 1], 10
+    jne 1f
+    dec rdx
+1:  mov rdi, rax
+    mov rsi, rdx
+    xor edx, edx
+    call ed_clip_set
+    lea rdi, [rip + .Lcopied_code]
+    test eax, eax
+    jnz 2f
+    lea rdi, [rip + .Lcopy_failed]
+2:  call app_toast
+    mov eax, 1
     EPILOGUE
 
 # open_relative(m, target cstr) -> eax 1 when the target is a path relative to the document's base
@@ -1685,6 +1714,23 @@ close_code:
     mov rsi, [rip + cb + SB_ptr]
     mov rdx, [rip + cb + SB_len]
     call sb_push
+    mov dword ptr [rbx + MDB_copy], -1
+    cmp qword ptr [r13 + MD_links + VEC_len], MD_LINKS_MAX
+    jae 3f
+    cmp dword ptr [rbx + MDB_codelen], 0
+    je 3f
+    lea rdi, [r13 + MD_links]
+    mov esi, MDL_SIZE
+    call vec_push
+    mov ecx, [rbx + MDB_code]
+    mov [rax + MDL_off], ecx
+    mov ecx, [rbx + MDB_codelen]
+    or ecx, MDL_COPY
+    mov [rax + MDL_len], ecx
+    mov rax, [r13 + MD_links + VEC_len]
+    dec eax
+    mov [rbx + MDB_copy], eax
+3:
     lea rdi, [rip + cb]
     call sb_clear
 9:  EPILOGUE
@@ -4589,6 +4635,17 @@ code_items:
 4:  imul edx, [rsp + 56]
     add edx, [rip + g_mt + 4*MI_8]
     add edx, [rip + g_mt + 4*MI_8]
+    mov dword ptr [rsp + 60], 0 # Copy button's header height
+    cmp dword ptr [rbx + MDB_copy], -1
+    je 41f
+    mov r12d, edx
+    mov edi, MDF_SMALL
+    call face_of
+    mov ecx, [rax + FACE_lineh]
+    add ecx, [rip + g_mt + 4*MI_8]
+    mov [rsp + 60], ecx
+    lea edx, [r12 + rcx]
+41:
     mov edi, [rip + lay_x0]
     mov esi, [rip + lay_y]
     mov r12d, edx
@@ -4597,6 +4654,37 @@ code_items:
     mov ecx, r12d
     mov r8d, T_HOVER
     call fill_item
+    cmp dword ptr [rbx + MDB_copy], -1
+    je 42f
+    mov edi, MDF_SMALL
+    call face_of
+    mov rdi, rax
+    lea rsi, [rip + .Lcopy_code]
+    mov edx, 4
+    call text_width
+    add eax, [rip + g_mt + 4*MI_16]
+    mov r12d, eax
+    mov edi, MDK_COPY
+    call item_new
+    mov ecx, [rip + lay_right]
+    sub ecx, r12d
+    sub ecx, [rip + g_mt + 4*MI_8]
+    mov edx, [rip + lay_x0]
+    add edx, [rip + g_mt + 4*MI_8]
+    cmp ecx, edx
+    cmovl ecx, edx
+    mov [rax + MDI_x], ecx
+    mov ecx, [rip + lay_y]
+    add ecx, [rip + g_mt + 4*MI_4]
+    mov [rax + MDI_y], ecx
+    mov [rax + MDI_w], r12d
+    mov ecx, [rsp + 60]
+    mov [rax + MDI_h], ecx
+    mov ecx, [rbx + MDB_copy]
+    mov [rax + MDI_link], ecx
+    mov dword ptr [rax + MDI_color], T_MUTED
+42: mov eax, [rsp + 60]
+    add [rip + lay_y], eax
     M eax, MI_8
     add [rip + lay_y], eax
     mov dword ptr [rsp + 16], 0 # the line's start
@@ -5124,6 +5212,56 @@ FN md_draw
     je .Lmd_box
     cmp eax, MDK_IMAGE
     je .Lmd_image
+    cmp eax, MDK_COPY
+    je .Lmd_copy
+    jmp .Lmd_next
+.Lmd_copy:
+    mov edi, [r13 + MDI_link]
+    add edi, [rsp + 20]
+    mov esi, r15d
+    mov edx, r14d
+    mov ecx, [r13 + MDI_w]
+    mov r8d, [r13 + MDI_h]
+    call ui_btn
+    mov [rsp + 56], eax
+    test eax, UB_HOVER
+    jz 1f
+    mov ecx, [r13 + MDI_link]
+    mov [rsp + 28], ecx
+    mov dword ptr [rip + g_cursor], CUR_POINTER
+1:  test eax, UB_CLICK
+    jz 2f
+    mov ecx, [r13 + MDI_link]
+    mov [rsp + 24], ecx
+2:  mov edi, r15d
+    mov esi, r14d
+    mov edx, [r13 + MDI_w]
+    mov ecx, [r13 + MDI_h]
+    M r8d, MI_3
+    COLOR r9d, T_BORDER
+    mov eax, [r13 + MDI_link]
+    cmp eax, [rbx + MD_focus]
+    je 3f
+    test dword ptr [rsp + 56], UB_HOVER
+    jz 4f
+3:  COLOR r9d, T_ACCENT
+4:  COLOR eax, T_PANEL
+    push rax
+    push rax
+    call gfx_frame
+    add rsp, 16
+    mov edi, MDF_SMALL
+    call face_of
+    mov rdi, rax
+    mov esi, r15d
+    add esi, [rip + g_mt + 4*MI_8]
+    mov edx, r14d
+    add edx, [rip + g_mt + 4*MI_4]
+    add edx, [rax + FACE_ascent]
+    lea rcx, [rip + .Lcopy_code]
+    mov r8d, 4
+    COLOR r9d, T_FG
+    call text_draw
     jmp .Lmd_next
 .Lmd_image:
     mov eax, [r13 + MDI_style]
@@ -5290,6 +5428,9 @@ FN md_draw
 .Lp_http: .asciz "http://"
 .Lp_https: .asciz "https://"
 .Lp_rhun: .asciz "rhun://"
+.Lcopy_code: .asciz "Copy"
+.Lcopied_code: .asciz "Code copied"
+.Lcopy_failed: .asciz "Could not copy code"
 .Lb_doc: .asciz "doc"
 .Ld_base: .asciz "base "
 .Ld_sel: .asciz "sel"
@@ -5476,6 +5617,9 @@ FN md_dump
 5:  xor r13d, r13d
 6:  cmp r13, [rbx + MD_links + VEC_len]
     jae 9f
+    mov rax, [rbx + MD_links + VEC_ptr]
+    test dword ptr [rax + r13*8 + MDL_len], MDL_COPY
+    jnz 7f
     mov rdi, r12
     lea rsi, [rip + .Ld_link]
     call sb_push_cstr
@@ -5494,6 +5638,17 @@ FN md_dump
     mov rdi, r12
     mov esi, 10
     call sb_push_byte
+    jmp 8f
+7:  mov rdi, r12
+    lea rsi, [rip + .Ld_copy]
+    call sb_push_cstr
+    mov rdi, r12
+    mov rsi, r13
+    call sb_push_u64
+    mov rdi, r12
+    mov esi, 10
+    call sb_push_byte
+8:
     inc r13
     jmp 6b
 9:  EPILOGUE
@@ -5507,6 +5662,7 @@ FN md_dump
 .Ld_item: .asciz "item "
 .Ld_text: .asciz " text="
 .Ld_link: .asciz "link "
+.Ld_copy: .asciz "copy-action "
 .Lt_para: .asciz "para"
 .Lt_head: .asciz "head"
 .Lt_code: .asciz "code"
@@ -5535,7 +5691,9 @@ FN md_dump
 .Lf_link: .asciz " link="
 .p2align 3
 type_names: .quad .Lt_para, .Lt_head, .Lt_code, .Lt_rule, .Lt_row
-kind_names: .quad .Lk_text, .Lk_fill, .Lk_dot, .Lk_box, .Lk_line, .Lk_image
+.Lk_copy: .asciz "copy"
+.p2align 3
+kind_names: .quad .Lk_text, .Lk_fill, .Lk_dot, .Lk_box, .Lk_line, .Lk_image, .Lk_copy
 block_fields: .quad .Lf_level, MDB_level, .Lf_quote, MDB_quote, .Lf_list, MDB_list, .Lf_marker, MDB_marker
     .quad .Lf_num, MDB_num, .Lf_line, MDB_line, .Lf_runs, MDB_nrun, 0, 0
 item_fields: .quad .Lf_x, MDI_x, .Lf_y, MDI_y, .Lf_w, MDI_w, .Lf_h, MDI_h, .Lf_face, MDI_face

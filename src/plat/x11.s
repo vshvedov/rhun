@@ -623,7 +623,7 @@ x_picture_mods:
 7:  not ecx
     and ebx, ecx
 6:  mov edi, ebx
-    call viewpic_modifiers
+    call app_on_modifiers
     mov eax, ebx
     EPILOGUE
 

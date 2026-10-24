@@ -37,6 +37,10 @@ lk_links: .zero VEC_SIZE        # LKR
 lk_bytes: .zero SB_SIZE
 lk_line: .zero SB_SIZE
 lk_path: .zero 4200
+.ifdef MACOS
+.globl g_mac_control_click
+g_mac_control_click: .long 0    # physical Control makes a context click in AppKit
+.endif
 
 .text
 
@@ -49,8 +53,13 @@ modifier:
 1:  ret
 
 # held() -> eax 1 while the modifier is down (as the last key or button said), without shift
+FN doclinks_held
 held:
     call modifier
+.ifdef MACOS
+    cmp dword ptr [rip + g_mac_control_click], 0
+    jne 8f
+.endif
     mov ecx, [rip + g_mods]
     test ecx, MOD_SHIFT
     jnz 8f

@@ -209,6 +209,15 @@ c_key:
 1:  xor eax, eax
     ret
 
+c_modifiers:
+    mov rdi, rbx
+    mov rsi, r12
+    call parse_combo
+    mov edi, edx
+    call app_on_modifiers
+    xor eax, eax
+    ret
+
 c_key_up:
     mov rdi, rbx
     mov rsi, r12
@@ -2265,6 +2274,7 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Ls_theme: .asciz " theme="
 .Lc_key_up: .asciz "key-up"
 .Lc_key: .asciz "key"
+.Lc_modifiers: .asciz "modifiers"
 .Lc_type: .asciz "type"
 .Lc_move: .asciz "move"
 .Lc_click: .asciz "click"
@@ -2410,7 +2420,7 @@ ctl_tables:
     .quad submitext_ctl         # Submit to Index (submitext.s)
     .quad 0
 ctl_table:
-    .quad .Lc_key_up, c_key_up, .Lc_key, c_key, .Lc_type, c_type, .Lc_move, c_move, .Lc_click, c_click, .Lc_tap, c_tap
+    .quad .Lc_key_up, c_key_up, .Lc_key, c_key, .Lc_modifiers, c_modifiers, .Lc_type, c_type, .Lc_move, c_move, .Lc_click, c_click, .Lc_tap, c_tap
     .quad .Lc_down, c_down, .Lc_up, c_up, .Lc_updown, c_updown, .Lc_scroll, c_scroll, .Lc_open, c_open
     .quad .Lc_cmd, c_cmd, .Lc_shot, c_shot, .Lc_wait, c_wait, .Lc_resize, c_resize
     .quad .Lc_quit, c_quit, .Lc_echo, c_echo, .Lc_print_doc, c_print_doc

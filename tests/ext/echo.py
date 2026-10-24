@@ -570,7 +570,10 @@ def on_run(command, doc, versions):
     elif name == 'exec':
         def run_ls():
             import subprocess
-            subprocess.run(['/bin/ls', '/usr'], capture_output=True, check=True)   # a folder the rules let it read
+            program = '/bin/ls'
+            if MODE == 'build':
+                program = os.path.join(os.environ['RHUN_STATE'], 'compiled-program')
+            subprocess.run([program, '/usr'], capture_output=True, check=True)   # a folder the rules let it read
         probe(run_ls)
     elif name == 'git':
         def run_git():

@@ -789,7 +789,7 @@ win_wndproc_deferred:
 8:
     mov r15d, eax
     mov edi, eax
-    call viewpic_modifiers
+    call app_on_modifiers
     test r15d, MOD_ALT
     jz 9f
     cmp r13d, 115              # Alt+F4 belongs to Windows
@@ -844,7 +844,7 @@ win_wndproc_deferred:
     call win_mods
 8:  mov r15d, eax
     mov edi, eax
-    call viewpic_modifiers
+    call app_on_modifiers
     lea rdx, [rip + .Lkeys]
     xor ecx, ecx
 1:  mov eax, [rdx + rcx*8]

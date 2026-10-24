@@ -101,14 +101,15 @@ class Markdown(ViewsBase):
         self.assertIn('→.', by)                                        # &#x2192;
         self.assertEqual(self.field(by['https://rhun.app/docs'], 'link'), '1')
         self.assertEqual(self.field(by['ref'], 'link'), '2')                # defined after its use
-        self.assertEqual(self.field(by['https://auto.link'], 'link'), '3')
+        self.assertEqual(self.field(by['https://auto.link'], 'link'), '4')
         self.assertNotEqual(self.field(by['here'], 'y'), self.field(by['then'], 'y'))   # a hard break
 
     def test_links(self):
         out = self.dump(SAMPLE)
         links = [l for l in out if l.startswith('link ')]
         self.assertEqual(links, ['link 0 https://example.com', 'link 1 https://rhun.app/docs',
-                                 'link 2 https://example.org/ref', 'link 3 https://auto.link'])
+                                 'link 2 https://example.org/ref', 'link 4 https://auto.link'])
+        self.assertIn('copy-action 3', out)
 
     def test_code_is_colored_by_its_grammar(self):
         t = self.texts(self.dump(SAMPLE))

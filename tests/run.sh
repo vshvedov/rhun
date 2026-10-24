@@ -264,7 +264,7 @@ python3 tests/wasm-fuzz.py 1 2 --count 100 || fail=1
 # file diagnostics, the Results panel and hierarchies, the peek view, the hover card, selection
 # ranges, workspace symbols, document links
 for t in langfeat-query complete-items code-actions rename-format file-diagnostics results peek hover-query \
-         selection-ranges workspace-symbols document-links; do
+         selection-ranges workspace-symbols document-links definition-link; do
     python3 tests/$t.py || fail=1
 done
 python3 tests/langfeat-real.py || fail=1

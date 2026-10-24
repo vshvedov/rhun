@@ -1546,7 +1546,7 @@ on_keyboard:
     mov [rip + kb_group], eax
     mov edi, [rip + kb_mods]
     and edi, MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_SUPER
-    call viewpic_modifiers
+    call app_on_modifiers
     jmp .Lk_ret
 .Lk_repeat:
     mov eax, [r12]

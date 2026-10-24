@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / 'build' / 'windows'
 
 
-def tool(name):
+def tool(name, optional=False):
     roots = [os.environ.get('LLVM_BIN', ''), '/opt/homebrew/opt/llvm/bin',
              '/opt/homebrew/opt/lld/bin', r'C:\Program Files\LLVM\bin']
     found = shutil.which(name)
@@ -28,6 +28,8 @@ def tool(name):
             path = Path(root) / (name + suffix)
             if root and path.is_file():
                 return str(path)
+    if optional:
+        return None
     raise SystemExit(f'{name} is required. Install LLVM and set LLVM_BIN to its bin folder.')
 
 
@@ -152,7 +154,11 @@ def main():
     parser.add_argument('mode', choices=['debug', 'release', 'test'], nargs='?', default='debug')
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
-    mc, dlltool, link, rc = map(tool, ['llvm-mc', 'llvm-dlltool', 'lld-link', 'llvm-rc'])
+    mc = tool('llvm-mc', optional=True)
+    clang = tool('clang', optional=True) if not mc else None
+    if not mc and not clang:
+        raise SystemExit('llvm-mc or clang is required. Install LLVM and set LLVM_BIN to its bin folder.')
+    dlltool, link, rc = map(tool, ['llvm-dlltool', 'lld-link', 'llvm-rc'])
     # ICO containers can carry the existing PNG directly, without rerasterizing the artwork.
     png = (ROOT / 'assets/icons/rhun-256.png').read_bytes()
     icon = OUT / 'rhun.ico'
@@ -198,8 +204,12 @@ def main():
         source = '\n'.join(converted) + '\n'
         copy = OUT / name
         copy.write_text(source, encoding='utf-8')
-        run([mc, '-triple=x86_64-pc-windows-msvc', '-filetype=obj', '-defsym=WINDOWS=1',
-             '-I', ROOT / 'src', '-I', ROOT / 'src/win', '-I', OUT, copy, '-o', obj])
+        if mc:
+            run([mc, '-triple=x86_64-pc-windows-msvc', '-filetype=obj', '-defsym=WINDOWS=1',
+                 '-I', ROOT / 'src', '-I', ROOT / 'src/win', '-I', OUT, copy, '-o', obj])
+        else:
+            run([clang, '-target', 'x86_64-pc-windows-msvc', '-c', '-Wa,-defsym,WINDOWS=1',
+                 '-I', ROOT / 'src', '-I', ROOT / 'src/win', '-I', OUT, copy, '-o', obj])
         return obj
 
     with concurrent.futures.ThreadPoolExecutor() as pool:

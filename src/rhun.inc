@@ -568,6 +568,13 @@ ENDSTRUCT SET_SIZE
 .equ UP_INSTALLING, 2
 .equ UP_READY, 3                # installed; a restart runs it
 
+# ---- auto save (cfg_auto_save) ----
+.equ AUTOSAVE_OFF, 0
+.equ AUTOSAVE_AFTER_DELAY, 1
+.equ AUTOSAVE_ON_FOCUS_CHANGE, 2
+.equ AUTOSAVE_ON_WINDOW_CHANGE, 3
+
+
 # ---- document ----
 STRUCT
 F DOC_buf, 8
@@ -1131,6 +1138,7 @@ ENDSTRUCT MK_SIZE
 .equ HOVER_REST_MS, 500
 .equ EDITS_MAX, 1048576
 .equ ID_EXT_HOVER, 0x3e00
+
 
 .equ DISK_FADE_MS, 800
 .equ DISK_FRAME_MS, 50

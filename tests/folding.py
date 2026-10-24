@@ -54,6 +54,54 @@ class Folding(FoldBase):
         # Down twice from line 1: line 8 ("}"), then 9 (blank): nothing to fold or open there
         self.assertEqual(self.folds(out)[1:], ['fold 1-7', 'fold 1-7'])
 
+    def test_bracket_folding_unindented(self):
+        code = 'function calculateTotal() {\n$subtotal = 100;\n$tax = 10;\nreturn $subtotal + $tax;\n}\n'
+        (self.proj / 'calc.php').write_text(code, encoding='utf-8')
+        out = self.run_f(['key ctrl+Home', 'cmd fold', 'print-present folds',
+                          'cmd unfold', 'print-present folds'], files=('calc.php',))
+        # Enclosed lines inside { ... } fold, leaving closing brace on line 5 visible
+        self.assertEqual(self.folds(out)[0], 'fold 1-4')
+        self.assertEqual(self.folds(out)[1:], [])
+
+    def test_bracket_folding_nested(self):
+        code = 'function calc() {\nif ($x) {\n$a = 1;\n}\nreturn $a;\n}\n'
+        (self.proj / 'nested.php').write_text(code, encoding='utf-8')
+        out = self.run_f(['key ctrl+Home', 'key Down', 'cmd fold', 'print-present folds',
+                          'key ctrl+Home', 'cmd fold', 'print-present folds'], files=('nested.php',))
+        f = self.folds(out)
+        self.assertEqual(f[0], 'fold 2-3')
+        self.assertEqual(f[1:], ['fold 1-5', 'fold 2-3'])
+
+    def test_bracket_folding_arrays_and_calls(self):
+        code = 'items = [\n1,\n2,\n]\nfunc(\na,\nb\n)\n'
+        (self.proj / 'data.js').write_text(code, encoding='utf-8')
+        out = self.run_f(['key ctrl+Home', 'cmd fold', 'print-present folds',
+                          'key Down', 'key Down', 'key Down', 'key Down', 'cmd fold', 'print-present folds'],
+                         files=('data.js',))
+        f = self.folds(out)
+        self.assertEqual(f[0], 'fold 1-3')
+        self.assertEqual(f[1:], ['fold 1-3', 'fold 5-7'])
+
+    def test_bracket_folding_strings_and_comments_ignored(self):
+        code = 'function calc() {\n// a line with {\nlet s = "string { with } braces";\nreturn 10;\n}\n'
+        (self.proj / 'sample.js').write_text(code, encoding='utf-8')
+        out = self.run_f(['key ctrl+Home', 'cmd fold', 'print-present folds'], files=('sample.js',))
+        self.assertEqual(self.folds(out), ['fold 1-4'])
+
+    def test_bracket_folding_gutter_click(self):
+        code = 'function calc() {\n$a = 1;\n$b = 2;\nreturn $a + $b;\n}\n'
+        (self.proj / 'gutter.php').write_text(code, encoding='utf-8')
+        out = self.run_f(['print-xy 1 1'] + [f'print-hit {x} 86' for x in range(0, 60, 2)], files=('gutter.php',))
+        xs = [x for x, l in zip(range(0, 60, 2), out[1:]) if l.startswith('fold-lane ')]
+        self.assertTrue(xs, out)
+        y = int(out[0].split()[1])
+        # Clicking the fold lane on line 1 collapses the PHP function
+        out = self.run_f([f'click {xs[0] + 2} {y}', 'print-present folds'], files=('gutter.php',))
+        self.assertEqual(self.folds(out), ['fold 1-4'])
+        # Clicking again unfolds it
+        out = self.run_f([f'click {xs[0] + 2} {y}', f'click {xs[0] + 2} {y}', 'print-present folds'], files=('gutter.php',))
+        self.assertEqual(self.folds(out), [])
+
     def test_innermost_range_holding_the_caret(self):
         out = self.run_f(['key ctrl+Home', 'key Down', 'key Down', 'cmd fold', 'print-present folds',
                           'print-state', 'cmd fold', 'print-present folds'])

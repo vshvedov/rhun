@@ -223,15 +223,23 @@ tools/package-mac.sh   # build/rhun-VERSION-macos-arm64.zip and .dmg
 
 The Windows build targets Windows 10 version 1809 or later and Windows 11, on x64. Native ARM64 and Windows code signing are not included in 0.16.0. Windows may display an unknown-publisher warning for the unsigned download.
 
-Download `rhun-VERSION-windows-x86_64.zip` from [Releases](https://github.com/vshvedov/rhun/releases/latest), extract it, and open `rhun.exe`. Keep `rhun.com` beside it for terminal use. For a Start menu shortcut and a terminal command, paste this into PowerShell:
+Download `rhun-VERSION-windows-x86_64.zip` from [Releases](https://github.com/vshvedov/rhun/releases/latest), extract it, and open `rhun.exe`. Keep `rhun.com` beside it for terminal use. For a Start menu shortcut and a terminal command, download the installer in PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; & ([scriptblock]::Create((New-Object Net.WebClient).DownloadString('https://github.com/vshvedov/rhun/releases/latest/download/install.ps1')))"
+$rhunInstaller = Join-Path $env:TEMP ('rhun-install-' + [guid]::NewGuid() + '.ps1')
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/vshvedov/rhun/releases/latest/download/install.ps1' -OutFile $rhunInstaller -ErrorAction Stop
+```
+
+After the download succeeds, you can [inspect the installer source](https://github.com/vshvedov/rhun/blob/main/install.ps1). Run it in the same PowerShell window:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File $rhunInstaller
 ```
 
 The installer verifies SHA-256, installs under `%LOCALAPPDATA%\Programs\rhun`, adds a Start menu shortcut and updates your user PATH. Open a new terminal after installation. Options are `-Version X`, `-InstallDir DIR`, `-NoModifyPath`, `-NoShortcut`, `-NoUrlScheme` (no `rhun://file/` links), and `-Uninstall`. It refuses to replace a running editor or a directory containing unrelated files. Use the status bar to download an update and restart into it, or close rhun and rerun the installer. Automatic checks are enabled for release builds, with installation and restart initiated by you. Uninstalling keeps settings and sessions.
 
-The script is also included in the ZIP. To install from a downloaded script, run `powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1`. No administrator access or package manager is needed.
+The script is also included in the ZIP. No administrator access or package manager is needed. `RemoteSigned` applies only to the installer process and does not change your saved execution policy. If an organizational policy or an unsigned-download warning blocks the script, use the ZIP or contact your administrator.
 
 Installation registers text, source, configuration and supported image extensions in Open With and
 Default Apps for the current user. It prints a command you can run manually to open Windows Settings

@@ -86,6 +86,10 @@ FN main
     T Markdown, "`comment` and **bold** [link](x)"
     T Markdown, "```sh"
     T Markdown, "inside fence", 1
+    T Shell, "if [[ $# -gt 0 ]]; then"
+    T Shell, "if [[ ${#mcmx[@]} -lt 2 ]]; then"
+    T Shell, "sleep 10 # sleep 10 second"
+    T Python, "x=1#c"
     mov rdi, [rip + out + SB_ptr]
     mov rsi, [rip + out + SB_len]
     call log_write

@@ -226,7 +226,7 @@ copy_token:
     pop rax
     ret
 
-# add_region(gr, start, slen, end, elen, class, flags(esc | multi<<8 | bol<<9))
+# add_region(gr, start, slen, end, elen, class, flags(esc | multi<<8 | bol<<9 | word<<10))
 add_region:
     PROLOGUE 16
     mov rbx, rdi
@@ -262,8 +262,12 @@ add_region:
     and edx, 1
     mov [rcx + REG_multi], dl
     shr eax, 1
+    mov edx, eax
+    and edx, 1
+    mov [rcx + REG_bol], dl
+    shr eax, 1
     and eax, 1
-    mov [rcx + REG_bol], al
+    mov [rcx + REG_word], al
     EPILOGUE
 
 # grammar_parse(text, len) -> GR*
@@ -547,7 +551,7 @@ FN grammar_fill
     add rsp, 16
     jmp .Lgp_next
 .Lgp_region:
-    # region = start end class [multiline] [bol] [escape=X]
+    # region = start end class [multiline] [bol] [word] [escape=X]
     call .Lgp_words3
     mov rdi, [rsp + 32]
     mov rsi, [rsp + 40]
@@ -578,6 +582,16 @@ FN grammar_fill
     js 7f
     or ecx, 0x200
 7:  push rcx
+    mov rdi, r14
+    mov rsi, r15
+    lea rdx, [rip + .Lv_word]
+    mov ecx, 5
+    call str_find
+    pop rcx
+    test rax, rax
+    js 71f
+    or ecx, 0x400
+71: push rcx
     mov rdi, r14
     mov rsi, r15
     lea rdx, [rip + .Lv_escape]
@@ -1182,7 +1196,20 @@ FN tokenize
     jnz 7f
 6:  inc rcx
     jmp .Ltk_reg
-7:  movzx eax, byte ptr [r15 + REG_slen]
+7:  cmp byte ptr [r15 + REG_word], 0
+    je .Ltk_wordok
+    test rsi, rsi
+    jz .Ltk_wordok
+    movzx eax, byte ptr [r12 + rsi - 1]
+    lea rdi, [rip + word_sep]
+    push rcx
+    mov ecx, 9
+    repne scasb
+    pop rcx
+    je .Ltk_wordok
+    jmp 6b
+.Ltk_wordok:
+    movzx eax, byte ptr [r15 + REG_slen]
     add rsi, rax
     call scan_region_end
     jmp .Ltk_main
@@ -1727,6 +1754,8 @@ class_names:
 .Lv_insensitive: .asciz "insensitive"
 .Lv_multiline: .ascii "multiline"
 .Lv_bol: .ascii "bol"
+.Lv_word: .ascii " word"
+word_sep: .ascii " \t|&;()<>"
 .Lv_escape: .ascii "escape="
 .Lv_eol: .asciz "eol"
 .Lsyntax_dir: .asciz "syntax"

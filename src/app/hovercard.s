@@ -1227,6 +1227,8 @@ build:
     mov rsi, [rip + hc_src + SB_len]
     call md_new
     mov [rip + hc_md], rax
+    mov rdi, rax                # its text reads as the editor's: code face, syntax text color
+    call md_set_editor_text
     mov dword ptr [rip + hc_mmax], 0    # a new document: measure it again
 7:  mov eax, 1
     EPILOGUE
@@ -1410,7 +1412,7 @@ FN hovercard_draw
     cmp dword ptr [rip + hc_focus], 0
     je 71f
     COLOR r9d, T_ACCENT
-71: COLOR eax, T_POPUP
+71: COLOR eax, T_CODE_BG       # one surface with its code blocks
     push rax
     push rax
     call gfx_frame

@@ -310,6 +310,15 @@ theme_derive_into:
     DERIVE T_HIGHLIGHT_WRITE, T_BG, T_WARNING, 60
     COPY T_INFO, T_ACCENT
     COPY T_HINT, T_MUTED
+    # Markdown code blocks and the hover card: a step from the editor toward the text, darker on
+    # a light theme and lighter on a dark one; rules a quarter of the way from that to the text, so
+    # they show on the card whichever way the theme's border leans
+    test r12d, r12d
+    je 4f
+    DERIVE T_CODE_BG, T_BG, T_FG, 41
+    jmp 5f
+4:  DERIVE T_CODE_BG, T_BG, T_FG, 15
+5:  DERIVE T_RULE, T_CODE_BG, T_FG, 64
     EPILOGUE
 
 # luma(argb) -> eax: 54 r^2 + 183 g^2 + 18 b^2, relative luminance with squares for the curve
@@ -899,7 +908,7 @@ slot_names:
     .quad .Lt0, .Lt1, .Lt2, .Lt3, .Lt4, .Lt5, .Lt6, .Lt7, .Lt8, .Lt9
     .quad .Lt10, .Lt11, .Lt12, .Lt13, .Lt14, .Lt15, .Lg0, .Lg1, .Lg2
     .quad .Li0, .Li1, .Li2, .Li3, .Li4, .Li5, .Li6, .Li7, .Li8, .Li9
-    .quad .Lp0, .Lp1, .Lp2, .Lp3, .Lp4, .Lp5, .Lp6, .Lp7
+    .quad .Lp0, .Lp1, .Lp2, .Lp3, .Lp4, .Lp5, .Lp6, .Lp7, .Lp8, .Lp9
 .Ls0: .asciz "bg"
 .Ls1: .asciz "fg"
 .Ls2: .asciz "accent"
@@ -984,3 +993,5 @@ slot_names:
 .Lp5: .asciz "highlight_write"
 .Lp6: .asciz "info"
 .Lp7: .asciz "hint"
+.Lp8: .asciz "code_bg"
+.Lp9: .asciz "rule"

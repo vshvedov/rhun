@@ -315,10 +315,10 @@ theme_derive_into:
     # they show on the card whichever way the theme's border leans
     test r12d, r12d
     je 4f
-    DERIVE T_CODE_BG, T_BG, T_FG, 41
+    DERIVE T_POPUP_BG, T_BG, T_FG, 41
     jmp 5f
-4:  DERIVE T_CODE_BG, T_BG, T_FG, 15
-5:  DERIVE T_RULE, T_CODE_BG, T_FG, 64
+4:  DERIVE T_POPUP_BG, T_BG, T_FG, 15
+5:  DERIVE T_RULE, T_POPUP_BG, T_FG, 64
     EPILOGUE
 
 # luma(argb) -> eax: 54 r^2 + 183 g^2 + 18 b^2, relative luminance with squares for the curve
@@ -993,5 +993,5 @@ slot_names:
 .Lp5: .asciz "highlight_write"
 .Lp6: .asciz "info"
 .Lp7: .asciz "hint"
-.Lp8: .asciz "code_bg"
+.Lp8: .asciz "popup_bg"
 .Lp9: .asciz "rule"

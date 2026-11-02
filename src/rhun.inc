@@ -544,7 +544,7 @@ ENDSTRUCT INI_SIZE
 .equ T_HIGHLIGHT_WRITE, T_INLAY + 5
 .equ T_INFO, T_INLAY + 6        # info and hint diagnostics
 .equ T_HINT, T_INLAY + 7
-.equ T_CODE_BG, T_INLAY + 8     # Markdown code blocks and the hover card
+.equ T_POPUP_BG, T_INLAY + 8     # Markdown code blocks and the hover card
 .equ T_RULE, T_INLAY + 9        # Markdown rules, and between the hover card's sections
 .equ T_COUNT, T_INLAY + 10
 

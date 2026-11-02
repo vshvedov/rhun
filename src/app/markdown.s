@@ -4525,7 +4525,7 @@ flow:
     mov edx, eax
     call text_width
     mov [rsp + 32], eax
-4:  # the word as an item (a code span over its tint; bold without one in editor text)
+4:  # the word as an item (a code span over its tint, none in editor text)
     test dword ptr [r13 + MDR_style], MS_CODE
     jz 41f
     cmp dword ptr [rbx + MD_edtext], 0
@@ -4554,12 +4554,8 @@ flow:
     mov [rax + MDI_face], ecx
     mov ecx, [r13 + MDR_style]
     cmp dword ptr [rip + lay_bold], 0
-    jne 44f
-    test ecx, MS_CODE
-    jz 42f
-    cmp dword ptr [rbx + MD_edtext], 0
     je 42f
-44: or ecx, MS_STRONG
+    or ecx, MS_STRONG
 42: mov [rax + MDI_style], ecx
     mov ecx, [r13 + MDR_link]
     mov [rax + MDI_link], ecx
@@ -4676,7 +4672,7 @@ code_items:
     mov edx, [rip + lay_right]
     sub edx, edi
     mov ecx, r12d
-    mov r8d, T_CODE_BG
+    mov r8d, T_POPUP_BG
     call fill_item
     cmp dword ptr [rbx + MDB_copy], -1
     je 42f
@@ -4704,6 +4700,11 @@ code_items:
     add [rip + lay_y], eax
     M eax, MI_8
     add [rip + lay_y], eax
+    cmp dword ptr [rsp + 60], 0 # under the Copy row: room so tall code lines never reach it
+    je 43f
+    M eax, MI_4
+    add [rip + lay_y], eax
+43:
     mov dword ptr [rsp + 16], 0 # the line's start
     mov dword ptr [rsp + 20], 0 # the grammar's state
 .Lci_line:
@@ -5269,7 +5270,7 @@ FN md_draw
     mov ecx, [r13 + MDI_h]
     M r8d, MI_3
     COLOR r9d, T_ACCENT
-    COLOR eax, T_CODE_BG
+    COLOR eax, T_POPUP_BG
     push rax
     push rax
     call gfx_frame

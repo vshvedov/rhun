@@ -41,6 +41,12 @@ Setup, once:
 3. In the repository's Actions settings: the secret `SIGNPATH_API_TOKEN` (a SignPath CI user's API
    token with submitter rights) and the variable `SIGNPATH_ORGANIZATION_ID`.
 
+Before enabling production signing, run **SignPath test signing** manually in GitHub Actions,
+with the organization ID and the CI token secret in place. It uses `test-signing` and the ZIP
+artifact configuration above without publishing any files. Its self-signed certificate is for
+setup verification only. After SignPath reviews the trusted-build setup and imports the production
+certificate, set `SIGNPATH_ORGANIZATION_ID` to enable signing in the release workflow.
+
 The version resource that `tools/build-windows.py` adds to both executables supplies that product
 name and version. Explorer and Defender's reports show it too.
 

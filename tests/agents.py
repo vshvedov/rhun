@@ -39,7 +39,8 @@ class CodexDiscovery(unittest.TestCase):
         self.env = dict(os.environ, HOME=self.home.as_posix(),
                         XDG_CONFIG_HOME=(self.home / 'config').as_posix(),
                         XDG_STATE_HOME=(self.home / 'state').as_posix(), SHELL='/nonexistent')
-        self.env.pop('GROK_HOME', None)
+        for key in ('CLAUDE_CONFIG_DIR', 'CODEX_HOME', 'GROK_HOME'):
+            self.env.pop(key, None)
         config = self.home / 'config/rhun/config'
         config.parent.mkdir(parents=True)
         config.write_text('[updates]\ncheck = false\n[git]\nenabled = false\n', encoding='utf-8')
@@ -302,6 +303,25 @@ class CodexDiscovery(unittest.TestCase):
         shutil.rmtree(history.parent)
         self.assertEqual(len(self.worker()[-1][2]), 2)
         self.assertTrue(history.is_file())
+
+    def test_provider_cache_profiles_preserve_legacy_worktree_history(self):
+        self.init_repo()
+        tree = self.add_worktree('profile-history')
+        self.worktree_sessions(tree)
+        self.assertEqual(len(self.worker()[-1][2]), 2)
+        history, = (self.home / 'state/rhun').glob('agents-worktrees-v2-*/*.root')
+        data = history.read_bytes()
+        length, = struct.unpack_from('<Q', data)
+        self.assertTrue(data[8:8 + length].endswith(b'\n' + self.env['HOME'].encode()),
+                        'durable history no longer uses the legacy repository/HOME identity')
+        self.git('worktree', 'remove', str(tree))
+        self.env['GROK_HOME'] = str(self.home / 'another grok profile')
+        for _ in range(2):
+            for cache in (self.home / 'state/rhun').glob('agents-index-v6-*'):
+                cache.unlink()
+            self.assertEqual(len(self.worker()[-1][2]), 2)
+        self.assertTrue(history.is_file())
+        self.assertEqual(len(list(history.parent.parent.glob('agents-worktrees-v2-*'))), 1)
 
     def test_reused_worktree_path_keeps_old_history_and_excludes_foreign_sessions(self):
         self.init_repo()
@@ -753,6 +773,56 @@ class CodexDiscovery(unittest.TestCase):
                             model=strings[4]))
         assert offset == len(packet)
         return records
+
+    def test_custom_agent_homes_discover_only_the_selected_profile(self):
+        self.init_repo()
+        self.session.write_bytes(self.metadata() + b'\n' + self.message('user', 'Default Codex'))
+        default_claude = self.home / '.claude/projects' / claude_slug(str(self.project)) / 'default.jsonl'
+        default_claude.parent.mkdir(parents=True)
+        default_claude.write_text(json.dumps({'type': 'user', 'cwd': str(self.project),
+                                            'message': {'role': 'user', 'content': 'Default Claude'}}) + '\n')
+        self.assertEqual({row['title'] for row in self.worker()[-1][2]},
+                         {'Default Claude', 'Default Codex'})
+        for profile in ('first café', 'second 日本'):
+            claude_home = self.home / profile / 'claude'
+            codex_home = self.home / profile / 'codex'
+            claude = claude_home / 'projects' / claude_slug(str(self.project)) / 'custom.jsonl'
+            codex = codex_home / 'sessions/2026/11/02/custom.jsonl'
+            claude.parent.mkdir(parents=True)
+            codex.parent.mkdir(parents=True)
+            titles = {f'{profile} Claude', f'{profile} Codex'}
+            claude.write_text(json.dumps({'type': 'user', 'cwd': str(self.project),
+                                         'message': {'role': 'user', 'content': f'{profile} Claude'}}) + '\n')
+            codex.write_bytes(self.metadata() + b'\n' + self.message('user', f'{profile} Codex'))
+            self.env.update(CLAUDE_CONFIG_DIR=str(claude_home), CODEX_HOME=str(codex_home))
+            for _ in range(2):
+                packets = self.worker()
+                self.assertEqual({row['title'] for row in packets[-1][2]}, titles)
+                for _, _, rows in packets:
+                    self.assertTrue({row['title'] for row in rows} <= titles, packets)
+            output = self.run_commands(['print-agents'])
+            for title in titles:
+                self.assertIn(title, output)
+            self.assertNotIn('Default', output)
+        self.env.update(CLAUDE_CONFIG_DIR='', CODEX_HOME='')
+        self.assertEqual({row['title'] for row in self.worker()[-1][2]},
+                         {'Default Claude', 'Default Codex'})
+
+    def test_grok_profile_switch_does_not_publish_previous_cached_sessions(self):
+        self.init_repo()
+        for profile in ('first', 'second'):
+            home = self.home / profile
+            log = home / 'sessions/project/session/updates.jsonl'
+            log.parent.mkdir(parents=True)
+            log.with_name('summary.json').write_text(json.dumps({
+                'info': {'id': profile, 'cwd': str(self.project)}, 'generated_title': profile}))
+            log.write_bytes(GrokDiscovery.update(profile, GrokDiscovery.user(profile)))
+            self.env['GROK_HOME'] = str(home)
+            for _ in range(2):
+                packets = self.worker(sources='grok')
+                self.assertEqual([row['title'] for row in packets[-1][2]], [profile])
+                for _, _, rows in packets:
+                    self.assertTrue(all(row['title'] == profile for row in rows), packets)
 
     def test_load_more_click_and_page_boundaries(self):
         for count in (0, 49, 50, 51, 100, 123):

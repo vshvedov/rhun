@@ -11,6 +11,7 @@
 #                                           followed it (http, https: the browser; rhun://: a tab;
 #                                           a file relative to the base: a tab)
 #   md_set_base(m, ptr, len)                the absolute folder relative links name
+#   md_set_flat(m)                         code blocks use the containing surface
 #   m = md_from_body(ext, ptr, len)         a rich-document body ("doc LEN" + Markdown, "base
 #                                           LEN" + folder: views design 3.8.4), or 0
 #   md_free(m)
@@ -76,7 +77,7 @@ F MD_height, 4
 F MD_maxw, 4            # the widest line laid out
 F MD_gen, 4             # g_face_gen when laid out
 F MD_hover, 4           # the link under the pointer last frame, -1
-F MD_pad, 4
+F MD_flat, 4           # code blocks have no background on an already tinted surface
 F MD_base, 8            # cstr, mem_alloc'd: the folder relative links name (md_set_base), or 0
 F MD_ext, 8             # the extension whose img: handles images name (md_from_body), or 0
 F MD_focus, 4           # the link the keyboard is on (drawn as hovered), -1
@@ -1399,6 +1400,14 @@ FN md_sel_text
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
+
+# md_set_flat(m): keep code on the containing surface (0: nothing).
+FN md_set_flat
+    test rdi, rdi
+    jz 1f
+    mov dword ptr [rdi + MD_flat], 1
+    mov dword ptr [rdi + MD_width], -1
+1:  ret
 
 # md_set_base(m, ptr, len): the absolute folder relative links name (a trailing / left out); an
 #   empty one clears it
@@ -4646,6 +4655,8 @@ code_items:
     mov [rsp + 60], ecx
     lea edx, [r12 + rcx]
 41:
+    cmp dword ptr [r15 + MD_flat], 0
+    jne 411f
     mov edi, [rip + lay_x0]
     mov esi, [rip + lay_y]
     mov r12d, edx
@@ -4654,6 +4665,7 @@ code_items:
     mov ecx, r12d
     mov r8d, T_HOVER
     call fill_item
+411:
     cmp dword ptr [rbx + MDB_copy], -1
     je 42f
     mov edi, MDF_SMALL

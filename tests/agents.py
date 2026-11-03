@@ -312,7 +312,7 @@ class CodexDiscovery(unittest.TestCase):
         history, = (self.home / 'state/rhun').glob('agents-worktrees-v2-*/*.root')
         data = history.read_bytes()
         length, = struct.unpack_from('<Q', data)
-        self.assertTrue(data[8:8 + length].endswith(b'\n' + str(self.home).encode()),
+        self.assertTrue(data[8:8 + length].endswith(b'\n' + self.env['HOME'].encode()),
                         'durable history no longer uses the legacy repository/HOME identity')
         self.git('worktree', 'remove', str(tree))
         self.env['GROK_HOME'] = str(self.home / 'another grok profile')

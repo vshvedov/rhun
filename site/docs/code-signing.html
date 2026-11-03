@@ -1,8 +1,8 @@
 <section id="signing">
 <h2>Windows releases</h2>
 <p>Free code signing provided by <a href="https://signpath.io">SignPath.io</a>, certificate by <a href="https://signpath.org">SignPath Foundation</a>.</p>
-<p>The signed files are <code>rhun.exe</code> and <code>rhun.com</code> in the Windows ZIP of each <a href="https://github.com/vshvedov/rhun/releases">release</a>. The <a href="https://github.com/vshvedov/rhun/blob/main/.github/workflows/release.yml">release workflow</a> builds them from the release’s tag in <a href="https://github.com/vshvedov/rhun">vshvedov/rhun</a> on GitHub-hosted runners, tests them, and submits them for signing. A person approves every signing request. rhun’s signature covers nothing else: extensions, their language servers, and the programs rhun starts are signed by their own authors, if at all.</p>
-<p>Signing starts with the first release after SignPath Foundation accepts rhun; earlier Windows releases are unsigned. Every release’s ZIP SHA-256 is in its <code>SHA256SUMS</code>, and the installer and updater check it.</p>
+<p>Once production signing is enabled, it covers <code>rhun.exe</code> and <code>rhun.com</code> in the Windows ZIP of each <a href="https://github.com/vshvedov/rhun/releases">release</a>. The <a href="https://github.com/vshvedov/rhun/blob/main/.github/workflows/release.yml">release workflow</a> builds them from the release’s tag in <a href="https://github.com/vshvedov/rhun">vshvedov/rhun</a> on GitHub-hosted runners, tests them, and submits them for signing. A person approves every signing request. rhun’s signature covers nothing else: extensions, their language servers, and the programs rhun starts are signed by their own authors, if at all.</p>
+<p>Windows releases remain unsigned until the production certificate and build verification are ready. Each release’s notes state whether its Windows files are signed. Every release’s ZIP SHA-256 is in its <code>SHA256SUMS</code>, and the installer and updater check it.</p>
 </section>
 <section id="team">
 <h2>Team roles</h2>

@@ -1,0 +1,72 @@
+# Exercise trusted-build signing with the self-signed test certificate. These files are never
+# published as a release, and this workflow does not enable production signing.
+name: SignPath test signing
+
+on:
+  workflow_dispatch:
+    inputs:
+      organization_id:
+        description: SignPath organization ID
+        required: true
+        default: 40f55990-5f8f-4272-a8f9-68f5b8482a23
+
+permissions:
+  contents: read
+
+jobs:
+  sign:
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/cache/restore@v4
+        with:
+          path: build/llvm
+          key: llvm-windows-x64-23.1.2
+      - name: LLVM
+        shell: pwsh
+        timeout-minutes: 20
+        run: tools/setup-windows-llvm.ps1
+      - name: Build
+        env:
+          RHUN_DIST: '1'
+        run: python tools/build-windows.py release
+      - name: Version
+        id: version
+        shell: pwsh
+        run: Add-Content $env:GITHUB_OUTPUT "version=$((Get-Content VERSION -Raw).Trim())"
+      - name: Unsigned executables
+        id: unsigned
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-test-unsigned
+          path: |
+            build/windows/rhun.exe
+            build/windows/rhun.com
+          if-no-files-found: error
+      - name: Test signing
+        uses: signpath/github-action-submit-signing-request@v3
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ inputs.organization_id }}
+          project-slug: rhun
+          signing-policy-slug: test-signing
+          artifact-configuration-slug: windows-executables
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          wait-for-completion-timeout-in-seconds: 1200
+          output-artifact-directory: build/test-signed
+          parameters: |
+            version: ${{ toJSON(steps.version.outputs.version) }}
+      - name: Inspect test signatures
+        shell: pwsh
+        run: |
+          foreach ($name in 'rhun.exe', 'rhun.com') {
+            $signature = Get-AuthenticodeSignature -LiteralPath "build/test-signed/$name"
+            if ($null -eq $signature.SignerCertificate) { throw "$name has no signature" }
+            Write-Output "$name test certificate: $($signature.SignerCertificate.Subject)"
+            Write-Output "$name status: $($signature.Status), $($signature.StatusMessage)"
+          }

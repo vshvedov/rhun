@@ -13,6 +13,7 @@
 #   md_set_base(m, ptr, len)                the absolute folder relative links name
 #   md_set_editor_text(m)                   paragraphs in the editor's face and text color, as the
 #                                           hover card shows them
+#   md_set_flat(m)                         code blocks use the containing surface
 #   m = md_from_body(ext, ptr, len)         a rich-document body ("doc LEN" + Markdown, "base
 #                                           LEN" + folder: views design 3.8.4), or 0
 #   md_free(m)
@@ -79,6 +80,8 @@ F MD_maxw, 4            # the widest line laid out
 F MD_gen, 4             # g_face_gen when laid out
 F MD_hover, 4           # the link under the pointer last frame, -1
 F MD_edtext, 4          # 1: paragraphs in the code face and the syntax text color
+F MD_flat, 4           # code blocks have no background on an already tinted surface
+F MD_pad, 4
 F MD_base, 8            # cstr, mem_alloc'd: the folder relative links name (md_set_base), or 0
 F MD_ext, 8             # the extension whose img: handles images name (md_from_body), or 0
 F MD_focus, 4           # the link the keyboard is on (drawn as hovered), -1
@@ -1408,6 +1411,14 @@ FN md_set_editor_text
     jz 1f
     mov dword ptr [rdi + MD_edtext], 1
     mov dword ptr [rdi + MD_width], -1     # laid out again
+1:  ret
+
+# md_set_flat(m): keep code on the containing surface (0: nothing).
+FN md_set_flat
+    test rdi, rdi
+    jz 1f
+    mov dword ptr [rdi + MD_flat], 1
+    mov dword ptr [rdi + MD_width], -1
 1:  ret
 
 # md_set_base(m, ptr, len): the absolute folder relative links name (a trailing / left out); an
@@ -4666,6 +4677,8 @@ code_items:
     mov [rsp + 60], ecx
     lea edx, [r12 + rcx]
 41:
+    cmp dword ptr [r15 + MD_flat], 0
+    jne 411f
     mov edi, [rip + lay_x0]
     mov esi, [rip + lay_y]
     mov r12d, edx
@@ -4674,6 +4687,7 @@ code_items:
     mov ecx, r12d
     mov r8d, T_POPUP_BG
     call fill_item
+411:
     cmp dword ptr [rbx + MDB_copy], -1
     je 42f
     mov r12d, [rsp + 60]        # an icon button, square in the header

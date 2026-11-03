@@ -1227,6 +1227,8 @@ build:
     mov rsi, [rip + hc_src + SB_len]
     call md_new
     mov [rip + hc_md], rax
+    mov rdi, rax
+    call md_set_flat
     mov dword ptr [rip + hc_mmax], 0    # a new document: measure it again
 7:  mov eax, 1
     EPILOGUE

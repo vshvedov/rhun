@@ -14,6 +14,19 @@ def hover(l1, c1, l2, c2, text):
 
 
 class Hover(lang.Lang):
+    def test_fenced_code_uses_the_hover_cards_own_surface(self):
+        config = self.work / 'config/rhun/config'
+        config.write_text(config.read_text().replace('[ui]\n',
+                          '[ui]\nfollow_system = false\ntheme = turbo-pascal\n'))
+        root = self.provider({'hello': 'hello 1 hover-query markdown',
+                              'answers': {'hover-query': {'body': hover(0, 0, 0, 0,
+                                  '```go\nfunc runCLI() int\n```\n\nRuns the command.')}}},
+                             'hover = *.rs\n')
+        shot = self.work / 'hover.ppm'
+        out = self.run_lang(root, ['hover-at 2 10', 'wait 800', 'print-hover-card', f'shot {shot}'])
+        self.assertTrue(any(line.startswith('card=shown') for line in out), out)
+        self.assertFalse((0, 85, 85) in lang.host.ppm_colors(shot), 'code adds its own hover tint')
+
     def two(self, a='alpha text', b='beta text', extra_a=None):
         root = self.work / 'lang'
         spec_a = {'hello': 'hello 1 hover-query', 'answers': {'hover-query': {'body': hover(2, 9, 2, 14, a)}},

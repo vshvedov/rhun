@@ -21,6 +21,7 @@ matches: .zero VEC_SIZE
 tmp: .zero SB_SIZE
 packet: .zero SB_SIZE
 cache_key: .zero SB_SIZE
+history_key_len: .quad 0        # stable repository/HOME prefix, shared with pre-profile histories
 cache_file: .zero SB_SIZE
 history_file: .zero SB_SIZE
 history_dir: .zero SB_SIZE
@@ -144,18 +145,27 @@ worktree_name:
 claude_root:
     PROLOGUE
     mov rbx, rdi
-    # ~/.claude/projects/<path with every non-alphanumeric UTF-16 unit as '-'>
+    # $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects, then the checkout's slug
     lea rdi, [rip + tmp]
     call sb_clear
+    lea rdi, [rip + .Lclaude_config_dir]
+    call getenv
+    lea r12, [rip + .Lprojects]
+    test rax, rax
+    jz 1f
+    cmp byte ptr [rax], 0
+    jne 2f
+1:
     lea rdi, [rip + .Lhome]
     call getenv
     test rax, rax
     jz 9f
-    lea rdi, [rip + tmp]
+    lea r12, [rip + .Lclaude_projects]
+2:  lea rdi, [rip + tmp]
     mov rsi, rax
     call sb_push_cstr
     lea rdi, [rip + tmp]
-    lea rsi, [rip + .Lclaude_projects]
+    mov rsi, r12
     call sb_push_cstr
     mov r15, [rip + tmp + SB_len]
     mov rdi, [rip + tmp + SB_ptr]
@@ -328,6 +338,21 @@ has_source:
     shr rax, 63
     EPILOGUE
 
+# Append an environment value, separated by NUL so embedded newlines cannot alias profiles.
+cache_env:
+    PROLOGUE
+    call getenv
+    mov rbx, rax
+    lea rdi, [rip + cache_key]
+    xor esi, esi
+    call sb_push_byte
+    test rbx, rbx
+    jz 1f
+    lea rdi, [rip + cache_key]
+    mov rsi, rbx
+    call sb_push_cstr
+1:  EPILOGUE
+
 # Cache filename is hashed; the entire identity is also stored and checked on load.
 cache_path:
     PROLOGUE 32
@@ -354,6 +379,15 @@ cache_path:
     lea rdi, [rip + cache_key]
     mov rsi, rax
     call sb_push_cstr
+    mov rax, [rip + cache_key + SB_len]
+    mov [rip + history_key_len], rax
+    # A provisional page must never come from another provider's configuration directory.
+    lea rdi, [rip + .Lclaude_config_dir]
+    call cache_env
+    lea rdi, [rip + .Lcodex_home]
+    call cache_env
+    lea rdi, [rip + .Lgrok_home]
+    call cache_env
     lea rdi, [rip + cache_file]
     call session_state_dir
     test eax, eax
@@ -386,6 +420,14 @@ cache_path:
     lea rdi, [rip + cache_file]
     mov rsi, rsp
     call sb_push
+    # Worktree associations survive provider switches and upgrades from the legacy cache key.
+    mov rdi, [rip + cache_key + SB_ptr]
+    mov rsi, [rip + history_key_len]
+    call hash_line
+    mov rsi, rax
+    mov rdi, rsp
+    call fmt_hex
+    mov [rsp + 24], rax
     lea rdi, [rip + history_file]
     mov rsi, rsp
     mov rdx, [rsp + 24]
@@ -524,7 +566,7 @@ history_read_file:
     cmp r12, 1 << 20
     ja 8f
     mov r13, [rbx]
-    cmp r13, [rip + cache_key + SB_len]
+    cmp r13, [rip + history_key_len]
     jne 8f
     lea rax, [r13 + 40]
     cmp rax, r12
@@ -646,6 +688,7 @@ history_save:
     lea rsi, [rip + .Lhistory_suffix]
     call sb_push_cstr
     mov rdi, [rip + history_item + SB_ptr]
+    mov rsi, [rip + history_key_len]
     call keyed_save
     test rax, rax
     jnz 31f
@@ -817,6 +860,7 @@ member_save:
     call mem_free
     call packet_finish
     mov rdi, [rip + member_file + SB_ptr]
+    mov rsi, [rip + history_key_len]
     call keyed_save
 9:  EPILOGUE
 
@@ -848,7 +892,7 @@ member_check:
     cmp r13, 1 << 20
     ja 8f
     mov r14, [rbx]
-    cmp r14, [rip + cache_key + SB_len]
+    cmp r14, [rip + history_key_len]
     jne 8f
     lea rax, [r14 + 40]
     cmp rax, r13
@@ -1067,6 +1111,7 @@ cache_save:
     cmp rax, [rip + cache_hash]
     je 5f                       # unchanged since loaded: not written (and synced) again on every run
     mov rdi, [rip + cache_file + SB_ptr]
+    mov rsi, [rip + cache_key + SB_len]
     call keyed_save
     test rax, rax
     jnz 9f
@@ -1076,21 +1121,20 @@ cache_save:
     call opencode_state_save
 9:  EPILOGUE
 
-# keyed_save(path): atomically write the identity and current packet.
+# keyed_save(path, key length): atomically write the identity prefix and current packet.
 keyed_save:
     PROLOGUE 16
     mov r12, rdi
+    mov [rsp], rsi
     lea rdi, [rip + tmp]
     call sb_clear
-    mov rax, [rip + cache_key + SB_len]
-    mov [rsp], rax
     lea rdi, [rip + tmp]
     mov rsi, rsp
     mov edx, 8
     call sb_push
     lea rdi, [rip + tmp]
     mov rsi, [rip + cache_key + SB_ptr]
-    mov rdx, [rip + cache_key + SB_len]
+    mov rdx, [rsp]
     call sb_push
     lea rdi, [rip + tmp]
     mov rsi, [rip + packet + SB_ptr]
@@ -1153,13 +1197,9 @@ scan_sources:
     call has_source
     test eax, eax
     jz 5f
-    lea rdi, [rip + .Lhome]
-    call getenv
+    call codex_sessions
     test rax, rax
     jz 5f
-    mov rdi, rax
-    lea rsi, [rip + .Lcodex_sessions]
-    call path_join
     mov rbx, rax
     mov rdi, rax
     xor esi, esi
@@ -1315,6 +1355,24 @@ codex_cb:
 9:  mov rdi, rbx
     call mem_free
     EPILOGUE
+
+codex_sessions:
+    PROLOGUE
+    lea rdi, [rip + .Lcodex_home]
+    call getenv
+    lea rsi, [rip + .Lsessions]
+    test rax, rax
+    jz 1f
+    cmp byte ptr [rax], 0
+    jne 2f
+1:  lea rdi, [rip + .Lhome]
+    call getenv
+    test rax, rax
+    jz 9f
+    lea rsi, [rip + .Lcodex_sessions]
+2:  mov rdi, rax
+    call path_join
+9:  EPILOGUE
 
 # grok_sessions() -> Grok Build's sessions folder (owned): $GROK_HOME/sessions, or ~/.grok/sessions; 0
 # without a home
@@ -1977,6 +2035,9 @@ sort_sift:
 
 .section .rodata
 .Lhome: .asciz "HOME"
+.Lclaude_config_dir: .asciz "CLAUDE_CONFIG_DIR"
+.Lcodex_home: .asciz "CODEX_HOME"
+.Lprojects: .asciz "/projects/"
 .Lclaude_projects: .asciz "/.claude/projects/"
 .Lcodex_sessions: .asciz ".codex/sessions"
 .Lcodex_worktrees: .ascii "/.codex/worktrees/"

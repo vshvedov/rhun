@@ -774,8 +774,309 @@ indent_of:
     pop rbx
     ret
 
-# range_starts(doc, line) -> eax 1 when the line starts a foldable range (the next non-blank line
-# is indented deeper); looks at most 64 lines ahead
+# ---------------- bracket ranges ----------------
+
+# bracket_pair_info(al byte) -> eax open_ch, edx close_ch, ecx is_open (1: open, -1: close, 0: none)
+bracket_pair_info:
+    cmp al, '{'
+    je 1f
+    cmp al, '}'
+    je 2f
+    cmp al, '['
+    je 3f
+    cmp al, ']'
+    je 4f
+    cmp al, '('
+    je 5f
+    cmp al, ')'
+    je 6f
+    xor eax, eax
+    xor edx, edx
+    xor ecx, ecx
+    ret
+1:  mov eax, '{'
+    mov edx, '}'
+    mov ecx, 1
+    ret
+2:  mov eax, '{'
+    mov edx, '}'
+    mov ecx, -1
+    ret
+3:  mov eax, '['
+    mov edx, ']'
+    mov ecx, 1
+    ret
+4:  mov eax, '['
+    mov edx, ']'
+    mov ecx, -1
+    ret
+5:  mov eax, '('
+    mov edx, ')'
+    mov ecx, 1
+    ret
+6:  mov eax, '('
+    mov edx, ')'
+    mov ecx, -1
+    ret
+
+# bracket_match_forward(doc, pos, open_ch, close_ch) -> rax pos of matching close_ch, or -1
+bracket_match_forward:
+    PROLOGUE 48
+    mov r13, rdi                # doc
+    mov r12, rsi                # pos of open_ch
+    inc r12                     # start from pos + 1
+    mov [rsp + 8], edx          # open_ch
+    mov [rsp + 16], ecx         # close_ch
+    mov qword ptr [rsp + 24], 0 # depth
+    mov qword ptr [rsp + 32], 150000 # max bytes
+.Lbm_loop:
+    dec qword ptr [rsp + 32]
+    js .Lbm_not_found
+    mov rdi, r13
+    mov rsi, r12
+    call doc_byte
+    test eax, eax
+    jz .Lbm_not_found           # EOF
+    mov ebx, eax
+
+    # check line comment //
+    cmp ebx, '/'
+    jne 1f
+    lea rsi, [r12 + 1]
+    mov rdi, r13
+    call doc_byte
+    cmp eax, '/'
+    jne .Lbm_check_block_cmt
+    add r12, 2
+.Lbm_skip_line_cmt:
+    mov rdi, r13
+    mov rsi, r12
+    call doc_byte
+    test eax, eax
+    jz .Lbm_not_found
+    cmp eax, 10
+    je .Lbm_next_char
+    inc r12
+    jmp .Lbm_skip_line_cmt
+
+.Lbm_check_block_cmt:
+    cmp eax, '*'
+    jne 1f
+    add r12, 2
+.Lbm_skip_blk_cmt:
+    mov rdi, r13
+    mov rsi, r12
+    call doc_byte
+    test eax, eax
+    jz .Lbm_not_found
+    cmp eax, '*'
+    jne .Lbm_skip_blk_cmt_next
+    lea rsi, [r12 + 1]
+    mov rdi, r13
+    call doc_byte
+    cmp eax, '/'
+    jne .Lbm_skip_blk_cmt_next
+    add r12, 2
+    jmp .Lbm_loop
+.Lbm_skip_blk_cmt_next:
+    inc r12
+    jmp .Lbm_skip_blk_cmt
+
+1:  # check hash comment #
+    cmp ebx, '#'
+    jne 2f
+    inc r12
+.Lbm_skip_hash_cmt:
+    mov rdi, r13
+    mov rsi, r12
+    call doc_byte
+    test eax, eax
+    jz .Lbm_not_found
+    cmp eax, 10
+    je .Lbm_next_char
+    inc r12
+    jmp .Lbm_skip_hash_cmt
+
+2:  # check string literal
+    cmp ebx, '"'
+    je .Lbm_string
+    cmp ebx, '\''
+    je .Lbm_string
+    cmp ebx, '`'
+    je .Lbm_string
+    jmp 3f
+
+.Lbm_string:
+    mov r14d, ebx               # quote char
+    inc r12
+.Lbm_str_loop:
+    mov rdi, r13
+    mov rsi, r12
+    call doc_byte
+    test eax, eax
+    jz .Lbm_not_found
+    cmp eax, '\\'
+    jne .Lbm_str_no_esc
+    add r12, 2
+    jmp .Lbm_str_loop
+.Lbm_str_no_esc:
+    cmp eax, r14d
+    je .Lbm_str_done
+    cmp r14d, '`'
+    je .Lbm_str_cont
+    cmp eax, 10
+    je .Lbm_next_char
+.Lbm_str_cont:
+    inc r12
+    jmp .Lbm_str_loop
+.Lbm_str_done:
+    inc r12
+    jmp .Lbm_loop
+
+3:  # check bracket characters
+    cmp ebx, [rsp + 8]          # open_ch
+    jne 4f
+    inc qword ptr [rsp + 24]    # depth++
+    inc r12
+    jmp .Lbm_loop
+
+4:  cmp ebx, [rsp + 16]         # close_ch
+    jne .Lbm_next_char
+    mov rax, [rsp + 24]         # depth
+    test rax, rax
+    jz .Lbm_found
+    dec qword ptr [rsp + 24]    # depth--
+    inc r12
+    jmp .Lbm_loop
+
+.Lbm_next_char:
+    inc r12
+    jmp .Lbm_loop
+
+.Lbm_found:
+    mov rax, r12
+    EPILOGUE
+
+.Lbm_not_found:
+    mov rax, -1
+    EPILOGUE
+
+# bracket_range_end(doc, line) -> rax last line of range (0-based), or -1
+FN bracket_range_end
+    PROLOGUE 48
+    mov rbx, rdi                # doc
+    mov r12, rsi                # line
+    cmp r12, [rbx + DOC_nlines]
+    jae .Lbre_none
+    mov rdi, rbx
+    mov rsi, r12
+    call doc_line_start
+    mov r13, rax                # line start pos
+    mov rdi, rbx
+    mov rsi, r12
+    call doc_line_end
+    mov r14, rax                # line end pos
+    cmp r14, r13
+    jbe .Lbre_none
+
+    # find effective end of code (strip line comments)
+    mov r15, r14
+    mov rcx, r13
+.Lbre_find_eff_end:
+    cmp rcx, r14
+    jae .Lbre_scan_brackets
+    mov rdi, rbx
+    mov rsi, rcx
+    call doc_byte
+    cmp eax, '/'
+    jne 1f
+    lea rsi, [rcx + 1]
+    cmp rsi, r14
+    jae 1f
+    mov rdi, rbx
+    call doc_byte
+    cmp eax, '/'
+    je .Lbre_comment_found
+    cmp eax, '*'
+    je .Lbre_comment_found
+1:  cmp eax, '#'
+    je .Lbre_comment_found
+    cmp eax, '"'
+    je .Lbre_eff_str
+    cmp eax, '\''
+    je .Lbre_eff_str
+    cmp eax, '`'
+    je .Lbre_eff_str
+    inc rcx
+    jmp .Lbre_find_eff_end
+
+.Lbre_eff_str:
+    mov edx, eax
+    inc rcx
+.Lbre_eff_str_loop:
+    cmp rcx, r14
+    jae .Lbre_scan_brackets
+    mov rdi, rbx
+    mov rsi, rcx
+    call doc_byte
+    cmp eax, '\\'
+    jne 2f
+    add rcx, 2
+    jmp .Lbre_eff_str_loop
+2:  cmp eax, edx
+    je .Lbre_eff_str_done
+    inc rcx
+    jmp .Lbre_eff_str_loop
+.Lbre_eff_str_done:
+    inc rcx
+    jmp .Lbre_find_eff_end
+
+.Lbre_comment_found:
+    mov r15, rcx
+
+.Lbre_scan_brackets:
+    mov rcx, r15
+.Lbre_scan_loop:
+    cmp rcx, r13
+    jbe .Lbre_none
+    dec rcx
+    mov rdi, rbx
+    mov rsi, rcx
+    mov [rsp], rcx
+    call doc_byte
+    call bracket_pair_info
+    cmp ecx, 1
+    jne .Lbre_scan_loop
+    mov [rsp + 8], rax          # open_ch
+    mov [rsp + 16], rdx         # close_ch
+    mov rdi, rbx
+    mov rsi, [rsp]              # pos
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 16]
+    call bracket_match_forward
+    cmp rax, -1
+    je .Lbre_scan_resume
+    mov rdi, rbx
+    mov rsi, rax
+    call doc_line_of
+    cmp rax, r12
+    jbe .Lbre_scan_resume
+    lea rdx, [r12 + 1]
+    cmp rax, rdx
+    je .Lbre_ret_range
+    dec rax
+.Lbre_ret_range:
+    EPILOGUE
+
+.Lbre_scan_resume:
+    mov rcx, [rsp]
+    jmp .Lbre_scan_loop
+
+.Lbre_none:
+    mov rax, -1
+    EPILOGUE
+
+# range_starts(doc, line) -> eax 1 when the line starts a foldable range
 FN range_starts
     PROLOGUE
     mov rbx, rdi
@@ -794,6 +1095,13 @@ FN range_starts
     jne 71f
     EPILOGUE
 71: mov rdi, rbx
+    mov rsi, r12
+    call bracket_range_end
+    cmp rax, -1
+    je 72f
+    mov eax, 1
+    EPILOGUE
+72: mov rdi, rbx
     mov rsi, r12
     call indent_of
     test eax, eax
@@ -859,6 +1167,12 @@ FN range_end
     jmp 4b
 71: mov rdi, rbx
     mov rsi, r12
+    call bracket_range_end
+    cmp rax, -1
+    je 72f
+    EPILOGUE
+72: mov rdi, rbx
+    mov rsi, r12
     call range_starts
     test eax, eax
     jz 8f
@@ -916,6 +1230,7 @@ fold_innermost:
     call fr_innermost
     EPILOGUE
 0:  mov r13, r12                # the candidate header
+    mov r15d, 2000              # search limit lines up
 1:  mov rdi, rbx
     mov rsi, r13
     call range_end
@@ -938,27 +1253,12 @@ fold_innermost:
 2:  mov rax, r13
     mov rdx, r14
     EPILOGUE
-3:  # the next header up: the nearest line above indented less than the candidate
-    test r13, r13
+3:  test r13, r13
     jz 8f
-    mov rdi, rbx
-    mov rsi, r13
-    call indent_of
-    mov r15d, eax
-    test r15d, r15d
-    jns 4f
-    mov r15d, 0x7fffffff        # a blank line: any non-blank line above
-4:  dec r13
-    mov rdi, rbx
-    mov rsi, r13
-    call indent_of
-    test eax, eax
-    js 5f
-    cmp eax, r15d
-    jl 1b
-5:  test r13, r13
-    jnz 4b
-    jmp 8f
+    dec r15d
+    js 8f
+    dec r13
+    jmp 1b
 8:  mov rax, -1
     EPILOGUE
 

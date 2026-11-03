@@ -2208,6 +2208,7 @@ g_commands:
     COMMAND keyboard_shortcuts, "Keyboard Shortcuts", cmd_keyboard_shortcuts, ""
     COMMAND select_file_icon_theme, "Select File Icon Theme", cmd_select_file_icon_theme, ""
     COMMAND new_file, "New File", cmd_new_file, "ctrl+n"
+    COMMAND new_window, "New Window", cmd_new_window, "ctrl+shift+n"
     COMMAND save, "Save", cmd_save, "ctrl+s"
     COMMAND save_without_formatting, "Save Without Formatting", cmd_save_without_formatting, ""
     COMMAND cancel_save, "Cancel Save", cmd_cancel_save, ""

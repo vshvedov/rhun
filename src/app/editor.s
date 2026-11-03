@@ -39,6 +39,7 @@ g_ed_h: .long 0
 g_ed_tx: .long 0                # x of column 0 (before horizontal scroll)
 ed_hovered: .long 0             # the pointer was over the editor this frame (hover tracking)
 g_dragging: .long 0
+zoom_accum: .long 0
 hs_on: .long 0                  # the horizontal scrollbar is shown (hscroll_measure)
 hs_content: .long 0             # px: the widest line and a margin
 hs_view: .long 0                # px: the text area
@@ -2577,6 +2578,28 @@ FN editor_draw
 13: mov dword ptr [rip + ed_hovered], 1
     cmp dword ptr [rip + g_ed_cell], 0      # over a cell the wheel scrolls the notebook
     jne 3f
+    # wheel: with ctrl it zooms the editor font size, like in VS Code
+    test dword ptr [rip + g_scroll_mods], MOD_CTRL
+    jz .Lwheel_normal
+    mov eax, [rip + g_scroll_y]
+    test eax, eax
+    jz 3f
+    add [rip + zoom_accum], eax
+    cmp dword ptr [rip + zoom_accum], -40
+    jle .Lzoom_in_step
+    cmp dword ptr [rip + zoom_accum], 40
+    jge .Lzoom_out_step
+    jmp 3f
+.Lzoom_in_step:
+    mov dword ptr [rip + zoom_accum], 0
+    call cmd_zoom_in
+    jmp 3f
+.Lzoom_out_step:
+    mov dword ptr [rip + zoom_accum], 0
+    call cmd_zoom_out
+    jmp 3f
+.Lwheel_normal:
+    mov dword ptr [rip + zoom_accum], 0
     # wheel (sideways with Shift: wheel_xy)
     call wheel_xy
     mov eax, edx

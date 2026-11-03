@@ -14,8 +14,11 @@
 .globl cfg_agents_claude, cfg_agents_codex, cfg_agents_grok, cfg_agents_opencode
 .globl cfg_vim
 .globl cfg_restore_project
+.globl cfg_auto_save, cfg_auto_save_delay
 .globl cfg_follow_system, cfg_dark_theme, cfg_light_theme, cfg_theme_keys
 cfg_restore_project: .long 1
+cfg_auto_save: .long 0
+cfg_auto_save_delay: .long 1000
 .globl cfg_test_gutter
 cfg_test_gutter: .long 1        # testing: [testing] gutter, the tests' glyphs in the gutter
 cfg_font_size: .long 14
@@ -955,6 +958,8 @@ g_settings:
     SETTING .Ls_files, code_actions_on_save_timeout, ST_INT, cfg_save_actions_timeout, 250, 30000, 250, 0, "Code actions wait (ms)", "Total wait for source actions before continuing to formatting and saving."
     SETTING .Ls_files, restore_session, ST_BOOL, cfg_restore_session, 0, 1, 1, 0, "Restore open files", "Reopen the files from the last session of a project."
     SETTING .Ls_files, restore_project, ST_BOOL, cfg_restore_project, 0, 1, 1, 0, "Reopen last project", "Reopen the project you closed with when no file or folder is given."
+    SETTING .Ls_files, auto_save, ST_CHOICE, cfg_auto_save, 0, 3, 1, 0, "Auto save", "Automatically save modified files.", .Lautosave_opts
+    SETTING .Ls_files, auto_save_delay, ST_INT, cfg_auto_save_delay, 200, 60000, 100, 0, "Auto save delay", "Delay in milliseconds before saving modified files."
     SETTING .Ls_files, exclude, ST_STR, cfg_exclude, 0, 0, 0, 0, "Hidden in explorer", "Space separated names the explorer skips."
     SETTING .Ls_agents, claude, ST_BOOL, cfg_agents_claude, 0, 1, 1, 0, "Claude Code", "Show Claude Code sessions in the agents panel."
     SETTING .Ls_agents, codex, ST_BOOL, cfg_agents_codex, 0, 1, 1, 0, "Codex", "Show Codex sessions in the agents panel."
@@ -995,3 +1000,4 @@ g_settings:
 .Lsecrets_opts: .asciz "system", "Keychain", "memory", "Memory", "file", "File", ""
 
 .Lai_setup: .asciz "Local model files"
+.Lautosave_opts: .asciz "off", "Off", "after_delay", "After Delay", "on_focus_change", "On Focus Change", "on_window_change", "On Window Change", ""

@@ -4685,7 +4685,7 @@ code_items:
     mov edx, [rip + lay_right]
     sub edx, edi
     mov ecx, r12d
-    mov r8d, T_POPUP_BG
+    mov r8d, T_HOVER
     call fill_item
 411:
     cmp dword ptr [rbx + MDB_copy], -1
@@ -5284,7 +5284,11 @@ FN md_draw
     mov ecx, [r13 + MDI_h]
     M r8d, MI_3
     COLOR r9d, T_ACCENT
-    COLOR eax, T_POPUP_BG
+    COLOR eax, T_HOVER          # the ring's inside: the code block's tint, or the flat surface
+    cmp dword ptr [rbx + MD_flat], 0
+    je 41f
+    COLOR eax, T_POPUP
+41:
     push rax
     push rax
     call gfx_frame

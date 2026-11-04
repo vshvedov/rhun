@@ -1414,7 +1414,7 @@ FN hovercard_draw
     cmp dword ptr [rip + hc_focus], 0
     je 71f
     COLOR r9d, T_ACCENT
-71: COLOR eax, T_POPUP_BG       # one surface with its code blocks
+71: COLOR eax, T_POPUP
     push rax
     push rax
     call gfx_frame

@@ -86,7 +86,7 @@
       clearTimeout(resetTimer);
       try {
         await navigator.clipboard.writeText(button.dataset.copy);
-        status.textContent = "Copied. Paste it into your terminal to install.";
+        status.textContent = button.dataset.copyMessage || "Copied. Paste it into your terminal to install.";
         button.textContent = "Copied ✓";
         resetTimer = setTimeout(() => { button.textContent = "Copy command"; }, 2200);
       } catch {

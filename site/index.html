@@ -228,8 +228,20 @@ THE SOFTWARE.
         <button class="copy button" type="button" data-copy="curl -fsSL https://github.com/vshvedov/rhun/releases/latest/download/install.sh | sh">Copy command</button><span class="copy-status" role="status" aria-live="polite"></span>
         <div class="windows-install">
           <div class="install-box-heading"><span class="install-os-label">Terminal install · <span><svg class="os-icon" aria-hidden="true" focusable="false"><use href="#os-windows"/></svg>Windows PowerShell</span></span><span aria-hidden="true">&gt;_</span></div>
-          <div class="command"><span class="prompt" aria-hidden="true">&gt;</span><code>powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; &amp; ([scriptblock]::Create((New-Object Net.WebClient).DownloadString('https://github.com/vshvedov/rhun/releases/latest/download/install.ps1')))&quot;</code></div>
-          <button class="copy button" type="button" data-copy="powershell -NoProfile -ExecutionPolicy Bypass -Command &quot;[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; &amp; ([scriptblock]::Create((New-Object Net.WebClient).DownloadString('https://github.com/vshvedov/rhun/releases/latest/download/install.ps1')))&quot;">Copy command</button><span class="copy-status" role="status" aria-live="polite"></span>
+          <div class="install-step">
+            <p class="install-step-label">1. Download the installer</p>
+            <div class="command"><span class="prompt" aria-hidden="true">&gt;</span><code>$rhunInstaller = Join-Path $env:TEMP ('rhun-install-' + [guid]::NewGuid() + '.ps1')
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/vshvedov/rhun/releases/latest/download/install.ps1' -OutFile $rhunInstaller -ErrorAction Stop</code></div>
+            <button class="copy button" type="button" aria-label="Copy Windows download commands" data-copy="$rhunInstaller = Join-Path $env:TEMP ('rhun-install-' + [guid]::NewGuid() + '.ps1')&#10;[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12&#10;Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/vshvedov/rhun/releases/latest/download/install.ps1' -OutFile $rhunInstaller -ErrorAction Stop" data-copy-message="Copied. Paste into PowerShell to download the installer.">Copy command</button><span class="copy-status" role="status" aria-live="polite"></span>
+          </div>
+          <p class="install-note">After the download succeeds, you can <a href="https://github.com/vshvedov/rhun/blob/main/install.ps1">inspect the installer source</a>.</p>
+          <div class="install-step">
+            <p class="install-step-label">2. Run it in the same PowerShell window</p>
+            <div class="command"><span class="prompt" aria-hidden="true">&gt;</span><code>powershell -NoProfile -ExecutionPolicy RemoteSigned -File $rhunInstaller</code></div>
+            <button class="copy button" type="button" aria-label="Copy Windows install command" data-copy="powershell -NoProfile -ExecutionPolicy RemoteSigned -File $rhunInstaller">Copy command</button><span class="copy-status" role="status" aria-live="polite"></span>
+          </div>
+          <p class="install-note">Checks the release archive's SHA-256, installs for your user, and adds a Start menu shortcut and the <code>rhun</code> terminal command.</p>
         </div>
       </div>
     </div>

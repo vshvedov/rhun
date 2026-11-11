@@ -1,3 +1,11 @@
 LIBRARY gdi32.dll
 EXPORTS
+    CreateBitmap
+    CreateCompatibleDC
+    CreateSolidBrush
+    DeleteObject
+    GetClipBox
+    GetPixel
+    PatBlt
+    SelectObject
     StretchDIBits

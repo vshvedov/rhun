@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
-"""Input methods on real Wayland (issue 121): the composition shows at the editor's caret
-(print-preedit) and committed text is typed. Headless Sway relays a stand-in input method
-(tests/wayland-input-method.c, the input-method-v2 protocol) to rhun's text-input-v3.
-usage: linux-ime.py --wayland"""
+"""Input methods on real X11 and Wayland (issue 121): the composition shows at the editor's caret
+(print-preedit) and committed text is typed.
+Wayland: headless Sway relays a stand-in input method (tests/wayland-input-method.c, the
+input-method-v2 protocol) to rhun's text-input-v3.
+X11: IBus's XIM server with the Hangul engine, keys from xdotool; skipped without ibus-daemon and
+ibus-hangul. usage: linux-ime.py [--wayland]"""
 import json
 import os
 import select
 from pathlib import Path
+import shutil
 import socket
 import subprocess
 import sys
@@ -19,8 +22,9 @@ if sys.platform != 'linux':
 ROOT = Path(__file__).resolve().parents[1]
 EXE = Path(os.environ.get('RHUN_TEST_EXE', ROOT / 'build/rhun')).resolve()
 wayland = '--wayland' in sys.argv
-if not wayland:
-    print('skip linux/x11-ime (Wayland only)')
+if not wayland and not (shutil.which('ibus-daemon') and
+                        Path('/usr/share/ibus/component/hangul.xml').exists()):
+    print('skip linux/x11-ime (needs ibus-daemon and ibus-hangul)')
     sys.exit(0)
 
 
@@ -126,6 +130,42 @@ with tempfile.TemporaryDirectory(prefix='rhun-ime-') as directory:
             method = start([str(programs['wayland-input-method'])], stdin=subprocess.PIPE,
                            stdout=subprocess.PIPE, text=True)
             assert method.stdout.readline() == 'ready\n', 'the input method did not start'
+        else:
+            read_fd, write_fd = os.pipe()
+            start(['Xvfb', '-displayfd', str(write_fd), '-screen', '0', '1280x800x24', '-nolisten', 'tcp'],
+                  pass_fds=(write_fd,))
+            os.close(write_fd)
+            with os.fdopen(read_fd) as pipe:
+                env['DISPLAY'] = ':' + pipe.readline().strip()
+            env['RHUN_BACKEND'] = 'x11'
+            env.pop('WAYLAND_DISPLAY', None)
+            started = work / 'openbox-started'
+            start(['openbox', '--startup', 'touch ' + str(started)])
+            until(started.exists, 'Openbox did not start')
+            # IBus on its own session bus; the Hangul engine starts in Hangul mode
+            bus = subprocess.check_output(['dbus-daemon', '--session', '--fork', '--print-address=1',
+                                           '--print-pid=1'], env=env, text=True).split('\n')
+            env['DBUS_SESSION_BUS_ADDRESS'] = bus[0]
+            bus_pid = int(bus[1])
+            env['GSETTINGS_BACKEND'] = 'keyfile'
+            subprocess.run(['gsettings', 'set', 'org.freedesktop.ibus.engine.hangul',
+                            'initial-input-mode', 'hangul'], env=env, check=True)
+            start(['ibus-daemon', '--xim', '--replace', '--panel=disable'])
+            until(lambda: subprocess.run(['ibus', 'engine', 'hangul'], env=env,
+                                         capture_output=True).returncode == 0,
+                  'IBus did not start', 30)
+            # ibus-x11 announces itself on the root window
+            until(lambda: '@server=ibus' in subprocess.run(
+                ['xprop', '-root', 'XIM_SERVERS'], env=env, capture_output=True, text=True).stdout,
+                'IBus XIM server did not start', 30)
+            env['XMODIFIERS'] = '@im=ibus'
+
+            def focused():
+                result = subprocess.run(['xdotool', 'getactivewindow'], env=env, capture_output=True,
+                                        text=True)
+                windows = subprocess.run(['xdotool', 'search', '--class', '^rhun$'], env=env,
+                                         capture_output=True, text=True)
+                return result.returncode == 0 and result.stdout.strip() in windows.stdout.splitlines()
 
         control = work / 'control'
         editor = start([str(EXE), str(file), '--control', str(control)])
@@ -160,6 +200,25 @@ with tempfile.TemporaryDirectory(prefix='rhun-ime-') as directory:
             send('commit 글')
             send('commit é!')
             expect('commit-text', '한글é!hello\n', '')
+        else:
+            def xdotool(*args):
+                output(['xdotool', *args])
+            # 2-set layout: g k s is 한, r m f is 글
+            xdotool('type', '--delay', '60', 'gks')
+            expect('composition', 'hello\n', '한')
+            xdotool('type', '--delay', '60', 'rmf')
+            expect('commit-on-next-syllable', '한hello\n', '글')
+            xdotool('key', '--delay', '60', 'space')
+            expect('commit-and-space', '한글 hello\n', '')
+            xdotool('type', '--delay', '60', 'a1')
+            expect('jamo-then-digit', '한글 ㅁ1hello\n', '')
+            # the input method quits: keys are rhun's again
+            subprocess.run(['ibus', 'exit'], env=env, check=True)
+            until(lambda: subprocess.run(['pgrep', '-x', 'ibus-x11'], capture_output=True).returncode,
+                  'IBus did not quit')
+            command('wait 300')
+            xdotool('type', '--delay', '60', 'gk')
+            expect('server-quit', '한글 ㅁ1gkhello\n', '')
         command('quit')
         editor.wait(timeout=10)
     except BaseException:
@@ -183,5 +242,10 @@ with tempfile.TemporaryDirectory(prefix='rhun-ime-') as directory:
                 except subprocess.TimeoutExpired:
                     process.kill()
                     process.wait()
+        if not wayland and 'bus_pid' in dir():
+            try:
+                os.kill(bus_pid, 15)
+            except OSError:
+                pass
         for log in logs:
             log.close()

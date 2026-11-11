@@ -44,6 +44,7 @@ if [ "$(uname -s)" = Linux ]; then
     check x11-string build/x11_string_test
     check x11-send build/x11_send_test
     check x11-metadata build/x11_metadata_test
+    check ctext build/ctext_test
     check wayland-paste build/wayland_paste_test
     check wayland-send build/wayland_send_test
     check wayland-metadata build/wayland_metadata_test

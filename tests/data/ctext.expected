@@ -1,0 +1,14 @@
+ascii: a	b c
+latin1: café
+cyrillic: Привет
+ksc-gl: 한글
+ksc-gr: 한
+jis-then-ascii: 日本!
+gb: 中文
+utf8-segment: 😀okx
+katakana: ｱ
+unknown-set: �
+extended-segment: z
+cut-at-character: 한
+mixed: a한b
+controls-dropped: ab

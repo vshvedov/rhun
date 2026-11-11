@@ -44,7 +44,7 @@ def main():
                             '-I', str(ROOT / 'src/win'), str(path), '-o', str(obj)],
                            cwd=ROOT, check=True)
             objects.append(obj)
-        excluded = {'src/main.s', 'src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s',
+        excluded = {'src/main.s', 'src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/xim.s', 'src/plat/ctext.s', 'src/plat/ctdata.s',
                     'src/plat/appearance.s', 'src/win/sys.s'}
         for path in sorted((ROOT / 'src').rglob('*.s')):
             relative = path.relative_to(ROOT).as_posix()

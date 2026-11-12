@@ -751,6 +751,11 @@ fold's pill and other virtual text, `ghost` for inline completion, `codelens` fo
 `info` and `hint` for those diagnostics. A theme that leaves them out gets them from its other
 colors.
 
+Markdown adds `rule`: thematic breaks, and the lines between the hover card's sections (by
+default a quarter of the way from `popup` to `fg`, so they show on the card whichever way the
+theme's `border` leans). The card itself is filled with `popup`, its code blocks sit on that same
+surface, and its text uses the editor's font and the theme's `text` color, as code does.
+
 File icons can come from an extension's icon theme: **Select File Icon Theme** in the command
 palette previews each one in the explorer and saves the choice as `file_icons` in `[ui]` (`rhun`,
 the built-in icons; `none`; or a theme's `OWNER/NAME/THEME`).

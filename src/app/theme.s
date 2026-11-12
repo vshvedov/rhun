@@ -310,6 +310,9 @@ theme_derive_into:
     DERIVE T_HIGHLIGHT_WRITE, T_BG, T_WARNING, 60
     COPY T_INFO, T_ACCENT
     COPY T_HINT, T_MUTED
+    # rules a quarter of the way from the popup surface toward the text, so they show on the hover
+    # card whichever way the theme's border leans
+    DERIVE T_RULE, T_POPUP, T_FG, 64
     EPILOGUE
 
 # luma(argb) -> eax: 54 r^2 + 183 g^2 + 18 b^2, relative luminance with squares for the curve
@@ -899,7 +902,7 @@ slot_names:
     .quad .Lt0, .Lt1, .Lt2, .Lt3, .Lt4, .Lt5, .Lt6, .Lt7, .Lt8, .Lt9
     .quad .Lt10, .Lt11, .Lt12, .Lt13, .Lt14, .Lt15, .Lg0, .Lg1, .Lg2
     .quad .Li0, .Li1, .Li2, .Li3, .Li4, .Li5, .Li6, .Li7, .Li8, .Li9
-    .quad .Lp0, .Lp1, .Lp2, .Lp3, .Lp4, .Lp5, .Lp6, .Lp7
+    .quad .Lp0, .Lp1, .Lp2, .Lp3, .Lp4, .Lp5, .Lp6, .Lp7, .Lp8
 .Ls0: .asciz "bg"
 .Ls1: .asciz "fg"
 .Ls2: .asciz "accent"
@@ -984,3 +987,4 @@ slot_names:
 .Lp5: .asciz "highlight_write"
 .Lp6: .asciz "info"
 .Lp7: .asciz "hint"
+.Lp8: .asciz "rule"

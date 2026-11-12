@@ -1227,7 +1227,9 @@ build:
     mov rsi, [rip + hc_src + SB_len]
     call md_new
     mov [rip + hc_md], rax
-    mov rdi, rax
+    mov rdi, rax                # its text reads as the editor's: code face, syntax text color
+    call md_set_editor_text
+    mov rdi, [rip + hc_md]      # and its code blocks sit on the card itself
     call md_set_flat
     mov dword ptr [rip + hc_mmax], 0    # a new document: measure it again
 7:  mov eax, 1

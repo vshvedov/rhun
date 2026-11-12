@@ -11,6 +11,8 @@
 #                                           followed it (http, https: the browser; rhun://: a tab;
 #                                           a file relative to the base: a tab)
 #   md_set_base(m, ptr, len)                the absolute folder relative links name
+#   md_set_editor_text(m)                   paragraphs in the editor's face and text color, as the
+#                                           hover card shows them
 #   md_set_flat(m)                         code blocks use the containing surface
 #   m = md_from_body(ext, ptr, len)         a rich-document body ("doc LEN" + Markdown, "base
 #                                           LEN" + folder: views design 3.8.4), or 0
@@ -77,7 +79,9 @@ F MD_height, 4
 F MD_maxw, 4            # the widest line laid out
 F MD_gen, 4             # g_face_gen when laid out
 F MD_hover, 4           # the link under the pointer last frame, -1
+F MD_edtext, 4          # 1: paragraphs in the code face and the syntax text color
 F MD_flat, 4           # code blocks have no background on an already tinted surface
+F MD_pad, 4
 F MD_base, 8            # cstr, mem_alloc'd: the folder relative links name (md_set_base), or 0
 F MD_ext, 8             # the extension whose img: handles images name (md_from_body), or 0
 F MD_focus, 4           # the link the keyboard is on (drawn as hovered), -1
@@ -1400,6 +1404,14 @@ FN md_sel_text
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
+
+# md_set_editor_text(m): its paragraphs in the code face and the syntax text color (0: nothing)
+FN md_set_editor_text
+    test rdi, rdi
+    jz 1f
+    mov dword ptr [rdi + MD_edtext], 1
+    mov dword ptr [rdi + MD_width], -1     # laid out again
+1:  ret
 
 # md_set_flat(m): keep code on the containing surface (0: nothing).
 FN md_set_flat
@@ -4199,7 +4211,10 @@ FN md_layout
     jle 21f
     mov [rip + lay_right], eax  # never narrower than a little
 21: mov dword ptr [rip + lay_color], T_FG
-    cmp dword ptr [r13 + MDB_quote], 0
+    cmp dword ptr [rbx + MD_edtext], 0
+    je 23f
+    mov dword ptr [rip + lay_color], T_SYN + C_TEXT
+23: cmp dword ptr [r13 + MDB_quote], 0
     je 22f
     mov dword ptr [rip + lay_color], T_MUTED
 22: mov eax, [r13 + MDB_type]
@@ -4209,11 +4224,16 @@ FN md_layout
     je .Lml_rule
     cmp eax, MDB_TROW
     je .Lml_trow
-    # a paragraph or a heading: its face
+    # a paragraph or a heading: its face (a paragraph in the code face for md_set_editor_text)
     mov dword ptr [rip + lay_face], MDF_UI
     mov dword ptr [rip + lay_bold], 0
     cmp eax, MDB_HEAD
-    jne 3f
+    je 24f
+    cmp dword ptr [rbx + MD_edtext], 0
+    je 3f
+    mov dword ptr [rip + lay_face], MDF_CODE
+    jmp 3f
+24:
     mov dword ptr [rip + lay_bold], 1
     mov ecx, [r13 + MDB_level]
     cmp ecx, 1
@@ -4260,7 +4280,7 @@ FN md_layout
     mov edx, [rip + lay_right]
     sub edx, edi
     M ecx, MI_1
-    mov r8d, T_BORDER
+    mov r8d, T_RULE
     call fill_item
     M eax, MI_12
     add [rip + lay_y], eax
@@ -4516,9 +4536,11 @@ flow:
     mov edx, eax
     call text_width
     mov [rsp + 32], eax
-4:  # the word as an item (a code span over its tint)
+4:  # the word as an item (a code span over its tint, none in editor text)
     test dword ptr [r13 + MDR_style], MS_CODE
     jz 41f
+    cmp dword ptr [rbx + MD_edtext], 0
+    jne 41f
     mov edi, [rip + lay_x]
     sub edi, [rip + g_mt + 4*MI_2]
     mov esi, [rip + lay_y]
@@ -4668,14 +4690,7 @@ code_items:
 411:
     cmp dword ptr [rbx + MDB_copy], -1
     je 42f
-    mov edi, MDF_SMALL
-    call face_of
-    mov rdi, rax
-    lea rsi, [rip + .Lcopy_code]
-    mov edx, 4
-    call text_width
-    add eax, [rip + g_mt + 4*MI_16]
-    mov r12d, eax
+    mov r12d, [rsp + 60]        # an icon button, square in the header
     mov edi, MDK_COPY
     call item_new
     mov ecx, [rip + lay_right]
@@ -4699,6 +4714,11 @@ code_items:
     add [rip + lay_y], eax
     M eax, MI_8
     add [rip + lay_y], eax
+    cmp dword ptr [rsp + 60], 0 # under the Copy row: room so tall code lines never reach it
+    je 43f
+    M eax, MI_4
+    add [rip + lay_y], eax
+43:
     mov dword ptr [rsp + 16], 0 # the line's start
     mov dword ptr [rsp + 20], 0 # the grammar's state
 .Lci_line:
@@ -4784,11 +4804,8 @@ code_items:
     mov ecx, [rcx + FACE_ascent]
     mov [rax + MDI_base], ecx
     mov dword ptr [rax + MDI_face], MDF_CODE
-    lea ecx, [r14 + T_SYN]
-    test r14d, r14d
-    jnz 64f
-    mov ecx, T_FG
-64: mov [rax + MDI_color], ecx
+    lea ecx, [r14 + T_SYN]      # plain words too: the syntax text color, as in the editor
+    mov [rax + MDI_color], ecx
     mov ecx, [rbx + MDB_code]
     add ecx, [rsp + 16]
     add ecx, r13d
@@ -5245,35 +5262,56 @@ FN md_draw
     jz 2f
     mov ecx, [r13 + MDI_link]
     mov [rsp + 24], ecx
-2:  mov edi, r15d
+2:  # the copy icon: a background while hovered or held, a ring with the keyboard on it
+    test dword ptr [rsp + 56], UB_HOVER | UB_HELD
+    jz 3f
+    mov edi, r15d
     mov esi, r14d
     mov edx, [r13 + MDI_w]
     mov ecx, [r13 + MDI_h]
     M r8d, MI_3
-    COLOR r9d, T_BORDER
-    mov eax, [r13 + MDI_link]
+    COLOR r9d, T_HOVER
+    test dword ptr [rsp + 56], UB_HELD
+    jz 21f
+    COLOR r9d, T_ACTIVE
+21: call gfx_round_rect
+3:  mov eax, [r13 + MDI_link]
     cmp eax, [rbx + MD_focus]
-    je 3f
-    test dword ptr [rsp + 56], UB_HOVER
-    jz 4f
-3:  COLOR r9d, T_ACCENT
-4:  COLOR eax, T_PANEL
+    jne 4f
+    mov edi, r15d
+    mov esi, r14d
+    mov edx, [r13 + MDI_w]
+    mov ecx, [r13 + MDI_h]
+    M r8d, MI_3
+    COLOR r9d, T_ACCENT
+    COLOR eax, T_HOVER          # the ring's inside: the code block's tint, or the flat surface
+    cmp dword ptr [rbx + MD_flat], 0
+    je 41f
+    COLOR eax, T_POPUP
+41:
     push rax
     push rax
     call gfx_frame
     add rsp, 16
-    mov edi, MDF_SMALL
-    call face_of
-    mov rdi, rax
+4:  mov edi, IC_COPY
     mov esi, r15d
-    add esi, [rip + g_mt + 4*MI_8]
     mov edx, r14d
-    add edx, [rip + g_mt + 4*MI_4]
-    add edx, [rax + FACE_ascent]
-    lea rcx, [rip + .Lcopy_code]
-    mov r8d, 4
+    mov ecx, [r13 + MDI_w]
+    mov r8d, [r13 + MDI_h]
+    COLOR r9d, T_MUTED
+    test dword ptr [rsp + 56], UB_HOVER
+    jz 5f
     COLOR r9d, T_FG
-    call text_draw
+5:  call ui_icon_center
+    mov edi, [r13 + MDI_link]   # "Copy" as its tooltip
+    add edi, [rsp + 20]
+    mov esi, r15d
+    mov edx, r14d
+    add edx, [r13 + MDI_h]
+    mov ecx, [r13 + MDI_w]
+    mov r8d, [rsp + 56]
+    lea r9, [rip + .Lcopy_code]
+    call tip_note_text
     jmp .Lmd_next
 .Lmd_image:
     mov eax, [r13 + MDI_style]

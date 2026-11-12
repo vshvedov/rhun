@@ -37,5 +37,6 @@ else
         binutils curl wget git python3 xvfb openbox xdotool x11-utils sway weston \
         gcc pkg-config libwayland-dev wayland-protocols strace zsh fish tcsh dbus \
         xsettingsd xdg-desktop-portal xdg-desktop-portal-gtk dconf-service dconf-cli \
-        libglib2.0-bin gsettings-desktop-schemas xkb-data ibus ibus-hangul
+        libglib2.0-bin gsettings-desktop-schemas xkb-data ibus ibus-hangul fonts-nanum \
+        fonts-droid-fallback
 fi

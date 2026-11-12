@@ -23,7 +23,7 @@ jobs:
       - name: The tag is VERSION
         run: test "${GITHUB_REF_NAME#v}" = "$(cat VERSION)"
       - name: Tools
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq binutils curl git python3 xvfb openbox xdotool x11-utils sway gcc pkg-config libwayland-dev wayland-protocols
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq binutils curl git python3 xvfb openbox xdotool x11-utils sway gcc pkg-config libwayland-dev wayland-protocols fonts-nanum fonts-droid-fallback
       - name: Tests
         run: tests/run.sh
       - name: Installer tests

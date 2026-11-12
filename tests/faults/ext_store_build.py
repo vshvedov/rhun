@@ -43,7 +43,7 @@ def build(folder, fixture, replacements, windows=False):
         objects[relative] = obj
     excluded = {'src/main.s'}
     if mac or windows:
-        excluded |= {'src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/appearance.s'}
+        excluded |= {'src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/xim.s', 'src/plat/ctext.s', 'src/plat/ctdata.s', 'src/plat/appearance.s'}
     inventory = [objects.pop('fixture.s')]
     for path in sorted((ROOT / 'src').rglob('*.s')):
         relative = path.relative_to(ROOT).as_posix()

@@ -53,6 +53,15 @@ id_cursor_mgr: .long 0
 id_viewporter: .long 0
 id_fscale_mgr: .long 0
 id_activation: .long 0
+# text-input-v3: an input method's composition and committed text (ime.s)
+id_ti_mgr: .long 0
+id_ti: .long 0
+ti_on: .long 0                  # enabled: the surface has the text input's focus
+ti_rect: .zero 16               # the cursor rectangle last sent, logical
+ti_pre_len: .long 0             # pending until done: the composition (-1 none) and committed text
+ti_commit_len: .long 0
+ti_pre: .zero 256
+ti_commit: .zero 4096
 activation_sent: .long 0
 id_sync: .long 0
 sync_done: .long 0
@@ -639,6 +648,8 @@ FN wl_dispatch
     je .Ld_surface
     cmp ebx, [rip + id_ddev]
     je .Ld_ddev
+    cmp ebx, [rip + id_ti]
+    je .Ld_ti
     mov edi, ebx
     call wl_source_find
     test rax, rax
@@ -866,6 +877,13 @@ FN wl_dispatch
     mov rdi, r12
     mov rsi, r13
     call on_keyboard
+    jmp .Ld_ret
+
+.Ld_ti:
+    mov edi, r12d
+    mov rsi, r13
+    mov rdx, r14
+    call wl_ti_event
     jmp .Ld_ret
 
 .Ld_ddev:
@@ -1301,6 +1319,7 @@ wl_draw:
     call gfx_set_target
     mov dword ptr [rip + g_dirty], 0
     call app_render
+    call wl_ti_cursor
     lea rcx, [rip + buf_busy]
     mov dword ptr [rcx + rbx*4], 1
     lea rcx, [rip + id_buf]
@@ -1328,6 +1347,142 @@ wl_draw:
     EPILOGUE
 
 # ---------------- input ----------------
+
+# wl_ti_event(opcode, args, length): text-input-v3 events. A composition and committed text wait
+# for done, which applies them together.
+wl_ti_event:
+    PROLOGUE
+    mov r12, rsi
+    mov r13, rdx
+    test edi, edi
+    jz .Lti_enter
+    cmp edi, 1
+    je .Lti_leave
+    cmp edi, 2
+    je .Lti_preedit
+    cmp edi, 3
+    je .Lti_commit
+    cmp edi, 5
+    je .Lti_done
+    jmp .Lti_ret
+.Lti_enter:
+    mov dword ptr [rip + ti_on], 1
+    mov dword ptr [rip + ti_rect], -1
+    MSG [rip + id_ti], 1          # enable
+    END
+    call wl_ti_cursor             # with the cursor rectangle, then commit
+    jmp .Lti_ret
+.Lti_leave:
+    mov dword ptr [rip + ti_on], 0
+    MSG [rip + id_ti], 2          # disable
+    END
+    MSG [rip + id_ti], 7          # commit
+    END
+    xor edi, edi
+    xor esi, esi
+    call ime_preedit
+    jmp .Lti_ret
+.Lti_preedit:
+    lea rdi, [rip + ti_pre]
+    mov esi, 256
+    call wl_ti_string
+    mov [rip + ti_pre_len], eax
+    jmp .Lti_ret
+.Lti_commit:
+    lea rdi, [rip + ti_commit]
+    mov esi, 4096
+    call wl_ti_string
+    mov [rip + ti_commit_len], eax
+    jmp .Lti_ret
+.Lti_done:
+    mov esi, [rip + ti_commit_len]
+    test esi, esi
+    jle 1f
+    lea rdi, [rip + ti_commit]
+    call ime_commit
+1:  mov esi, [rip + ti_pre_len]
+    test esi, esi
+    jg 2f
+    xor esi, esi
+2:  lea rdi, [rip + ti_pre]
+    call ime_preedit
+    mov dword ptr [rip + ti_pre_len], 0
+    mov dword ptr [rip + ti_commit_len], 0
+.Lti_ret:
+    EPILOGUE
+
+# wl_ti_string(buffer, capacity) -> eax: the event's string argument (r12 args, r13 length)
+# copied, its length without the NUL; 0 for null or one that does not fit
+wl_ti_string:
+    mov ecx, [r12]
+    test ecx, ecx
+    jz 8f
+    dec ecx
+    cmp ecx, esi
+    ja 8f
+    lea eax, [rcx + 4]
+    cmp rax, r13
+    ja 8f
+    lea rsi, [r12 + 4]
+    mov eax, ecx
+    rep movsb
+    ret
+8:  xor eax, eax
+    ret
+
+# wl_ti_cursor(): while enabled, the caret's rectangle to the input method when it moved (the
+# candidate window goes there); the window's corner without a caret
+wl_ti_cursor:
+    PROLOGUE 16
+    cmp dword ptr [rip + ti_on], 0
+    je 9f
+    xor eax, eax
+    xor ebx, ebx
+    mov r12d, [rip + g_lh]
+    cmp dword ptr [rip + g_caret_ok], 0
+    je 1f
+    cmp dword ptr [rip + g_focus], FOCUS_EDITOR
+    jne 1f
+    mov eax, [rip + g_caret_x]
+    mov ebx, [rip + g_caret_y]
+    test eax, eax
+    jns 2f
+    xor eax, eax
+2:  test ebx, ebx
+    jns 1f
+    xor ebx, ebx
+1:  call phys_to_logical
+    mov [rsp], eax
+    mov eax, ebx
+    call phys_to_logical
+    mov [rsp + 4], eax
+    mov eax, r12d
+    call phys_to_logical
+    mov [rsp + 8], eax
+    mov eax, [rsp]
+    cmp eax, [rip + ti_rect]
+    jne 3f
+    mov eax, [rsp + 4]
+    cmp eax, [rip + ti_rect + 4]
+    jne 3f
+    mov eax, [rsp + 8]
+    cmp eax, [rip + ti_rect + 12]
+    je 9f
+3:  mov eax, [rsp]
+    mov [rip + ti_rect], eax
+    mov eax, [rsp + 4]
+    mov [rip + ti_rect + 4], eax
+    mov eax, [rsp + 8]
+    mov [rip + ti_rect + 12], eax
+    MSG [rip + id_ti], 6          # set_cursor_rectangle
+    ARG [rip + ti_rect]
+    ARG [rip + ti_rect + 4]
+    ARG 1
+    ARG [rip + ti_rect + 12]
+    END
+    MSG [rip + id_ti], 7          # commit
+    END
+9:  EPILOGUE
 
 # fixed 24.8 logical -> physical int
 fixed_to_phys:
@@ -3155,7 +3310,17 @@ FN wl_open_window
     ARG [rip + id_ddev]
     ARG [rip + id_seat]
     END
-3:  MSG [rip + id_surface], 6     # initial commit
+3:  cmp dword ptr [rip + id_ti_mgr], 0
+    je 4f
+    cmp dword ptr [rip + id_seat], 0
+    je 4f
+    call wl_new_id
+    mov [rip + id_ti], eax
+    MSG [rip + id_ti_mgr], 1      # get_text_input
+    ARG [rip + id_ti]
+    ARG [rip + id_seat]
+    END
+4:  MSG [rip + id_surface], 6     # initial commit
     END
     mov dword ptr [rip + g_wayland], 1   # the isWayland context key (when.s)
     # vtable
@@ -3215,6 +3380,7 @@ global_table:
     .quad .Li_viewporter, id_viewporter, 1
     .quad .Li_fscale, id_fscale_mgr, 1
     .quad .Li_activation, id_activation, 1
+    .quad .Li_text_input, id_ti_mgr, 1
     .quad 0, 0, 0
 .Li_compositor: .asciz "wl_compositor"
 .Li_shm: .asciz "wl_shm"
@@ -3226,6 +3392,7 @@ global_table:
 .Li_viewporter: .asciz "wp_viewporter"
 .Li_fscale: .asciz "wp_fractional_scale_manager_v1"
 .Li_activation: .asciz "xdg_activation_v1"
+.Li_text_input: .asciz "zwp_text_input_manager_v3"
 .p2align 3
 .Ltiling: .quad .Lt_hypr, .Lt_sway, .Lt_niri, .Lt_river, .Lt_dwl, .Lt_qtile, 0
 .Lt_hypr: .asciz "Hyprland"

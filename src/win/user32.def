@@ -12,6 +12,7 @@ SetWindowPlacement
     DispatchMessageW
     EmptyClipboard
     EndPaint
+    FillRect
     GetClipboardData
     GetDC
     GetDpiForWindow

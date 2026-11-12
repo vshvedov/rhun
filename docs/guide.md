@@ -20,6 +20,7 @@ rhun draws everything itself: it rasterizes TrueType fonts, icons and widgets in
 - Vim mode, off by default: normal, insert and visual modes, operators, text objects, counts, `.`, search and `:` commands
 - Characters missing from the built-in fonts are drawn with the system's fonts
 - Every XKB layout, dead keys and the Compose key (the system's Compose rules, `~/.XCompose` or `$XCOMPOSEFILE`)
+- Input methods such as IBus and Fcitx: text-input-v3 on Wayland, XIM on X11 (the one `XMODIFIERS=@im=NAME` names); the composition shows at the editor's caret
 - Files changed on disk are reloaded, open files are restored per project
 - Wayland with fractional scaling; X11 as a fallback
 - macOS on Apple silicon: Retina displays, input methods and dead keys, full screen, signed with a Developer ID

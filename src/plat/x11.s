@@ -371,6 +371,9 @@ x_message:
     call x_send_error
     mov rdi, rbx
     call x_paste_error
+    mov rdi, rbx
+    mov esi, 32
+    call xim_reply
 .Lxm_error_waited:
     # errors are non-fatal for us (e.g. a stale property), but one answering the request a reply is
     # awaited for ends the wait: reply_buf then starts with 0
@@ -399,6 +402,11 @@ x_message:
     call x_paste_reply
     test eax, eax
     jnz .Lxm_ret
+    mov rdi, rbx
+    mov esi, r12d
+    call xim_reply
+    test eax, eax
+    jnz .Lxm_ret
 .Lxm_reply_waited:
     movzx eax, word ptr [rbx + 2]
     cmp eax, [rip + want_seq]
@@ -415,6 +423,11 @@ x_message:
     mov dword ptr [rip + got_reply], 1
     jmp .Lxm_ret
 .Lxm_key:
+    # an input method takes key presses first and sends back the ones it does not use (xim.s)
+    mov rdi, rbx
+    call xim_key
+    test eax, eax
+    jnz .Lxm_ret
     movzx eax, word ptr [rbx + 28]
     movzx edi, byte ptr [rbx + 1]
     # the keymap changed: keys wait for the new one (programs that type by remapping a spare key)
@@ -506,9 +519,13 @@ x_message:
     jmp .Lxm_ret
 .Lxm_focusin:
     mov edi, 1
+    call xim_focus
+    mov edi, 1
     call app_on_focus
     jmp .Lxm_ret
 .Lxm_focusout:
+    xor edi, edi
+    call xim_focus
     xor edi, edi
     call app_on_focus
     jmp .Lxm_ret
@@ -544,6 +561,10 @@ x_message:
     call x_paste_notify
     jmp .Lxm_ret
 .Lxm_client:
+    mov rdi, rbx
+    call xim_client
+    test eax, eax
+    jnz .Lxm_ret
     mov eax, [rbx + 8]
     cmp eax, [rip + a_manager]
     jne 1f
@@ -589,6 +610,8 @@ x_message:
     mov dword ptr [rip + xs_stale], 1
     jmp .Lxm_ret
 .Lxm_destroy:
+    mov rdi, rbx
+    call xim_destroyed
     mov rdi, rbx
     call x_send_destroy
     mov rdi, rbx
@@ -879,7 +902,7 @@ x_process_until_reply:
 # ---- requests ----
 
 # x_intern(name cstr) -> atom
-x_intern:
+FN x_intern
     PROLOGUE 64
     mov rbx, rdi
     call strlen
@@ -910,6 +933,26 @@ x_intern:
     call x_wait_reply
     mov eax, [rip + reply_buf + 8]
     EPILOGUE
+
+# x_selection_owner(atom) -> eax: the selection's owner window, 0 for none (synchronous)
+FN x_selection_owner
+    PROLOGUE 16
+    mov byte ptr [rsp], 23      # GetSelectionOwner
+    mov byte ptr [rsp + 1], 0
+    mov word ptr [rsp + 2], 2
+    mov [rsp + 4], edi
+    lea rdi, [rsp]
+    mov esi, 8
+    call x_req
+    mov eax, [rip + seq]
+    and eax, 0xffff
+    mov [rip + want_seq], eax
+    call x_wait_reply
+    xor eax, eax
+    cmp byte ptr [rip + reply_buf], 1
+    jne 9f
+    mov eax, [rip + reply_buf + 8]
+9:  EPILOGUE
 
 # Build an independently owned ChangeProperty request, or return 0/0 before allocation.
 # x_property_request(window, prop, type, format(8/32), data, nunits) -> rax bytes, rdx length.
@@ -1746,6 +1789,7 @@ FN x_open_window
     mov [rip + g_plat + P_maximize], rax
     lea rax, [rip + x_title]
     mov [rip + g_plat + P_title], rax
+    call xim_open               # the input method XMODIFIERS names (xim.s)
     mov edi, [rip + xfd]
     mov esi, POLLIN
     lea rdx, [rip + x_on_readable]

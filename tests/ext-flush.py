@@ -56,7 +56,7 @@ def fault_fixture(platform, folder):
         objects.append(obj)
     excluded = {'src/main.s', 'src/app/extflush.s'}
     if platform != 'linux':
-        excluded.update(('src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/appearance.s'))
+        excluded.update(('src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/xim.s', 'src/plat/ctext.s', 'src/plat/ctdata.s', 'src/plat/appearance.s'))
     build = ROOT / ('build/windows' if builder else 'build/obj')
     for path in sorted((ROOT / 'src').rglob('*.s')):
         relative = path.relative_to(ROOT).as_posix()

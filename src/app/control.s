@@ -2,7 +2,7 @@
 #   key ctrl+s | type text | click x y [right|middle|shift|ctrl] | tap x y | move x y | down | up | scroll dy [ctrl]
 #   open path | cmd name | shot file.ppm | wait ms | resize w h | print-doc | print-state | echo text | quit
 #   wait-git | print-git | print-gitlog | print-scm | wait-update | print-update | print-project | print-palette
-#   print-menu | focus out|in
+#   print-menu | focus out|in | print-preedit
 #   multi-cursor: click x y alt|shift+alt (print-selections and drag are in wsctl.s)
 .include "rhun.inc"
 
@@ -1778,6 +1778,20 @@ c_print_doc:
     xor eax, eax
     ret
 
+# print-preedit: the composition an input method shows at the editor's caret (ime.s), one line
+c_print_preedit:
+    push rbx
+    call ime_preedit_text
+    lea rdi, [rip + out]
+    mov rsi, rax
+    call sb_push
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    pop rbx
+    xor eax, eax
+    ret
+
 # print-state: "tabs=N active=name line=L col=C sel=S dirty=D lang=X [vim=M] focus=F theme=T" (T is omarchy:ID when following);
 #   an image tab has "image=WxH format=F zoom=Z fit=0|1" in place of the cursor and language
 c_print_state:
@@ -2292,6 +2306,7 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Lc_echo: .asciz "echo"
 .Lc_print_doc: .asciz "print-doc"
 .Lc_print_state: .asciz "print-state"
+.Lc_print_preedit: .asciz "print-preedit"
 .Lc_print_syntax: .asciz "print-syntax"
 .Lc_print_agents: .asciz "print-agents"
 .Lc_xkey: .asciz "xkey"
@@ -2425,7 +2440,7 @@ ctl_table:
     .quad .Lc_cmd, c_cmd, .Lc_shot, c_shot, .Lc_wait, c_wait, .Lc_resize, c_resize
     .quad .Lc_quit, c_quit, .Lc_echo, c_echo, .Lc_print_doc, c_print_doc
     .quad .Lc_print_state, c_print_state, .Lc_print_syntax, c_print_syntax, .Lc_print_agents, c_print_agents, .Lc_xkey, c_xkey
-    .quad .Lc_print_shape, c_print_shape
+    .quad .Lc_print_shape, c_print_shape, .Lc_print_preedit, c_print_preedit
     .quad .Lc_print_window, c_print_window, .Lc_print_cursor, c_print_cursor, .Lc_print_term, c_print_term
     .quad .Lc_print_git, c_print_git, .Lc_wait_git, c_wait_git, .Lc_print_gitlog, c_print_gitlog
     .quad .Lc_wait_grep, c_wait_grep

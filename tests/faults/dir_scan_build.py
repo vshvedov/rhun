@@ -91,7 +91,7 @@ def build(folder, windows=False, native_mac=False, mutation=None):
         objects['native'] = helper
     excluded = {'src/main.s'}
     if mac or windows:
-        excluded |= {'src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/appearance.s'}
+        excluded |= {'src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/xim.s', 'src/plat/ctext.s', 'src/plat/ctdata.s', 'src/plat/appearance.s'}
     inventory = [objects.pop('fixture.s')]
     if native_mac:
         inventory.append(objects.pop('native'))

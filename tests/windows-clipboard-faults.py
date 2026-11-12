@@ -52,7 +52,7 @@ def main():
         assert common.count('FN main\n') == 1
         fixture = assemble('fixture', common.replace('FN main\n', 'FN wm_regular_main\n', 1) + '\n' +
                            (ROOT / 'tests/faults/windows_clipboard_metadata.s').read_text(encoding='utf-8'))
-        exclude = {'src/main.s', 'src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/appearance.s'}
+        exclude = {'src/main.s', 'src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/xim.s', 'src/plat/ctext.s', 'src/plat/ctdata.s', 'src/plat/appearance.s'}
         objects = []
         for path in sorted((ROOT / 'src').rglob('*.s')):
             relative = path.relative_to(ROOT).as_posix()

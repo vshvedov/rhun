@@ -35,7 +35,7 @@ def build_faults(folder, windows=False):
                             '-I', str(out), '-defsym=WINDOWS=1', '-o', str(obj), str(path)], check=True)
             objects.append(obj)
         excluded = {'src/main.s', 'src/mem.s', 'src/start.s', 'src/plat/wayland.s',
-                    'src/plat/x11.s', 'src/plat/appearance.s'}
+                    'src/plat/x11.s', 'src/plat/xim.s', 'src/plat/ctext.s', 'src/plat/ctdata.s', 'src/plat/appearance.s'}
         for path in sorted((ROOT / 'src').rglob('*.s')):
             rel = path.relative_to(ROOT).as_posix()
             if rel not in excluded and 'mac' not in path.relative_to(ROOT).parts:
@@ -63,7 +63,7 @@ def build_faults(folder, windows=False):
             objects.append(obj)
         excluded = {'src/main.s', 'src/mem.s'}
         if mac:
-            excluded |= {'src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/appearance.s'}
+            excluded |= {'src/start.s', 'src/plat/wayland.s', 'src/plat/x11.s', 'src/plat/xim.s', 'src/plat/ctext.s', 'src/plat/ctdata.s', 'src/plat/appearance.s'}
         for path in sorted((ROOT / 'src').rglob('*.s')):
             rel = path.relative_to(ROOT).as_posix()
             if rel in excluded or 'win' in path.relative_to(ROOT).parts:

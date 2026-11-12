@@ -49,6 +49,10 @@ jobs:
         run: |
           python3 tests/linux-keypad.py
           python3 tests/linux-keypad.py --wayland
+      - name: Input methods (issue 121)
+        run: |
+          python3 tests/linux-ime.py
+          python3 tests/linux-ime.py --wayland
       - name: Window switches keep the editor's view
         run: |
           python3 tests/linux-focus.py

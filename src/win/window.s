@@ -2,7 +2,7 @@
 .include "win.inc"
 .bss
 .p2align 4
-.globl win_hwnd, win_clip_depth, win_deferred_count, win_deferred_overflow
+.globl win_hwnd, win_clip_depth, win_deferred_count, win_deferred_overflow, win_presented
 win_hwnd: .quad 0
 win_clip_depth: .quad 0
 win_deferred_count: .quad 0
@@ -14,6 +14,7 @@ win_pixels: .quad 0
 win_capacity: .quad 0
 win_width: .long 0
 win_height: .long 0
+win_presented: .long 0          # a frame reached the window: erasing keeps its pixels (#99)
 win_placement: .zero 44         # WINDOWPLACEMENT through rcNormalPosition
 win_saved: .zero WPOS_SIZE
 win_surrogate: .long 0
@@ -252,6 +253,7 @@ win_draw:
     mov qword ptr [rsp + 88], 0
     mov qword ptr [rsp + 96], 0x00cc0020
     API StretchDIBits
+    mov dword ptr [rip + win_presented], 1
     mov rcx, [rip + win_hwnd]
     mov rdx, rbx
     API ReleaseDC
@@ -693,7 +695,27 @@ win_wndproc_deferred:
     API EndPaint
     jmp .Lwm_zero
 .Lwm_erased:
-    mov eax, 1
+    # The class has no brush. Until the first frame, paint the theme's background: an unpainted
+    # window shows white (#99). Later erases keep the last frame's pixels until the next one.
+    cmp dword ptr [rip + win_presented], 0
+    jne 1f
+    mov ecx, [rip + g_theme + 4 * T_BG]
+    bswap ecx                  # 0xaarrggbb to COLORREF 0x00bbggrr
+    shr ecx, 8
+    API CreateSolidBrush
+    test rax, rax
+    jz 1f
+    mov r15, rax
+    mov rcx, r13
+    lea rdx, [rsp + 96]
+    API GetClipBox
+    mov rcx, r13
+    lea rdx, [rsp + 96]
+    mov r8, r15
+    API FillRect
+    mov rcx, r15
+    API DeleteObject
+1:  mov eax, 1
     jmp .Lwm_ret
 .Lwm_focus:
     xor edi, edi

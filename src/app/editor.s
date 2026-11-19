@@ -2553,14 +2553,22 @@ FN editor_draw
     call pos_at_point
     cmp qword ptr [rip + g_vt_hit], 0
     jne 14f
+    push rax
     mov rdi, rbx
     mov rsi, rax
+    call doc_byte
+    cmp eax, 10
+    pop rsi
+    je 12f
+    cmp eax, -1
+    je 12f
+    mov rdi, rbx
     call ext_hover_track
     call ext_hover_tip
     call gutter_unhover
     jmp 13f
-14: xor edi, edi                # over an inlay: its own tip (vtext.s)
-    xor esi, esi
+14: mov rdi, rbx                # over an inlay: track hover on the line, and its tip (vtext.s)
+    mov rsi, rax
     call ext_hover_track
     mov rdi, rbx
     call vt_hover

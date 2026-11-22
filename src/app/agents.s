@@ -3168,6 +3168,42 @@ FN agents_ext_is_open
     inc eax
 1:  ret
 
+# FN agents_open_any() -> rax the conversation the panel shows, whatever its kind, or 0
+FN agents_open_any
+    xor eax, eax
+    mov rcx, [rip + view]
+    test rcx, rcx
+    js 1f
+    cmp rcx, [rip + sessions + VEC_len]
+    jae 1f
+    mov rdx, [rip + sessions + VEC_ptr]
+    mov rax, [rdx + rcx*8]
+1:  ret
+
+# FN agents_scroll_dump(sb): " scroll=N max=N follow=0|1": the open thread as it was drawn last (where it
+#   is scrolled, how far it can be, whether it follows what comes in)
+FN agents_scroll_dump
+    PROLOGUE
+    mov rbx, rdi
+    lea rsi, [rip + .Ld_scroll]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + th_scroll]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_max]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + th_max]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_follow]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + th_follow]
+    call sb_push_u64
+    EPILOGUE
+
 # FN agents_open_driven() -> rax the conversation the panel shows when it has a driver (agent_drv.s):
 #   the one its prompt box, card, Stop and the headless agent commands act on; or 0
 FN agents_open_driven
@@ -4719,6 +4755,10 @@ thread_draw:
     mov rdi, rbx                # a session with a driver too (agent_drv.s)
     call agent_drv_of
     test rax, rax
+    jnz 44f
+    mov rdi, rbx                # and a remote window's Claude Code conversation: the line that says why not
+    call agentext_remote_line
+    test eax, eax
     jz 41f
 44: mov rdi, rbx                # AI (D4): its card and prompt box go under the messages
     mov esi, [rsp + 8]
@@ -4786,6 +4826,7 @@ thread_draw:
     jns 61f
     xor eax, eax
 61: mov [rsp + 36], eax         # max scroll
+    mov [rip + th_max], eax
     cmp dword ptr [rip + th_follow], 0
     je 62f
     mov [rip + th_scroll], eax
@@ -5717,6 +5758,9 @@ FN agents_test_append
 9:  EPILOGUE
 
 .section .rodata
+.Ld_scroll: .asciz " scroll="
+.Ld_max: .asciz " max="
+.Ld_follow: .asciz " follow="
 .Lr0: .asciz "?"
 .Lr1: .asciz "user"
 .Lr2: .asciz "agent"
@@ -5832,6 +5876,7 @@ summary_keys:
 .data
 view: .quad -1
 th_follow: .long 1
+th_max: .long 0                 # the open thread's largest scroll, when it was drawn last
 
 .section .rodata
 .Lindex_arg: .asciz "--agent-index"

@@ -2969,6 +2969,8 @@ ENDSTRUCT AL_SIZE
 .equ ALF_UNANSWERED, 256        # the last turn ended with requests unanswered (the re-read says so again)
 .equ ALF_HOLDWAIT, 512          # a start waits for another holder of the conversation to let go
 .equ ALF_HOLDOK, 1024           # this start is past the holder check (none, or Open here anyway)
+.equ ALF_AUTHWAIT, 2048         # a start waits for the sign-in state (DRV_auth)
+.equ ALF_ASKAGAIN, 4096         # a start the user asked for: a cached "not signed in" is asked again
 .equ AL_QUEUE_MAX, 4            # prompts waiting for "ready"
 # AQ: a request the agent waits on (the plan's PR: that prefix is the Problems tab's)
 STRUCT
@@ -2988,7 +2990,10 @@ ENDSTRUCT AQ_SIZE
 .equ AQK_PERMISSION, 1
 .equ AQK_QUESTION, 2
 .equ AQK_PLAN, 3
-.equ AQK_HELD, 4                # rhun's own cards (AL_own): the conversation is open somewhere else
+.equ AQK_HELD, 4                # rhun's own cards (AL_own): the conversation is open somewhere else,
+.equ AQK_TRUST, 5               #   the project is not trusted, the program is not signed in, its start
+.equ AQK_SIGNIN, 6              #   failed
+.equ AQK_FAILED, 7
 # DRV: a driver's table (read-only)
 STRUCT
 F DRV_kind, 4           # the AS_kind it drives
@@ -3000,12 +3005,19 @@ F DRV_stop, 8           # (AL*): interrupt the turn
 F DRV_answer, 8         # (AL*, AQ*, n) -> eax 1: option n (from 0) of that request
 F DRV_release, 8        # (AL*): end the process politely (the stop sequence)
 F DRV_held, 8           # (AL*) -> eax HOLDER_*
+F DRV_auth, 8           # (AL*, again) -> eax AUTH_*: whether its program is signed in (asked in the
+                        #   background; again 1: a "no" is asked again, the user's next Send)
+F DRV_terminal, 8       # (AL*, what): its program in rhun's terminal prompt: 0 alone, 1 its sign-in
 ENDSTRUCT DRV_SIZE
 .equ DRVC_NEW, 1                # can start a conversation
 .equ DRVC_RESUME, 2
 .equ DRVC_FORK, 4
 .equ DRVC_SESSION, 8            # keeps no live record: its functions take the AS* where the others take
                                 # the AL*, and send returns SEND_* (an extension's: it keeps the state)
+.equ DRVC_TRUST, 16             # its program reads the project's own settings: an untrusted project asks
+.equ AUTH_IN, 0                 # DRV_auth: signed in (or it cannot tell: the program will say)
+.equ AUTH_WAIT, 1               #   the answer is not there yet
+.equ AUTH_OUT, 2                #   not signed in
 .equ HOLDER_NONE, 0
 .equ HOLDER_OTHER, 1
 .equ HOLDER_UNKNOWN, 2

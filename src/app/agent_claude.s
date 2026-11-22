@@ -12,6 +12,12 @@
 # its transcript is named after; a copy (Continue in a copy, ALF_FORK) is forked from its source with our
 # UUID. Before a --resume, cl_held says whether another program has the conversation open.
 #
+# The sign-in state (cl_auth) is `[WRAPPER] CLAUDE auth status --json`, run once a window in the background
+# with claude's environment: a pipe read by a watch of its own (not a connection: it does not count against
+# the cap), 64 KiB at most, 10 s at most. Only its loggedIn is read; no credential is read anywhere. A turn
+# that fails with an authentication error shows the sign-in notice too. cl_terminal puts claude (or its
+# sign-in) in rhun's terminal prompt, as the rhun.run tool does.
+#
 # The first line it is sent is initialize; nothing else goes until its answer (the prompts wait in
 # AL_queue, agent_drv.s). A turn streams: message_start names the message, a text block's start is a
 # reply row, its deltas add to it, the consolidated assistant record of the block is its finished text;
@@ -34,6 +40,12 @@
 .equ QUESTION_OPTS, 16          # a question's card shows its first 16 options
 .equ R_ASSIST, 2                # the roles of agents.s's messages
 .equ R_INFO, 6
+.equ AUTH_MS, 10000             # the sign-in question's answer is waited for this long
+.equ AUTH_MAX, 65536            # bytes of its answer kept
+.equ AU_UNKNOWN, 0              # au_state: not asked (or to be asked again)
+.equ AU_ASKING, 1
+.equ AU_IN, 2
+.equ AU_OUT, 3
 
 .bss
 .p2align 3
@@ -44,6 +56,13 @@ psb: .zero SB_SIZE              # a transcript path
 dsb: .zero SB_SIZE              # the projects folder (find_file)
 tsb: .zero SB_SIZE              # a request's id or input as JSON text
 found_al: .quad 0               # find_file's session
+au_buf: .zero SB_SIZE           # the sign-in question's answer
+au_until: .quad 0               # time_ms its answer is given up on
+au_state: .long 0               # AU_*: the window's sign-in state
+au_pid: .long 0                 # the question's process while it runs
+.data
+.p2align 2
+au_fd: .long -1                 # its output's pipe while it runs
 
 .text
 
@@ -506,6 +525,325 @@ cl_held:
     lea rdi, [rbx + AL_sid]
     call holder_claude
 9:  EPILOGUE
+
+# ---- the sign-in state: `claude auth status --json`, once a window, in the background ----
+
+# cl_auth(AL*, again) -> eax AUTH_*: whether claude is signed in. The first time a window asks (and again
+#   after it said no, when again is 1: the next Send), `[WRAPPER] CLAUDE auth status --json` runs in the
+#   background (au_begin); while it runs the answer is AUTH_WAIT. Only its loggedIn is read; an answer rhun
+#   cannot read, one later than AUTH_MS, or a program that cannot be started is AUTH_IN: claude says
+#   otherwise itself when it starts
+cl_auth:
+    PROLOGUE
+    mov eax, [rip + au_state]
+    cmp eax, AU_OUT
+    jne 1f
+    test esi, esi
+    jz .Lau_out
+    mov dword ptr [rip + au_state], AU_UNKNOWN
+    mov eax, AU_UNKNOWN
+1:  cmp eax, AU_IN
+    je .Lau_in
+    cmp eax, AU_ASKING
+    jne 2f
+    call time_ms
+    cmp rax, [rip + au_until]
+    jl .Lau_wait
+    call claude_auth_end        # too slow: it counts as signed in
+    mov dword ptr [rip + au_state], AU_IN
+    jmp .Lau_in
+2:  call au_begin
+    test eax, eax
+    jnz .Lau_wait
+    mov dword ptr [rip + au_state], AU_IN
+.Lau_in:
+    mov eax, AUTH_IN
+    EPILOGUE
+.Lau_wait:
+    mov eax, AUTH_WAIT
+    EPILOGUE
+.Lau_out:
+    mov eax, AUTH_OUT
+    EPILOGUE
+
+# au_begin() -> eax 1 when the status question runs (AU_ASKING): its stdout (and stderr) on a pipe read by
+#   au_on_out, stdin at its end. Locals: [rsp] argv (8 slots), [rsp + 64] the pipes, [rsp + 80] envp,
+#   [rsp + 88] the prefix
+au_begin:
+    PROLOGUE 96
+    call claude_exe
+    test rax, rax
+    jz 8f
+    mov [rsp + 88], rax
+    xor ecx, ecx
+1:  cmp ecx, edx
+    jae 2f
+    mov r8, [rax + rcx*8]
+    mov [rsp + rcx*8], r8
+    inc ecx
+    jmp 1b
+2:  lea rax, [rip + .La_auth]
+    mov [rsp + rcx*8], rax
+    lea rax, [rip + .La_status]
+    mov [rsp + rcx*8 + 8], rax
+    lea rax, [rip + .La_json]
+    mov [rsp + rcx*8 + 16], rax
+    mov qword ptr [rsp + rcx*8 + 24], 0
+    lea rdi, [rsp + 64]         # in: [64] it reads, [68] rhun's end, closed at once
+    mov esi, O_CLOEXEC
+    SYS SYS_pipe2
+    test rax, rax
+    jnz 7f
+    lea rdi, [rsp + 72]         # out: [72] rhun reads, [76] it writes (stdout and stderr)
+    mov esi, O_CLOEXEC
+    SYS SYS_pipe2
+    test rax, rax
+    jnz 6f
+    call claude_env
+    mov [rsp + 80], rax
+    lea rdi, [rsp]
+    mov rsi, rax
+    mov rdx, [rip + g_project]
+    mov ecx, [rsp + 64]
+    mov r8d, [rsp + 76]
+    mov r9d, [rsp + 76]
+    xor eax, eax
+    push rax
+    push rax
+    call uproc_spawn
+    add rsp, 16
+    mov rbx, rax
+    mov rdi, [rsp + 80]
+    call mem_free
+    mov edi, [rsp + 64]
+    SYS SYS_close
+    mov edi, [rsp + 68]
+    SYS SYS_close
+    mov edi, [rsp + 76]
+    SYS SYS_close
+    test rbx, rbx
+    jle 5f
+    mov edi, [rsp + 72]
+    mov esi, F_SETFL
+    mov edx, O_NONBLOCK
+    SYS SYS_fcntl
+    mov edi, [rsp + 72]
+    mov esi, POLLIN
+    lea rdx, [rip + au_on_out]
+    xor ecx, ecx
+    call watch_try_add
+    test eax, eax
+    jz 4f
+    mov [rip + au_pid], ebx
+    mov eax, [rsp + 72]
+    mov [rip + au_fd], eax
+    lea rdi, [rip + au_buf]
+    call sb_clear
+    call time_ms
+    add rax, AUTH_MS
+    mov [rip + au_until], rax
+    mov dword ptr [rip + au_state], AU_ASKING
+    mov rdi, [rsp + 88]
+    call mem_free
+    mov eax, 1
+    EPILOGUE
+4:  mov edi, ebx                # no room to watch it: it goes
+    xor esi, esi
+    call uproc_end
+5:  mov edi, [rsp + 72]
+    SYS SYS_close
+    jmp 7f
+6:  mov edi, [rsp + 64]
+    SYS SYS_close
+    mov edi, [rsp + 68]
+    SYS SYS_close
+7:  mov rdi, [rsp + 88]
+    call mem_free
+8:  xor eax, eax
+    EPILOGUE
+
+# au_on_out(fd, events, ctx): the status question's output, kept up to AUTH_MAX bytes; at its end the
+#   answer is read
+au_on_out:
+    PROLOGUE
+    mov ebx, edi
+1:  lea rdi, [rip + au_buf]
+    mov esi, 4096
+    call sb_reserve
+    mov rsi, rax
+    mov edi, ebx
+    mov edx, 4096
+    SYS SYS_read
+    cmp rax, -EINTR
+    je 1b
+    cmp rax, -EAGAIN
+    je 9f
+    test rax, rax
+    jle 2f
+    mov rcx, [rip + au_buf + SB_len]
+    cmp rcx, AUTH_MAX
+    jae 1b                      # past the limit: read and dropped
+    add [rip + au_buf + SB_len], rax
+    jmp 1b
+2:  call au_answer
+9:  EPILOGUE
+
+# au_answer(): the question ended: its loggedIn, false -> AU_OUT, anything else -> AU_IN
+au_answer:
+    PROLOGUE
+    call claude_auth_end
+    mov dword ptr [rip + au_state], AU_IN
+    mov rdi, [rip + au_buf + SB_ptr]
+    mov rsi, [rip + au_buf + SB_len]
+    test rsi, rsi
+    jz 9f
+    xor ecx, ecx                # from its first "{": a line before it is not the answer
+1:  cmp rcx, rsi
+    jae 9f
+    cmp byte ptr [rdi + rcx], '{'
+    je 2f
+    inc rcx
+    jmp 1b
+2:  add rdi, rcx
+    sub rsi, rcx
+    call json_parse
+    test rax, rax
+    jz 9f
+    mov rdi, rax
+    lea rsi, [rip + .Lk_loggedIn]
+    call json_get
+    mov rdi, rax
+    call json_bool
+    test edx, edx
+    jz 9f
+    test eax, eax
+    jnz 9f
+    mov dword ptr [rip + au_state], AU_OUT
+9:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# FN claude_auth_end(): the status question, if one runs, ends (its watch, its pipe, its process)
+FN claude_auth_end
+    PROLOGUE
+    mov edi, [rip + au_fd]
+    test edi, edi
+    js 1f
+    call watch_remove
+    mov edi, [rip + au_fd]
+    SYS SYS_close
+    mov dword ptr [rip + au_fd], -1
+1:  mov edi, [rip + au_pid]
+    test edi, edi
+    jz 9f
+    mov dword ptr [rip + au_pid], 0
+    mov esi, 2000
+    call uproc_end
+9:  EPILOGUE
+
+# cl_terminal(AL*, what): claude in rhun's terminal prompt (it runs when the user presses Enter there): the
+#   configured program (or "claude", found on the terminal's PATH), with "auth login" for what 1
+cl_terminal:
+    PROLOGUE
+    mov r12d, esi
+    lea rdi, [rip + psb]
+    call sb_clear
+    mov rsi, [rip + cfg_claude_executable]
+    cmp byte ptr [rsi], 0
+    jne 1f
+    lea rsi, [rip + .Lw_claude]
+1:  lea rdi, [rip + psb]
+    call sh_word
+    test r12d, r12d
+    jz 2f
+    lea rdi, [rip + psb]
+    lea rsi, [rip + .Lw_login]
+    call sb_push_cstr
+2:  mov rdi, [rip + psb + SB_ptr]
+    mov rsi, [rip + psb + SB_len]
+    call extproto_own_term
+    test eax, eax
+    jnz 9f
+    lea rdi, [rip + .Lr_prompt_busy]
+    call app_toast
+9:  EPILOGUE
+
+# sh_word(sb, cstr): the word for a shell: as it is when it has only letters, digits and / . _ - + ~ : , @,
+#   else in single quotes (a quote in it as '\'')
+sh_word:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor ecx, ecx
+1:  movzx eax, byte ptr [r12 + rcx]
+    test eax, eax
+    jz 7f                       # all plain
+    inc rcx
+    lea rdx, [rip + .Lsh_plain]
+2:  movzx r8d, byte ptr [rdx]
+    test r8d, r8d
+    jz 3f
+    inc rdx
+    cmp eax, r8d
+    je 1b
+    jmp 2b
+3:  mov r8d, eax                # a letter or a digit
+    or r8d, 0x20
+    sub r8d, 'a'
+    cmp r8d, 25
+    jbe 1b
+    sub eax, '0'
+    cmp eax, 9
+    jbe 1b
+    mov rdi, rbx                # quoted
+    mov esi, 39
+    call sb_push_byte
+    xor r13d, r13d
+4:  movzx esi, byte ptr [r12 + r13]
+    test esi, esi
+    jz 6f
+    inc r13
+    cmp esi, 39
+    jne 5f
+    mov rdi, rbx
+    lea rsi, [rip + .Lsh_quote]
+    call sb_push_cstr
+    jmp 4b
+5:  mov rdi, rbx
+    call sb_push_byte
+    jmp 4b
+6:  mov rdi, rbx
+    mov esi, 39
+    call sb_push_byte
+    EPILOGUE
+7:  mov rdi, rbx
+    mov rsi, r12
+    call sb_push_cstr
+    EPILOGUE
+
+# auth_error(ptr, len) -> eax 1 when a turn's error says claude's sign-in was refused (an expired or
+#   missing one): the words the CLI uses for it
+auth_error:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    lea rbx, [rip + auth_words]
+1:  mov r14, [rbx]
+    test r14, r14
+    jz 8f
+    add rbx, 8
+    mov rdi, r14
+    call strlen
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r14
+    mov rcx, rax
+    call str_find
+    test rax, rax
+    js 1b
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
 
 # ---- reading ----
 
@@ -1064,7 +1402,19 @@ h_result:
     mov rdx, r13
     mov rcx, r14
     call ev_turn_end
-    test dword ptr [rbx + AL_flags], ALF_NEW
+    cmp r15d, TE_ERROR          # refused credentials: the sign-in notice, the state asked again
+    jne 5f
+    mov rdi, r13
+    mov rsi, r14
+    call auth_error
+    test eax, eax
+    jz 5f
+    cmp dword ptr [rip + au_state], AU_ASKING
+    je 41f
+    mov dword ptr [rip + au_state], AU_UNKNOWN
+41: mov rdi, rbx
+    call ev_signed_out
+5:  test dword ptr [rbx + AL_flags], ALF_NEW
     jz 9f
     mov rdi, rbx                # a new conversation: its file is where the CLI wrote it
     call find_file
@@ -2094,8 +2444,8 @@ err_tail:
 .p2align 3
 .globl claude_drv
 claude_drv:
-    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME
-    .quad .Lname, cl_start, cl_send, cl_stop, cl_answer, cl_release, cl_held
+    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST
+    .quad .Lname, cl_start, cl_send, cl_stop, cl_answer, cl_release, cl_held, cl_auth, cl_terminal
 cl_types:
     .quad .Lv_stream_event, h_stream, .Lv_assistant, h_assistant, .Lv_system, h_system
     .quad .Lv_result, h_result, .Lv_control_request, h_request, .Lv_control_response, h_response
@@ -2122,6 +2472,21 @@ cl_flags:
 .La_sid: .asciz "--session-id="
 .La_resume: .asciz "--resume="
 .La_fork: .asciz "--fork-session"
+.La_auth: .asciz "auth"
+.La_status: .asciz "status"
+.La_json: .asciz "--json"
+.Lk_loggedIn: .asciz "loggedIn"
+.Lw_claude: .asciz "claude"
+.Lw_login: .asciz " auth login"
+.Lsh_plain: .asciz "/._-+~:,@"
+.Lsh_quote: .asciz "'\\''"
+.Lr_prompt_busy: .asciz "Close the open prompt first."
+.La_w1: .asciz "authentication_error"
+.La_w2: .asciz "Please run /login"
+.La_w3: .asciz "Not logged in"
+.La_w4: .asciz "Invalid API key"
+.p2align 3
+auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .La_mode: .asciz "--permission-mode="
 .Lk_type: .asciz "type"
 .Lk_subtype: .asciz "subtype"

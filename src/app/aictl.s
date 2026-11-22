@@ -158,7 +158,39 @@ c_agent_new:
     call agentext_new_kind
     xor eax, eax
     EPILOGUE
-8:  mov rax, -1
+8:  xor edi, edi                # why not, as a line
+    call no_chat
+    mov rax, -1
+    EPILOGUE
+
+# no_chat(look): why the box takes nothing, a line of the output (the command answers error): the chat is
+#   off, or this is a remote window (look 1: when the open session is a Claude Code one, or none is
+#   open), else no open conversation takes prompts
+no_chat:
+    PROLOGUE
+    test edi, edi
+    jz 1f
+    call agents_open_any
+    test rax, rax
+    jz 1f
+    lea rbx, [rip + .Lr_no_box]
+    cmp dword ptr [rax + AS_kind], AG_CLAUDE
+    jne 3f
+1:  lea rbx, [rip + .Lr_chat_off]
+    cmp dword ptr [rip + cfg_claude_chat], 0
+    je 3f
+    lea rbx, [rip + agentext_remote_text]
+    cmp dword ptr [rip + g_remote], 0
+    jne 3f
+    lea rbx, [rip + .Lr_no_box]
+3:  call ai_out
+    mov rdi, rax
+    mov rsi, rbx
+    call sb_push_cstr
+    call ai_out
+    mov rdi, rax
+    mov esi, 10
+    call sb_push_byte
     EPILOGUE
 
 # has_target() -> eax 1 when the box has someone to go to: a new session being written, or an open
@@ -194,7 +226,9 @@ c_agent_prompt:
     call agentext_send
     xor eax, eax
     EPILOGUE
-8:  mov rax, -1
+8:  mov edi, 1
+    call no_chat
+    mov rax, -1
     EPILOGUE
 
 # agent-type TEXT: TEXT typed into the prompt box, not sent (the session's program starts)
@@ -211,7 +245,9 @@ c_agent_type:
     call agentext_typed
     xor eax, eax
     EPILOGUE
-8:  mov rax, -1
+8:  mov edi, 1
+    call no_chat
+    mov rax, -1
     EPILOGUE
 
 # agent-stop: Stop in the open session
@@ -565,6 +601,9 @@ c_agent_test_append:
 .Lt_guard: .asciz "guard"
 .Lc_print_tools: .asciz "print-tools"
 .Lc_print_holder: .asciz "print-holder"
+.Lr_chat_off: .asciz "Chat with Claude Code is off (Settings > Claude Code)."
+.Lr_no_box: .asciz "No open conversation takes prompts."
+
 .Lw_holder: .asciz "holder="
 .Lh_none: .asciz "none"
 .Lh_other: .asciz "other"

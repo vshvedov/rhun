@@ -17,6 +17,9 @@
 # reopen moves CN_gen; a close leaves CN_IDLE, its buffers freed): every caller of a callback checks
 # both before it touches the connection again. Once CN_exit is set (the child is reaped, a callback runs
 # during the last drain) no signal goes to its pid: the kernel may have given the number to another.
+#
+# agent_conn_count() is how many are open (the cap), agent_conn_owns(pid) whether a pid is one of their
+# children (rhun's own programs are no holders of a conversation: agent_holder.s).
 .include "rhun.inc"
 
 .equ REAP_FAST_MS, 500          # uproc_wait each tick this long after the end of stdout or a signal

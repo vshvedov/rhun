@@ -1008,6 +1008,19 @@ def s_error(prompt):
            errors=['API Error: 529 {"type":"overloaded_error","message":"Overloaded"}'])
 
 
+def s_autherr(prompt):
+    """the CLI's credentials were refused (unrecorded: the shape of s_error with an authentication error's
+    words, as the CLI prints an API error)"""
+    result(subtype='error_during_execution', stop=None, terminal='api_error',
+           errors=['Failed to authenticate. API Error: 401 {"type":"error","error":{"type":"authentication_error",'
+                   '"message":"OAuth token has expired."}} \u00b7 Please run /login'])
+
+
+def s_long(prompt):
+    """a reply of 120 paragraphs, streamed in pieces (a thread taller than the panel)"""
+    final(''.join('Paragraph %d of a long reply.\n\n' % i for i in range(120)), 0.05)
+
+
 def s_wait(prompt):
     """a reply after a second"""
     time.sleep(1)
@@ -1094,7 +1107,7 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'wait': s_wait, 'many': s_many, 'ran': s_ran, 'fails': s_fails, 'early': s_early,
              'replay': s_replay, 'mcp': s_mcp, 'noid': s_noid, 'askx': s_askx, 'deep': s_deep,
              'withdraw': s_withdraw, 'unsaved': s_unsaved, 'unknown': s_unknown, 'unhandled': s_unhandled,
-             'mute': s_mute, 'orphan': s_orphan}
+             'mute': s_mute, 'orphan': s_orphan, 'autherr': s_autherr, 'long': s_long}
 
 
 COMMANDS = [{'name': 'compact', 'description': 'Clear history but keep a summary', 'argumentHint': ''}]

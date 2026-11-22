@@ -43,6 +43,12 @@
 # While a session's program runs or is about to (STARTING to HELD) its transcript is not read
 # (session_update, agents.s): its rows come from the stream; ev_closed reads the file again.
 #
+# A start first passes rhun's own questions, each a card of rhun's (AL_own): a project the user did not open
+# by hand (a rhun:// link, wfold_flags) is asked about once a window for a driver whose program reads the
+# project's settings (DRVC_TRUST: Trust, Continue without); the program must be signed in (DRV_auth, asked
+# in the background: not signed in is a notice with Sign In instead of the start, asked again at the next
+# Send); a start that fails gets a notice with "Run claude in Terminal" (DRV_terminal).
+#
 # Before it continues an existing conversation (--resume) the driver says whether another program holds it
 # (DRV_held: a terminal's claude, another rhun window's): the start waits up to g_drv_hold_ms, reading
 # again every second, then rhun asks with a card of its own (ALS_HELD, AL_own): Open here anyway, Continue
@@ -74,6 +80,7 @@
 lives: .zero VEC_SIZE           # AL*: every live record
 jsb: .zero SB_SIZE              # the prompts that waited, joined; a new conversation's path
 uuid_n: .quad 0                 # agent_uuid's counter (no /dev/urandom)
+trust_answered: .long 0         # the window's answer to the trust card was given (a project asks once)
 
 .data
 .p2align 2
@@ -436,6 +443,8 @@ FN agent_send
     jmp 9f
 .Las_now:
     and dword ptr [r15 + AL_flags], ~(ALF_DRAFT | ALF_UNANSWERED)
+    mov rdi, r15                # a notice of rhun's goes with the next prompt
+    call own_drop
     call user_row
     mov rdi, r15
     mov rsi, r12
@@ -474,7 +483,8 @@ agent_start:
     mov rax, [rbx + AL_as]      # the rows from here on come from the stream
     mov rax, [rax + AS_msgs + VEC_len]
     mov [rbx + AL_live_from], rax
-    and dword ptr [rbx + AL_flags], ~(ALF_ENDING | ALF_STOP_ASKED | ALF_CAPWAIT | ALF_HOLDWAIT | ALF_HOLDOK)
+    and dword ptr [rbx + AL_flags], ~(ALF_ENDING | ALF_STOP_ASKED | ALF_CAPWAIT | ALF_HOLDWAIT | ALF_HOLDOK | ALF_AUTHWAIT)
+    or dword ptr [rbx + AL_flags], ALF_ASKAGAIN
     mov rdi, rbx
     mov esi, ALS_STARTING
     call agent_state_set
@@ -496,7 +506,32 @@ agent_start:
 drv_start:
     PROLOGUE
     mov rbx, rdi
-    and dword ptr [rbx + AL_flags], ~(ALF_ENVWAIT | ALF_CAPWAIT)
+    and dword ptr [rbx + AL_flags], ~(ALF_ENVWAIT | ALF_CAPWAIT | ALF_AUTHWAIT)
+    mov rax, [rbx + AL_drv]     # a project the user did not open by hand (a rhun:// link) is asked about
+    test dword ptr [rax + DRV_caps], DRVC_TRUST     #   first, once a window (design 5)
+    jz 17f
+    cmp dword ptr [rip + trust_answered], 0
+    jne 17f
+    xor edi, edi
+    call wfold_flags
+    and eax, WS_PRIMARY | WS_TRUSTED
+    cmp eax, WS_PRIMARY         # a folder that is not trusted (no folder: nothing to trust)
+    jne 17f
+    mov rdi, rbx
+    call ask_trust
+    mov eax, 1
+    EPILOGUE
+17: xor esi, esi                # signed in? (asked in the background; a "no" again at the user's start)
+    test dword ptr [rbx + AL_flags], ALF_ASKAGAIN
+    setnz sil
+    and dword ptr [rbx + AL_flags], ~ALF_ASKAGAIN
+    mov rdi, rbx
+    mov rax, [rbx + AL_drv]
+    call [rax + DRV_auth]
+    cmp eax, AUTH_WAIT
+    je .Lds_auth
+    cmp eax, AUTH_OUT
+    je .Lds_out
     test dword ptr [rbx + AL_flags], ALF_HOLDOK
     jnz 0f
     mov rdi, rbx
@@ -520,7 +555,14 @@ drv_start:
     lea rdi, [rbx + AL_report]
     lea rsi, [rip + .Lbusy]
     call sb_push_cstr
-    jmp 3f
+    mov rdi, rbx
+    mov rsi, [rbx + AL_report + SB_ptr]
+    mov rdx, [rbx + AL_report + SB_len]
+    call ev_failed
+    mov rdi, rbx                # it is no failure of the program's: no notice for it
+    call own_drop
+    xor eax, eax
+    EPILOGUE
 2:  mov rdi, rbx
     mov rax, [rbx + AL_drv]
     call [rax + DRV_start]
@@ -532,6 +574,15 @@ drv_start:
     call ev_failed
     xor eax, eax
 9:  EPILOGUE
+.Lds_auth:                      # the tick looks again
+    or dword ptr [rbx + AL_flags], ALF_AUTHWAIT
+    mov eax, 1
+    EPILOGUE
+.Lds_out:                       # not signed in: the notice instead of the start
+    mov rdi, rbx
+    call signed_out
+    xor eax, eax
+    EPILOGUE
 .Lds_hold:                      # held elsewhere: the tick reads the records again
     or dword ptr [rbx + AL_flags], ALF_HOLDWAIT
     call time_ms
@@ -604,6 +655,90 @@ ask_held:
     call own_card
     EPILOGUE
 
+# ask_trust(AL*): the project is not trusted: ALS_HELD and the card that asks whether the program may use
+#   its own settings, hooks and servers
+ask_trust:
+    PROLOGUE
+    mov rbx, rdi
+    mov esi, ALS_HELD
+    call agent_state_set
+    lea rdi, [rip + .Lq_trust]
+    call strlen
+    mov rdi, rbx
+    mov esi, AQK_TRUST
+    lea rdx, [rip + .Lq_trust]
+    mov rcx, rax
+    lea r8, [rip + opts_trust]
+    mov r9d, 2
+    call own_card
+    EPILOGUE
+
+# signed_out(AL*): its program is not signed in: no start (FAILED, the reason in AL_report, the prompts
+#   back in the box) and the sign-in notice; the state is asked again at the next Send
+signed_out:
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rbx + AL_report]
+    call sb_clear
+    lea rdi, [rbx + AL_report]
+    lea rsi, [rip + .Lq_signin]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, ALS_FAILED
+    call agent_state_set
+    mov rdi, rbx
+    call start_abandon
+    mov rdi, rbx
+    call ev_signed_out
+    EPILOGUE
+
+# FN ev_signed_out(al): the sign-in notice (a card with Sign In): before a start, or after a turn the
+#   program's credentials failed
+FN ev_signed_out
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rip + .Lq_signin]
+    call strlen
+    mov rdi, rbx
+    mov esi, AQK_SIGNIN
+    lea rdx, [rip + .Lq_signin]
+    mov rcx, rax
+    lea r8, [rip + opts_signin]
+    mov r9d, 1
+    call own_card
+    EPILOGUE
+
+# failed_notice(AL*): its start failed: the notice with "Run claude in Terminal", and the wrapper named
+#   when one is set (a wrapper that does not start claude fails every start)
+failed_notice:
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rip + jsb]
+    call sb_clear
+    lea rdi, [rip + jsb]
+    lea rsi, [rip + .Lq_failed]
+    call sb_push_cstr
+    mov r12, [rip + cfg_claude_wrapper]
+    cmp byte ptr [r12], 0
+    je 1f
+    lea rdi, [rip + jsb]
+    lea rsi, [rip + .Lq_wrapper]
+    call sb_push_cstr
+    lea rdi, [rip + jsb]
+    mov rsi, r12
+    call sb_push_cstr
+    lea rdi, [rip + jsb]
+    lea rsi, [rip + .Lq_wrapper_tail]
+    call sb_push_cstr
+1:  mov rdi, rbx
+    mov esi, AQK_FAILED
+    mov rdx, [rip + jsb + SB_ptr]
+    mov rcx, [rip + jsb + SB_len]
+    lea r8, [rip + opts_failed]
+    mov r9d, 1
+    call own_card
+    EPILOGUE
+
 # own_card(AL*, kind, prompt ptr, len, opts cstr*, n): rhun's own card on the session (an AQ of that kind
 #   in AL_own; the one it had goes)
 own_card:
@@ -648,12 +783,21 @@ own_drop:
     call aq_free
 9:  EPILOGUE
 
-# own_answer(AL*, kind, n): option n of rhun's own card (it went from the screen already)
+# own_answer(AL*, kind, n): option n of rhun's own card. Held: Open here anyway, Continue in a copy, Cancel.
+#   Trust: Trust (Trust Folder for Git, then the start with all setting sources), Continue without (the
+#   start with the user's only). Both remembered for the window. The sign-in and failed-start notices
+#   put claude in the terminal prompt and stay until the next Send
 own_answer:
     PROLOGUE
     mov rbx, rdi
     mov r12d, esi
     mov r13, rdx
+    cmp r12d, AQK_SIGNIN
+    je .Loa_signin
+    cmp r12d, AQK_FAILED
+    je .Loa_failed
+    cmp r12d, AQK_TRUST
+    je .Loa_trust
     cmp r12d, AQK_HELD
     jne 9f
     mov rdi, rbx
@@ -661,7 +805,7 @@ own_answer:
     test r13, r13
     jnz 1f
     or dword ptr [rbx + AL_flags], ALF_HOLDOK  # Open here anyway
-    mov rdi, rbx
+3:  mov rdi, rbx
     mov esi, ALS_STARTING
     call agent_state_set
     mov rdi, rbx
@@ -678,6 +822,26 @@ own_answer:
     mov esi, ALS_OFF
     call agent_state_set
 9:  EPILOGUE
+.Loa_trust:
+    mov rdi, rbx
+    call own_drop
+    mov dword ptr [rip + trust_answered], 1
+    test r13, r13
+    jnz 3b
+    call cmd_trust_folder       # the project's own settings from now on (wfold_flags)
+    jmp 3b
+.Loa_signin:
+    mov rdi, rbx
+    mov esi, 1
+    mov rax, [rbx + AL_drv]
+    call [rax + DRV_terminal]
+    EPILOGUE
+.Loa_failed:
+    mov rdi, rbx
+    xor esi, esi
+    mov rax, [rbx + AL_drv]
+    call [rax + DRV_terminal]
+    EPILOGUE
 
 # start_abandon(AL*): a start that never ran: the rows it showed go (the prompts that waited) and those
 #   prompts go back in the box
@@ -1534,10 +1698,15 @@ FN ev_failed
     mov rsi, r12
     mov rdx, r13
     call sb_push
-1:  mov rdi, rbx
+1:  mov r14d, [rbx + AL_state]
+    mov rdi, rbx
     mov esi, ALS_FAILED
     call agent_state_set
-    mov rdi, [rbx + AL_as]
+    cmp r14d, ALS_STARTING      # its start failed: the notice that offers claude in the terminal
+    jne 2f
+    mov rdi, rbx
+    call failed_notice
+2:  mov rdi, [rbx + AL_as]
     mov esi, R_ERROR
     mov rdx, [rbx + AL_report + SB_ptr]
     mov rcx, [rbx + AL_report + SB_len]
@@ -1578,7 +1747,18 @@ FN agent_drv_tick
     mov rdi, r12
     call drv_start
     jmp 1b
-3:  test dword ptr [r12 + AL_flags], ALF_HOLDWAIT
+3:  test dword ptr [r12 + AL_flags], ALF_AUTHWAIT
+    jz 30f
+    mov rdi, r12
+    xor esi, esi
+    mov rax, [r12 + AL_drv]
+    call [rax + DRV_auth]
+    cmp eax, AUTH_WAIT
+    je 1b
+    mov rdi, r12
+    call drv_start
+    jmp 1b
+30: test dword ptr [r12 + AL_flags], ALF_HOLDWAIT
     jz 31f
     mov rdi, r12
     call hold_tick
@@ -1662,7 +1842,7 @@ FN agent_drv_timeout
     mov r12, [rax + rbx*8]
     inc rbx
     mov eax, ENV_TICK_MS
-    test dword ptr [r12 + AL_flags], ALF_ENVWAIT | ALF_CAPWAIT
+    test dword ptr [r12 + AL_flags], ALF_ENVWAIT | ALF_CAPWAIT | ALF_AUTHWAIT
     jnz 2f
     test dword ptr [r12 + AL_flags], ALF_HOLDWAIT
     jz 11f
@@ -1707,6 +1887,8 @@ live_end:
 #   uproc_quit_end's). Quitting, and the project changing (agents_set_project)
 FN agent_drv_shutdown
     PROLOGUE
+    call claude_auth_end        # the sign-in question, if it runs
+    mov dword ptr [rip + trust_answered], 0     # another project is asked again
 1:  mov rcx, [rip + lives + VEC_len]
     test rcx, rcx
     jz 9f
@@ -1752,7 +1934,8 @@ FN agent_drv_apply
 8:  call agentext_drivers_changed
     EPILOGUE
 
-# FN agent_live_dump(sb, AS* or 0): "state=… pid=0|1 sid=… mode=… queued=N requests=N new=0|1", then
+# FN agent_live_dump(sb, AS* or 0): "state=… pid=0|1 sid=… mode=… queued=N requests=N new=0|1 scroll=N
+#   max=N follow=0|1" (the open thread: agents_scroll_dump), then
 #   "report=TEXT" when it failed with one (print-agent-live)
 FN agent_live_dump
     PROLOGUE
@@ -1830,6 +2013,8 @@ FN agent_live_dump
     setnz sil
 8:  mov rdi, rbx
     call sb_push_u64
+    mov rdi, rbx                # where the open thread is scrolled, whether it follows the stream
+    call agents_scroll_dump
     mov rdi, rbx
     mov esi, 10
     call sb_push_byte
@@ -1870,15 +2055,33 @@ ext_held:
     mov eax, HOLDER_NONE
     ret
 
+# ext_auth(AS*, again) -> eax AUTH_IN: the extension signs its agent in itself
+ext_auth:
+    mov eax, AUTH_IN
+    ret
+
 .section .rodata
 .p2align 3
 ext_drv:
     .long AS_KIND_EXT, DRVC_SESSION | DRVC_NEW | DRVC_RESUME
     .quad .Lext_name, ext_start, agentext_ext_send, agentext_stop, ext_answer, ext_release, ext_held
+    .quad ext_auth, ext_release
 kind_names: .quad .Lk_claude, .Lk_codex, .Lk_grok, .Lk_opencode
 state_names: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 ags_of: .long AGS_IDLE, AGS_WORKING, AGS_IDLE, AGS_WORKING, AGS_WAITING, AGS_WAITING, AGS_ERROR
 opts_held: .quad .Lo_here, .Lo_copy, .Lo_cancel
+opts_trust: .quad .Lo_trust, .Lo_without
+opts_signin: .quad .Lo_signin
+opts_failed: .quad .Lo_terminal
+.Lq_trust: .asciz "Trust this folder? Claude Code would then use the project's own settings, hooks and servers."
+.Lo_trust: .asciz "Trust"
+.Lo_without: .asciz "Continue without"
+.Lq_signin: .asciz "Claude Code is not signed in."
+.Lo_signin: .asciz "Sign In"
+.Lq_failed: .asciz "Claude Code could not start."
+.Lq_wrapper: .asciz " The wrapper "
+.Lq_wrapper_tail: .asciz " is set in Settings > Claude Code."
+.Lo_terminal: .asciz "Run claude in Terminal"
 .Lq_held: .asciz "This conversation is still open somewhere else."
 .Lo_here: .asciz "Open here anyway"
 .Lo_copy: .asciz "Continue in a copy"

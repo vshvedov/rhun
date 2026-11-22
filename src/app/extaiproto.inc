@@ -433,12 +433,55 @@ FN extproto_tool_term
     xor eax, eax
 9:  EPILOGUE
 
+# FN extproto_own_term(ptr, len) -> eax 1: a command of rhun's own in its terminal prompt (it runs when
+#   the user presses Enter; nobody is answered), 0 when a prompt or the palette is open already. The
+#   text must be one plain line
+FN extproto_own_term
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    xor eax, eax
+    test r13, r13
+    jz 9f
+    cmp r13, EXT_TERM_MAX
+    ja 9f
+    mov rdi, r12
+    mov rsi, r13
+    call plain_text             # what is shown is what runs
+    test eax, eax
+    jz 9f
+    xor eax, eax
+    cmp qword ptr [rip + pr_id], 0
+    jne 9f
+    call palette_is_open
+    test eax, eax
+    mov eax, 0
+    jnz 9f
+    lea rdi, [rip + .Lrun_label]
+    mov esi, PROMPT_TERM
+    mov rdx, r12
+    mov rcx, r13
+    call palette_ext_prompt_open
+    call palette_field
+    mov qword ptr [rax + TF_cur], 0
+    mov qword ptr [rax + TF_anchor], 0
+    mov qword ptr [rip + pr_kind], 3
+    mov qword ptr [rip + pr_ext], 0     # rhun's own: no extension waits for the answer
+    mov qword ptr [rip + pr_id], -1
+    mov qword ptr [rip + pr_tool], 0
+    call time_ms
+    mov [rip + pr_opened], rax
+    mov eax, 1
+9:  EPILOGUE
+
 # prompt_term_answer(ran): a term prompt closed: ok, or cancelled; for rhun.run the tool call is
-#   answered instead (tools.s)
+#   answered instead (tools.s); rhun's own (extproto_own_term) answers nobody
 prompt_term_answer:
     mov rax, [rip + pr_tool]
     test rax, rax
     jnz 1f
+    cmp qword ptr [rip + pr_ext], 0
+    je 3f
     test edi, edi
     jz 2f
     mov rdi, [rip + pr_id]
@@ -450,6 +493,7 @@ prompt_term_answer:
     mov rdi, rax
     mov qword ptr [rip + pr_tool], 0
     jmp tools_term_done
+3:  ret
 
 .bss
 .p2align 3

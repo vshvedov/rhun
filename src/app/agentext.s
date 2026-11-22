@@ -11,6 +11,7 @@
 .equ AGENT_FIELD_MAX, 4096      # any field of a row, before cutting
 .equ AGENT_TEXT_MAX, 71680      # a message's text is cut at 70 KB, as OpenCode copies are
 .equ AGENT_MSGS_MAX, 2000       # messages one transcript answer may hold
+.equ CARD_LINES, 4              # a card's prompt wraps to this many lines, the last one cut with "…"
 
 .bss
 .p2align 3
@@ -2370,6 +2371,21 @@ FN agentext_opened
     call tf_clear
 9:  EPILOGUE
 
+# FN agentext_remote_line(AS*) -> eax 1 when the session shows "Chat is not available in remote windows
+#   yet" where its box would be: a Claude Code conversation in a remote window with the chat on
+FN agentext_remote_line
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    cmp dword ptr [rdi + AS_kind], AG_CLAUDE
+    jne 1f
+    cmp dword ptr [rip + cfg_claude_chat], 0
+    je 1f
+    cmp dword ptr [rip + g_remote], 0
+    je 1f
+    inc eax
+1:  ret
+
 # FN agentext_open_keep(AS*): that session opens and the box goes with it, its text kept (a copy of the
 #   conversation the box was writing to)
 FN agentext_open_keep
@@ -2624,6 +2640,7 @@ card_h:
     mov rbx, [rdi + AS_ask]
     test rbx, rbx
     jz 9f
+    mov r12d, esi
     mov rdi, rbx
     mov rdx, [rbx + AXK_opts + VEC_len]
     dec rdx
@@ -2634,7 +2651,76 @@ card_h:
     imul eax, ecx
     add eax, [rip + g_pmt + 4*MI_40]
     add eax, [rip + g_pmt + 4*MI_12]
+    mov r13d, eax
+    mov rdi, [rbx + AXK_prompt] # the prompt's lines past its first
+    mov esi, r12d
+    sub esi, [rip + g_pmt + 4*MI_48]
+    call prompt_lines
+    dec eax
+    imul eax, [rip + g_pmt + 4*MI_24]
+    add eax, r13d
 9:  EPILOGUE
+
+# prompt_line(ptr, len, maxw) -> rax the bytes of a card prompt's first line at maxw px (the panel's
+#   face), broken after a word when it can be; rdx the bytes it takes, with the space after it
+prompt_line:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    mov rdi, [rip + ag_fui]
+    mov rsi, r12
+    mov ecx, edx
+    mov rdx, r13
+    call text_fit
+    cmp rax, r13
+    jae 7f
+    mov rbx, rax                # what fits; the break is at a space there, or the last one before it
+    mov rcx, rax
+1:  cmp byte ptr [r12 + rcx], ' '
+    je 2f
+    test rcx, rcx
+    jz 3f
+    dec rcx
+    jmp 1b
+2:  test rcx, rcx
+    jz 3f
+    mov rax, rcx
+    lea rdx, [rcx + 1]
+    EPILOGUE
+3:  test rbx, rbx               # one word longer than the line: cut where it fits (a character at least)
+    jnz 4f
+    mov rdi, r12
+    mov rsi, r13
+    call utf8_decode
+    mov rbx, rdx
+4:  mov rax, rbx
+    mov rdx, rbx
+    EPILOGUE
+7:  mov rax, r13
+    mov rdx, r13
+    EPILOGUE
+
+# prompt_lines(prompt cstr, maxw) -> eax the lines a card's prompt takes (1 to CARD_LINES)
+prompt_lines:
+    PROLOGUE
+    mov r12, rdi
+    mov r14d, esi
+    call strlen
+    mov r13, rax
+    xor ebx, ebx
+1:  inc ebx
+    cmp ebx, CARD_LINES
+    jae 9f
+    mov rdi, r12
+    mov rsi, r13
+    mov edx, r14d
+    call prompt_line
+    add r12, rdx
+    sub r13, rdx
+    test r13, r13
+    jnz 1b
+9:  mov eax, ebx
+    EPILOGUE
 
 # opt_row(AXK*, w, i) -> eax the row (from 0) option i wraps to in a card w wide
 opt_row:
@@ -2702,8 +2788,14 @@ FN agentext_bottom_h
     mov rdi, rbx
     call agent_drv_of
     test rax, rax
+    jnz 2f
+    mov rdi, rbx                # a remote window's Claude Code conversation: one line where the box would be
+    call agentext_remote_line
+    test eax, eax
     jz 1f
-    mov edi, r12d
+    add r13d, [rip + g_pmt + 4*MI_32]
+    jmp 1f
+2:  mov edi, r12d
     mov rsi, rbx
     call input_h
     add r13d, eax
@@ -2857,7 +2949,28 @@ FN agentext_bottom_draw
 2:  mov rdi, rbx
     call agent_drv_of
     test rax, rax
+    jnz 3f
+    mov rdi, rbx                # no box: in a remote window a Claude Code conversation says why
+    call agentext_remote_line
+    test eax, eax
     jz 9f
+    lea rdi, [rip + .Lremote_line]
+    call strlen
+    mov r9, rax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [rip + g_pmt + 4*MI_16]
+    mov edx, [rsp + 16]
+    PM ecx, MI_32
+    lea r8, [rip + .Lremote_line]
+    COLOR r10d, T_MUTED
+    mov r11d, [rsp + 8]
+    sub r11d, [rip + g_pmt + 4*MI_32]
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+    jmp 9f
 3:  # the box
     mov edi, [rsp + 8]
     mov rsi, rbx
@@ -3007,27 +3120,58 @@ card_draw:
     push rax
     call gfx_frame
     add rsp, 16
-    mov rdi, [rbx + AXK_prompt]
+    # the prompt, wrapped at words (CARD_LINES at most, the last cut with "…")
+    mov r12, [rbx + AXK_prompt]
+    mov rdi, r12
     call strlen
+    mov r13, rax
+    mov eax, [rsp + 8]
+    sub eax, [rip + g_pmt + 4*MI_48]
+    mov [rsp + 44], eax         # its width
+    xor r14d, r14d              # the line
+.Lcd_line:
+    mov rdi, r12
+    mov rsi, r13
+    mov edx, [rsp + 44]
+    call prompt_line
+    lea ecx, [r14 + 1]
+    cmp ecx, CARD_LINES
+    jb 1f
+    mov rax, r13                # the last line takes the rest
+    mov rdx, r13
+1:  mov [rsp + 32], rdx
     mov r9, rax
     mov rdi, [rip + ag_fui]
     mov esi, [rsp]
     add esi, [rip + g_pmt + 4*MI_24]
-    mov edx, [rsp + 4]
+    mov edx, r14d
+    imul edx, [rip + g_pmt + 4*MI_24]
+    add edx, [rsp + 4]
     add edx, [rip + g_pmt + 4*MI_10]
     PM ecx, MI_24
-    mov r8, [rbx + AXK_prompt]
+    mov r8, r12
     COLOR r10d, T_FG
-    mov r11d, [rsp + 8]
-    sub r11d, [rip + g_pmt + 4*MI_48]
+    mov r11d, [rsp + 44]
     push r11
     push r10
     call ui_text_v_fit
     add rsp, 16
+    mov rdx, [rsp + 32]
+    add r12, rdx
+    sub r13, rdx
+    inc r14d
+    test r13, r13
+    jz 2f
+    cmp r14d, CARD_LINES
+    jb .Lcd_line
+2:  lea eax, [r14 - 1]
+    imul eax, [rip + g_pmt + 4*MI_24]
+    mov [rsp + 44], eax         # the room the lines past the first take
     # the options, wrapping; scrolled by rows so the selected one shows in a card that is cut
     mov eax, [rsp + 12]
     sub eax, [rip + g_pmt + 4*MI_40]
     sub eax, [rip + g_pmt + 4*MI_12]
+    sub eax, [rsp + 44]
     mov ecx, [rip + g_pmt + 4*MI_32]
     add ecx, [rip + g_pmt + 4*MI_6]
     mov [rsp + 32], ecx                # a row's height
@@ -3048,6 +3192,7 @@ card_draw:
 6:  imul eax, [rsp + 32]
     mov r13d, [rsp + 4]
     add r13d, [rip + g_pmt + 4*MI_40]   # y
+    add r13d, [rsp + 44]
     mov ecx, r13d
     mov [rsp + 36], ecx                # the options' top
     sub r13d, eax
@@ -3378,8 +3523,9 @@ plus_btn:
     setnz dl
     EPILOGUE
 
-# FN agentext_input_dump(sb): "input=TEXT focus=0|1 new=OWNER/NAME|KIND|- pending=0|1 box=0|1" and the
-#   open card's "card=PROMPT options=A|B" (print-agent-input)
+# FN agentext_input_dump(sb): "input=TEXT focus=0|1 new=OWNER/NAME|KIND|- pending=0|1 box=0|1", the
+#   open card's "card=PROMPT options=A|B", and in a remote window "notice=TEXT" for a Claude Code
+#   conversation (print-agent-input)
 FN agentext_input_dump
     PROLOGUE
     mov rbx, rdi
@@ -3470,7 +3616,21 @@ FN agentext_input_dump
 2:  mov rdi, rbx
     mov esi, 10
     call sb_push_byte
-9:  EPILOGUE
+9:  call agents_open_any        # the line a remote window shows instead of the box
+    mov rdi, rax
+    call agentext_remote_line
+    test eax, eax
+    jz 10f
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_notice]
+    call sb_push_cstr
+    mov rdi, rbx
+    lea rsi, [rip + .Lremote_line]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+10: EPILOGUE
 
 # FN agentext_prompts_gone(ext): an extension stopped: its prompt in flight and new session end
 FN agentext_prompts_gone
@@ -3517,6 +3677,10 @@ FN agentext_prompts_gone
 .Ld_new: .asciz " new="
 .Ld_box: .asciz " box="
 .Ld_card: .asciz "card="
+.Ld_notice: .asciz "notice="
+.globl agentext_remote_text
+agentext_remote_text:
+.Lremote_line: .asciz "Chat is not available in remote windows yet"
 .Ld_options: .asciz " options="
 .Le_cancelled: .asciz "cancelled"
 .Le_card_syntax: .asciz "syntax a prompt line and 1 to 16 options, none empty"

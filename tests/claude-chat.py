@@ -14,6 +14,7 @@ import sys
 import tempfile
 import time
 import unittest
+import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[1]
 EXE = Path(os.environ.get('RHUN_TEST_EXE', ROOT / 'build/rhun')).resolve()
@@ -78,15 +79,17 @@ class ChatCase(unittest.TestCase):
         """[claude] with the fake as the program, then extra lines."""
         return f'[claude]\nwrapper = {PYTHON}\nexecutable = {FAKE}\n' + extra
 
-    def start(self, claude=None, extra='', env=None):
-        """rhun on the project with BASE + claude (default: claude_section()) + extra as its config."""
+    def start(self, claude=None, extra='', env=None, target=None, remote=False):
+        """rhun on the project (or target, a link) with BASE + claude (default: claude_section()) + extra as
+        its config; remote: a remote window on this machine (the local: transport)."""
         if claude is None:
             claude = self.claude_section()
         self.config.write_text(self.BASE + claude + extra, encoding='utf-8')
         control = self.work / 'control'
         if control.exists():
             control.unlink()
-        self.process = subprocess.Popen([str(EXE), str(self.project), '--headless', '1280x800',
+        where = ['--remote', 'local:', str(self.project)] if remote else [target or str(self.project)]
+        self.process = subprocess.Popen([str(EXE)] + where + ['--headless', '1280x800',
                                          '--scale', '1', '--control', str(control)],
                                         env=dict(self.env, **(env or {})),
                                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
@@ -124,6 +127,10 @@ class ChatCase(unittest.TestCase):
                 return ''.join(output), reply == 'ok\n'
             self.assertNotEqual(reply, '', line)
             output.append(reply)
+
+    def live(self):
+        """print-agent-live without the thread's scroll fields (EdgeTest reads those)."""
+        return re.sub(r' scroll=\d+ max=\d+ follow=[01]', '', self.command('print-agent-live'))
 
     def quit(self):
         """End rhun the way the user does (it writes its config if a setting changed), and wait."""
@@ -344,8 +351,7 @@ class SeamTest(ChatCase):
         self.start()
         lines = self.open_row('Claude')
         self.assertTrue(lines[0].endswith(' box=1'), lines)
-        self.assertEqual(self.command('print-agent-live'),
-                         'state=off pid=0 sid= mode= queued=0 requests=0 new=0\n')
+        self.assertEqual(self.live(), 'state=off pid=0 sid= mode= queued=0 requests=0 new=0\n')
 
     def test_send_gives_the_drivers_error_row(self):
         self.start('[claude]\nexecutable = /nonexistent/claude\n')
@@ -358,7 +364,7 @@ class SeamTest(ChatCase):
         self.assertEqual(thread[-1], 'error ' + missing[:60])
         self.assertNotIn('user hello', thread)      # it never went: the text stays in the box
         self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
-        self.assertEqual(self.command('print-agent-live').splitlines(),     # the id: the holder check's
+        self.assertEqual(self.live().splitlines(),     # the id: the holder check's
                          ['state=failed pid=0 sid=s1 mode= queued=0 requests=0 new=0', 'report=' + missing])
 
     def test_chat_off_has_no_box(self):
@@ -432,9 +438,6 @@ class DrivenCase(ChatCase):
         """The open conversation's rows (print-agents: the list's rows first, then these)."""
         return [line for line in self.command('print-agents').splitlines()
                 if line.split(' ')[0].split('(')[0] in ROLES]
-
-    def live(self):
-        return self.command('print-agent-live')
 
     def sid(self):
         return re.search(r' sid=(\S*)', self.live()).group(1)
@@ -538,7 +541,8 @@ class ChatTest(DrivenCase):
         self.command('agent-new claude')
         self.command('agent-prompt one')
         self.command('agent-prompt two')
-        live = self.live()
+        # the sign-in state comes first (a moment), then the process; initialize waits 800 ms
+        live = self.until(lambda: (lambda s: s if ' pid=1 ' in s else None)(self.live()), 'the process')
         self.assertTrue(live.startswith('state=starting pid=1 '), live)
         self.assertIn(' queued=2 ', live)
         self.command('wait-agent ready 10000')
@@ -1499,6 +1503,230 @@ class HolderTest(DrivenCase):
         self.assertEqual(self.command('print-holder s2'), 'holder=none\n')
         (self.work / '.claude/sessions/bad.json').write_text('{not json', encoding='utf-8')
         self.assertEqual(self.command('print-holder s2'), 'holder=unknown\n')
+
+
+SIGN_IN_CARD = 'card=Claude Code is not signed in. options=Sign In'
+TRUST_CARD = ("card=Trust this folder? Claude Code would then use the project's own settings, hooks and "
+              "servers. options=Trust|Continue without")
+FAILED_CARD = 'card=Claude Code could not start. options=Run claude in Terminal'
+TERM_PROMPT = 'prompt=Run in the terminal: Enter, or Esc'
+REMOTE_LINE = 'Chat is not available in remote windows yet'
+
+
+def rhun_link(path):
+    """A rhun://file/ link to a folder, as a browser hands it over (tests/file-launch.py)."""
+    return 'rhun://file' + urllib.parse.quote(Path(path).as_posix()) + '/'
+
+
+class EdgeTest(DrivenCase):
+    """The sign-in state, folder trust, the failed start's notice, chat off and remote windows, the box's
+    input, and the thread following the stream."""
+
+    def card(self):
+        lines = self.command('print-agent-input').splitlines()
+        return lines[1] if len(lines) > 1 else None
+
+    def auths(self):
+        return [r for r in self.records() if r.get('start') == 'auth']
+
+    def scroll(self):
+        """print-agent-live's scroll=N max=N follow=0|1 of the open thread."""
+        m = re.search(r' scroll=(\d+) max=(\d+) follow=([01])', self.command('print-agent-live'))
+        return int(m.group(1)), int(m.group(2)), int(m.group(3))
+
+    def test_signed_out_shows_sign_in(self):
+        mode = self.work / 'auth-mode'
+        mode.write_text('out', encoding='utf-8')
+        self.start(env={'FAKE_CLAUDE_AUTH': '@' + str(mode)})
+        self.chat('hello', 'failed')
+        self.assertEqual(self.starts(), [])         # no stream process was started
+        auths = self.auths()
+        self.assertEqual(len(auths), 1, auths)
+        self.assertEqual(auths[0]['argv'], ['auth', 'status', '--json'])
+        self.assertIsNone(auths[0]['env']['CLAUDECODE'])
+        lines = self.live().splitlines()
+        self.assertTrue(lines[0].startswith('state=failed pid=0 '), lines)
+        self.assertEqual(lines[1], 'report=Claude Code is not signed in.')
+        self.assertEqual(self.card(), SIGN_IN_CARD)
+        self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
+        self.assertEqual(self.thread(), [])         # the prompt never went
+        self.command('agent-card 1')                # Sign In: the CLI's own sign-in in rhun's terminal prompt
+        self.assertEqual(self.command('print-palette').splitlines()[:2], [TERM_PROMPT, f'field={FAKE} auth login'])
+        self.command('key Escape')
+        self.assertEqual(self.card(), SIGN_IN_CARD)  # until the next Send
+        mode.write_text('ok', encoding='utf-8')     # signed in, in the terminal
+        self.command('agent-prompt hello')          # the next Send asks again
+        self.command('wait-agent ready')
+        self.assertEqual(len(self.auths()), 2)
+        self.assertEqual(len(self.starts()), 1)
+        self.assertIsNone(self.card())
+        self.assertEqual(self.thread(), ['user hello', REPLY + 'ok: hello'])
+
+    def test_signed_in_starts(self):
+        self.start()
+        self.chat('hello')
+        self.assertEqual(len(self.auths()), 1)
+        self.assertEqual(len(self.starts()), 1)
+        self.assertIsNone(self.card())
+        self.chat('again')                          # asked once a window
+        self.assertEqual(len(self.auths()), 1)
+        self.assertEqual(len(self.starts()), 2)
+        self.stop()
+        self.fake_log.unlink()
+        self.start(env={'FAKE_CLAUDE_AUTH': 'garbage'})     # an answer rhun cannot read: the CLI will say
+        self.chat('hello')
+        self.assertEqual(len(self.auths()), 1)
+        self.assertEqual(len(self.starts()), 1)
+        self.stop()
+        self.fake_log.unlink()
+        self.start(env={'FAKE_CLAUDE_AUTH': 'ok', 'FAKE_CLAUDE_AUTH_MS': '20000'})   # no answer in 10 s
+        self.chat('hello', 'ready', 20000)
+        self.assertEqual(len(self.starts()), 1)
+
+    def test_an_authentication_error_shows_sign_in(self):
+        self.start()
+        self.chat('autherr')
+        thread = self.thread()
+        self.assertTrue(thread[-1].startswith('error Failed to authenticate.'), thread)
+        self.assertEqual(self.card(), SIGN_IN_CARD)
+        self.command('agent-prompt hello')          # the next prompt goes to the running claude; the card goes
+        self.command('wait-agent ready')
+        self.assertIsNone(self.card())
+        self.assertEqual(len(self.auths()), 1)
+        self.command('agent-release')               # the next start asks the sign-in state again
+        self.command('wait-agent off')
+        self.command('agent-prompt again')
+        self.command('wait-agent ready')
+        self.assertEqual(len(self.auths()), 2)
+        self.assertEqual(len(self.starts()), 2)
+
+    def linked(self):
+        """The project a git repository, opened through a rhun:// link: not trusted."""
+        subprocess.run(['git', 'init', '-q', str(self.project)], check=True, env=self.env)
+        self.start(target=rhun_link(self.project))
+        self.assertTrue(self.command('print-project').strip().endswith('/project'))
+
+    def test_untrusted_folder_asks_then_user_sources(self):
+        self.linked()
+        self.chat('hello', 'held')
+        self.assertEqual(self.card(), TRUST_CARD)
+        self.assertEqual(self.starts(), [])
+        self.command('agent-card 2')                # Continue without
+        self.command('wait-agent ready')
+        starts = self.starts()
+        self.assertEqual(len(starts), 1)
+        self.assertIn('--setting-sources=user', starts[0]['argv'])
+        self.assertEqual(starts[0]['sources'], ['user'])
+        self.assertEqual(self.thread(), ['user hello', REPLY + 'ok: hello'])
+        self.chat('again')                          # remembered for the window
+        self.assertIsNone(self.card())
+        self.assertEqual(self.starts()[1]['sources'], ['user'])
+
+    def test_trust_gives_all_sources(self):
+        self.linked()
+        self.command('agent-new claude')
+        self.command('agent-type h')                # the first key asks already
+        self.command('wait-agent held')
+        self.assertEqual(self.card(), TRUST_CARD)
+        self.command('agent-card 1')                # Trust: Trust Folder for Git, then all sources
+        self.command('wait-agent ready')
+        self.assertEqual(self.starts()[0]['sources'], ['user', 'project', 'local'])
+        self.chat('again')
+        self.assertIsNone(self.card())
+        self.assertEqual(self.starts()[1]['sources'], ['user', 'project', 'local'])
+
+    def test_trusted_folder_gets_all_sources(self):
+        self.start()
+        self.chat('hello')
+        self.assertIsNone(self.card())
+        self.assertIn('--setting-sources=user,project,local', self.starts()[0]['argv'])
+
+    def test_failed_start_offers_the_terminal(self):
+        self.start('[claude]\nexecutable = /nonexistent/claude\n')
+        self.chat('hello', 'failed')
+        self.assertEqual(self.card(), FAILED_CARD)
+        self.command('agent-card 1')
+        self.assertEqual(self.command('print-palette').splitlines()[:2], [TERM_PROMPT, 'field=/nonexistent/claude'])
+        self.command('key Escape')
+        self.stop()
+        broken = self.work / 'broken-claude'        # a program that ends at once, through a wrapper
+        broken.write_text('#!/bin/sh\necho "broken: no config" >&2\nexit 3\n', encoding='utf-8')
+        broken.chmod(0o755)
+        self.start(f'[claude]\nwrapper = /bin/sh\nexecutable = {broken}\n')
+        self.chat('hello', 'failed')
+        self.assertEqual(self.card(), 'card=Claude Code could not start. The wrapper /bin/sh is set in '
+                                      'Settings > Claude Code. options=Run claude in Terminal')
+        self.assertIn('broken: no config', self.live())
+        self.command('agent-prompt hello')          # the next Send tries again: the card goes meanwhile
+        self.command('wait-agent failed')
+        self.assertEqual(self.card()[:len('card=Claude Code could not start.')], 'card=Claude Code could not start.')
+
+    def test_chat_off_answers_with_a_reason(self):
+        self.seed()
+        self.start(self.claude_section('chat = false\n'))
+        self.open_listed()
+        self.assertTrue(self.command('print-agent-input').splitlines()[0].endswith(' box=0'))
+        for line in ('agent-prompt x', 'agent-type x', 'agent-new claude'):
+            out, ok = self.reply(line)
+            self.assertFalse(ok, line)
+            self.assertEqual(out, 'Chat with Claude Code is off (Settings > Claude Code).\n', line)
+
+    @unittest.skipUnless(sys.platform.startswith('linux'), 'the local: remote transport is Linux only')
+    def test_remote_window_has_no_chat(self):
+        self.seed()
+        self.start(remote=True)
+        self.command('wait-remote 60')
+        self.command('cmd focus_agents')
+        self.command('wait-agents')
+        rows = [l for l in self.command('print-agents').splitlines() if l.startswith('Claude')]
+        self.assertEqual(len(rows), 1, rows)
+        self.command('print-agents 1')
+        lines = self.command('print-agent-input').splitlines()
+        self.assertTrue(lines[0].endswith(' box=0'), lines)
+        self.assertEqual(lines[1:], ['notice=' + REMOTE_LINE])
+        out, ok = self.reply('agent-prompt x')
+        self.assertFalse(ok)
+        self.assertEqual(out, REMOTE_LINE + '\n')
+        out, ok = self.reply('agent-new claude')
+        self.assertFalse(ok)
+        self.assertEqual(out, REMOTE_LINE + '\n')
+
+    def test_the_box_takes_paste_and_input_methods(self):
+        self.seed()
+        self.start()
+        self.command('key ' + MOD + '+n')           # the text to paste, copied from a new file
+        self.command('type pasted-')
+        self.command('key ' + MOD + '+a')
+        self.command('key ' + MOD + '+c')
+        self.open_listed()
+        self.command('key Tab')
+        self.command('key ' + MOD + '+v')
+        self.command('type héllo wörld ✓ 한국')     # characters as an input method commits them
+        self.command('wait-agent ready')
+        self.assertTrue(self.command('print-agent-input').startswith('input=pasted-héllo wörld ✓ 한국 '))
+        self.command('key Return')
+        self.command('wait-agent ready')
+        self.assertEqual(self.prompts(), ['pasted-héllo wörld ✓ 한국'])
+
+    def test_follows_the_stream(self):
+        self.start()
+        self.chat('long', 'ready', 20000)
+        self.command('wait 200')
+        scroll, top, follow = self.scroll()
+        self.assertGreater(top, 0)
+        self.assertEqual((scroll, follow), (top, 1))
+        self.command('move 1000 300')               # scrolled up: it stays there while more comes
+        self.command('scroll -5')
+        self.command('wait 100')
+        scroll, top, follow = self.scroll()
+        self.assertEqual(follow, 0)
+        self.assertLess(scroll, top)
+        self.command('agent-prompt long')
+        self.command('wait-agent ready 20000')
+        self.command('wait 200')
+        later, top2, follow = self.scroll()
+        self.assertEqual((later, follow), (scroll, 0))
+        self.assertGreater(top2, top)
 
 
 if __name__ == '__main__':

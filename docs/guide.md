@@ -89,86 +89,111 @@ your plan's limits as they do in the CLI; rhun makes no request to Anthropic its
 stays a way to use Claude Code as before: a conversation is the same one `claude --resume` shows,
 so you can go on with it in either place.
 
-**+ Claude Code** in the panel's header starts a new conversation: write the first prompt in the
-box and press Enter. To continue an existing conversation, open it from the list and write in the
-box under it. Enter sends and Shift+Enter starts a new line; in the panel, Enter or Tab goes to the
-box and Escape leaves it. The reply streams in as Claude writes it. A tool call shows as a row once
-Claude has written it, and its output as a result row; thinking and the work of subagents are not
-shown. The permission mode Claude Code reports shows as `mode: NAME` beside Send.
+**+ Claude Code** in the panel's header opens a new conversation, "New Claude Code session": write
+the first prompt in the box and press Enter. To continue an existing conversation, open it from the
+list and write in the box under it. Enter sends and Shift+Enter starts a new line; in the panel,
+Enter or Tab goes to the box and Escape leaves it. The reply streams in as Claude writes it. A tool
+call shows as a row once Claude has written it, and its output as a result row; thinking and the
+work of subagents are not shown. The permission mode Claude Code reports shows as `mode: NAME`
+beside Send.
 
-The process starts when you type the first character in a conversation's box, so it is usually
-ready by the time you send; reading conversations starts nothing. Up to four prompts sent while it
-starts wait for it. While a turn runs, Send leaves the text in the box and says so: stop the turn
-or wait for the reply. A prompt is at most 50,000 characters. **Stop**, or Escape while the panel
-or its box has the focus, interrupts the turn, and an "Interrupted" row marks it. After
-`idle_stop_minutes` without a turn, a card or typing, the process is stopped; the next prompt
-starts it again and goes on with the same conversation. A new conversation you leave before
-sending anything is dropped, with its process. Quitting rhun, opening another folder or turning
-the chat off ends every process rhun started. A process that ends by itself during a turn leaves
-an error row with the last lines it printed, and prompts that were still waiting go back into the
-box.
+The process starts when you type or paste the first character in a conversation's box, so it is
+usually ready by the time you send; reading conversations starts nothing. It runs in the
+conversation's folder (a worktree's conversation in that worktree, a new one in the project). Up
+to four prompts sent while it starts wait for it; a fifth stays in the box with "Four
+prompts are already waiting to be sent." While Claude works, **Stop** takes the place of **Send**,
+and a prompt sent then, or while a card waits for you, stays in the box with "Claude is still
+working. Stop it or wait for the reply." A prompt is at most 50,000 characters. **Stop**, or Escape
+while the panel or its box has the focus, interrupts the turn, a card that waits included, and an
+"Interrupted" row marks it. **Back** leaves the conversation without stopping it: the turn goes on,
+and the conversation shows it when you open it again.
+
+After **Stop idle agents after** (`idle_stop_minutes`) without a turn, a card or typing, the
+process is stopped; the next prompt starts it again and goes on with the same conversation. A new
+conversation you leave before sending anything (Back, another conversation opened, another new one
+begun or the panel closed) is dropped, with its process. At most 32 processes run at once: one more
+ends the idle one used longest ago, and when none is idle the prompt stays in the box under an error
+row, "Too many agents are running. Stop one and send again." Quitting rhun, opening another folder
+or turning the chat off ends every process rhun started. A process that ends by itself during a
+turn leaves an error row such as "Claude Code ended (exit status 2)" with the last lines it printed,
+and prompts that were still waiting go back into the box; the next prompt starts it again.
 
 While rhun talks to Claude Code, the rows come from the process. When the process ends, the
 conversation is read again from Claude Code's own file, so the panel shows what the file holds. A
 running process keeps the program, wrapper and environment it was started with; changed settings
 apply to the next start. In a [remote window](#remote-hosts) Claude Code's conversations are listed
-and read, without a box.
+and read, the header has no **+ Claude Code**, and where the box would be a line says "Chat is not
+available in remote windows yet".
 
 | Key | Action |
 | --- | --- |
 | Enter, Tab | In the panel: go to the prompt box |
 | Enter, Shift+Enter | In the box: send, new line |
 | Escape | Stop the turn while one runs; otherwise leave the box, then the conversation |
-| 1 to 9; arrows and Enter | Pick an option of the card (while the panel has the focus) |
+| 1 to 9; arrows and Enter | Pick an option of the card (while the panel, not the box, has the focus) |
 | Ctrl+Plus, Ctrl+Minus, Ctrl+0 | The panel's text size, while the panel or its box has the focus |
 
 ### Permissions, questions and plans
 
 When Claude Code asks before using a tool, a card shows under the conversation with the question
-for that tool, such as "Allow this bash command?" and the command, "Make this edit to FILE?" or
-"Allow write to FILE?", and the buttons **Yes** and **No**. Yes lets the tool run with its input
-unchanged; No refuses it, and Claude stops and waits for you to say how to go on. One card shows at
-a time, the oldest first, and the others wait behind it. A request Claude withdraws goes, with a
-"Withdrawn by Claude" row. If the process ends while a card is up, the card goes and a row says so.
+for that tool and the buttons **Yes** and **No**: "Allow this bash command?" and the command's
+first line, "Make this edit to FILE?" (Edit and MultiEdit), "Allow write to FILE?", "Allow reading
+from FILE?", "Allow fetching this url?" and the URL, and for any other tool "Do you want to proceed
+with TOOL?". The buttons of a card show their keys, 1 to 9. Yes lets the tool run with its input
+unchanged; No refuses it and interrupts the turn, which ends with an "Interrupted" row, and Claude
+waits for you to say how to go on. One card shows at a time, the oldest first, and the others wait
+behind it (32 at most; Claude gets an error for one more). A request Claude withdraws goes, with a
+"Withdrawn by Claude" row. If the process ends while a card is up, the card goes and a row says
+"Claude Code ended before the request was answered."
 
-Claude's questions show the same way, one card per question with a button per answer, in the order
-asked; a question that takes several answers takes one here. A plan Claude asks you to approve
-shows as a reply, then a card "Accept this plan?": **Yes** leaves plan mode, so Claude can go on
-and edit, and **No, keep planning** keeps it planning. Requests of other kinds (from hooks, MCP
-servers or forms) are answered as not supported, so Claude never waits for a card that is not
-there.
+Claude's questions show the same way, one card per question with a button per answer (the first
+16), in the order asked; a question that takes several answers takes one here. A plan Claude asks
+you to approve shows as a reply, then a card "Accept this plan?": **Yes** leaves plan mode for the
+default mode (Manual) and lets Claude go on, and **No, keep planning** keeps it planning. Requests
+of other kinds (from hooks, MCP servers, forms or dialogs) are answered as not supported, so Claude
+never waits for a card that is not there.
 
 ### Open somewhere else
 
 Before continuing a conversation, rhun looks in Claude Code's records of its running sessions for
-another Claude Code that has it open, such as one in a terminal. It waits up to 10 seconds for that
-one to let go, then asks: "This conversation is still open somewhere else." **Open here anyway**
-continues it in rhun too. **Continue in a copy** makes a new conversation from it, "Copy of TITLE",
-sends your prompt there and leaves the original alone. **Cancel** puts your prompt back into the
-box. rhun does not check on Windows.
+another Claude Code that has it open, such as one in a terminal or in another rhun window. It waits
+up to 10 seconds for that one to let go, looking again every second, then asks: "This conversation
+is still open somewhere else." **Open here anyway** continues it in rhun too. **Continue in a copy**
+makes a new conversation from it, "Copy of TITLE", sends your prompt there and leaves the original
+alone. **Cancel** puts your prompt back into the box. rhun does not check on Windows.
 
 ### Sign-in and folder trust
 
 Signing in is Claude Code's own: run `claude auth login` in rhun's terminal, or anywhere else, and
 rhun uses that sign-in through the CLI. rhun never signs in, reads or stores Claude Code's
-credentials. When the CLI says it is not signed in, the box shows "Claude Code is not signed in."
-with **Sign In**, which puts `claude auth login` in rhun's terminal prompt; it runs when you press
-Enter. When `claude` cannot be found, the conversation shows an error row that names Settings >
-Claude Code, and **Run claude in Terminal** puts `claude` in the terminal prompt to see what it
-says.
+credentials. Before the first start in a window rhun runs `claude auth status --json` in the
+background and reads only whether it is signed in; an answer it cannot read, or none in 10
+seconds, counts as signed in. When it is not signed in, or a turn fails because the sign-in was
+refused, the prompt goes back into the box and a card says "Claude Code is not signed in." with
+**Sign In**. Sign In opens the prompt "Run in the terminal: Enter, or Esc" with `claude auth login`
+in it (the **Claude Code program** in place of `claude` when one is set): Enter runs it in rhun's
+terminal. The card stays until the next Send, which asks again.
+
+When a start fails, an error row says why, such as "Claude Code was not found. Install it, or set
+its path in Settings > Claude Code.", and a card says "Claude Code could not start." (followed by
+"The wrapper WRAPPER is set in Settings > Claude Code." when one is set) with **Run claude in
+Terminal**, which opens the same prompt with `claude`, or the configured program, to see what it
+says. The next Send tries again.
 
 Claude Code reads the project's own settings only in a folder rhun trusts: one you opened yourself,
 or one you trusted after a `rhun://` link opened it (see **Trust folder** above). In any other
 folder it starts with only your user settings: the project's `.claude/settings.json` and
 `.claude/settings.local.json`, with the hooks and permission rules they hold, are not read. The
-first conversation in such a folder asks first: "Trust this folder? Claude Code would then use the
-project's own settings, hooks and servers." **Trust** trusts the folder, as **Trust Folder for
-Git** does, and starts Claude Code with all its settings; **Continue without** starts it with your
-user settings only, and the window remembers that choice.
+first conversation in such a folder asks first, as soon as you type in its box: "Trust this
+folder? Claude Code would then use the project's own settings, hooks and servers." **Trust** trusts
+the folder, as **Trust Folder for Git** does, and starts Claude Code with all its settings;
+**Continue without** starts it with your user settings only. The window remembers the answer until
+another folder is opened.
 
 ### Settings for the chat
 
-These are in Settings > Claude Code and Settings > Agents:
+These are in Settings > Claude Code and Settings > Agents; the `env.` lines are in the config file
+only:
 
 ```ini
 [claude]
@@ -183,27 +208,32 @@ font_size = 0
 ```
 
 - `chat` (**Chat with Claude Code**, on by default): off, Claude Code's conversations get no box,
-  the header has no **+ Claude Code**, and the processes that run are ended.
-- `executable` (**Claude Code program**): the path of `claude`, or a name looked up on the PATH.
-  Empty finds `claude` on your login shell's PATH, then in `~/.local/bin`, `~/.claude/local`,
-  `/opt/homebrew/bin`, `/usr/local/bin`, `~/.npm-global/bin` and `~/.bun/bin` (on Windows
-  `~/.local/bin/claude.exe`).
-- `wrapper` (**Wrapper program**): a program started with `claude` and its arguments after it,
-  found the same way; empty starts `claude` itself.
-- `initial_mode` (**Permission mode**): the mode a conversation starts in. Empty (the default)
-  leaves it to Claude Code's own settings; `default` (Manual), `acceptEdits` (Edit automatically)
-  or `plan` names one. `manual` is read as `default`.
-- `env.NAME = value`: a variable for Claude Code's environment, a line each, at most 64. NAME is
-  letters, digits and `_`, and does not start with a digit. The values are only in the config file:
+  the header has no **+ Claude Code**, and the processes that run are ended; their conversations
+  are read again from their files.
+- `executable` (**Claude Code program**): the path of `claude` (`~/` is your home folder), or a
+  name looked up on your login shell's PATH. Empty finds `claude` on that PATH, then in
+  `~/.local/bin`, `~/.claude/local`, `/opt/homebrew/bin`, `/usr/local/bin`, `~/.npm-global/bin`
+  and `~/.bun/bin` (on Windows `~/.local/bin/claude.exe`).
+- `wrapper` (**Wrapper program**): a program started with `claude` and its arguments after it, a
+  path or a name on the PATH; empty starts `claude` itself.
+- `initial_mode` (**Permission mode**): the mode a conversation starts in. **Claude Code's
+  setting** (empty, the default) leaves it to Claude Code's own settings; **Manual** (`default`),
+  **Edit automatically** (`acceptEdits`) or **Plan** (`plan`) names one. `manual` is read as
+  `default`.
+- `env.NAME = value`: a variable for Claude Code's environment, a line each, at most 64 of at most
+  8 KiB each. NAME is letters, digits and `_`, and does not start with a digit; a line that breaks
+  these rules is dropped with a log line that names it. The values are only in the config file:
   `print-settings` shows `claude.env.NAME=(set)`, and no value is printed or logged. An absolute
   `env.CLAUDE_CONFIG_DIR` is also where the agents panel finds Claude Code's conversations.
-- `idle_stop_minutes` (**Stop idle agents after**, 10 by default, 0 to 240): minutes without a
-  turn, a card or typing before a conversation's process is stopped. 0 never stops it.
+- `idle_stop_minutes` (**Stop idle agents after**, 10 by default, 0 to 240; the Settings page steps
+  by 5): minutes without a turn, a card or typing before a conversation's process is stopped. 0
+  never stops it.
 - `font_size` (**Font size**, under Agents): see [Text size](#text-size) below.
 
 Otherwise Claude Code gets your login shell's environment, without the variables a Claude Code that
-started rhun leaves in it (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`), and with
-`CLAUDE_CODE_ENTRYPOINT=rhun`.
+started rhun leaves in it (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `TRACEPARENT`, `TRACESTATE`),
+and with `CLAUDE_CODE_ENTRYPOINT=rhun` and `MCP_CONNECTION_NONBLOCKING=true`, which an `env.` line
+does not change.
 
 ### Markdown replies
 
@@ -213,10 +243,12 @@ links. Your own prompts stay plain text, and tool, result, error and info rows a
 reply that is still streaming is drawn as it grows; a code block that has not been closed yet shows
 as code.
 
-`http` and `https` links open in the browser and `rhun://` links as rhun opens them. A link to a
-file opens it in the editor at its line: `path`, `path:12`, `path:12:5`, `path:12-20`, `path#L12`
-or `path#L12-L20`, absolute, or relative to the conversation's checkout and then to the project. A
-range goes to its first line, and a file that does not exist shows a message instead.
+`http` and `https` links open in the browser and `rhun://` links as rhun opens them; a link with
+another scheme does nothing. A link to a file opens it in the editor at its line: `path`,
+`path:12`, `path:12:5`, `path:12-20`, `path#L12` or `path#L12-L20`, absolute, or relative to the
+conversation's checkout and then to the project, with `file://` before it and `%20` escapes read
+too. A range goes to its first line, and a file that does not exist shows "No such file: PATH"
+instead.
 
 ### Text size
 
@@ -229,10 +261,13 @@ with it.
 **Agents: Increase Font Size**, **Agents: Decrease Font Size** and **Agents: Reset Font Size** in
 the command palette change it wherever the focus is (`agents_font_increase`,
 `agents_font_decrease` and `agents_font_reset` for key bindings). Increase from 0 goes to the
-interface's size plus one, Decrease from 8 goes back to 0, and Reset follows the interface again.
-While the panel or its prompt box has the focus, Zoom In, Zoom Out and Reset Zoom (Command+Plus,
-Command+Minus and Command+0 on macOS; Ctrl+Plus, Ctrl+Minus and Ctrl+0 on Linux and Windows; the
-keypad's plus, minus and 0 too) change this size instead of the editor's.
+interface's size plus one and stops at 32, Decrease from 0 goes to the interface's size minus one
+and from 8 back to 0, and Reset follows the interface again. While the panel or its prompt box has
+the focus, the keys of Zoom In, Zoom Out and Reset Zoom (Command+Plus, Command+Minus and Command+0
+on macOS; Ctrl+Plus, Ctrl+Minus and Ctrl+0 on Linux and Windows; the keypad's plus, minus and 0
+too) change this size instead of the editor's. Run from the command palette, Zoom In and Zoom Out
+change the editor's size (or the terminal's, when the palette was opened from the terminal): use
+the Agents commands there.
 
 ## OpenCode sessions
 
@@ -521,7 +556,7 @@ Drag a tab along the strip to move it; the other tabs make room as it goes, and 
 
 Find, replace and find in files ignore case until their Aa is on, in every script: `été` finds `Été`, `яблоко` finds `ЯБЛОКО` and `οδος` finds `ΟΔΟΣ`. Accented letters stay apart from plain ones, so `ete` does not find `été`.
 
-All commands are listed in the command palette. In the terminal, Ctrl+Shift+C and Ctrl+Shift+V copy and paste, Ctrl+Shift+W goes to the program instead of closing the editor's tabs, Shift+PageUp and Shift+PageDown scroll back, Ctrl+Tab and Ctrl+Shift+Tab switch between terminals, and Shift keeps the mouse for selecting when a program uses it. A command run from the palette acts where its shortcut would: Zoom In with the terminal focused zooms the terminal.
+All commands are listed in the command palette. In the terminal, Ctrl+Shift+C and Ctrl+Shift+V copy and paste, Ctrl+Shift+W goes to the program instead of closing the editor's tabs, Shift+PageUp and Shift+PageDown scroll back, Ctrl+Tab and Ctrl+Shift+Tab switch between terminals, and Shift keeps the mouse for selecting when a program uses it. A command run from the palette acts where its shortcut would: Zoom In with the terminal focused zooms the terminal. The agents panel is the exception: from the palette Zoom In zooms the editor, and **Agents: Increase Font Size** the panel.
 
 Links in the terminal open with Cmd+click on macOS and Ctrl+click on Linux and Windows, as in VS Code; a plain click still selects. Hovering a link underlines it, and its tooltip names the click. An `http://` or `https://` URL opens in the default browser, such as the `http://localhost:5173/` a dev server prints. The path of a file that exists opens in a tab: a name from `ls`, a relative or absolute path, or `~/...`, and `file:LINE` or `file:LINE:COL` from a compiler or `grep -n` opens at that place. Relative paths start in the shell's current folder on Linux and macOS, then in the project folder, where they also start on Windows. The click works in programs that take the mouse too.
 

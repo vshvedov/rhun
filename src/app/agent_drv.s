@@ -25,20 +25,32 @@
 #                                             AGS_ERROR, OFF and READY AGS_IDLE
 #   agent_drv_tick(), agent_drv_timeout() -> eax ms or -1, agent_drv_shutdown()
 #   agent_live_dump(sb, AS* or 0)             print-agent-live
+#   agent_uuid(buf)                           a v4 UUID, 36 characters and a NUL
 #   events drivers call (AL* first): ev_note(al, role, ptr, len), ev_failed(al, ptr, len) (could not
-#     start or broke: ALS_FAILED, an error row, the prompts that waited back in the box)
+#     start or broke: ALS_FAILED, an error row, the prompts that waited back in the box), ev_ready(al)
+#     (handshake done: the prompts that waited go), ev_text(al, key ptr, key len, ptr, len, replace) (a
+#     block's reply text), ev_mode(al, ptr, len), ev_turn_end(al, TE_*, ptr, len), ev_closed(al, err)
+#     (the process is gone: OFF unless FAILED, the conversation read again from its file)
+#
+# While a session's program runs or is about to (STARTING to HELD) its transcript is not read
+# (session_update, agents.s): its rows come from the stream; ev_closed reads the file again.
 #   g_drv_idle_ms (0: [agents] idle_stop_minutes), g_drv_hold_ms: agent-timing's overrides
 .include "rhun.inc"
 
 .equ R_USER, 1                  # the roles of agents.s's messages
+.equ R_ASSIST, 2
 .equ R_ERROR, 5
+.equ R_INFO, 6
 .equ ENV_TICK_MS, 50            # a start waiting for the login environment looks again this often
 .equ HOLD_MS, 10000             # how long a start waits for another holder of the conversation
+.equ PROMPT_CHARS, 50000        # a prompt's characters at most (the extension's limit)
+.equ ROWKEY_MAX, 80             # AL_rowkey's size
 
 .bss
 .p2align 3
 lives: .zero VEC_SIZE           # AL*: every live record
-jsb: .zero SB_SIZE              # the prompts that waited, joined
+jsb: .zero SB_SIZE              # the prompts that waited, joined; a new conversation's path
+uuid_n: .quad 0                 # agent_uuid's counter (no /dev/urandom)
 
 .data
 .p2align 2
@@ -329,7 +341,24 @@ FN agent_send
     mov rdx, r13
     call [r14 + DRV_send]
     jmp 9f
-2:  mov rdi, rbx
+2:  xor ecx, ecx                # at most PROMPT_CHARS characters (the extension's limit)
+    xor edx, edx
+21: cmp rcx, r13
+    jae 22f
+    movzx eax, byte ptr [r12 + rcx]
+    inc rcx
+    and eax, 0xc0
+    cmp eax, 0x80
+    je 21b
+    inc rdx
+    jmp 21b
+22: cmp rdx, PROMPT_CHARS
+    jbe 23f
+    lea rdi, [rip + .Lprompt_long]
+    call app_toast
+    mov eax, SEND_FAILED
+    jmp 9f
+23: mov rdi, rbx
     call agent_live
     mov r15, rax
     mov eax, SEND_FAILED
@@ -403,6 +432,9 @@ agent_start:
     mov rbx, rdi
     lea rdi, [rbx + AL_report]
     call sb_clear
+    mov rax, [rbx + AL_as]      # the rows from here on come from the stream
+    mov rax, [rax + AS_msgs + VEC_len]
+    mov [rbx + AL_live_from], rax
     mov rdi, rbx
     mov esi, ALS_STARTING
     call agent_state_set
@@ -520,10 +552,161 @@ FN agent_release
     call [rax + DRV_release]
 9:  EPILOGUE
 
-# FN agent_new(kind) -> rax AS* or 0: a new conversation of a built-in driver, adopted and opened. Its
-#   session (an id, a transcript path, the project's folder) is the driver's to make: none yet
+# FN agent_new(kind) -> rax AS* or 0: a new conversation of a built-in driver (the draft's first character
+#   or its Send): a v4 UUID is its id, an AS of that kind whose path is the transcript Claude Code will
+#   write for that id in the project's folder (AS_cwd), titled "New conversation", adopted and opened
+#   (agentext.s keeps the box's text: keep_box); its live record is new (ALF_NEW) with the id in AL_sid.
+#   0 when the driver is not available, or the window has no project. Locals: [rsp] the id (40 bytes)
 FN agent_new
-    xor eax, eax
+    PROLOGUE 48
+    mov ebx, edi
+    call agent_drv_for_kind
+    test rax, rax
+    jz 8f
+    test dword ptr [rax + DRV_caps], DRVC_NEW
+    jz 8f
+    cmp ebx, AG_CLAUDE          # the one built-in driver that starts conversations: its file's place
+    jne 8f
+    mov r12, [rip + g_project]
+    test r12, r12
+    jz 8f
+    lea rdi, [rsp]
+    call agent_uuid
+    lea rdi, [rip + jsb]
+    call sb_clear
+    lea rdi, [rip + jsb]
+    mov rsi, r12
+    lea rdx, [rsp]
+    call claude_transcript
+    test eax, eax
+    jz 8f
+    mov edi, AS_SIZE
+    call mem_alloc
+    mov r13, rax
+    mov [r13 + AS_kind], ebx
+    mov rdi, [rip + jsb + SB_ptr]
+    mov rsi, [rip + jsb + SB_len]
+    call mem_dup
+    mov [r13 + AS_path], rax
+    lea rdi, [rip + .Lnew_title]
+    call strlen
+    lea rdi, [rip + .Lnew_title]
+    mov rsi, rax
+    call mem_dup
+    mov [r13 + AS_title], rax
+    mov rdi, r12
+    call strlen
+    mov rdi, r12
+    mov rsi, rax
+    call mem_dup
+    mov [r13 + AS_cwd], rax
+    call time_now
+    mov [r13 + AS_mtime], rax
+    imul rax, rax, 1000000000
+    mov [r13 + AS_recency], rax
+    mov rdi, r13
+    call agents_adopt
+    mov rdi, r13
+    call agents_open_as
+    mov rdi, r13
+    call agent_live
+    test rax, rax
+    jz 9f
+    or dword ptr [rax + AL_flags], ALF_NEW
+    lea rdi, [rax + AL_sid]
+    lea rsi, [rsp]
+    call cstr_copy
+9:  mov rax, r13
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# FN agent_uuid(buf): a random version 4 UUID, 36 characters and a NUL. The bytes come from /dev/urandom;
+#   where that cannot be read (Windows) from the clock, the pid and a counter
+FN agent_uuid
+    PROLOGUE 16
+    mov rbx, rdi
+    lea rdi, [rip + .Lurandom]
+    call file_open_read
+    test rax, rax
+    js 2f
+    mov r12d, eax
+    mov edi, eax
+    lea rsi, [rsp]
+    mov edx, 16
+    SYS SYS_read
+    mov r13, rax
+    mov edi, r12d
+    SYS SYS_close
+    cmp r13, 16
+    je 3f
+2:  call time_us                # splitmix64 of the clock, the pid and a counter
+    mov r12, rax
+    SYS SYS_getpid
+    shl rax, 32
+    xor r12, rax
+    inc qword ptr [rip + uuid_n]
+    mov rax, [rip + uuid_n]
+    mov rcx, 0x9e3779b97f4a7c15
+    imul rax, rcx
+    add r12, rax
+    mov rdi, r12
+    call mix64
+    mov [rsp], rax
+    lea rdi, [r12 + 1]
+    call mix64
+    mov [rsp + 8], rax
+3:  and byte ptr [rsp + 6], 0x0f
+    or byte ptr [rsp + 6], 0x40         # version 4
+    and byte ptr [rsp + 8], 0x3f
+    or byte ptr [rsp + 8], 0x80         # variant 10
+    xor r12d, r12d                      # the byte
+    xor r13d, r13d                      # where its two digits go
+4:  cmp r12d, 16
+    jae 6f
+    cmp r12d, 4
+    je 5f
+    cmp r12d, 6
+    je 5f
+    cmp r12d, 8
+    je 5f
+    cmp r12d, 10
+    jne 51f
+5:  mov byte ptr [rbx + r13], '-'
+    inc r13
+51: movzx eax, byte ptr [rsp + r12]
+    lea rcx, [rip + .Lhex]
+    mov edx, eax
+    shr edx, 4
+    movzx edx, byte ptr [rcx + rdx]
+    mov [rbx + r13], dl
+    and eax, 15
+    movzx eax, byte ptr [rcx + rax]
+    mov [rbx + r13 + 1], al
+    add r13, 2
+    inc r12d
+    jmp 4b
+6:  mov byte ptr [rbx + r13], 0
+    EPILOGUE
+
+# mix64(x) -> rax splitmix64's finalizer of x
+mix64:
+    mov rax, rdi
+    mov rcx, 0x9e3779b97f4a7c15
+    add rax, rcx
+    mov rcx, rax
+    shr rcx, 30
+    xor rax, rcx
+    mov rcx, 0xbf58476d1ce4e5b9
+    imul rax, rcx
+    mov rcx, rax
+    shr rcx, 27
+    xor rax, rcx
+    mov rcx, 0x94d049bb133111eb
+    imul rax, rcx
+    mov rcx, rax
+    shr rcx, 31
+    xor rax, rcx
     ret
 
 # ---- events ----
@@ -533,6 +716,198 @@ FN ev_note
     mov rdi, [rdi + AL_as]
     xor r8d, r8d
     jmp agents_msg_add
+
+# FN ev_ready(al): the handshake is done: the prompts that waited go, the oldest first
+FN ev_ready
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, rbx
+    mov esi, ALS_READY
+    call agent_state_set
+    xor r12d, r12d
+    xor r13d, r13d              # one went
+1:  cmp r12, [rbx + AL_queue + VEC_len]
+    jae 2f
+    mov rax, [rbx + AL_queue + VEC_ptr]
+    mov r14, [rax + r12*8]
+    inc r12
+    mov rdi, r14
+    call strlen
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, rax
+    mov rax, [rbx + AL_drv]
+    call [rax + DRV_send]
+    or r13d, eax
+    jmp 1b
+2:  mov rdi, rbx
+    call queue_free
+    test r13d, r13d
+    jz 9f
+    call time_ms
+    mov [rbx + AL_used], rax
+    mov rdi, rbx
+    mov esi, ALS_WORKING
+    call agent_state_set
+9:  EPILOGUE
+
+# FN ev_text(al, key ptr, key len, ptr, len, replace): reply text of a content block, under its item key: a
+#   new row (empty while it streams), more text for the row of that key, or (replace) its finished text in
+#   place of what streamed. A finished row takes no more text: the next text under the same key (a
+#   stream without partial messages) is a row of its own
+FN ev_text
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov r15, r8
+    mov [rsp], r9
+    cmp qword ptr [rbx + AL_row], 0
+    jl 3f
+    cmp byte ptr [rbx + AL_rowkey], 0
+    je 3f
+    lea rdi, [rbx + AL_rowkey]
+    call strlen
+    cmp rax, r13
+    jne 3f
+    lea rdi, [rbx + AL_rowkey]
+    mov rsi, r12
+    mov rdx, r13
+    call memeq
+    test eax, eax
+    jz 3f
+    mov rdi, [rbx + AL_as]      # the row of that key
+    mov rsi, [rbx + AL_row]
+    mov rdx, r14
+    mov rcx, r15
+    cmp qword ptr [rsp], 0
+    jne 2f
+    call agents_msg_append
+    EPILOGUE
+2:  call agents_msg_set
+    mov qword ptr [rbx + AL_row], -1
+    mov byte ptr [rbx + AL_rowkey], 0
+    EPILOGUE
+3:  mov rdi, [rbx + AL_as]      # a row of its own
+    mov esi, R_ASSIST
+    mov rdx, r14
+    mov rcx, r15
+    xor r8d, r8d
+    call agents_msg_add
+    mov [rbx + AL_row], rax
+    mov byte ptr [rbx + AL_rowkey], 0
+    test rax, rax
+    js 8f
+    cmp qword ptr [rsp], 0
+    jne 8f                      # finished already
+    cmp r13, ROWKEY_MAX
+    jae 9f
+    lea rdi, [rbx + AL_rowkey]
+    mov rsi, r12
+    mov rdx, r13
+    mov byte ptr [rdi + rdx], 0
+    call memmove
+    EPILOGUE
+8:  mov qword ptr [rbx + AL_row], -1
+9:  EPILOGUE
+
+# FN ev_mode(al, ptr, len): the permission mode the agent reports (the label by the box)
+FN ev_mode
+    cmp rdx, 31
+    jbe 1f
+    mov edx, 31
+1:  lea rdi, [rdi + AL_mode]
+    mov byte ptr [rdi + rdx], 0
+    mov dword ptr [rip + g_dirty], 1
+    jmp memmove
+
+# FN ev_turn_end(al, reason, ptr, len): a turn ended: TE_DONE, TE_ERROR (the agent's text as an error row)
+#   or TE_INTERRUPTED (an "Interrupted" row). READY once every prompt sent has had its end
+FN ev_turn_end
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rdx
+    mov r14, rcx
+    cmp r12d, TE_ERROR
+    jne 1f
+    test r14, r14
+    jnz 11f
+    lea r13, [rip + .Lturn_failed]
+    mov rdi, r13
+    call strlen
+    mov r14, rax
+11: mov rdi, [rbx + AL_as]
+    mov esi, R_ERROR
+    mov rdx, r13
+    mov rcx, r14
+    xor r8d, r8d
+    call agents_msg_add
+    jmp 2f
+1:  cmp r12d, TE_INTERRUPTED
+    jne 2f
+    lea rdi, [rip + .Linterrupted]
+    call strlen
+    mov rdi, [rbx + AL_as]
+    mov esi, R_INFO
+    lea rdx, [rip + .Linterrupted]
+    mov rcx, rax
+    xor r8d, r8d
+    call agents_msg_add
+2:  and dword ptr [rbx + AL_flags], ~ALF_STOP_ASKED
+    mov qword ptr [rbx + AL_row], -1
+    mov byte ptr [rbx + AL_rowkey], 0
+    call time_ms
+    mov [rbx + AL_used], rax
+    cmp qword ptr [rbx + AL_turns], 0
+    je 3f
+    dec qword ptr [rbx + AL_turns]
+    jnz 9f
+3:  cmp dword ptr [rbx + AL_state], ALS_WORKING
+    jne 9f
+    mov rdi, rbx
+    mov esi, ALS_READY
+    call agent_state_set
+9:  EPILOGUE
+
+# FN ev_closed(al, err): the agent's process is gone: the state is OFF unless it FAILED, and the
+#   conversation is read again from its file, which is the truth (a new conversation that has no file yet
+#   keeps the rows the stream fed); a failure's error row follows the file's rows
+FN ev_closed
+    PROLOGUE
+    mov rbx, rdi
+    cmp dword ptr [rbx + AL_state], ALS_FAILED
+    je 1f
+    mov rdi, rbx
+    mov esi, ALS_OFF
+    call agent_state_set
+1:  mov qword ptr [rbx + AL_turns], 0
+    mov qword ptr [rbx + AL_row], -1
+    mov byte ptr [rbx + AL_rowkey], 0
+    and dword ptr [rbx + AL_flags], ~ALF_STOP_ASKED
+    mov r12, [rbx + AL_as]
+    mov rdi, [r12 + AS_path]
+    test rdi, rdi
+    jz 9f
+    call file_missing
+    test eax, eax
+    jnz 9f
+    and dword ptr [rbx + AL_flags], ~ALF_NEW
+    mov rdi, r12
+    call agents_resync
+    cmp dword ptr [rbx + AL_state], ALS_FAILED
+    jne 9f
+    cmp qword ptr [rbx + AL_report + SB_len], 0
+    je 9f
+    mov rdi, r12                # why it failed, after what the file holds (the re-read dropped its row)
+    mov esi, R_ERROR
+    mov rdx, [rbx + AL_report + SB_ptr]
+    mov rcx, [rbx + AL_report + SB_len]
+    xor r8d, r8d
+    call agents_msg_add
+9:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
 
 # FN ev_failed(al, ptr, len): it could not start or broke: ALS_FAILED, the reason in AL_report and as an
 #   error row, and the prompts that waited back in the box
@@ -755,6 +1130,12 @@ ags_of: .long AGS_IDLE, AGS_WORKING, AGS_IDLE, AGS_WORKING, AGS_WAITING, AGS_WAI
 .Ls_failed: .asciz "failed"
 .Ldash: .asciz "-"
 .Lblank: .asciz "\n\n"
+.Lnew_title: .asciz "New conversation"
+.Lurandom: .asciz "/dev/urandom"
+.Lhex: .ascii "0123456789abcdef"
+.Lprompt_long: .asciz "The prompt is longer than 50,000 characters."
+.Lturn_failed: .asciz "The turn failed."
+.Linterrupted: .asciz "Interrupted"
 .Ld_state: .asciz "state="
 .Ld_pid: .asciz " pid="
 .Ld_sid: .asciz " sid="

@@ -18,8 +18,6 @@
 .include "rhun.inc"
 
 .equ WS_MAX, 16
-.equ WS_PRIMARY, 1              # wfold_flags: the primary folder
-.equ WS_TRUSTED, 2              # opened by hand, or trusted
 STRUCT
 F WFR_path, 8           # owned, absolute, no trailing separator
 F WFR_name, 8           # owned display name

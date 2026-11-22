@@ -2935,7 +2935,14 @@ F AL_out, VEC_SIZE      # requests rhun sent and awaits: {n, act} 16-byte slots
 F AL_next, 8            # the number of rhun's next request
 F AL_hold_until, 8      # time_ms the wait for another holder ends (agent_holder.s)
 F AL_cfg, 8             # the driver's own
+F AL_turns, 8           # prompts written whose turn has not ended (READY when none is left)
+F AL_rowkey, 80         # cstr: the item key of AL_row (ev_text), empty when no row takes more text
 ENDSTRUCT AL_SIZE
+.equ TE_DONE, 0                 # ev_turn_end's reasons
+.equ TE_ERROR, 1
+.equ TE_INTERRUPTED, 2
+.equ WS_PRIMARY, 1              # wfold_flags (workspace.s): the primary folder
+.equ WS_TRUSTED, 2              # opened by hand, or trusted
 .equ ALS_OFF, 0                 # no process
 .equ ALS_STARTING, 1
 .equ ALS_READY, 2

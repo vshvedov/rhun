@@ -2247,7 +2247,15 @@ FN session_update
     mov rbx, rdi
     cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
     je 9f                       # its extension sends its messages (agentext.s)
-    mov r12d, -1
+    mov rax, [rbx + AS_live]    # rhun drives it: while its program runs or is about to, its rows come
+    test rax, rax               # from the stream and the file it writes is not read as well
+    jz 16f                      # (agents_resync reads it again once the program is gone)
+    mov eax, [rax + AL_state]
+    cmp eax, ALS_STARTING
+    jb 16f
+    cmp eax, ALS_HELD
+    jbe 9f
+16: mov r12d, -1
     cmp dword ptr [rip + g_remote], 0     # remote hosts: the size from the host, no descriptor
     je 11f
     mov rdi, [rbx + AS_path]
@@ -2389,7 +2397,19 @@ FN agents_poll
 31: mov rax, [rip + sessions + VEC_ptr]
     mov r12, [rax + rbx*8]
     call poll_session
-4:  call vfs_stats_clear
+4:  mov rbx, [rip + page_count] # the sessions rhun drives that the page lacks (a new conversation): their
+41: cmp rbx, [rip + sessions + VEC_len]  # files' growth asks discovery to list them
+    jae 42f
+    mov rax, [rip + sessions + VEC_ptr]
+    mov r12, [rax + rbx*8]
+    cmp rbx, [rip + view]
+    je 43f                      # polled above
+    cmp qword ptr [r12 + AS_live], 0
+    je 43f
+    call poll_session
+43: inc rbx
+    jmp 41b
+42: call vfs_stats_clear
     test r13d, r13d
     jz 5f
     call sort_sessions

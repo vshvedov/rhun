@@ -4,6 +4,7 @@ the control socket. Every rhun gets its own HOME and XDG folders and a config wh
 starts the fake through python3; the environment it is given has no CLAUDE* or ANTHROPIC* variable
 (these tests run inside Claude Code sessions too), and TERM is set, so rhun uses that environment
 instead of asking a login shell for one."""
+import json
 import os
 from pathlib import Path
 import re
@@ -392,6 +393,225 @@ class SeamTest(ChatCase):
         self.assertEqual(out, 'timeout state=off\n')
         out, ok = self.reply('wait-agent bogus 300')
         self.assertFalse(ok)
+
+
+ROLES = ('user', 'agent', 'tool', 'result', 'error', 'info')
+PINNED = ['--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json',
+          '--include-partial-messages', '--permission-prompt-tool=stdio',
+          '--setting-sources=user,project,local', '--max-thinking-tokens=31999']
+SLOW_ROW = 'agent ' + ''.join('word%d ' % i for i in range(10))     # print-agents shows 60 bytes
+UUID4 = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
+
+
+class ChatTest(ChatCase):
+    """A new conversation with the fake: the start, the handshake, a prompt, the streamed reply."""
+
+    def records(self):
+        """The fake's log, a record a line."""
+        if not self.fake_log.exists():
+            return []
+        return [json.loads(line) for line in self.fake_log.read_text(encoding='utf-8').splitlines() if line]
+
+    def starts(self):
+        return [r for r in self.records() if r.get('start') == 'stream']
+
+    def stdin(self):
+        """The lines the fake read, parsed."""
+        return [json.loads(r['stdin']) for r in self.records() if 'stdin' in r]
+
+    def prompts(self):
+        """The texts of the user messages the fake read."""
+        return [m['message']['content'][0]['text'] for m in self.stdin() if m.get('type') == 'user']
+
+    def thread(self):
+        """The open conversation's rows (print-agents: the list's rows first, then these)."""
+        return [line for line in self.command('print-agents').splitlines()
+                if line.split(' ')[0].split('(')[0] in ROLES]
+
+    def live(self):
+        return self.command('print-agent-live')
+
+    def sid(self):
+        return re.search(r' sid=(\S*)', self.live()).group(1)
+
+    def chat(self, prompt, wait='ready', ms=10000):
+        """A new conversation, its first prompt, and the state waited for."""
+        self.command('agent-new claude')
+        self.command('agent-prompt ' + prompt)
+        if wait:
+            self.command(f'wait-agent {wait} {ms}')
+
+    def test_new_conversation_round_trip(self):
+        self.start(env={'CLAUDECODE': '1'})         # rhun runs inside Claude Code: its child must not
+        self.chat('hello')
+        self.assertEqual(self.thread()[-2:], ['user hello', 'agent ok: hello'])
+        starts = self.starts()
+        self.assertEqual(len(starts), 1, starts)
+        argv = starts[0]['argv']
+        self.assertEqual(argv[:-1], PINNED)
+        self.assertTrue(argv[-1].startswith('--session-id='), argv)
+        sid = argv[-1][len('--session-id='):]
+        self.assertRegex(sid, UUID4)
+        self.assertEqual(starts[0]['cwd'], str(self.project))
+        self.assertEqual(starts[0]['env']['CLAUDE_CODE_ENTRYPOINT'], 'rhun')
+        self.assertEqual(starts[0]['env']['MCP_CONNECTION_NONBLOCKING'], 'true')
+        self.assertIsNone(starts[0]['env']['CLAUDECODE'])
+        self.assertEqual(self.stdin()[0], {'type': 'control_request', 'request_id': 'r1',
+                                           'request': {'subtype': 'initialize', 'hooks': None}})
+        self.assertEqual(self.stdin()[1], {'type': 'user', 'message': {
+            'role': 'user', 'content': [{'type': 'text', 'text': 'hello'}]},
+            'parent_tool_use_id': None, 'session_id': ''})
+        self.assertEqual(self.live(), f'state=ready pid=1 sid={sid} mode=default queued=0 requests=0 new=0\n')
+        transcript = self.work / '.claude/projects' / slug(self.project) / (sid + '.jsonl')
+        self.assertTrue(transcript.exists())
+
+    def test_text_streams_into_one_row(self):
+        self.start()
+        self.chat('slow', 'working')
+        deadline = time.monotonic() + 10
+        first = None
+        while time.monotonic() < deadline:
+            last = self.thread()[-1]
+            if last.startswith('agent ') and len(last) > len('agent '):
+                first = last
+                break
+            time.sleep(0.02)
+        self.assertIsNotNone(first)
+        self.assertLess(len(first), 50, first)
+        time.sleep(0.4)
+        second = self.thread()[-1]
+        self.assertTrue(second.startswith(first), (first, second))
+        self.assertGreater(len(second), len(first))
+        self.command('wait-agent ready 20000')
+        thread = self.thread()
+        self.assertEqual([row for row in thread if row.startswith('agent')], [SLOW_ROW])
+
+    def test_prompts_wait_for_the_handshake(self):
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '800'})
+        self.command('agent-new claude')
+        self.command('agent-prompt one')
+        self.command('agent-prompt two')
+        live = self.live()
+        self.assertTrue(live.startswith('state=starting pid=1 '), live)
+        self.assertIn(' queued=2 ', live)
+        self.command('wait-agent ready 10000')
+        lines = self.stdin()
+        self.assertEqual([m.get('type') for m in lines], ['control_request', 'user', 'user'])
+        self.assertEqual(self.prompts(), ['one', 'two'])
+        self.assertEqual(self.thread(), ['user one', 'user two', 'agent ok: one', 'agent ok: two'])
+
+    def test_unknown_records_are_ignored(self):
+        self.start()
+        self.chat('unknown')
+        self.assertEqual(self.thread(), ['user unknown', 'agent ok: unknown'])
+        self.assertTrue(self.live().startswith('state=ready pid=1 '))
+
+    def test_turn_error_shows_the_cli_text(self):
+        self.start()
+        self.chat('error')
+        thread = self.thread()
+        self.assertEqual(thread[0], 'user error')
+        self.assertTrue(thread[-1].startswith('error API Error: 529 {"type":"overloaded_error"'), thread)
+        self.assertTrue(self.live().startswith('state=ready pid=1 '))
+
+    def test_cli_missing(self):
+        self.start('[claude]\nexecutable = /nonexistent/claude\n')
+        self.chat('hello', 'failed')
+        lines = self.live().splitlines()
+        self.assertTrue(lines[0].startswith('state=failed pid=0 '), lines)
+        self.assertEqual(lines[1], 'report=Claude Code was not found. Install it, or set its path in '
+                                   'Settings > Claude Code.')
+        self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
+        self.assertEqual(self.starts(), [])
+
+    def test_a_long_folder_finds_its_file(self):
+        # a slug over 200 bytes: rhun's path is provisional (the real CLI cuts it and adds a hash, the fake
+        # does not); at the first turn's end the file named after the id is found in the projects folder
+        self.project = self.work / ('p' * max(140, 210 - len(str(self.work))))
+        self.project.mkdir()
+        self.assertGreater(len(slug(self.project)), 200)
+        self.start()
+        self.chat('hello')
+        self.assertEqual(self.thread(), ['user hello', 'agent ok: hello'])
+        self.assertTrue(self.live().endswith(' new=0\n'), self.live())
+        self.command('agent-release')               # the file is read again from the found path
+        self.command('wait-agent off')
+        self.assertEqual(self.thread(), ['user hello', 'agent(claude-opus-5-5) ok: hello'])
+
+    def test_process_end_mid_turn_is_an_error_row(self):
+        self.start()
+        self.chat('exit', 'failed')                 # the fake dies mid-reply, status 2
+        # the file is read again (the streamed part is not in it), then why it failed
+        self.assertEqual(self.thread(), ['user exit', 'error Claude Code ended (exit status 2).'])
+        lines = self.live().splitlines()
+        self.assertTrue(lines[0].startswith('state=failed pid=0 '), lines)
+        self.assertEqual(lines[1], 'report=Claude Code ended (exit status 2).')
+
+    def test_env_pairs_reach_the_process(self):
+        self.start(self.claude_section('env.FOO = bar\n'), env={'FAKE_CLAUDE_ECHO_ENV': 'FOO'})
+        self.chat('hello')
+        self.assertEqual(self.starts()[0]['env']['FOO'], 'bar')
+
+    def test_the_initial_mode_is_passed(self):
+        self.start(self.claude_section('initial_mode = plan\n'))
+        self.chat('hello')
+        argv = self.starts()[0]['argv']
+        self.assertIn('--permission-mode=plan', argv)
+        self.assertIn(' mode=plan ', self.live())
+
+    def test_draft_keeps_its_first_character(self):
+        self.start()
+        self.command('agent-new claude')
+        self.command('agent-type h')
+        self.assertTrue(self.command('print-agent-input').startswith('input=h '))
+        self.command('wait-agent ready')
+        self.assertTrue(self.command('print-agent-input').startswith('input=h '))
+        self.assertEqual(len(self.starts()), 1)
+        self.assertEqual(self.prompts(), [])
+        self.assertEqual(self.thread(), [])
+
+    def test_no_duplicates_while_driven(self):
+        self.start()
+        self.chat('hello')
+        transcript = self.work / '.claude/projects' / slug(self.project) / (self.sid() + '.jsonl')
+        self.assertTrue(transcript.exists())
+        time.sleep(3)                               # the panel's one-second poll sees the file grow
+        thread = self.thread()
+        self.assertEqual(thread.count('user hello'), 1, thread)
+        self.assertEqual(thread.count('agent ok: hello'), 1, thread)
+
+    def test_send_during_a_turn_is_refused(self):
+        self.start()
+        self.chat('slow', 'working')
+        self.command('agent-prompt more')
+        self.assertTrue(self.command('print-agent-input').startswith('input=more '))
+        self.command('wait-agent ready 20000')
+        self.assertEqual(self.prompts(), ['slow'])
+        self.assertNotIn('user more', self.thread())
+
+    def test_back_mid_turn_keeps_the_session(self):
+        self.start()
+        self.chat('slow', 'working')
+        pid = self.starts()[0]['pid']
+        self.command('cmd focus_agents')
+        self.command('key Escape')                  # back to the list
+        # the panel's poll sees the new file grow: discovery lists it (on the same AS, by its path)
+        deadline = time.monotonic() + 5
+        while True:
+            self.command('wait-agents')
+            rows = self.command('print-agents').splitlines()
+            if rows or time.monotonic() > deadline:
+                break
+            time.sleep(0.2)
+        self.assertEqual(len(rows), 1, rows)
+        self.assertTrue(rows[0].startswith('Claude') and rows[0].endswith(': New conversation'), rows)
+        self.assertIn(f' {pid}', self.command('print-uproc').split('\n')[0])
+        self.assertTrue(self.live().startswith('state=off '))   # nothing open
+        self.command('print-agents 1')
+        self.command('wait-agent ready 20000')
+        thread = self.thread()
+        self.assertEqual(thread[0], 'user slow')
+        self.assertEqual([row for row in thread if row.startswith('agent')], [SLOW_ROW])
 
 
 if __name__ == '__main__':

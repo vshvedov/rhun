@@ -23,6 +23,7 @@ hidden_names: .zero VEC_SIZE    # cstr OWNER/NAME of the sources switched off in
 qual: .zero SB_SIZE
 num: .zero 32
 tmp: .zero SB_SIZE
+mode_sb: .zero SB_SIZE           # the mode label (mode_label)
 match_len: .quad 0              # cwd_match: the longest root that holds the CWD so far
 match_name: .quad 0             #   its worktree name (a copy) when it is a linked worktree
 match_cwd: .quad 0
@@ -2396,12 +2397,13 @@ FN agentext_field
     ret
 
 # FN agentext_typed(): text was typed into the box: the session it belongs to hears of it (agent_typing:
-#   a driven session's program starts). A new conversation's session is the driver's to make
+#   a driven session's program starts). A built-in driver's draft becomes its conversation at the first
+#   character (agent_new), the text staying in the box
 FN agentext_typed
     cmp qword ptr [rip + new_ext], 0
     jne 1f
     cmp qword ptr [rip + new_kind], 0
-    jne 1f
+    jne 2f
     push rbx
     call agents_open_driven
     pop rbx
@@ -2410,6 +2412,23 @@ FN agentext_typed
     mov rdi, rax
     jmp agent_typing
 1:  ret
+2:  PROLOGUE
+    lea rdi, [rip + in_tf]
+    call tf_text
+    test rdx, rdx
+    jz 9f
+    mov rdi, [rip + new_kind]
+    mov qword ptr [rip + keep_box], 1
+    call agent_new
+    mov qword ptr [rip + keep_box], 0
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    call agent_typing
+    EPILOGUE
+8:  lea rdi, [rip + .Lnew_failed]
+    call app_toast
+9:  EPILOGUE
 
 # FN agentext_paste(ptr, len)
 FN agentext_paste
@@ -2616,15 +2635,55 @@ FN agentext_bottom_h
     test rax, rax
     jz 1f
     mov edi, r12d
+    mov rsi, rbx
     call input_h
     add r13d, eax
 1:  mov eax, r13d
     EPILOGUE
 
-# input_h(w) -> eax the prompt row's height: the box grows to 5 lines
+# mode_label(AS* or 0) -> rax "mode: X" in mode_sb, or 0: the permission mode a driven session reports
+mode_label:
+    PROLOGUE
+    xor eax, eax
+    test rdi, rdi
+    jz 9f
+    mov rbx, [rdi + AS_live]
+    test rbx, rbx
+    jz 9f
+    cmp byte ptr [rbx + AL_mode], 0
+    je 9f
+    lea rdi, [rip + mode_sb]
+    call sb_clear
+    lea rdi, [rip + mode_sb]
+    lea rsi, [rip + .Lmode_head]
+    call sb_push_cstr
+    lea rdi, [rip + mode_sb]
+    lea rsi, [rbx + AL_mode]
+    call sb_push_cstr
+    mov rax, [rip + mode_sb + SB_ptr]
+9:  EPILOGUE
+
+# mode_w(AS* or 0) -> eax the room the mode label takes left of Send (with its gap), 0 without one
+mode_w:
+    PROLOGUE
+    call mode_label
+    test rax, rax
+    jz 9f
+    lea rdi, [rip + g_face_small]
+    mov rsi, [rip + mode_sb + SB_ptr]
+    mov rdx, [rip + mode_sb + SB_len]
+    call text_width
+    add eax, [rip + g_mt + 4*MI_8]
+9:  EPILOGUE
+
+# input_h(w, AS* or 0) -> eax the prompt row's height: the box grows to 5 lines
 input_h:
     PROLOGUE
-    mov esi, edi
+    mov ebx, edi
+    mov rdi, rsi
+    call mode_w
+    mov esi, ebx
+    sub esi, eax
     sub esi, [rip + g_mt + 4*MI_64]
     sub esi, [rip + g_mt + 4*MI_40]
     lea rdi, [rip + in_tf]
@@ -2645,7 +2704,7 @@ input_h:
 # FN agentext_bottom_draw(AS* or 0 for a new session, x, y, w, h): the card, then the prompt box with
 #   Send, or Stop while the session works
 FN agentext_bottom_draw
-    PROLOGUE 48
+    PROLOGUE 64                 # [rsp + 48] the mode label's room
     mov rbx, rdi
     mov [rsp], esi
     mov [rsp + 4], edx
@@ -2682,6 +2741,7 @@ FN agentext_bottom_draw
     test rax, rax
     jz 11f
     mov edi, [rsp + 8]
+    mov rsi, rbx
     call input_h
     mov ecx, eax
 11: mov eax, [rsp + 12]
@@ -2711,13 +2771,18 @@ FN agentext_bottom_draw
     jz 9f
 3:  # the box
     mov edi, [rsp + 8]
+    mov rsi, rbx
     call input_h
     mov [rsp + 24], eax
     M eax, MI_12
     mov ecx, [rsp]
     add ecx, eax
     mov [rsp + 28], ecx         # box x
+    mov rdi, rbx                # the mode label's room, left of Send
+    call mode_w
+    mov [rsp + 48], eax
     mov ecx, [rsp + 8]
+    sub ecx, eax
     sub ecx, [rip + g_mt + 4*MI_64]
     sub ecx, [rip + g_mt + 4*MI_40]
     mov [rsp + 32], ecx         # box w
@@ -2747,7 +2812,26 @@ FN agentext_bottom_draw
     test eax, UB_PRESS
     jz 5f
     mov dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
-5:  # Send, or Stop while it works
+5:  cmp dword ptr [rsp + 48], 0 # a small muted "mode: X" between the box and Send
+    je 51f
+    mov rdi, rbx
+    call mode_label
+    lea rdi, [rip + g_face_small]
+    mov esi, [rsp + 28]
+    add esi, [rsp + 32]
+    add esi, [rip + g_mt + 4*MI_8]
+    mov edx, [rsp + 36]
+    M ecx, MI_32
+    mov r8, [rip + mode_sb + SB_ptr]
+    mov r9, [rip + mode_sb + SB_len]
+    COLOR eax, T_MUTED
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    mov eax, [rsp + 48]
+    add [rsp + 32], eax         # Send stays at the right end
+51: # Send, or Stop while it works
     mov edi, ID_AI_CARD + 32
     lea r12, [rip + .Lb_send]
     test rbx, rbx
@@ -3072,6 +3156,7 @@ FN agentext_new_draw
     COLOR r9d, T_MUTED
     call ui_text_c
     mov edi, [rsp + 8]
+    xor esi, esi
     call input_h
     mov r8d, eax                # the box at the bottom
     xor edi, edi                # no session yet
@@ -3320,6 +3405,7 @@ FN agentext_prompts_gone
 .Lph_reply: .asciz "Reply to the agent (Enter sends, Shift+Enter a new line)"
 .Lph_new: .asciz "What should the agent do? (Enter starts the session)"
 .Lb_send: .asciz "Send"
+.Lmode_head: .asciz "mode: "
 .Lb_stop: .asciz "Stop"
 .Lnew_head: .asciz "New "
 .Lnew_tail: .asciz " session"

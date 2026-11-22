@@ -28,6 +28,7 @@
 .equ ERR_TAIL, 2000             # bytes of stderr an error row shows at most
 .equ OA_INIT, 1                 # what an answer rhun waits for answers (AL_out's act)
 .equ OA_MODE, 2                 # set_permission_mode (nothing is done with its answer)
+.equ OA_STOP, 3                 # interrupt (its answer is not needed: the turn's result follows)
 .equ QUESTION_OPTS, 16          # a question's card shows its first 16 options
 .equ R_ASSIST, 2                # the roles of agents.s's messages
 .equ R_INFO, 6
@@ -431,9 +432,29 @@ cl_send:
     inc qword ptr [rbx + AL_turns]
 9:  EPILOGUE
 
-# cl_stop(AL*): Stop (the interrupt is not built yet)
+# cl_stop(AL*): Stop: {"type":"control_request","request_id":"rN","request":{"subtype":"interrupt"}}, once
+#   a turn (ALF_STOP_ASKED until its result). Claude withdraws the requests that wait (control_cancel_request)
+#   and ends the turn with an aborted result: the "Interrupted" row (ev_turn_end)
 cl_stop:
-    ret
+    PROLOGUE
+    mov rbx, rdi
+    test dword ptr [rbx + AL_flags], ALF_STOP_ASKED
+    jnz 9f
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
+    or dword ptr [rbx + AL_flags], ALF_STOP_ASKED
+    mov rdi, rbx
+    mov esi, OA_STOP
+    call req_begin
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_interrupt]
+    call jw_cstr
+    mov rdi, rbx
+    call req_end
+9:  EPILOGUE
 
 # cl_release(AL*): claude's input ends; it exits by itself, the stop sequence follows (agent_conn.s)
 cl_release:
@@ -1829,6 +1850,8 @@ h_cancel:
     mov rdi, rbx
     mov rsi, r14
     call ev_request_gone
+    test dword ptr [rbx + AL_flags], ALF_STOP_ASKED
+    jnz 2f                      # the user's Stop withdrew it: the turn's end says "Interrupted"
     lea rdi, [rip + .Lwithdrawn]
     call strlen
     mov rdi, rbx
@@ -1836,7 +1859,7 @@ h_cancel:
     lea rdx, [rip + .Lwithdrawn]
     mov rcx, rax
     call ev_note
-    cmp r13, 1
+2:  cmp r13, 1
     jne 9f
     mov rdi, rbx                # it was the one shown
     call req_show
@@ -1908,11 +1931,14 @@ h_response:
     EPILOGUE
 
 # cl_close(CN*, err): the process is gone (or the connection broke). While it started or a turn ran
-#   that is a failure: the reason and the end of its stderr as an error row; then ev_closed
+#   that is a failure: the reason and the end of its stderr as an error row; then ev_closed. An end rhun
+#   asked for (ALF_ENDING: a release, the idle stop, the cap) is none, whatever the exit status
 cl_close:
     PROLOGUE
     mov rbx, [rdi + CN_ctx]
     mov r12d, esi
+    test dword ptr [rbx + AL_flags], ALF_ENDING
+    jnz 8f
     mov eax, [rbx + AL_state]
     cmp eax, ALS_STARTING
     je 1f
@@ -2099,6 +2125,7 @@ cl_flags:
 .Lv_error: .asciz "error"
 .Lv_aborted: .asciz "aborted"
 .Lv_unsupported: .asciz "not supported by rhun yet"
+.Lv_interrupt: .asciz "interrupt"
 .Lv_cancel: .asciz "control_cancel_request"
 .Lv_can_use_tool: .asciz "can_use_tool"
 .Lv_tool_use: .asciz "tool_use"

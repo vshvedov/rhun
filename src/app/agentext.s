@@ -2455,6 +2455,12 @@ FN agentext_input_key
     call agents_open_driven     # the box has no session any more: the panel takes the keys
     test rax, rax
     jz 7f
+    cmp r12d, KEY_ESCAPE        # Escape while its turn runs: Stop (agent_drv.s); the box keeps the keys
+    jne 1f
+    mov rdi, rax
+    call agent_stop_running
+    test eax, eax
+    jnz 8f
 0:  cmp r12d, KEY_ESCAPE
     jne 1f
 7:  mov dword ptr [rip + g_focus], FOCUS_AGENTS
@@ -2470,17 +2476,71 @@ FN agentext_input_key
     call agentext_send
     jmp 8f
 3:  lea rdi, [rip + in_tf]
+    call tf_text
+    mov r15, rdx                # its length before the key
+    lea rdi, [rip + in_tf]
     mov esi, r12d
     mov edx, r13d
     mov ecx, r14d
     call ta_key
     test eax, eax
     jz 9f
+    mov rdi, r15
+    call box_typed
 8:  mov dword ptr [rip + g_dirty], 1
     mov eax, 1
     EPILOGUE
 9:  xor eax, eax
     EPILOGUE
+
+# box_typed(len before): the box took a key or a paste: when it holds text now, its session hears of it:
+#   the first text starts its program (agentext_typed), more only keeps it from the idle stop
+box_typed:
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rip + in_tf]
+    call tf_text
+    test rdx, rdx
+    jz 9f
+    test rbx, rbx
+    jnz 1f
+    call agentext_typed
+    EPILOGUE
+1:  call agents_open_driven
+    test rax, rax
+    jz 9f
+    mov rdi, rax
+    call agent_touch
+9:  EPILOGUE
+
+# FN agentext_box_paste(ptr, len): a paste into the box (app_on_paste): as typing, it may start the
+#   session's program
+FN agentext_box_paste
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    lea rdi, [rip + in_tf]
+    call tf_text
+    mov rbx, rdx
+    mov rdi, r12
+    mov rsi, r13
+    call agentext_paste
+    mov rdi, rbx
+    call box_typed
+    EPILOGUE
+
+# FN agentext_drivers_changed(): a driver went away (the settings changed): a new conversation being begun
+#   for it is left
+FN agentext_drivers_changed
+    PROLOGUE
+    mov rdi, [rip + new_kind]
+    test rdi, rdi
+    jz 9f
+    call agent_drv_for_kind
+    test rax, rax
+    jnz 9f
+    call agentext_new_leave
+9:  EPILOGUE
 
 # FN agentext_card_nav(AS*, keysym) -> eax 1 when the arrow keys moved among the card's options, or
 #   Enter picked the one they chose (every option is reachable, also past 9 and in a cut card)

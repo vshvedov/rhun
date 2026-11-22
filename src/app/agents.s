@@ -117,6 +117,7 @@ FN agents_apply_settings
 # ---------- asynchronous index and paging ----------
 FN agents_set_project
     PROLOGUE
+    call agent_drv_shutdown     # the sessions rhun drives end with their programs (agent_drv.s)
     call agents_shutdown
     mov rdi, [rip + cfg_agent_sources]
     call strlen
@@ -2969,7 +2970,7 @@ FN agents_key
     jmp 5f
 4:  call agentext_new_active
     test rax, rax
-    jz 7f
+    jz 71f
     cmp r12d, KEY_RETURN        # writing a new session: Enter or Tab goes back to its box
     je 8f
     cmp r12d, KEY_TAB
@@ -2983,6 +2984,15 @@ FN agents_key
     mov dword ptr [rip + g_dirty], 1
     mov eax, 1
     EPILOGUE
+71: cmp r12d, KEY_ESCAPE        # Escape while the open conversation's turn runs: Stop (agent_drv.s)
+    jne 7f
+    call agents_open_driven
+    test rax, rax
+    jz 7f
+    mov rdi, rax
+    call agent_stop_running
+    test eax, eax
+    jnz 5b
 7:  mov edi, r12d
     call key_list
     EPILOGUE
@@ -3212,6 +3222,64 @@ FN agents_adopt
     mov [rax], rbx
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
+
+# FN agents_drop(AS*): a session made here that is not wanted (a new conversation left without a prompt)
+#   leaves the list and the pool and is freed (its program ends: agent_closed); the open one closes
+FN agents_drop
+    PROLOGUE
+    mov rbx, rdi
+    xor ecx, ecx
+1:  cmp rcx, [rip + sessions + VEC_len]
+    jae 5f
+    mov rax, [rip + sessions + VEC_ptr]
+    cmp [rax + rcx*8], rbx
+    je 2f
+    inc rcx
+    jmp 1b
+2:  mov rdx, [rip + view]       # the rows after it move up: the open one keeps its row
+    cmp rdx, rcx
+    jl 3f
+    jg 21f
+    mov qword ptr [rip + view], -1
+    jmp 3f
+21: dec qword ptr [rip + view]
+3:  cmp rcx, [rip + page_count]
+    jae 31f
+    dec qword ptr [rip + page_count]
+31: mov rax, [rip + sessions + VEC_ptr]
+    mov rdx, [rip + sessions + VEC_len]
+    dec rdx
+    mov [rip + sessions + VEC_len], rdx
+4:  cmp rcx, rdx
+    jae 5f
+    mov r8, [rax + rcx*8 + 8]
+    mov [rax + rcx*8], r8
+    inc rcx
+    jmp 4b
+5:  xor ecx, ecx
+6:  cmp rcx, [rip + pool + VEC_len]
+    jae 8f
+    mov rax, [rip + pool + VEC_ptr]
+    cmp [rax + rcx*8], rbx
+    je 7f
+    inc rcx
+    jmp 6b
+7:  mov rdx, [rip + pool + VEC_len]
+    dec rdx
+    mov [rip + pool + VEC_len], rdx
+71: cmp rcx, rdx
+    jae 8f
+    mov r8, [rax + rcx*8 + 8]
+    mov [rax + rcx*8], r8
+    inc rcx
+    jmp 71b
+8:  cmp [rip + th_as], rbx
+    jne 81f
+    mov qword ptr [rip + th_as], 0
+81: mov rdi, rbx
+    call agent_session_free
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
 
 # pin_live(): apply_page: the pool's sessions rhun drives that the page lacks go after its rows
 pin_live:

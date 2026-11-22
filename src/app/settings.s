@@ -168,7 +168,12 @@ FN setting_applied
     call config_agent_sources
     call agents_set_project
     jmp 9f
-4:  lea rcx, [rip + cfg_git]
+4:  lea rcx, [rip + cfg_claude_chat]
+    cmp rax, rcx
+    jne 41f
+    call agent_drv_apply        # switched off: the conversations rhun drives end with their programs
+    jmp 9f
+41: lea rcx, [rip + cfg_git]
     cmp rax, rcx
     jne 5f
     call git_apply

@@ -24,7 +24,7 @@ Environment: FAKE_CLAUDE_AUTH; FAKE_CLAUDE_ACCOUNT (ok, bedrock, none: the initi
 FAKE_CLAUDE_KEYSRC (system/init apiKeySource, default none); FAKE_CLAUDE_MODE (the user's default
 permission mode, default "default"); FAKE_CLAUDE_INIT_MS (a delay before initialize is answered);
 FAKE_CLAUDE_RESUME (unknown: every --resume id is unknown, as fixture 11); FAKE_CLAUDE_LINGER_MS (an unknown
---resume exits that long after its result); FAKE_CLAUDE_FORK_LATE (a copy's file, the source's history, is
+--resume exits that long after its result; `mute` runs that long after closing its stdout); FAKE_CLAUDE_FORK_LATE (a copy's file, the source's history, is
 written with its first transcript line rather than at its start: unrecorded, so rhun must handle both);
 FAKE_CLAUDE_NUMERIC_IDS (its requests' ids are numbers from 7); FAKE_CLAUDE_SCENARIO (every prompt runs
 that scenario, whatever its first word); FAKE_CLAUDE_UNSAVED_MARK (`unsaved` stopped saves only the
@@ -301,9 +301,12 @@ def register():
 # a SIGTERM ends it as a crash: the recordings show the record removed only on a clean exit (C7), so the
 # fake keeps it (conservative for rhun's holder reads; Task 12's live run checks the real CLI)
 LATE_USER = []                      # FAKE_CLAUDE_USER_LATE_MS: the user line not yet in the transcript
+MUTE = threading.Event()            # `mute`: a SIGTERM is ignored
 
 
 def terminated(*_):
+    if MUTE.is_set():
+        return
     if LATE_USER:                   # recorded as it stops (once: the group and the pid both get the signal)
         time.sleep(int(ENV['FAKE_CLAUDE_USER_LATE_MS']) / 1000)
         if LATE_USER:
@@ -953,6 +956,34 @@ def s_exit(prompt):
     crash(2)
 
 
+def s_mute(prompt):
+    """a process that will not exit: it closes its stdout mid-turn, ignores SIGTERM and runs on for
+    FAKE_CLAUDE_LINGER_MS (default 30 s); only a SIGKILL ends it before"""
+    CRASH.set()
+    message_start()
+    MUTE.set()                      # (signal.signal works only in the main thread: the handler looks)
+    with LOCK:
+        sys.stdout.flush()
+        os.close(1)
+    time.sleep(int(ENV.get('FAKE_CLAUDE_LINGER_MS', '30000')) / 1000)
+    crash(1)
+
+
+def s_orphan(prompt):
+    """a permission request the turn's result overtakes, never withdrawn (unrecorded: the CLI withdraws first,
+    06): it waits a second for no answer, then the turn ends"""
+    mid = message_start()
+    command = 'touch orphan.txt'
+    tool_input = {'command': command, 'description': 'Run ' + command}
+    tid = tool_use(mid, 0, 'Bash', tool_input)
+    message_end('tool_use')
+    emit({'type': 'control_request', 'request_id': request_id(),
+          'request': bash_request(tool_input, tid, suggestions(command))})
+    time.sleep(1)                   # a test sees the card meanwhile
+    tool_result(tid, REJECTED, True)
+    final('done')
+
+
 def s_big(prompt):
     """a permission request left waiting, then one record above rhun's 64 MiB limit; then it waits for rhun to
     let go and ends as a crash"""
@@ -1062,7 +1093,8 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'racing': s_racing, 'subagent': s_subagent, 'exit': s_exit, 'big': s_big, 'error': s_error,
              'wait': s_wait, 'many': s_many, 'ran': s_ran, 'fails': s_fails, 'early': s_early,
              'replay': s_replay, 'mcp': s_mcp, 'noid': s_noid, 'askx': s_askx, 'deep': s_deep,
-             'withdraw': s_withdraw, 'unsaved': s_unsaved, 'unknown': s_unknown, 'unhandled': s_unhandled}
+             'withdraw': s_withdraw, 'unsaved': s_unsaved, 'unknown': s_unknown, 'unhandled': s_unhandled,
+             'mute': s_mute, 'orphan': s_orphan}
 
 
 COMMANDS = [{'name': 'compact', 'description': 'Clear history but keep a summary', 'argumentHint': ''}]

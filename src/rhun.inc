@@ -2960,6 +2960,10 @@ ENDSTRUCT AL_SIZE
 .equ ALF_RESYNC, 4
 .equ ALF_FORK, 8
 .equ ALF_ENVWAIT, 16            # a start waits for the login environment (the tick starts it)
+.equ ALF_DRAFT, 32              # a new conversation that never got a prompt: left, it goes
+.equ ALF_ENDING, 64             # rhun asked its program to end: the end is no failure
+.equ ALF_CAPWAIT, 128           # a start waits for another program to end (g_conn_max)
+.equ ALF_UNANSWERED, 256        # the last turn ended with requests unanswered (the re-read says so again)
 .equ AL_QUEUE_MAX, 4            # prompts waiting for "ready"
 # AQ: a request the agent waits on (the plan's PR: that prefix is the Problems tab's)
 STRUCT

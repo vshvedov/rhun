@@ -2202,6 +2202,7 @@ FN app_apply_settings
     call app_sync_panels
     call git_apply
     call agents_apply_settings
+    call agent_drv_apply        # agents: [claude] chat switched off ends what it drives (agent_drv.s)
     call ai_apply
     call vim_sync
     call watch_apply_settings
@@ -2347,9 +2348,9 @@ FN app_on_paste
     jmp 9f
 0:  cmp dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
     jne 5f
-    mov rdi, rbx                # and an agent's prompt box
+    mov rdi, rbx                # and an agent's prompt box (a paste is typing: agentext_box_paste)
     mov rsi, r12
-    call agentext_paste
+    call agentext_box_paste
     jmp 9f
 5:  mov rdi, rbx                # an extension's version control message box (scmpanel.s)
     mov rsi, r12

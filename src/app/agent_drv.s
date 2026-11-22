@@ -17,13 +17,15 @@
 #                                             the program is ready (it is started first when it is not
 #                                             running); refused while a turn runs
 #   agent_stop(AS*), agent_answer(AS*, n), agent_typing(AS*) (typing starts the program),
-#   agent_release(AS*) (the program ends politely, as the idle stop does)
+#   agent_touch(AS*) (more typing: the idle stop waits again), agent_stop_running(AS*) -> eax (Escape:
+#   Stop when a turn runs), agent_release(AS*) (the program ends politely, as the idle stop does)
 #   agent_new(kind) -> rax AS* or 0           a new conversation of a built-in driver, adopted and opened
 #   agent_closed(AS*)                         its row is freed: the program ends, the record is freed
 #   agent_state_set(AL*, state)               keeps AS_state in step: STARTING and WORKING are
 #                                             AGS_WORKING, WAITING and HELD AGS_WAITING, FAILED
 #                                             AGS_ERROR, OFF and READY AGS_IDLE
-#   agent_drv_tick(), agent_drv_timeout() -> eax ms or -1, agent_drv_shutdown()
+#   agent_drv_tick(), agent_drv_timeout() -> eax ms or -1, agent_drv_shutdown() (quit, the project changes),
+#   agent_drv_apply() (the settings changed: a driver switched off ends what it drives)
 #   agent_live_dump(sb, AS* or 0)             print-agent-live
 #   agent_uuid(buf)                           a v4 UUID, 36 characters and a NUL
 #   events drivers call (AL* first): ev_note(al, role, ptr, len), ev_failed(al, ptr, len) (could not
@@ -38,6 +40,13 @@
 #
 # While a session's program runs or is about to (STARTING to HELD) its transcript is not read
 # (session_update, agents.s): its rows come from the stream; ev_closed reads the file again.
+#
+# A program's life: it starts when the user types in the box or sends; it ends when it has been idle for
+# [agents] idle_stop_minutes (the tick), when a new conversation is left before its first prompt (it goes,
+# ALF_DRAFT), when the cap needs its place (the idle one used longest ago), and with its record when the
+# chat is switched off, the project changes, its row is freed or rhun quits. An end rhun asked for is OFF,
+# never FAILED (ALF_ENDING); one it did not ask for while a turn ran is FAILED, and the next Send starts
+# it again (--resume once the file exists).
 #   g_drv_idle_ms (0: [agents] idle_stop_minutes), g_drv_hold_ms: agent-timing's overrides
 .include "rhun.inc"
 
@@ -409,10 +418,12 @@ FN agent_send
     mov esi, 8
     call vec_push
     mov [rax], r14
+    and dword ptr [r15 + AL_flags], ~ALF_DRAFT     # it got a prompt: leaving it keeps it
     call user_row
     mov eax, SEND_QUEUED
     jmp 9f
 .Las_now:
+    and dword ptr [r15 + AL_flags], ~(ALF_DRAFT | ALF_UNANSWERED)
     call user_row
     mov rdi, r15
     mov rsi, r12
@@ -449,6 +460,7 @@ agent_start:
     mov rax, [rbx + AL_as]      # the rows from here on come from the stream
     mov rax, [rax + AS_msgs + VEC_len]
     mov [rbx + AL_live_from], rax
+    and dword ptr [rbx + AL_flags], ~(ALF_ENDING | ALF_STOP_ASKED | ALF_CAPWAIT)
     mov rdi, rbx
     mov esi, ALS_STARTING
     call agent_state_set
@@ -462,21 +474,113 @@ agent_start:
     call drv_start
     EPILOGUE
 
-# drv_start(AL*) -> eax 1 started, 0 failed (ev_failed with the driver's report)
+# drv_start(AL*) -> eax 1 started (or waiting for another program to end), 0 failed (ev_failed with the
+#   driver's report). At the cap (g_conn_max programs) the idle one used longest ago is released first and
+#   the start waits for a program to end (ALF_CAPWAIT, the tick starts it); with none idle it fails
 drv_start:
     PROLOGUE
     mov rbx, rdi
-    and dword ptr [rbx + AL_flags], ~ALF_ENVWAIT
+    and dword ptr [rbx + AL_flags], ~(ALF_ENVWAIT | ALF_CAPWAIT)
+    call cap_full
+    test eax, eax
+    jz 2f
+    mov rdi, rbx
+    call cap_room
+    test eax, eax
+    jz 1f
+    or dword ptr [rbx + AL_flags], ALF_CAPWAIT
+    mov eax, 1
+    EPILOGUE
+1:  lea rdi, [rbx + AL_report]
+    call sb_clear
+    lea rdi, [rbx + AL_report]
+    lea rsi, [rip + .Lbusy]
+    call sb_push_cstr
+    jmp 3f
+2:  mov rdi, rbx
     mov rax, [rbx + AL_drv]
     call [rax + DRV_start]
     test eax, eax
     jnz 9f
-    mov rdi, rbx
+3:  mov rdi, rbx
     mov rsi, [rbx + AL_report + SB_ptr]
     mov rdx, [rbx + AL_report + SB_len]
     call ev_failed
     xor eax, eax
 9:  EPILOGUE
+
+# cap_full() -> eax 1 when no other program may start (agent_conn_count at g_conn_max or CN_MAX)
+cap_full:
+    push rbx
+    call agent_conn_count
+    mov ecx, [rip + g_conn_max]
+    cmp ecx, CN_MAX
+    jbe 1f
+    mov ecx, CN_MAX
+1:  xor edx, edx
+    cmp eax, ecx
+    setae dl
+    mov eax, edx
+    pop rbx
+    ret
+
+# cap_room(AL*) -> eax 1 when a program will end and free a place: one is ending already, or the idle one
+#   used longest ago (READY, no card, nothing queued; not this one) is released now; 0 when none is idle
+cap_room:
+    PROLOGUE
+    mov r15, rdi
+    xor r13d, r13d              # the idle one used longest ago
+    xor ebx, ebx
+1:  cmp rbx, [rip + lives + VEC_len]
+    jae 4f
+    mov rax, [rip + lives + VEC_ptr]
+    mov r12, [rax + rbx*8]
+    inc rbx
+    cmp r12, r15
+    je 1b
+    cmp dword ptr [r12 + AL_cn + CN_state], CN_STOPPING
+    je 8f                       # its place comes free soon
+    mov rdi, r12
+    call is_idle
+    test eax, eax
+    jz 1b
+    test r13, r13
+    jz 2f
+    mov rax, [r12 + AL_used]
+    cmp rax, [r13 + AL_used]
+    jae 1b
+2:  mov r13, r12
+    jmp 1b
+4:  xor eax, eax
+    test r13, r13
+    jz 9f
+    mov rdi, r13
+    call release
+8:  mov eax, 1
+9:  EPILOGUE
+
+# is_idle(AL*) -> eax 1 when its program runs with nothing to do: READY, no request, no prompt waiting
+is_idle:
+    xor eax, eax
+    cmp dword ptr [rdi + AL_state], ALS_READY
+    jne 1f
+    cmp dword ptr [rdi + AL_cn + CN_state], CN_UP
+    jne 1f
+    cmp qword ptr [rdi + AL_reqs + VEC_len], 0
+    jne 1f
+    cmp qword ptr [rdi + AL_queue + VEC_len], 0
+    jne 1f
+    inc eax
+1:  ret
+
+# release(AL*): rhun ends its program politely (the stop sequence); the end is no failure (ALF_ENDING)
+release:
+    cmp dword ptr [rdi + AL_cn + CN_state], CN_UP
+    jne 1f
+    or dword ptr [rdi + AL_flags], ALF_ENDING
+    mov rax, [rdi + AL_drv]
+    jmp [rax + DRV_release]
+1:  ret
 
 # FN agent_stop(AS*): Stop: the turn is interrupted
 FN agent_stop
@@ -501,6 +605,25 @@ FN agent_stop
     mov rax, [r12 + AL_drv]
     call [rax + DRV_stop]
 9:  EPILOGUE
+
+# FN agent_stop_running(AS*) -> eax 1 when a turn of a session rhun drives runs (WORKING, WAITING): Stop
+#   went (Escape's meaning then; a second Stop in the same turn does nothing), 0 otherwise
+FN agent_stop_running
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    mov rcx, [rdi + AS_live]
+    test rcx, rcx
+    jz 1f
+    cmp dword ptr [rcx + AL_state], ALS_WORKING
+    je 2f
+    cmp dword ptr [rcx + AL_state], ALS_WAITING
+    jne 1f
+2:  push rbx
+    call agent_stop
+    pop rbx
+    mov eax, 1
+1:  ret
 
 # FN agent_answer(AS*, n): option n (from 0) of the session's card, as its driver answers it
 FN agent_answer
@@ -554,16 +677,19 @@ FN agent_typing
 
 # FN agent_release(AS*): its program ends politely (the stop sequence); the record stays
 FN agent_release
+    mov rdi, [rdi + AS_live]
+    test rdi, rdi
+    jnz release
+    ret
+
+# FN agent_touch(AS*): the user typed in its box: the idle stop waits again
+FN agent_touch
     PROLOGUE
     mov rbx, [rdi + AS_live]
     test rbx, rbx
     jz 9f
-    mov eax, [rbx + AL_cn + CN_state]
-    cmp eax, CN_UP
-    jne 9f
-    mov rdi, rbx
-    mov rax, [rbx + AL_drv]
-    call [rax + DRV_release]
+    call time_ms
+    mov [rbx + AL_used], rax
 9:  EPILOGUE
 
 # FN agent_new(kind) -> rax AS* or 0: a new conversation of a built-in driver (the draft's first character
@@ -626,7 +752,7 @@ FN agent_new
     call agent_live
     test rax, rax
     jz 9f
-    or dword ptr [rax + AL_flags], ALF_NEW
+    or dword ptr [rax + AL_flags], ALF_NEW | ALF_DRAFT
     lea rdi, [rax + AL_sid]
     lea rsi, [rsp]
     call cstr_copy
@@ -986,9 +1112,20 @@ FN ev_turn_end
     je 3f
     dec qword ptr [rbx + AL_turns]
     jnz 9f
-3:  cmp dword ptr [rbx + AL_state], ALS_WORKING
+3:  and dword ptr [rbx + AL_flags], ~ALF_UNANSWERED
+    mov rdi, rbx                # requests the turn left behind go with their card (Claude withdraws
+    call reqs_drop              #   them first; a card nobody waits for must not stay), an info row
+    test eax, eax               #   saying so (again after a re-read: ALF_UNANSWERED)
+    jz 31f
+    or dword ptr [rbx + AL_flags], ALF_UNANSWERED
+    mov edi, eax
+    call closed_note
+31: mov eax, [rbx + AL_state]
+    cmp eax, ALS_WORKING
+    je 4f
+    cmp eax, ALS_WAITING
     jne 9f
-    mov rdi, rbx
+4:  mov rdi, rbx
     mov esi, ALS_READY
     call agent_state_set
 9:  EPILOGUE
@@ -1008,10 +1145,15 @@ FN ev_closed
 1:  mov qword ptr [rbx + AL_turns], 0
     mov qword ptr [rbx + AL_row], -1
     mov byte ptr [rbx + AL_rowkey], 0
-    and dword ptr [rbx + AL_flags], ~ALF_STOP_ASKED
+    and dword ptr [rbx + AL_flags], ~(ALF_STOP_ASKED | ALF_ENDING)
+    mov rdi, rbx                # prompts that waited for a start rhun ended go back in the box
+    call queue_restore
     mov rdi, rbx                # nobody waits for an answer now: the cards go
     call reqs_drop
     mov r13d, eax
+    mov r14d, [rbx + AL_flags]  # or the turn's end took them (its row goes with the re-read)
+    and r14d, ALF_UNANSWERED
+    and dword ptr [rbx + AL_flags], ~ALF_UNANSWERED
     mov r12, [rbx + AL_as]
     mov rdi, [r12 + AS_path]
     test rdi, rdi
@@ -1023,6 +1165,7 @@ FN ev_closed
     mov rdi, r12
     call agents_resync
     mov edi, r13d
+    or edi, r14d
     call closed_note
     cmp dword ptr [rbx + AL_state], ALS_FAILED
     jne 9f
@@ -1086,7 +1229,8 @@ FN ev_failed
 
 # ---- the loop ----
 
-# FN agent_drv_tick(): starts that waited for the login environment
+# FN agent_drv_tick(): starts that waited for the login environment or for another program to end; a new
+#   conversation left without a prompt goes (draft_left); the idle stop (idle_ms)
 FN agent_drv_tick
     PROLOGUE
     cmp qword ptr [rip + lives + VEC_len], 0
@@ -1096,34 +1240,137 @@ FN agent_drv_tick
     jae 9f
     mov rax, [rip + lives + VEC_ptr]
     mov r12, [rax + rbx*8]
-    inc rbx
+    test dword ptr [r12 + AL_flags], ALF_DRAFT
+    jz 2f
+    mov rdi, r12
+    call draft_left
+    test eax, eax
+    jz 2f
+    mov rdi, [r12 + AL_as]      # its row goes, its program with it (the record leaves lives: the same
+    call agents_drop            #   index is looked at again)
+    jmp 1b
+2:  inc rbx
     test dword ptr [r12 + AL_flags], ALF_ENVWAIT
-    jz 1b
+    jz 3f
     call uproc_env_ready
     test eax, eax
-    jz 9f
+    jz 1b
     mov rdi, r12
     call drv_start
     jmp 1b
+3:  test dword ptr [r12 + AL_flags], ALF_CAPWAIT
+    jz 4f
+    call cap_full
+    test eax, eax
+    jnz 1b
+    mov rdi, r12
+    call drv_start
+    jmp 1b
+4:  mov rdi, r12
+    call idle_left
+    test rax, rax
+    jnz 1b                      # not due yet, or none pending (-1)
+    mov rdi, r12                # idle long enough: its program ends; the file is read again when it is
+    call release                #   gone (ev_closed), the next Send starts it again
+    jmp 1b
 9:  EPILOGUE
 
-# FN agent_drv_timeout() -> eax ms until the tick has work, or -1
-FN agent_drv_timeout
+# draft_left(AL*) -> eax 1 when the new conversation (ALF_DRAFT) is not the one the panel shows any more:
+#   Back, another one opened, a new one begun, or the panel closed
+draft_left:
+    PROLOGUE
+    mov rbx, rdi
+    mov eax, 1
+    cmp dword ptr [rip + g_show_agents], 0
+    je 9f
+    call agentext_new_active
+    test rax, rax
+    mov eax, 1
+    jnz 9f
+    call agents_open_driven
     xor ecx, ecx
-1:  cmp rcx, [rip + lives + VEC_len]
+    cmp rax, [rbx + AL_as]
+    setne cl
+    mov eax, ecx
+9:  EPILOGUE
+
+# idle_ms() -> rax the idle stop's time ([agents] idle_stop_minutes, or agent-timing's), 0: never
+idle_ms:
+    mov eax, [rip + g_drv_idle_ms]
+    test eax, eax
+    jnz 1f
+    mov eax, [rip + cfg_agents_idle_stop]
+    imul rax, rax, 60000
+1:  ret
+
+# idle_left(AL*) -> rax ms until its idle stop is due (0 or less: now); -1 when none is pending (its program
+#   is not idle, or the idle stop is off)
+idle_left:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, -1
+    call is_idle
+    test eax, eax
+    jz 9f
+    call idle_ms
+    test rax, rax
+    jz 9f
+    mov r12, rax
+    add r12, [rbx + AL_used]
+    call time_ms
+    sub r12, rax
+    jg 9f
+    xor r12d, r12d              # due: 0, not "none"
+9:  mov rax, r12
+    EPILOGUE
+
+# FN agent_drv_timeout() -> eax ms until the tick has work, or -1: a start that waits (the login
+#   environment, another program's end), an idle stop that is pending. Nothing for a record without a
+#   program: an idle rhun has no timer from here
+FN agent_drv_timeout
+    PROLOGUE
+    mov r13, -1
+    xor ebx, ebx
+1:  cmp rbx, [rip + lives + VEC_len]
     jae 8f
     mov rax, [rip + lives + VEC_ptr]
-    mov rax, [rax + rcx*8]
-    inc rcx
-    test dword ptr [rax + AL_flags], ALF_ENVWAIT
-    jz 1b
+    mov r12, [rax + rbx*8]
+    inc rbx
     mov eax, ENV_TICK_MS
-    ret
-8:  mov eax, -1
-    ret
+    test dword ptr [r12 + AL_flags], ALF_ENVWAIT | ALF_CAPWAIT
+    jnz 2f
+    mov rdi, r12
+    call idle_left
+    test rax, rax
+    js 1b
+2:  cmp r13, -1
+    je 3f
+    cmp rax, r13
+    jae 1b
+3:  mov r13, rax
+    jmp 1b
+8:  mov rax, 0x3fffffff
+    cmp r13, rax
+    jbe 9f
+    cmp r13, -1
+    je 9f
+    mov r13, rax
+9:  mov eax, r13d
+    EPILOGUE
 
-# FN agent_drv_shutdown(): every live record ends with its program (conn_close: SIGTERM now, SIGKILL
-#   at uproc's deadline, never a longer wait than uproc_quit_end's)
+# live_end(AL*): rhun stops driving the session: its card goes, its program gets the stop sequence
+#   (conn_close: SIGTERM now, SIGKILL later, reaped by uproc_tick), the record is freed
+live_end:
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, [rbx + AL_as]
+    call agentext_card_drop
+    mov rdi, rbx
+    call live_free
+    EPILOGUE
+
+# FN agent_drv_shutdown(): every live record ends with its program (live_end: never a longer wait than
+#   uproc_quit_end's). Quitting, and the project changing (agents_set_project)
 FN agent_drv_shutdown
     PROLOGUE
 1:  mov rcx, [rip + lives + VEC_len]
@@ -1131,10 +1378,44 @@ FN agent_drv_shutdown
     jz 9f
     mov rax, [rip + lives + VEC_ptr]
     mov rdi, [rax + rcx*8 - 8]
-    call live_free
+    call live_end
     jmp 1b
-9:  lea rdi, [rip + lives]
-    call vec_free
+9:  EPILOGUE
+
+# FN agent_drv_apply(): the settings changed: a session whose driver is not available any more ([claude]
+#   chat switched off) ends with its program; its conversation is read again from its file (a new one
+#   that never got a prompt goes), and a new conversation being begun for that driver is left
+FN agent_drv_apply
+    PROLOGUE
+    xor ebx, ebx
+1:  cmp rbx, [rip + lives + VEC_len]
+    jae 8f
+    mov rax, [rip + lives + VEC_ptr]
+    mov r12, [rax + rbx*8]
+    mov r13, [r12 + AL_as]
+    mov rdi, r13
+    call agent_drv_of
+    cmp rax, [r12 + AL_drv]
+    jne 2f
+    inc rbx
+    jmp 1b
+2:  test dword ptr [r12 + AL_flags], ALF_DRAFT
+    jz 3f
+    mov rdi, r13                # its row goes, the record with it
+    call agents_drop
+    jmp 1b
+3:  mov rdi, r12
+    call live_end
+    mov rdi, [r13 + AS_path]    # the file is the truth now (none yet: the rows the stream fed stay)
+    test rdi, rdi
+    jz 1b
+    call file_missing
+    test eax, eax
+    jnz 1b
+    mov rdi, r13
+    call agents_resync
+    jmp 1b
+8:  call agentext_drivers_changed
     EPILOGUE
 
 # FN agent_live_dump(sb, AS* or 0): "state=… pid=0|1 sid=… mode=… queued=N requests=N new=0|1", then
@@ -1285,6 +1566,7 @@ ags_of: .long AGS_IDLE, AGS_WORKING, AGS_IDLE, AGS_WORKING, AGS_WAITING, AGS_WAI
 .Linterrupted: .asciz "Interrupted"
 .Ltool: .asciz "tool"
 .Lunanswered: .asciz "Claude Code ended before the request was answered."
+.Lbusy: .asciz "Too many agents are running. Stop one and send again."
 .Ld_state: .asciz "state="
 .Ld_pid: .asciz " pid="
 .Ld_sid: .asciz " sid="

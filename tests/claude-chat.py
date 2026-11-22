@@ -396,6 +396,7 @@ class SeamTest(ChatCase):
         self.assertFalse(ok)
 
 
+MOD = 'cmd' if sys.platform == 'darwin' else 'ctrl'
 ROLES = ('user', 'agent', 'tool', 'result', 'error', 'info')
 PINNED = ['--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json',
           '--include-partial-messages', '--permission-prompt-tool=stdio',
@@ -404,6 +405,7 @@ MODEL = 'claude-opus-5-5'
 REPLY = f'agent({MODEL}) '            # the first reply of a conversation names its model
 SLOW_ROW = REPLY + ''.join('word%d ' % i for i in range(10))     # print-agents shows 60 bytes
 UUID4 = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
+BACK = (922, 60)                    # the open conversation's Back button (1280x800, the agents panel alone)
 
 
 class DrivenCase(ChatCase):
@@ -443,6 +445,44 @@ class DrivenCase(ChatCase):
         self.command('agent-prompt ' + prompt)
         if wait:
             self.command(f'wait-agent {wait} {ms}')
+
+    def seed(self, sid='s1'):
+        """A transcript of the project's conversation sid (the agents fixture)."""
+        folder = self.work / '.claude/projects' / slug(self.project)
+        folder.mkdir(parents=True, exist_ok=True)
+        fixture = (ROOT / 'tests/data/agents/claude.jsonl').read_text(encoding='utf-8')
+        path = folder / (sid + '.jsonl')
+        path.write_text(fixture.replace('@PROJECT@', self.project.as_posix()), encoding='utf-8')
+        return path
+
+    def listed(self):
+        """The list's rows once discovery is done (print-agents shows the page's rows first)."""
+        self.command('cmd focus_agents')
+        self.command('wait-agents')
+        return [line for line in self.command('print-agents').splitlines() if line.startswith('Claude')]
+
+    def open_listed(self):
+        """Open the one listed conversation; its rows."""
+        rows = self.listed()
+        self.assertEqual(len(rows), 1, rows)
+        self.command('print-agents 1')
+        return self.thread()
+
+    def until_gone(self):
+        """Until the open session's process is reaped (its file read again)."""
+        deadline = time.monotonic() + 10
+        while ' pid=1 ' in self.live():
+            self.assertLess(time.monotonic(), deadline, self.live())
+            time.sleep(0.05)
+
+    def until(self, check, what, seconds=10):
+        deadline = time.monotonic() + seconds
+        while True:
+            value = check()
+            if value:
+                return value
+            self.assertLess(time.monotonic(), deadline, what)
+            time.sleep(0.05)
 
 
 class ChatTest(DrivenCase):
@@ -600,8 +640,7 @@ class ChatTest(DrivenCase):
         self.start()
         self.chat('slow', 'working')
         pid = self.starts()[0]['pid']
-        self.command('cmd focus_agents')
-        self.command('key Escape')                  # back to the list
+        self.command(f'click {BACK[0]} {BACK[1]}')  # back to the list (Escape would stop the turn)
         # the panel's poll sees the new file grow: discovery lists it (on the same AS, by its path)
         deadline = time.monotonic() + 5
         while True:
@@ -636,35 +675,6 @@ class ChatTest(DrivenCase):
 class ResumeTest(DrivenCase):
     """An existing conversation from the list: --resume with its id, the stream under its old rows, the
     file read again once the process is gone."""
-
-    def seed(self, sid='s1'):
-        """A transcript of the project's conversation sid (the agents fixture)."""
-        folder = self.work / '.claude/projects' / slug(self.project)
-        folder.mkdir(parents=True, exist_ok=True)
-        fixture = (ROOT / 'tests/data/agents/claude.jsonl').read_text(encoding='utf-8')
-        path = folder / (sid + '.jsonl')
-        path.write_text(fixture.replace('@PROJECT@', self.project.as_posix()), encoding='utf-8')
-        return path
-
-    def listed(self):
-        """The list's rows once discovery is done (print-agents shows the page's rows first)."""
-        self.command('cmd focus_agents')
-        self.command('wait-agents')
-        return [line for line in self.command('print-agents').splitlines() if line.startswith('Claude')]
-
-    def open_listed(self):
-        """Open the one listed conversation; its rows."""
-        rows = self.listed()
-        self.assertEqual(len(rows), 1, rows)
-        self.command('print-agents 1')
-        return self.thread()
-
-    def until_gone(self):
-        """Until the open session's process is reaped (its file read again)."""
-        deadline = time.monotonic() + 10
-        while ' pid=1 ' in self.live():
-            self.assertLess(time.monotonic(), deadline, self.live())
-            time.sleep(0.05)
 
     def fresh_thread(self):
         """The open conversation as a new rhun reads it from the file."""
@@ -791,15 +801,6 @@ class RequestTest(DrivenCase):
     def responses(self):
         """The control_response lines the fake read."""
         return [m['response'] for m in self.stdin() if m.get('type') == 'control_response']
-
-    def until(self, check, what, seconds=10):
-        deadline = time.monotonic() + seconds
-        while True:
-            value = check()
-            if value:
-                return value
-            self.assertLess(time.monotonic(), deadline, what)
-            time.sleep(0.05)
 
     def test_tool_row_and_result(self):
         self.start()
@@ -951,6 +952,391 @@ class RequestTest(DrivenCase):
         self.assertIsNone(self.card())
         self.assertIn(' requests=0 ', self.live())
         self.assertIn('info Claude Code ended before the request was answered.', self.thread())
+
+
+def alive(pid):
+    """Whether the process runs (or is a zombie nobody reaped yet)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+BUSY = 'Too many agents are running. Stop one and send again.'
+UNANSWERED = 'info Claude Code ended before the request was answered.'
+
+
+class LifeTest(DrivenCase):
+    """Stop, and the process's life: it starts when the user types, stops when idle, when a draft is left,
+    when the chat is switched off or the project changes, and never outlives rhun."""
+
+    def pid(self, n=-1):
+        return self.starts()[n]['pid']
+
+    def gone(self, pid, seconds=10):
+        self.until(lambda: not alive(pid), f'process {pid} still runs', seconds)
+
+    def interrupts(self):
+        return [m for m in self.stdin()
+                if m.get('type') == 'control_request' and m['request'].get('subtype') == 'interrupt']
+
+    def streaming(self):
+        """Until the reply's row has text."""
+        self.until(lambda: any(r.startswith('agent') and r != 'agent ' and not r.endswith(') ')
+                               for r in self.thread()), 'the reply streams')
+
+    def card(self):
+        lines = self.command('print-agent-input').splitlines()
+        return lines[1] if len(lines) > 1 else None
+
+    def box(self):
+        return self.command('print-agent-input').splitlines()[0].split(' box=')[1]
+
+    def uproc_pids(self):
+        return re.findall(r'\b\d+\b', self.command('print-uproc'))
+
+    def test_stop_interrupts(self):
+        self.start()
+        self.chat('slow', 'working')
+        self.streaming()
+        self.command('agent-stop')
+        self.command('agent-stop')                  # a second Stop in the same turn does nothing
+        self.command('wait-agent ready 20000')
+        stops = self.interrupts()
+        self.assertEqual(len(stops), 1, stops)
+        self.assertRegex(stops[0]['request_id'], r'^r\d+$')
+        self.assertEqual(stops[0]['request'], {'subtype': 'interrupt'})
+        thread = self.thread()
+        self.assertEqual(thread[0], 'user slow')
+        self.assertEqual(thread[-1], 'info Interrupted')
+        self.assertEqual(thread.count('info Interrupted'), 1)
+        self.assertNotIn(SLOW_ROW, thread)          # cut short
+        self.assertTrue(self.live().startswith('state=ready pid=1 '), self.live())
+        self.command('agent-prompt hello')          # the next turn runs as usual, with no Stop of its own
+        self.command('wait-agent ready')
+        self.assertEqual(self.thread()[-2:], ['user hello', 'agent ok: hello'])
+        self.assertEqual(len(self.interrupts()), 1)
+        self.assertEqual(len(self.starts()), 1)
+
+    def test_stop_withdraws_a_card_quietly(self):
+        self.start()
+        self.chat('pending', 'waiting')
+        self.assertIsNotNone(self.card())
+        self.command('agent-stop')
+        self.command('wait-agent ready')
+        self.assertIsNone(self.card())
+        thread = self.thread()
+        self.assertNotIn('info Withdrawn by Claude', thread)
+        self.assertEqual(thread[-1], 'info Interrupted')
+
+    def test_escape_stops_a_turn(self):
+        self.start()
+        self.chat('slow', 'working')
+        self.streaming()
+        self.command('cmd focus_agents')
+        self.command('key Escape')                  # the panel has the keys and a turn runs: Stop
+        self.command('wait-agent ready 20000')
+        self.assertEqual(len(self.interrupts()), 1)
+        self.assertEqual(self.thread()[-1], 'info Interrupted')
+        self.assertTrue(self.command('print-agent-input').startswith('input= focus=0 '))
+        self.command('key Escape')                  # no turn: back to the list, as before
+        self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
+        self.command('print-agents 1')
+        self.command('agent-prompt slow')
+        self.command('wait-agent working')
+        self.streaming()
+        self.command('key Tab')                     # into the box
+        self.command('key Escape')                  # the box has the keys and a turn runs: Stop
+        self.command('wait-agent ready 20000')
+        self.assertEqual(len(self.interrupts()), 2)
+        self.assertTrue(self.command('print-agent-input').startswith('input= focus=1 '))
+        self.command('key Escape')                  # no turn: out of the box, as before
+        self.assertTrue(self.command('print-agent-input').startswith('input= focus=0 '))
+        self.assertTrue(self.live().startswith('state=ready pid=1 '), self.live())
+
+    def test_reading_starts_nothing(self):
+        for sid in ('s1', 's2', 's3'):
+            self.seed(sid)
+        self.start()
+        self.assertEqual(len(self.listed()), 3)
+        for n in (1, 2, 3):
+            self.command(f'print-agents {n}')
+            self.command('move 1000 300')
+            self.command('scroll 5')
+            self.command('scroll -5')
+            self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
+            self.command(f'click {BACK[0]} {BACK[1]}')
+        self.command('print-agents 2')
+        time.sleep(2)
+        self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
+        self.assertEqual(self.uproc_pids(), [])
+        self.assertEqual(self.starts(), [])
+
+    def test_typing_starts_the_process(self):
+        self.start()
+        self.command('agent-new claude')            # agent-type: text into the box, not sent
+        self.command('agent-type h')
+        self.command('wait-agent ready')
+        self.assertEqual(len(self.starts()), 1)
+        self.command('agent-new claude')            # real keys in a new conversation's box
+        self.assertTrue(self.command('print-agent-input').startswith('input= focus=1 '))
+        self.command('type h')
+        self.command('wait-agent ready')
+        self.assertEqual(len(self.starts()), 2)
+        self.assertTrue(self.command('print-agent-input').startswith('input=h '))
+        self.assertEqual(self.prompts(), [])
+        self.stop()
+        self.seed()                                 # real keys in an existing conversation's box
+        self.start()
+        self.open_listed()
+        self.assertTrue(self.live().startswith('state=off '), self.live())
+        self.command('key Tab')
+        self.command('type x')
+        self.command('wait-agent ready')
+        self.assertEqual(self.starts()[-1]['argv'][-1], '--resume=s1')
+        self.assertEqual(len(self.starts()), 3)
+        self.command('type y')                      # more keys start nothing more
+        time.sleep(0.5)
+        self.assertEqual(len(self.starts()), 3)
+        self.assertTrue(self.command('print-agent-input').startswith('input=xy '))
+        self.assertEqual(self.prompts(), [])
+        self.stop()                                 # a paste into the box
+        self.start()
+        self.command('key ' + MOD + '+n')           # the text to paste, copied from a new file
+        self.command('type pasted')
+        self.command('key ' + MOD + '+a')
+        self.command('key ' + MOD + '+c')
+        self.open_listed()
+        self.command('key Tab')
+        self.command('key ' + MOD + '+v')
+        self.command('wait-agent ready')
+        self.assertTrue(self.command('print-agent-input').startswith('input=pasted '))
+        self.assertEqual(len(self.starts()), 4)
+        self.assertEqual(self.prompts(), [])
+
+    def test_abandoned_draft_stops(self):
+        self.seed()
+        self.start()
+        self.assertEqual(len(self.listed()), 1)
+        # Back
+        self.command('agent-new claude')
+        self.command('agent-type h')
+        self.command('wait-agent ready')
+        pid = self.pid()
+        self.command('key Escape')                  # out of the box
+        self.command('key Escape')                  # back to the list: the draft is left
+        self.gone(pid)
+        self.assertEqual(len(self.listed()), 1)
+        self.assertEqual(self.uproc_pids(), [])
+        # another conversation opened
+        self.command('agent-new claude')
+        self.command('agent-type h')
+        self.command('wait-agent ready')
+        pid = self.pid()
+        self.command('print-agents 1')              # the listed one (a draft is pinned after the page)
+        self.gone(pid)
+        self.assertTrue(self.thread()[0].startswith('user '), self.thread())
+        self.assertEqual(len(self.listed()), 1)
+        # the panel closed
+        self.command('agent-new claude')
+        self.command('agent-type h')
+        self.command('wait-agent ready')
+        pid = self.pid()
+        self.command('cmd toggle_agents')
+        self.gone(pid)
+        self.assertEqual(len(self.listed()), 1)
+        self.assertEqual(self.prompts(), [])
+        # one that got a prompt stays when it is left
+        self.chat('hello')
+        pid = self.pid()
+        self.command(f'click {BACK[0]} {BACK[1]}')
+        time.sleep(0.5)
+        self.assertTrue(alive(pid))
+        rows = self.listed()
+        self.assertEqual(len(rows), 2, rows)
+
+    def test_idle_stop_and_transparent_restart(self):
+        self.start()
+        self.chat('hello')
+        sid = self.sid()
+        pid = self.pid()
+        self.command('agent-timing idle=300')
+        self.command('wait-agent off 5000')
+        self.gone(pid)
+        self.assertEqual(self.thread(), ['user hello', REPLY + 'ok: hello'])    # read again from the file
+        self.assertNotIn(' report=', self.live())
+        self.command('agent-prompt again')
+        self.command('wait-agent ready')
+        starts = self.starts()
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(starts[1]['argv'][-1], '--resume=' + sid)
+        self.assertEqual(self.thread()[-2:], ['user again', 'agent ok: again'])
+
+    def test_quit_mid_turn_leaves_no_process(self):
+        self.start()
+        self.chat('slow', 'working')
+        pid = self.pid()
+        self.quit()
+        self.gone(pid, 8)
+        # one that ignores SIGTERM goes too
+        self.start(env={'FAKE_CLAUDE_LINGER_MS': '60000'})
+        self.chat('mute', 'working')
+        pid = self.pid()
+        self.quit()
+        self.gone(pid, 8)
+
+    def test_crash_mid_turn(self):
+        self.start()
+        self.chat('exit', 'failed')
+        sid = self.sid()
+        crashed = ['user exit', 'error Claude Code ended (exit status 2).']
+        self.assertEqual(self.thread(), crashed)     # the file's rows, then why it ended
+        self.command('agent-prompt again')          # the next Send starts it again with the file
+        self.command('wait-agent ready')
+        starts = self.starts()
+        self.assertEqual(len(starts), 2)
+        self.assertEqual(starts[1]['argv'][-1], '--resume=' + sid)
+        thread = self.thread()
+        self.assertEqual(thread[:3], crashed + ['user again'])
+        self.assertTrue(thread[3].endswith('ok: again'), thread)
+
+    def test_the_cap(self):
+        self.start()
+        self.command('agent-timing guard=2')
+        self.chat('hello')
+        self.chat('hello')
+        first, second = self.pid(0), self.pid(1)
+        self.chat('hello')                          # a third: the idle one used longest ago is released
+        self.assertEqual(len(self.starts()), 3)
+        self.gone(first)
+        self.assertTrue(alive(second))
+        self.assertEqual(self.thread(), ['user hello', REPLY + 'ok: hello'])
+        self.stop()
+        self.fake_log.unlink()
+        self.start()
+        self.command('agent-timing guard=2')
+        self.chat('slow', 'working')
+        self.chat('slow', 'working')
+        self.chat('hello', 'failed')                # none idle
+        self.assertEqual(self.live().splitlines()[1], 'report=' + BUSY)
+        self.assertEqual(self.thread(), ['error ' + BUSY[:60]])
+        self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
+        self.assertEqual(len(self.starts()), 2)
+
+    def test_chat_off_stops_processes(self):
+        self.start()
+        self.chat('slow', 'working')
+        pid = self.pid()
+        self.config.write_text(self.BASE + self.claude_section('chat = false\n'), encoding='utf-8')
+        self.gone(pid, 15)
+        self.until(lambda: self.box() == '0', 'the box is gone')
+        self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
+        self.assertEqual(self.thread()[0], 'user slow')     # the file's rows
+        self.config.write_text(self.BASE + self.claude_section('chat = true\n'), encoding='utf-8')
+        self.until(lambda: self.box() == '1', 'the box is back', 15)
+        self.assertEqual(len(self.starts()), 1)
+
+    def test_settings_switch_shows_and_hides_the_box(self):
+        self.seed()
+        self.start()
+        self.open_listed()
+        self.assertEqual(self.box(), '1')
+        self.command('cmd settings')
+        self.command('type chat with claude')
+        self.assertEqual(self.command('print-settings'), 'claude.chat\n')
+        self.command(f'click {CHAT_SWITCH[0]} {CHAT_SWITCH[1]}')
+        self.assertEqual(self.box(), '0')
+        self.command(f'click {CHAT_SWITCH[0]} {CHAT_SWITCH[1]}')
+        self.assertEqual(self.box(), '1')
+
+    def test_project_switch_stops_processes(self):
+        self.start()
+        self.chat('slow', 'working')
+        pid = self.pid()
+        other = self.work / 'other'
+        other.mkdir()
+        self.command(f'open {other}')
+        self.gone(pid)
+        self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
+
+    def test_child_that_will_not_exit(self):
+        # stdout closes mid-turn, SIGTERM is ignored: the end of stdout's deadline, then the kill
+        self.start(env={'FAKE_CLAUDE_LINGER_MS': '60000'})
+        self.command('agent-timing eof=300 kill=300')
+        self.chat('mute', 'failed', 15000)
+        pid = self.pid()
+        self.gone(pid)
+        self.assertNotIn(str(pid), self.uproc_pids())
+        self.assertTrue(self.thread()[-1].startswith('error Claude Code ended'), self.thread())
+
+    def test_a_release_with_a_card_up_ends_off(self):
+        self.start()
+        self.chat('tool', 'waiting')
+        self.command('agent-release')               # rhun ends it: no failure, whatever its status
+        self.command('wait-agent off')
+        self.until_gone()
+        lines = self.live().splitlines()
+        self.assertEqual(len(lines), 1, lines)
+        self.assertIn(' requests=0 ', lines[0])
+        self.assertIsNone(self.card())
+        thread = self.thread()
+        self.assertEqual([row for row in thread if row.startswith('error')], [])
+        self.assertEqual(thread[-1], UNANSWERED)
+
+    def test_a_result_takes_a_waiting_card(self):
+        self.start()
+        self.chat('orphan', 'waiting')
+        self.assertEqual(self.card(), 'card=Allow this bash command? touch orphan.txt options=Yes|No')
+        self.command('wait-agent ready')
+        self.assertIsNone(self.card())
+        self.assertIn(' requests=0 ', self.live())
+
+    def passes(self, seconds=3):
+        def count():
+            return int(self.command('print-loop-stats').split()[0].split('=')[1])
+        before = count()
+        time.sleep(seconds)
+        return count() - before - 1
+
+    def test_idle_rhun_has_no_timer(self):
+        self.env['CODEX_HOME'] = str(self.work / '.codex')
+        self.seed()
+        codex = self.work / '.codex/sessions/2026/09/26'
+        codex.mkdir(parents=True)
+        fixture = (ROOT / 'tests/data/agents/codex.jsonl').read_text(encoding='utf-8')
+        (codex / 'rollout-c1.jsonl').write_text(fixture.replace('@PROJECT@', self.project.as_posix()),
+                                                encoding='utf-8')
+        self.start()
+        self.command('cmd focus_agents')
+        self.command('wait-agents')
+        rows = self.command('print-agents').splitlines()
+        self.assertEqual(len(rows), 2, rows)
+        n_claude = next(i for i, row in enumerate(rows) if row.startswith('Claude:')) + 1
+        n_codex = next(i for i, row in enumerate(rows) if row.startswith('Codex:')) + 1
+
+        def idle(n):
+            self.command(f'click {BACK[0]} {BACK[1]}')
+            self.command(f'print-agents {n}')
+            time.sleep(1.5)
+            return self.passes()
+        codex_passes = idle(n_codex)
+        claude_passes = idle(n_claude)
+        self.assertLessEqual(claude_passes, codex_passes + 1, (claude_passes, codex_passes))
+        # and after a process ran and was released
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready')
+        self.command('agent-release')
+        self.command('wait-agent off')
+        self.until_gone()
+        time.sleep(5)                               # discovery reads the file that changed
+        released = self.passes()
+        self.assertLessEqual(released, codex_passes + 1, (released, codex_passes))
+
+
+CHAT_SWITCH = (776, 348)            # the switch of Settings' one row "Chat with Claude Code" (1280x800)
 
 
 if __name__ == '__main__':

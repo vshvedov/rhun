@@ -1383,6 +1383,33 @@ tool_summary:
     pop rbx
     ret
 
+# interrupt_mark(ptr, len) -> eax 1 when a user text is Claude Code's interrupt mark ("[Request interrupted
+#   by user]", "[Request interrupted by user for tool use]"): it is drawn as the "Interrupted" row the live
+#   stream ends such a turn with (agent_drv.s), so a file read again gives the rows the stream gave
+interrupt_mark:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    lea rdx, [rip + .Lmark_stop]
+    call str_eq_cstr
+    test eax, eax
+    jnz 9f
+    mov rdi, rbx
+    mov rsi, r12
+    lea rdx, [rip + .Lmark_tool]
+    call str_eq_cstr
+9:  EPILOGUE
+
+# add_interrupted(s): the "Interrupted" row
+add_interrupted:
+    PROLOGUE
+    mov esi, R_INFO
+    lea rdx, [rip + .Linterrupted]
+    mov ecx, 11
+    xor r8d, r8d
+    call add_msg
+    EPILOGUE
+
 tool_field:
     PROLOGUE
     mov rbx, rdi
@@ -1482,8 +1509,14 @@ FN ingest_line
     je .Lil_ret
     mov r14, rax
     mov r15, rdx
+    mov rdi, rax
+    mov rsi, rdx
+    call interrupt_mark
+    test eax, eax
+    jnz .Lil_mark
     mov rdi, rbx
-    mov rsi, rax
+    mov rsi, r14
+    mov rdx, r15
     xor ecx, ecx
     call set_title
     cmp dword ptr [rsp], 0
@@ -1540,14 +1573,30 @@ FN ingest_line
     call json_str
     cmp byte ptr [rax], '<'
     je 4f
+    mov [rsp + 16], rax
+    mov [rsp + 24], rdx
+    mov rdi, rax
+    mov rsi, rdx
+    call interrupt_mark
+    test eax, eax
+    jz 31f
     mov rdi, rbx
+    call add_interrupted
+    jmp 4f
+31: mov rdi, rbx
     mov esi, R_USER
-    mov rcx, rdx
-    mov rdx, rax
+    mov rdx, [rsp + 16]
+    mov rcx, [rsp + 24]
     xor r8d, r8d
     call add_msg
 4:  inc r14d
     jmp 2b
+.Lil_mark:                      # the interrupt mark as a string: no title, the Interrupted row
+    cmp dword ptr [rsp], 0
+    je .Lil_ret
+    mov rdi, rbx
+    call add_interrupted
+    jmp .Lil_ret
 .Lil_assist:
     mov rdi, r12
     lea rsi, [rip + .Lmessage]
@@ -5830,6 +5879,9 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lcustom_title: .asciz "custom-title"
 .LcustomTitle: .asciz "customTitle"
 .LisMeta: .asciz "isMeta"
+.Lmark_stop: .asciz "[Request interrupted by user]"
+.Lmark_tool: .asciz "[Request interrupted by user for tool use]"
+.Linterrupted: .asciz "Interrupted"
 .Ltool_result: .asciz "tool_result"
 .Ltool_use: .asciz "tool_use"
 .Lname: .asciz "name"

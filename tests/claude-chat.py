@@ -1024,6 +1024,11 @@ class LifeTest(DrivenCase):
         self.assertEqual(self.thread()[-2:], ['user hello', 'agent ok: hello'])
         self.assertEqual(len(self.interrupts()), 1)
         self.assertEqual(len(self.starts()), 1)
+        streamed = self.thread()                    # the file's interrupt mark is the same Interrupted row
+        self.command('agent-release')
+        self.command('wait-agent off')
+        self.until_gone()
+        self.assertEqual(self.thread(), streamed)
 
     def test_stop_withdraws_a_card_quietly(self):
         self.start()

@@ -3271,6 +3271,50 @@ FN agents_msg_set
     call agents_msg_changed
 9:  EPILOGUE
 
+# FN agents_reply_model(AS*, model ptr, len, index): an assistant record of a session rhun drives, read
+#   as ingest_line reads one from the file: its model is noted (the list's row, the replies that follow),
+#   and the reply row at index (-1: the record has none) gets the label the file would give it: the
+#   model where it changes, none for Claude Code's own notices ("<synthetic>")
+FN agents_reply_model
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call note_model
+    test r14, r14
+    js 9f
+    cmp r14, [rbx + AS_msgs + VEC_len]
+    jae 9f
+    test r13, r13
+    jz 1f
+    cmp byte ptr [r12], '<'
+    je 9f
+1:  imul r15, r14, AM_SIZE
+    add r15, [rbx + AS_msgs + VEC_ptr]
+    mov rdi, rbx
+    mov rsi, [r15 + AM_text]
+    mov rdx, [r15 + AM_len]
+    call reply_label
+    test rax, rax
+    jz 9f
+    mov r12, rax
+    mov rdi, rax
+    call strlen
+    mov rdi, r12
+    mov rsi, rax
+    call mem_dup
+    mov rdi, [r15 + AM_name]
+    mov [r15 + AM_name], rax
+    call mem_free
+    mov rdi, rbx
+    mov rsi, r14
+    call agents_msg_changed
+9:  EPILOGUE
+
 # agents_msg_changed(AS*, index): a message's text changed in place: its row is measured again
 agents_msg_changed:
     imul rsi, rsi, AM_SIZE

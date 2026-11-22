@@ -5,7 +5,10 @@
 #   [WRAPPER] CLAUDE --output-format stream-json --verbose --input-format stream-json
 #     --include-partial-messages --permission-prompt-tool=stdio
 #     --setting-sources=user,project,local | --setting-sources=user     (the project trusted or not)
-#     --max-thinking-tokens=31999 [--permission-mode=MODE] --session-id=UUID
+#     --max-thinking-tokens=31999 --session-id=UUID | --resume=ID [--permission-mode=MODE]
+#
+# A new conversation gets our UUID (agent_new); an existing one is continued with --resume and the id
+# its transcript is named after.
 #
 # The first line it is sent is initialize; nothing else goes until its answer (the prompts wait in
 # AL_queue, agent_drv.s). A turn streams: message_start names the message, a text block's start is a
@@ -14,9 +17,6 @@
 # subtypes, lines that are not JSON) are ignored; a request of Claude's rhun does not answer yet gets an
 # error reply, so Claude never waits for rhun. Everything kept from a record is copied before anything
 # may parse again (the JSON arena is global).
-#
-# Continuing a conversation that has a transcript (--resume) is not built yet: such a start fails with
-# the report "not built yet".
 .include "rhun.inc"
 
 .equ LINE_VALUES, 1000000       # json_parse_lim's limits for one record
@@ -46,8 +46,6 @@ cl_start:
     mov r12, [rbx + AL_as]
     lea rdi, [rbx + AL_report]
     call sb_clear
-    test dword ptr [rbx + AL_flags], ALF_NEW
-    jz .Lcs_resume
     call claude_exe
     test rax, rax
     jz .Lcs_missing
@@ -60,7 +58,13 @@ cl_start:
     inc ecx
     jmp 1b
 2:  lea r13, [rsp + rcx*8]      # the next slot
-    lea rsi, [rip + cl_flags]
+    test dword ptr [rbx + AL_flags], ALF_NEW
+    jnz 21f
+    mov rdi, rbx                # an existing conversation: its id is its file's name
+    call resume_sid
+    test eax, eax
+    jz .Lcs_badid
+21: lea rsi, [rip + cl_flags]
 3:  mov rax, [rsi]
     test rax, rax
     jz 4f
@@ -78,11 +82,15 @@ cl_start:
     lea rax, [rip + .La_thinking]
     mov [r13 + 8], rax
     add r13, 16
-    # --session-id=UUID, then --permission-mode=MODE when [claude] initial_mode names one
+    # --session-id=UUID (new) or --resume=ID, then --permission-mode=MODE when [claude] initial_mode
+    # names one
     lea rdi, [rip + asb]
     call sb_clear
-    lea rdi, [rip + asb]
     lea rsi, [rip + .La_sid]
+    lea rax, [rip + .La_resume]
+    test dword ptr [rbx + AL_flags], ALF_NEW
+    cmovz rsi, rax
+    lea rdi, [rip + asb]
     call sb_push_cstr
     lea rdi, [rip + asb]
     lea rsi, [rbx + AL_sid]
@@ -172,12 +180,61 @@ cl_start:
     call sb_push_cstr
     xor eax, eax
     EPILOGUE
-.Lcs_resume:
+.Lcs_badid:
+    mov rdi, [rsp + 168]
+    call mem_free
     lea rdi, [rbx + AL_report]
-    lea rsi, [rip + .Lr_resume]
+    lea rsi, [rip + .Lr_badid]
     call sb_push_cstr
     xor eax, eax
     EPILOGUE
+
+# resume_sid(AL*) -> eax 1 with AL_sid the conversation's id: its transcript's name without ".jsonl"
+#   (Claude Code names the file after the id); 0 when that is empty or longer than an id
+resume_sid:
+    PROLOGUE
+    mov rbx, rdi
+    mov rax, [rbx + AL_as]
+    mov r12, [rax + AS_path]
+    xor eax, eax
+    test r12, r12
+    jz 9f
+    mov rdi, r12
+    call strlen
+    mov r13, rax
+    mov rcx, rax
+1:  test rcx, rcx               # the name after the last separator
+    jz 2f
+    cmp byte ptr [r12 + rcx - 1], '/'
+    je 2f
+    cmp byte ptr [r12 + rcx - 1], '\\'
+    je 2f
+    dec rcx
+    jmp 1b
+2:  lea r14, [r12 + rcx]
+    mov r15, r13
+    sub r15, rcx
+    cmp r15, 6
+    jb 3f
+    lea rdi, [r14 + r15 - 6]
+    lea rsi, [rip + .Ljsonl]
+    mov edx, 6
+    call memeq
+    test eax, eax
+    jz 3f
+    sub r15, 6
+3:  xor eax, eax
+    test r15, r15
+    jz 9f
+    cmp r15, 39
+    ja 9f
+    lea rdi, [rbx + AL_sid]
+    mov rsi, r14
+    mov rdx, r15
+    mov byte ptr [rdi + rdx], 0
+    call memmove
+    mov eax, 1
+9:  EPILOGUE
 
 # ---- writing (one message at a time into cw) ----
 
@@ -594,11 +651,13 @@ h_stream:
     call ev_text
     EPILOGUE
 
-# h_assistant(AL*, record): one finished content block (one record a block, the message's id, no index:
-#   it is the block the latest content_block_start began). A text block's text replaces what streamed
-#   under its key; tool calls are not shown yet, thinking never
+# h_assistant(AL*, record): finished content blocks (one record a block, the message's id, no index: it
+#   is the block the latest content_block_start began). The record's model is noted as the file reader
+#   notes it (agents_reply_model); a text block's text replaces what streamed under its key and its row
+#   gets the label the file would give it; thinking is not shown. Locals: [rsp] the model, [rsp + 8] its
+#   length, [rsp + 16] and [rsp + 24] the message id, then a block's key
 h_assistant:
-    PROLOGUE
+    PROLOGUE 32
     mov rbx, rdi
     mov r12, rsi
     mov rdi, rsi
@@ -610,12 +669,46 @@ h_assistant:
     call json_get
     mov r13, rax
     mov rdi, rax
+    lea rsi, [rip + .Lk_model]
+    call jstr
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    mov rdi, [rbx + AL_as]
+    mov rsi, rax
+    mov rcx, -1
+    call agents_reply_model
+    mov rdi, r13                # without partial messages no message_start named it
+    lea rsi, [rip + .Lk_id]
+    call jstr
+    mov [rsp + 16], rax
+    mov [rsp + 24], rdx
+    lea rdi, [rbx + AL_msgid]
+    call strlen
+    cmp rax, [rsp + 24]
+    jne 1f
+    lea rdi, [rbx + AL_msgid]
+    mov rsi, [rsp + 16]
+    mov rdx, [rsp + 24]
+    call memeq
+    test eax, eax
+    jnz 2f
+1:  mov rdi, rbx
+    mov rsi, [rsp + 16]
+    mov rdx, [rsp + 24]
+    call set_msgid
+2:  mov rdi, r13
     lea rsi, [rip + .Lk_content]
     call json_get
-    mov rdi, rax
-    xor esi, esi
+    mov r14, rax
+    xor r15d, r15d              # the block
+3:  mov rdi, r14
+    call json_len
+    cmp r15d, eax
+    jae 9f
+    mov rdi, r14
+    mov esi, r15d
     call json_at
-    mov r14, rax                # the block
+    mov r12, rax
     mov rdi, rax
     lea rsi, [rip + .Lk_type]
     call json_get
@@ -623,41 +716,30 @@ h_assistant:
     lea rsi, [rip + .Lv_text]
     call json_is
     test eax, eax
-    jz 9f
-    mov rdi, r13                # without partial messages no message_start named it
-    lea rsi, [rip + .Lk_id]
-    call jstr
-    mov r12, rax
-    mov r15, rdx
-    lea rdi, [rbx + AL_msgid]
-    call strlen
-    cmp rax, r15
-    jne 1f
-    lea rdi, [rbx + AL_msgid]
-    mov rsi, r12
-    mov rdx, r15
-    call memeq
-    test eax, eax
-    jnz 2f
-1:  mov rdi, rbx
-    mov rsi, r12
-    mov rdx, r15
-    call set_msgid
-2:  mov rdi, rbx
+    jz 7f
+    mov rdi, rbx
     mov rsi, [rbx + AL_block]
+    add rsi, r15
     call item_key
-    mov r12, rax
-    mov r13, rdx
-    mov rdi, r14
+    mov [rsp + 16], rax
+    mov [rsp + 24], rdx
+    mov rdi, r12
     lea rsi, [rip + .Lv_text]
     call jstr
     mov rdi, rbx
-    mov rsi, r12
+    mov rsi, [rsp + 16]
     mov rcx, rax
     mov r8, rdx
-    mov rdx, r13
+    mov rdx, [rsp + 24]
     mov r9d, 1                  # the finished text
     call ev_text
+    mov rdi, [rbx + AL_as]
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    mov rcx, rax
+    call agents_reply_model
+7:  inc r15d
+    jmp 3b
 9:  EPILOGUE
 
 # h_system(AL*, record): init (the session's id, its folder, the mode) and status (the mode)
@@ -1169,6 +1251,7 @@ cl_flags:
 .La_sources_user: .asciz "--setting-sources=user"
 .La_thinking: .asciz "--max-thinking-tokens=31999"
 .La_sid: .asciz "--session-id="
+.La_resume: .asciz "--resume="
 .La_mode: .asciz "--permission-mode="
 .Lk_type: .asciz "type"
 .Lk_subtype: .asciz "subtype"
@@ -1177,6 +1260,7 @@ cl_flags:
 .Lk_response: .asciz "response"
 .Lk_hooks: .asciz "hooks"
 .Lk_message: .asciz "message"
+.Lk_model: .asciz "model"
 .Lk_role: .asciz "role"
 .Lk_content: .asciz "content"
 .Lk_parent: .asciz "parent_tool_use_id"
@@ -1219,7 +1303,7 @@ cl_flags:
 .Lr_missing: .asciz "Claude Code was not found. Install it, or set its path in Settings > Claude Code."
 .Lr_spawn: .asciz "Claude Code could not be started."
 .Lr_busy: .asciz "Too many agents are running. Stop one and send again."
-.Lr_resume: .asciz "not built yet"
+.Lr_badid: .asciz "rhun cannot continue this conversation: its file is not named after a Claude Code id."
 .Lr_refused: .asciz "Claude Code refused to start the conversation."
 .Lr_early: .asciz "Claude Code ended before it was ready."
 .Lr_ended: .asciz "Claude Code ended"

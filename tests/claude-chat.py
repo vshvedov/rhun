@@ -309,7 +309,7 @@ class DiscoveryTest(ChatCase):
 
 class SeamTest(ChatCase):
     """The prompt box and cards through the driver table (agent_drv.s): a Claude Code conversation has
-    the box when the chat is on; other sessions keep none. The Claude driver itself is not built yet."""
+    the box when the chat is on; other sessions keep none."""
 
     def setUp(self):
         super().setUp()
@@ -348,17 +348,18 @@ class SeamTest(ChatCase):
                          'state=off pid=0 sid= mode= queued=0 requests=0 new=0\n')
 
     def test_send_gives_the_drivers_error_row(self):
-        self.start()
+        self.start('[claude]\nexecutable = /nonexistent/claude\n')
         self.open_row('Claude')
         out, ok = self.reply('agent-prompt hello')
         self.assertTrue(ok)
         self.command('wait-agent failed 5000')
         thread = self.command('print-agents').splitlines()
-        self.assertEqual(thread[-1], 'error not built yet')
+        missing = ('Claude Code was not found. Install it, or set its path in Settings > Claude Code.')
+        self.assertEqual(thread[-1], 'error ' + missing[:60])
         self.assertNotIn('user hello', thread)      # it never went: the text stays in the box
         self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
         self.assertEqual(self.command('print-agent-live').splitlines(),
-                         ['state=failed pid=0 sid= mode= queued=0 requests=0 new=0', 'report=not built yet'])
+                         ['state=failed pid=0 sid= mode= queued=0 requests=0 new=0', 'report=' + missing])
 
     def test_chat_off_has_no_box(self):
         self.start(self.claude_section('chat = false\n'))
@@ -399,12 +400,14 @@ ROLES = ('user', 'agent', 'tool', 'result', 'error', 'info')
 PINNED = ['--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json',
           '--include-partial-messages', '--permission-prompt-tool=stdio',
           '--setting-sources=user,project,local', '--max-thinking-tokens=31999']
-SLOW_ROW = 'agent ' + ''.join('word%d ' % i for i in range(10))     # print-agents shows 60 bytes
+MODEL = 'claude-opus-5-5'
+REPLY = f'agent({MODEL}) '            # the first reply of a conversation names its model
+SLOW_ROW = REPLY + ''.join('word%d ' % i for i in range(10))     # print-agents shows 60 bytes
 UUID4 = re.compile(r'[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}')
 
 
-class ChatTest(ChatCase):
-    """A new conversation with the fake: the start, the handshake, a prompt, the streamed reply."""
+class DrivenCase(ChatCase):
+    """The fake's log and the open conversation's rows."""
 
     def records(self):
         """The fake's log, a record a line."""
@@ -441,10 +444,14 @@ class ChatTest(ChatCase):
         if wait:
             self.command(f'wait-agent {wait} {ms}')
 
+
+class ChatTest(DrivenCase):
+    """A new conversation with the fake: the start, the handshake, a prompt, the streamed reply."""
+
     def test_new_conversation_round_trip(self):
         self.start(env={'CLAUDECODE': '1'})         # rhun runs inside Claude Code: its child must not
         self.chat('hello')
-        self.assertEqual(self.thread()[-2:], ['user hello', 'agent ok: hello'])
+        self.assertEqual(self.thread()[-2:], ['user hello', REPLY + 'ok: hello'])
         starts = self.starts()
         self.assertEqual(len(starts), 1, starts)
         argv = starts[0]['argv']
@@ -498,12 +505,12 @@ class ChatTest(ChatCase):
         lines = self.stdin()
         self.assertEqual([m.get('type') for m in lines], ['control_request', 'user', 'user'])
         self.assertEqual(self.prompts(), ['one', 'two'])
-        self.assertEqual(self.thread(), ['user one', 'user two', 'agent ok: one', 'agent ok: two'])
+        self.assertEqual(self.thread(), ['user one', 'user two', REPLY + 'ok: one', 'agent ok: two'])
 
     def test_unknown_records_are_ignored(self):
         self.start()
         self.chat('unknown')
-        self.assertEqual(self.thread(), ['user unknown', 'agent ok: unknown'])
+        self.assertEqual(self.thread(), ['user unknown', REPLY + 'ok: unknown'])
         self.assertTrue(self.live().startswith('state=ready pid=1 '))
 
     def test_turn_error_shows_the_cli_text(self):
@@ -532,11 +539,11 @@ class ChatTest(ChatCase):
         self.assertGreater(len(slug(self.project)), 200)
         self.start()
         self.chat('hello')
-        self.assertEqual(self.thread(), ['user hello', 'agent ok: hello'])
+        self.assertEqual(self.thread(), ['user hello', REPLY + 'ok: hello'])
         self.assertTrue(self.live().endswith(' new=0\n'), self.live())
         self.command('agent-release')               # the file is read again from the found path
         self.command('wait-agent off')
-        self.assertEqual(self.thread(), ['user hello', 'agent(claude-opus-5-5) ok: hello'])
+        self.assertEqual(self.thread(), ['user hello', REPLY + 'ok: hello'])
 
     def test_process_end_mid_turn_is_an_error_row(self):
         self.start()
@@ -578,7 +585,7 @@ class ChatTest(ChatCase):
         time.sleep(3)                               # the panel's one-second poll sees the file grow
         thread = self.thread()
         self.assertEqual(thread.count('user hello'), 1, thread)
-        self.assertEqual(thread.count('agent ok: hello'), 1, thread)
+        self.assertEqual(thread.count(REPLY + 'ok: hello'), 1, thread)
 
     def test_send_during_a_turn_is_refused(self):
         self.start()
@@ -612,6 +619,120 @@ class ChatTest(ChatCase):
         thread = self.thread()
         self.assertEqual(thread[0], 'user slow')
         self.assertEqual([row for row in thread if row.startswith('agent')], [SLOW_ROW])
+
+    def test_reply_rows_have_the_files_labels(self):
+        # a streamed reply is labeled as the file reader labels it: the model where it changes
+        self.start()
+        self.chat('hello')
+        self.command('agent-prompt again')
+        self.command('wait-agent ready')
+        streamed = self.thread()
+        self.assertEqual(streamed, ['user hello', REPLY + 'ok: hello', 'user again', 'agent ok: again'])
+        self.command('agent-release')
+        self.command('wait-agent off')
+        self.assertEqual(self.thread(), streamed)
+
+
+class ResumeTest(DrivenCase):
+    """An existing conversation from the list: --resume with its id, the stream under its old rows, the
+    file read again once the process is gone."""
+
+    def seed(self, sid='s1'):
+        """A transcript of the project's conversation sid (the agents fixture)."""
+        folder = self.work / '.claude/projects' / slug(self.project)
+        folder.mkdir(parents=True, exist_ok=True)
+        fixture = (ROOT / 'tests/data/agents/claude.jsonl').read_text(encoding='utf-8')
+        path = folder / (sid + '.jsonl')
+        path.write_text(fixture.replace('@PROJECT@', self.project.as_posix()), encoding='utf-8')
+        return path
+
+    def listed(self):
+        """The list's rows once discovery is done (print-agents shows the page's rows first)."""
+        self.command('cmd focus_agents')
+        self.command('wait-agents')
+        return [line for line in self.command('print-agents').splitlines() if line.startswith('Claude')]
+
+    def open_listed(self):
+        """Open the one listed conversation; its rows."""
+        rows = self.listed()
+        self.assertEqual(len(rows), 1, rows)
+        self.command('print-agents 1')
+        return self.thread()
+
+    def until_gone(self):
+        """Until the open session's process is reaped (its file read again)."""
+        deadline = time.monotonic() + 10
+        while ' pid=1 ' in self.live():
+            self.assertLess(time.monotonic(), deadline, self.live())
+            time.sleep(0.05)
+
+    def fresh_thread(self):
+        """The open conversation as a new rhun reads it from the file."""
+        self.stop()
+        self.start()
+        return self.open_listed()
+
+    def test_resume_sends_the_id(self):
+        self.seed()
+        self.start()
+        old = self.open_listed()
+        self.assertEqual(len(old), 6, old)
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready')
+        starts = self.starts()
+        self.assertEqual(len(starts), 1, starts)
+        self.assertEqual(starts[0]['argv'], PINNED + ['--resume=s1'])
+        self.assertEqual(starts[0]['cwd'], str(self.project))
+        self.assertEqual(self.thread(), old + ['user hello', REPLY + 'ok: hello'])
+        self.assertEqual(self.live(), 'state=ready pid=1 sid=s1 mode=default queued=0 requests=0 new=0\n')
+
+    def test_rows_after_stop_match_the_file(self):
+        self.seed()
+        self.start()
+        old = self.open_listed()
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready')
+        self.command('agent-prompt again')
+        self.command('wait-agent ready')
+        streamed = self.thread()
+        self.assertEqual(streamed, old + ['user hello', REPLY + 'ok: hello', 'user again', 'agent ok: again'])
+        self.command('agent-release')
+        self.command('wait-agent off')
+        self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
+        self.assertEqual(self.thread(), streamed)
+        self.assertEqual(self.fresh_thread(), streamed)
+
+    def test_new_conversation_is_one_row_after_discovery(self):
+        self.start()
+        self.chat('hello')
+        deadline = time.monotonic() + 8
+        rows = self.listed()
+        while not rows and time.monotonic() < deadline:
+            time.sleep(0.2)
+            rows = self.listed()
+        self.assertEqual(len(rows), 1, rows)
+        time.sleep(1.5)                             # another poll and page: still the one row
+        rows = self.listed()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertEqual(self.thread(), ['user hello', REPLY + 'ok: hello'])
+        self.command('agent-prompt again')          # the row is still the live session
+        self.command('wait-agent ready')
+        self.assertEqual(self.thread()[-2:], ['user again', 'agent ok: again'])
+        self.assertEqual(len(self.starts()), 1)
+
+    def test_unknown_id_fails_cleanly(self):
+        self.seed()
+        self.start(env={'FAKE_CLAUDE_RESUME': 'unknown'})
+        old = self.open_listed()
+        self.command('agent-prompt hello')
+        self.command('wait-agent failed')
+        self.until_gone()
+        text = 'No conversation found with session ID: s1'
+        self.assertEqual(self.live().splitlines(),
+                         ['state=failed pid=0 sid=s1 mode= queued=0 requests=0 new=0', 'report=' + text])
+        self.assertEqual(self.thread(), old + ['error ' + text])
+        self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
+        self.assertEqual(self.prompts(), [])        # it never got past the start
 
 
 if __name__ == '__main__':

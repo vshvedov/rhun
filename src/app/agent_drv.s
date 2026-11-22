@@ -751,10 +751,10 @@ FN ev_ready
     call agent_state_set
 9:  EPILOGUE
 
-# FN ev_text(al, key ptr, key len, ptr, len, replace): reply text of a content block, under its item key: a
-#   new row (empty while it streams), more text for the row of that key, or (replace) its finished text in
-#   place of what streamed. A finished row takes no more text: the next text under the same key (a
-#   stream without partial messages) is a row of its own
+# FN ev_text(al, key ptr, key len, ptr, len, replace) -> rax the row's index (-1 none): reply text of a
+#   content block, under its item key: a new row (empty while it streams), more text for the row of that
+#   key, or (replace) its finished text in place of what streamed. A finished row takes no more text: the
+#   next text under the same key (a stream without partial messages) is a row of its own
 FN ev_text
     PROLOGUE 16
     mov rbx, rdi
@@ -784,8 +784,10 @@ FN ev_text
     cmp qword ptr [rsp], 0
     jne 2f
     call agents_msg_append
+    mov rax, [rbx + AL_row]
     EPILOGUE
 2:  call agents_msg_set
+    mov rax, [rbx + AL_row]
     mov qword ptr [rbx + AL_row], -1
     mov byte ptr [rbx + AL_rowkey], 0
     EPILOGUE
@@ -808,6 +810,7 @@ FN ev_text
     mov rdx, r13
     mov byte ptr [rdi + rdx], 0
     call memmove
+    mov rax, [rbx + AL_row]
     EPILOGUE
 8:  mov qword ptr [rbx + AL_row], -1
 9:  EPILOGUE

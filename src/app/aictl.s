@@ -423,6 +423,36 @@ c_agent_timing:
 9:  xor eax, eax
     EPILOGUE
 
+# print-holder SID: whether another program has that Claude Code conversation open
+#   ("holder=none|other|unknown", agent_holder.s)
+c_print_holder:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call mem_dup
+    mov rbx, rax
+    mov rdi, rax
+    call holder_claude
+    mov r12d, eax
+    mov rdi, rbx
+    call mem_free
+    call ai_out
+    mov rbx, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lw_holder]
+    call sb_push_cstr
+    lea rcx, [rip + holder_names]
+    mov rsi, [rcx + r12*8]
+    mov rdi, rbx
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    EPILOGUE
+
 # print-tools: the tools a tools request lists, then the calls in flight
 c_print_tools:
     PROLOGUE
@@ -534,6 +564,11 @@ c_agent_test_append:
 .Lt_hold: .asciz "hold"
 .Lt_guard: .asciz "guard"
 .Lc_print_tools: .asciz "print-tools"
+.Lc_print_holder: .asciz "print-holder"
+.Lw_holder: .asciz "holder="
+.Lh_none: .asciz "none"
+.Lh_other: .asciz "other"
+.Lh_unknown: .asciz "unknown"
 .Lc_tool_confirm: .asciz "tool-confirm"
 .Lw_once: .asciz "once"
 .Lw_session: .asciz "session"
@@ -556,7 +591,9 @@ ai_ctl:
     .quad .Lc_agent_timing, c_agent_timing
     .quad .Lc_print_agent_row, c_print_agent_row, .Lc_agent_test_append, c_agent_test_append
     .quad .Lc_print_agents_metrics, c_print_agents_metrics
+    .quad .Lc_print_holder, c_print_holder
     .quad 0, 0
+holder_names: .quad .Lh_none, .Lh_other, .Lh_unknown
 live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_conn_kill_ms
     .quad .Lt_eof, g_conn_eof_ms, .Lt_hold, g_drv_hold_ms, .Lt_guard, g_conn_max, 0, 0

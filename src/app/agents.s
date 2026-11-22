@@ -3320,6 +3320,31 @@ FN agents_msg_add
     mov rax, r12
 9:  EPILOGUE
 
+# FN agents_copy_rows(dst AS*, src AS*, n): the first n rows of src (at most all) added to dst, with their
+#   labels (a copy of a conversation shows what the original showed)
+FN agents_copy_rows
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    cmp r13, [r12 + AS_msgs + VEC_len]
+    jbe 1f
+    mov r13, [r12 + AS_msgs + VEC_len]
+1:  xor r14d, r14d
+2:  cmp r14, r13
+    jae 9f
+    imul r15, r14, AM_SIZE
+    add r15, [r12 + AS_msgs + VEC_ptr]
+    mov rdi, rbx
+    mov esi, [r15 + AM_role]
+    mov rdx, [r15 + AM_text]
+    mov rcx, [r15 + AM_len]
+    mov r8, [r15 + AM_name]
+    call agents_msg_add
+    inc r14
+    jmp 2b
+9:  EPILOGUE
+
 # FN agents_msg_append(AS*, index, ptr, len): more text for that message (streaming)
 FN agents_msg_append
     PROLOGUE

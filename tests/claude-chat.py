@@ -358,8 +358,8 @@ class SeamTest(ChatCase):
         self.assertEqual(thread[-1], 'error ' + missing[:60])
         self.assertNotIn('user hello', thread)      # it never went: the text stays in the box
         self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
-        self.assertEqual(self.command('print-agent-live').splitlines(),
-                         ['state=failed pid=0 sid= mode= queued=0 requests=0 new=0', 'report=' + missing])
+        self.assertEqual(self.command('print-agent-live').splitlines(),     # the id: the holder check's
+                         ['state=failed pid=0 sid=s1 mode= queued=0 requests=0 new=0', 'report=' + missing])
 
     def test_chat_off_has_no_box(self):
         self.start(self.claude_section('chat = false\n'))
@@ -1337,6 +1337,168 @@ class LifeTest(DrivenCase):
 
 
 CHAT_SWITCH = (776, 348)            # the switch of Settings' one row "Chat with Claude Code" (1280x800)
+HELD_CARD = ('card=This conversation is still open somewhere else. '
+             'options=Open here anyway|Continue in a copy|Cancel')
+DOMAIN = 'darwin' if sys.platform == 'darwin' else 'linux'
+
+
+class HolderTest(DrivenCase):
+    """A conversation open somewhere else (a terminal's claude, another rhun window's): before --resume
+    rhun waits for it to let go, then asks; its own programs are never holders."""
+
+    def setUp(self):
+        super().setUp()
+        self.sleepers = []
+
+    def tearDown(self):
+        for p in self.sleepers:             # the test's own holders, by pid
+            if p.poll() is None:
+                p.kill()
+            p.wait(timeout=10)
+        super().tearDown()
+
+    def hold(self, sid='s1', domain=DOMAIN, pid=None):
+        """A session record of the CLI's for sid, held by a live process of the test's own (or pid)."""
+        if pid is None:
+            sleeper = subprocess.Popen(['sleep', '60'])
+            self.sleepers.append(sleeper)
+            pid = sleeper.pid
+        folder = self.work / '.claude/sessions'
+        folder.mkdir(parents=True, exist_ok=True)
+        record = folder / f'{pid}.json'
+        record.write_text(json.dumps({'pid': pid, 'sessionId': sid, 'cwd': str(self.project),
+                                      'startedAt': int(time.time() * 1000), 'version': '2.1.330',
+                                      'kind': 'interactive', 'entrypoint': 'cli', 'pidDomain': domain,
+                                      'status': 'idle'}), encoding='utf-8')
+        return record
+
+    def card(self):
+        lines = self.command('print-agent-input').splitlines()
+        return lines[1] if len(lines) > 1 else None
+
+    def held(self, hold_ms=300):
+        """s1 seeded and held, rhun started, the conversation opened and a prompt sent: until the card."""
+        path = self.seed()
+        record = self.hold()
+        self.start()
+        self.command(f'agent-timing hold={hold_ms}')
+        old = self.open_listed()
+        self.command('agent-prompt hello')
+        return path, record, old
+
+    def test_held_conversation_asks(self):
+        path, record, old = self.held()
+        self.assertTrue(self.live().startswith('state=starting pid=0 '), self.live())
+        self.command('wait-agent held 5000')
+        self.assertEqual(self.card(), HELD_CARD)
+        self.assertTrue(self.live().startswith('state=held pid=0 '), self.live())
+        self.assertIn(' queued=1 ', self.live())
+        self.assertEqual(self.starts(), [])         # nothing was spawned
+        self.assertEqual(re.findall(r'\b\d+\b', self.command('print-uproc')), [])
+        self.assertEqual(self.thread(), old + ['user hello'])
+        self.command('agent-prompt more')           # waits too, with the first
+        self.assertIn(' queued=2 ', self.live())
+
+    def test_released_in_time_starts(self):
+        path, record, old = self.held(3000)
+        time.sleep(0.6)
+        self.assertTrue(self.live().startswith('state=starting pid=0 '), self.live())
+        self.assertEqual(self.starts(), [])
+        record.unlink()                             # the other one ends within the wait
+        self.command('wait-agent ready 6000')
+        self.assertIsNone(self.card())
+        starts = self.starts()
+        self.assertEqual(len(starts), 1, starts)
+        self.assertEqual(starts[0]['argv'], PINNED + ['--resume=s1'])
+        self.assertEqual(self.thread(), old + ['user hello', REPLY + 'ok: hello'])
+
+    def test_a_dead_holder_holds_nothing(self):
+        self.seed()
+        sleeper = subprocess.Popen(['sleep', '0'])
+        sleeper.wait()
+        self.hold(pid=sleeper.pid)
+        self.hold(domain='elsewhere')               # another machine's record
+        self.start()
+        self.command('agent-timing hold=300')
+        self.open_listed()
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready')
+        self.assertEqual(len(self.starts()), 1)
+
+    def test_open_here_anyway(self):
+        path, record, old = self.held()
+        self.command('wait-agent held 5000')
+        self.command('agent-card 1')
+        self.command('wait-agent ready')
+        self.assertIsNone(self.card())
+        starts = self.starts()
+        self.assertEqual(len(starts), 1, starts)
+        self.assertEqual(starts[0]['argv'], PINNED + ['--resume=s1'])
+        self.assertEqual(self.thread(), old + ['user hello', REPLY + 'ok: hello'])
+
+    def test_continue_in_a_copy(self):
+        path, record, old = self.held()
+        before = path.read_bytes()
+        self.command('wait-agent held 5000')
+        self.command('agent-card 2')
+        self.command('wait-agent ready')
+        self.assertIsNone(self.card())
+        starts = self.starts()
+        self.assertEqual(len(starts), 1, starts)
+        argv = starts[0]['argv']
+        copy = self.sid()
+        self.assertRegex(copy, UUID4)
+        self.assertEqual(argv[:len(PINNED)], PINNED)
+        self.assertEqual(sorted(argv[len(PINNED):]), ['--fork-session', '--resume=s1', '--session-id=' + copy])
+        self.assertEqual(self.prompts(), ['hello'])
+        self.assertEqual(self.thread(), old + ['user hello', REPLY + 'ok: hello'])
+        self.assertEqual(path.read_bytes(), before)     # the original is left alone
+        self.assertTrue((path.parent / (copy + '.jsonl')).exists())
+        deadline = time.monotonic() + 8
+        rows = self.listed()
+        while len(rows) < 2 and time.monotonic() < deadline:
+            time.sleep(0.2)
+            rows = self.listed()
+        # both listed; the copy is titled "Copy of …" until discovery reads its file, which holds the
+        # original's own title record (the fake copies every record, as 07b-fork's file does)
+        self.assertEqual(len(rows), 2, rows)
+        self.command('agent-release')               # the copy's file is what it showed
+        self.command('wait-agent off')
+        self.assertEqual(self.thread(), old + ['user hello', REPLY + 'ok: hello'])
+        self.command('agent-prompt again')          # and it goes on as itself
+        self.command('wait-agent ready')
+        self.assertEqual(self.starts()[-1]['argv'], PINNED + ['--resume=' + copy])
+
+    def test_cancel_restores_the_prompt(self):
+        path, record, old = self.held()
+        self.command('wait-agent held 5000')
+        self.command('agent-card 3')
+        self.command('wait-agent off')
+        self.assertIsNone(self.card())
+        self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
+        self.assertEqual(self.thread(), old)
+        self.assertEqual(self.starts(), [])
+        self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
+
+    def test_own_child_is_no_holder(self):
+        self.seed()
+        self.start()
+        self.command('agent-timing hold=300')
+        self.open_listed()
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready')
+        pid = self.starts()[0]['pid']               # the fake registered s1 under its own pid
+        self.assertTrue((self.work / f'.claude/sessions/{pid}.json').exists())
+        self.assertEqual(self.command('print-holder s1'), 'holder=none\n')
+        self.command('agent-prompt again')          # a second prompt does not ask
+        self.command('wait-agent ready')
+        self.assertIsNone(self.card())
+        self.assertEqual(len(self.starts()), 1)
+        self.hold()                                 # anyone else's process is a holder
+        self.assertEqual(self.command('print-holder s1'), 'holder=other\n')
+        self.assertEqual(self.command('print-holder s2'), 'holder=none\n')
+        (self.work / '.claude/sessions/bad.json').write_text('{not json', encoding='utf-8')
+        self.assertEqual(self.command('print-holder s2'), 'holder=unknown\n')
 
 
 if __name__ == '__main__':

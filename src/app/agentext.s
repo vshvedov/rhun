@@ -2370,6 +2370,15 @@ FN agentext_opened
     call tf_clear
 9:  EPILOGUE
 
+# FN agentext_open_keep(AS*): that session opens and the box goes with it, its text kept (a copy of the
+#   conversation the box was writing to)
+FN agentext_open_keep
+    PROLOGUE
+    mov qword ptr [rip + keep_box], 1
+    call agents_open_as
+    mov qword ptr [rip + keep_box], 0
+    EPILOGUE
+
 # FN agentext_new_active() -> rax not 0 while a new session is written: its extension (EXT*), or the
 #   built-in driver's kind (AG_*)
 FN agentext_new_active

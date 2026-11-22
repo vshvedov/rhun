@@ -38,8 +38,16 @@
 #     ev_closed(al, err) (the process is gone: OFF unless FAILED, the requests it waited on go with an
 #     info row, the conversation read again from its file)
 #
+#   agent_aq_free(AQ*)                        a request a driver made but never kept
+#
 # While a session's program runs or is about to (STARTING to HELD) its transcript is not read
 # (session_update, agents.s): its rows come from the stream; ev_closed reads the file again.
+#
+# Before it continues an existing conversation (--resume) the driver says whether another program holds it
+# (DRV_held: a terminal's claude, another rhun window's): the start waits up to g_drv_hold_ms, reading
+# again every second, then rhun asks with a card of its own (ALS_HELD, AL_own): Open here anyway, Continue
+# in a copy (a new conversation forked from it, the prompts that waited moved there), Cancel (they go back
+# in the box). rhun's own programs are never holders.
 #
 # A program's life: it starts when the user types in the box or sends; it ends when it has been idle for
 # [agents] idle_stop_minutes (the tick), when a new conversation is left before its first prompt (it goes,
@@ -210,6 +218,8 @@ live_free:
     mov rbx, rdi
     lea rdi, [rbx + AL_cn]
     call conn_close
+    mov rdi, rbx
+    call own_drop
     mov rdi, rbx
     call queue_free
     xor r12d, r12d
@@ -394,11 +404,13 @@ FN agent_send
     je .Las_now
     cmp eax, ALS_STARTING
     je .Las_queue
+    cmp eax, ALS_HELD           # its start waits for the user's answer: the prompt waits with it
+    je .Las_queue
     cmp eax, ALS_OFF
     je 3f
     cmp eax, ALS_FAILED
     je 3f
-    mov eax, SEND_REFUSED       # a turn runs, a card is up, or it waits for another holder
+    mov eax, SEND_REFUSED       # a turn runs, or a card is up
     jmp 9f
 3:  mov rdi, r15                # not running: started first, the prompt waits for ready
     call agent_start
@@ -457,10 +469,12 @@ agent_start:
     mov rbx, rdi
     lea rdi, [rbx + AL_report]
     call sb_clear
+    mov rdi, rbx                # a card of rhun's from an earlier start goes
+    call own_drop
     mov rax, [rbx + AL_as]      # the rows from here on come from the stream
     mov rax, [rax + AS_msgs + VEC_len]
     mov [rbx + AL_live_from], rax
-    and dword ptr [rbx + AL_flags], ~(ALF_ENDING | ALF_STOP_ASKED | ALF_CAPWAIT)
+    and dword ptr [rbx + AL_flags], ~(ALF_ENDING | ALF_STOP_ASKED | ALF_CAPWAIT | ALF_HOLDWAIT | ALF_HOLDOK)
     mov rdi, rbx
     mov esi, ALS_STARTING
     call agent_state_set
@@ -474,14 +488,24 @@ agent_start:
     call drv_start
     EPILOGUE
 
-# drv_start(AL*) -> eax 1 started (or waiting for another program to end), 0 failed (ev_failed with the
-#   driver's report). At the cap (g_conn_max programs) the idle one used longest ago is released first and
-#   the start waits for a program to end (ALF_CAPWAIT, the tick starts it); with none idle it fails
+# drv_start(AL*) -> eax 1 started (or waiting), 0 failed (ev_failed with the driver's report). A
+#   conversation another program holds (DRV_held) waits for it to let go: read again every second for
+#   g_drv_hold_ms (ALF_HOLDWAIT, the tick), then rhun asks (ALS_HELD, its card). At the cap (g_conn_max
+#   programs) the idle one used longest ago is released first and the start waits for a program to end
+#   (ALF_CAPWAIT, the tick starts it); with none idle it fails
 drv_start:
     PROLOGUE
     mov rbx, rdi
     and dword ptr [rbx + AL_flags], ~(ALF_ENVWAIT | ALF_CAPWAIT)
-    call cap_full
+    test dword ptr [rbx + AL_flags], ALF_HOLDOK
+    jnz 0f
+    mov rdi, rbx
+    mov rax, [rbx + AL_drv]
+    call [rax + DRV_held]
+    cmp eax, HOLDER_OTHER       # unknown is none: the records are advisory
+    je .Lds_hold
+    or dword ptr [rbx + AL_flags], ALF_HOLDOK
+0:  call cap_full
     test eax, eax
     jz 2f
     mov rdi, rbx
@@ -508,6 +532,274 @@ drv_start:
     call ev_failed
     xor eax, eax
 9:  EPILOGUE
+.Lds_hold:                      # held elsewhere: the tick reads the records again
+    or dword ptr [rbx + AL_flags], ALF_HOLDWAIT
+    call time_ms
+    mov ecx, [rip + g_drv_hold_ms]
+    lea rdx, [rax + rcx]
+    mov [rbx + AL_hold_until], rdx
+    mov rdi, rbx
+    mov rsi, rax
+    call hold_next
+    mov eax, 1
+    EPILOGUE
+
+# hold_next(AL*, now): the holder is read again a second from now, or at the wait's end when sooner
+hold_next:
+    lea rax, [rsi + 1000]
+    cmp rax, [rdi + AL_hold_until]
+    jle 1f
+    mov rax, [rdi + AL_hold_until]
+1:  mov [rdi + AL_hold_at], rax
+    ret
+
+# hold_tick(AL*): ALF_HOLDWAIT's step when its time came: free now -> the start goes on; still held at
+#   the wait's end -> rhun asks
+hold_tick:
+    PROLOGUE
+    mov rbx, rdi
+    call time_ms
+    mov r12, rax
+    cmp r12, [rbx + AL_hold_at]
+    jl 9f
+    mov rdi, rbx
+    mov rax, [rbx + AL_drv]
+    call [rax + DRV_held]
+    cmp eax, HOLDER_OTHER
+    je 1f
+    and dword ptr [rbx + AL_flags], ~ALF_HOLDWAIT
+    or dword ptr [rbx + AL_flags], ALF_HOLDOK
+    mov rdi, rbx
+    call drv_start
+    EPILOGUE
+1:  call time_ms                # the read took its time
+    mov r12, rax
+    cmp r12, [rbx + AL_hold_until]
+    jge 2f
+    mov rdi, rbx
+    mov rsi, r12
+    call hold_next
+    EPILOGUE
+2:  and dword ptr [rbx + AL_flags], ~ALF_HOLDWAIT
+    mov rdi, rbx
+    call ask_held
+9:  EPILOGUE
+
+# ---- rhun's own cards (AL_own) ----
+
+# ask_held(AL*): the conversation is still open somewhere else: ALS_HELD and the card that asks
+ask_held:
+    PROLOGUE
+    mov rbx, rdi
+    mov esi, ALS_HELD
+    call agent_state_set
+    lea rdi, [rip + .Lq_held]
+    call strlen
+    mov rdi, rbx
+    mov esi, AQK_HELD
+    lea rdx, [rip + .Lq_held]
+    mov rcx, rax
+    lea r8, [rip + opts_held]
+    mov r9d, 3
+    call own_card
+    EPILOGUE
+
+# own_card(AL*, kind, prompt ptr, len, opts cstr*, n): rhun's own card on the session (an AQ of that kind
+#   in AL_own; the one it had goes)
+own_card:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 8], rdx
+    mov [rsp + 16], rcx
+    mov r14, r8
+    mov r15, r9
+    call own_drop
+    mov edi, AQ_SIZE
+    call mem_alloc
+    mov r12, rax
+    mov ecx, [rsp]
+    mov [r12 + AQ_kind], ecx
+    mov [rbx + AL_own], r12
+    mov rdi, [rbx + AL_as]
+    mov rsi, r12
+    mov rdx, [rsp + 8]
+    mov rcx, [rsp + 16]
+    mov r8, r14
+    mov r9, r15
+    call agentext_card
+    EPILOGUE
+
+# own_drop(AL*): rhun's own card goes (from the screen when it shows), unanswered
+own_drop:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rbx + AL_own]
+    test r12, r12
+    jz 9f
+    mov qword ptr [rbx + AL_own], 0
+    mov rdi, [rbx + AL_as]
+    call agentext_card_token
+    cmp rax, r12
+    jne 1f
+    mov rdi, [rbx + AL_as]
+    call agentext_card_drop
+1:  mov rdi, r12
+    call aq_free
+9:  EPILOGUE
+
+# own_answer(AL*, kind, n): option n of rhun's own card (it went from the screen already)
+own_answer:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rdx
+    cmp r12d, AQK_HELD
+    jne 9f
+    mov rdi, rbx
+    call own_drop
+    test r13, r13
+    jnz 1f
+    or dword ptr [rbx + AL_flags], ALF_HOLDOK  # Open here anyway
+    mov rdi, rbx
+    mov esi, ALS_STARTING
+    call agent_state_set
+    mov rdi, rbx
+    call drv_start
+    EPILOGUE
+1:  cmp r13, 1
+    jne 2f
+    mov rdi, rbx                # Continue in a copy
+    call fork_copy
+    EPILOGUE
+2:  mov rdi, rbx                # Cancel: the prompts go back in the box
+    call start_abandon
+    mov rdi, rbx
+    mov esi, ALS_OFF
+    call agent_state_set
+9:  EPILOGUE
+
+# start_abandon(AL*): a start that never ran: the rows it showed go (the prompts that waited) and those
+#   prompts go back in the box
+start_abandon:
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, [rbx + AL_as]
+    mov rsi, [rbx + AL_live_from]
+    call agents_ext_truncate
+    mov qword ptr [rbx + AL_row], -1
+    mov byte ptr [rbx + AL_rowkey], 0
+    mov rdi, rbx
+    call queue_restore
+    EPILOGUE
+
+# fork_copy(AL*): Continue in a copy: a new conversation (a new id, "Copy of TITLE", the original's rows
+#   so far) opened, the prompts that waited moved to it, and started as a fork of the original
+#   (ALF_FORK: --resume=SRC --fork-session --session-id=NEW). The original is left alone (OFF, its
+#   rows as its file has them). Locals: [rsp] the new id (40 bytes)
+fork_copy:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, [rbx + AL_as]
+    lea rdi, [rip + jsb]        # the title
+    call sb_clear
+    lea rdi, [rip + jsb]
+    lea rsi, [rip + .Lcopy_of]
+    call sb_push_cstr
+    mov rsi, [r12 + AS_title]
+    test rsi, rsi
+    jnz 1f
+    lea rsi, [rip + .Lconversation]
+1:  lea rdi, [rip + jsb]
+    call sb_push_cstr
+    mov rdi, [rip + jsb + SB_ptr]
+    mov rsi, [rip + jsb + SB_len]
+    call mem_dup
+    mov r14, rax
+    lea rdi, [rsp]
+    call agent_uuid
+    mov edi, [r12 + AS_kind]
+    mov rsi, [r12 + AS_cwd]
+    test rsi, rsi
+    jnz 2f
+    mov rsi, [rip + g_project]
+2:  mov rdx, r14
+    lea rcx, [rsp]
+    call new_as
+    mov r15, rax
+    mov rdi, r14
+    call mem_free
+    test r15, r15
+    jz 8f
+    mov rdi, r15                # what the copy holds of the original so far
+    mov rsi, r12
+    mov rdx, [rbx + AL_live_from]
+    call agents_copy_rows
+    mov rdi, r15
+    call agents_adopt
+    mov rdi, r15
+    call agentext_open_keep
+    mov rdi, r15
+    call agent_live
+    test rax, rax
+    jz 8f
+    mov r13, rax
+    or dword ptr [r13 + AL_flags], ALF_NEW | ALF_FORK
+    lea rdi, [r13 + AL_sid]
+    lea rsi, [rsp]
+    call cstr_copy
+    lea rdi, [r13 + AL_fork]
+    lea rsi, [rbx + AL_sid]
+    call cstr_copy
+    mov rdi, [rbx + AL_as]      # the original: its own rows only, no prompt waiting
+    mov rsi, [rbx + AL_live_from]
+    call agents_ext_truncate
+    mov rdi, rbx
+    mov esi, ALS_OFF
+    call agent_state_set
+    xor r14d, r14d              # the prompts move to the copy
+3:  cmp r14, [rbx + AL_queue + VEC_len]
+    jae 4f
+    mov rax, [rbx + AL_queue + VEC_ptr]
+    mov rax, [rax + r14*8]
+    mov [rsp + 40], rax
+    lea rdi, [r13 + AL_queue]
+    mov esi, 8
+    call vec_push
+    mov rcx, [rsp + 40]
+    mov [rax], rcx
+    inc r14
+    jmp 3b
+4:  mov qword ptr [rbx + AL_queue + VEC_len], 0
+    mov rdi, r13
+    call agent_start
+    test eax, eax
+    jz 9f                       # it could not start: its error row, the prompts in its box (ev_failed)
+    xor r14d, r14d              # each its row in the copy, as agent_send shows one
+5:  cmp r14, [r13 + AL_queue + VEC_len]
+    jae 9f
+    mov rax, [r13 + AL_queue + VEC_ptr]
+    mov rax, [rax + r14*8]
+    mov [rsp + 40], rax
+    mov rdi, rax
+    call strlen
+    mov rdi, r15
+    mov esi, R_USER
+    mov rdx, [rsp + 40]
+    mov rcx, rax
+    xor r8d, r8d
+    call agents_msg_add
+    inc r14
+    jmp 5b
+9:  EPILOGUE
+8:  mov rdi, rbx                # no copy: as Cancel
+    call start_abandon
+    mov rdi, rbx
+    mov esi, ALS_OFF
+    call agent_state_set
+    lea rdi, [rip + .Lcopy_failed]
+    call app_toast
+    EPILOGUE
 
 # cap_full() -> eax 1 when no other program may start (agent_conn_count at g_conn_max or CN_MAX)
 cap_full:
@@ -648,10 +940,17 @@ FN agent_answer
     test rax, rax
     jz 9f
     mov r14, rax
-    mov rdi, rbx                # the card goes; the driver shows the next one
-    call agentext_card_drop
     call time_ms
     mov [r13 + AL_used], rax
+    cmp r14, [r13 + AL_own]
+    jne 2f
+    mov rdi, r13                # rhun's own card: rhun answers it
+    mov esi, [r14 + AQ_kind]
+    mov rdx, r12
+    call own_answer
+    jmp 9f
+2:  mov rdi, rbx                # the card goes; the driver shows the next one
+    call agentext_card_drop
     mov rdi, r13
     mov rsi, r14
     mov rdx, r12
@@ -712,38 +1011,14 @@ FN agent_new
     jz 8f
     lea rdi, [rsp]
     call agent_uuid
-    lea rdi, [rip + jsb]
-    call sb_clear
-    lea rdi, [rip + jsb]
+    mov edi, ebx
     mov rsi, r12
-    lea rdx, [rsp]
-    call claude_transcript
-    test eax, eax
+    lea rdx, [rip + .Lnew_title]
+    lea rcx, [rsp]
+    call new_as
+    test rax, rax
     jz 8f
-    mov edi, AS_SIZE
-    call mem_alloc
     mov r13, rax
-    mov [r13 + AS_kind], ebx
-    mov rdi, [rip + jsb + SB_ptr]
-    mov rsi, [rip + jsb + SB_len]
-    call mem_dup
-    mov [r13 + AS_path], rax
-    lea rdi, [rip + .Lnew_title]
-    call strlen
-    lea rdi, [rip + .Lnew_title]
-    mov rsi, rax
-    call mem_dup
-    mov [r13 + AS_title], rax
-    mov rdi, r12
-    call strlen
-    mov rdi, r12
-    mov rsi, rax
-    call mem_dup
-    mov [r13 + AS_cwd], rax
-    call time_now
-    mov [r13 + AS_mtime], rax
-    imul rax, rax, 1000000000
-    mov [r13 + AS_recency], rax
     mov rdi, r13
     call agents_adopt
     mov rdi, r13
@@ -757,6 +1032,51 @@ FN agent_new
     lea rsi, [rsp]
     call cstr_copy
 9:  mov rax, r13
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# new_as(kind, cwd, title cstr, id cstr) -> rax a new AS of that kind, or 0: its path is the transcript
+#   Claude Code writes for that id in cwd's folder, AS_cwd is cwd, now its time (not yet adopted)
+new_as:
+    PROLOGUE 16
+    mov ebx, edi
+    mov r12, rsi
+    mov r14, rdx
+    mov [rsp], rcx
+    lea rdi, [rip + jsb]
+    call sb_clear
+    lea rdi, [rip + jsb]
+    mov rsi, r12
+    mov rdx, [rsp]
+    call claude_transcript
+    test eax, eax
+    jz 8f
+    mov edi, AS_SIZE
+    call mem_alloc
+    mov r13, rax
+    mov [r13 + AS_kind], ebx
+    mov rdi, [rip + jsb + SB_ptr]
+    mov rsi, [rip + jsb + SB_len]
+    call mem_dup
+    mov [r13 + AS_path], rax
+    mov rdi, r14
+    call strlen
+    mov rdi, r14
+    mov rsi, rax
+    call mem_dup
+    mov [r13 + AS_title], rax
+    mov rdi, r12
+    call strlen
+    mov rdi, r12
+    mov rsi, rax
+    call mem_dup
+    mov [r13 + AS_cwd], rax
+    call time_now
+    mov [r13 + AS_mtime], rax
+    imul rax, rax, 1000000000
+    mov [r13 + AS_recency], rax
+    mov rax, r13
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
@@ -1258,7 +1578,12 @@ FN agent_drv_tick
     mov rdi, r12
     call drv_start
     jmp 1b
-3:  test dword ptr [r12 + AL_flags], ALF_CAPWAIT
+3:  test dword ptr [r12 + AL_flags], ALF_HOLDWAIT
+    jz 31f
+    mov rdi, r12
+    call hold_tick
+    jmp 1b
+31: test dword ptr [r12 + AL_flags], ALF_CAPWAIT
     jz 4f
     call cap_full
     test eax, eax
@@ -1339,7 +1664,16 @@ FN agent_drv_timeout
     mov eax, ENV_TICK_MS
     test dword ptr [r12 + AL_flags], ALF_ENVWAIT | ALF_CAPWAIT
     jnz 2f
-    mov rdi, r12
+    test dword ptr [r12 + AL_flags], ALF_HOLDWAIT
+    jz 11f
+    call time_ms                # the holder's next read
+    mov rcx, [r12 + AL_hold_at]
+    sub rcx, rax
+    xor eax, eax
+    test rcx, rcx
+    cmovg rax, rcx
+    jmp 2f
+11: mov rdi, r12
     call idle_left
     test rax, rax
     js 1b
@@ -1544,6 +1878,14 @@ ext_drv:
 kind_names: .quad .Lk_claude, .Lk_codex, .Lk_grok, .Lk_opencode
 state_names: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 ags_of: .long AGS_IDLE, AGS_WORKING, AGS_IDLE, AGS_WORKING, AGS_WAITING, AGS_WAITING, AGS_ERROR
+opts_held: .quad .Lo_here, .Lo_copy, .Lo_cancel
+.Lq_held: .asciz "This conversation is still open somewhere else."
+.Lo_here: .asciz "Open here anyway"
+.Lo_copy: .asciz "Continue in a copy"
+.Lo_cancel: .asciz "Cancel"
+.Lcopy_of: .asciz "Copy of "
+.Lconversation: .asciz "conversation"
+.Lcopy_failed: .asciz "The copy could not be made."
 .Lext_name: .asciz "extension"
 .Lk_claude: .asciz "claude"
 .Lk_codex: .asciz "codex"

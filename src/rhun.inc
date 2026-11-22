@@ -2942,6 +2942,9 @@ F AL_hold_until, 8      # time_ms the wait for another holder ends (agent_holder
 F AL_cfg, 8             # the driver's own
 F AL_turns, 8           # prompts written whose turn has not ended (READY when none is left)
 F AL_rowkey, 80         # cstr: the item key of AL_row (ev_text), empty when no row takes more text
+F AL_own, 8             # AQ*: rhun's own card on the session (held, trust, sign-in, a failed start), or 0
+F AL_hold_at, 8         # time_ms the holder is read again (ALF_HOLDWAIT)
+F AL_fork, 40           # cstr: a copy's source conversation (ALF_FORK)
 ENDSTRUCT AL_SIZE
 .equ TE_DONE, 0                 # ev_turn_end's reasons
 .equ TE_ERROR, 1
@@ -2953,17 +2956,19 @@ ENDSTRUCT AL_SIZE
 .equ ALS_READY, 2
 .equ ALS_WORKING, 3
 .equ ALS_WAITING, 4             # a card is up
-.equ ALS_HELD, 5                # open elsewhere, asked
+.equ ALS_HELD, 5                # a start waits for an answer to rhun's own card (open elsewhere, trust)
 .equ ALS_FAILED, 6
 .equ ALF_NEW, 1                 # no transcript yet
 .equ ALF_STOP_ASKED, 2
 .equ ALF_RESYNC, 4
-.equ ALF_FORK, 8
+.equ ALF_FORK, 8                # a copy of AL_fork: its first start forks that conversation
 .equ ALF_ENVWAIT, 16            # a start waits for the login environment (the tick starts it)
 .equ ALF_DRAFT, 32              # a new conversation that never got a prompt: left, it goes
 .equ ALF_ENDING, 64             # rhun asked its program to end: the end is no failure
 .equ ALF_CAPWAIT, 128           # a start waits for another program to end (g_conn_max)
 .equ ALF_UNANSWERED, 256        # the last turn ended with requests unanswered (the re-read says so again)
+.equ ALF_HOLDWAIT, 512          # a start waits for another holder of the conversation to let go
+.equ ALF_HOLDOK, 1024           # this start is past the holder check (none, or Open here anyway)
 .equ AL_QUEUE_MAX, 4            # prompts waiting for "ready"
 # AQ: a request the agent waits on (the plan's PR: that prefix is the Problems tab's)
 STRUCT
@@ -2983,7 +2988,7 @@ ENDSTRUCT AQ_SIZE
 .equ AQK_PERMISSION, 1
 .equ AQK_QUESTION, 2
 .equ AQK_PLAN, 3
-.equ AQK_HELD, 4
+.equ AQK_HELD, 4                # rhun's own cards (AL_own): the conversation is open somewhere else
 # DRV: a driver's table (read-only)
 STRUCT
 F DRV_kind, 4           # the AS_kind it drives

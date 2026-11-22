@@ -940,6 +940,21 @@ FN agent_conn_count
     mov eax, [rip + nconns]
     ret
 
+# agent_conn_owns(pid) -> eax 1 when pid is the child of an open connection (rhun's own program)
+FN agent_conn_owns
+    xor ecx, ecx
+    lea rdx, [rip + conns]
+1:  cmp ecx, [rip + nconns]
+    jae 8f
+    mov rax, [rdx + rcx*8]
+    inc ecx
+    cmp [rax + CN_pid], edi
+    jne 1b
+    mov eax, 1
+    ret
+8:  xor eax, eax
+    ret
+
 .section .rodata
 .Lnl: .byte 10
 .text

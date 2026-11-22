@@ -5,10 +5,12 @@
 #   [WRAPPER] CLAUDE --output-format stream-json --verbose --input-format stream-json
 #     --include-partial-messages --permission-prompt-tool=stdio
 #     --setting-sources=user,project,local | --setting-sources=user     (the project trusted or not)
-#     --max-thinking-tokens=31999 --session-id=UUID | --resume=ID [--permission-mode=MODE]
+#     --max-thinking-tokens=31999 [--permission-mode=MODE]
+#     --session-id=UUID | --resume=ID | --resume=SRC --fork-session --session-id=UUID
 #
 # A new conversation gets our UUID (agent_new); an existing one is continued with --resume and the id
-# its transcript is named after.
+# its transcript is named after; a copy (Continue in a copy, ALF_FORK) is forked from its source with our
+# UUID. Before a --resume, cl_held says whether another program has the conversation open.
 #
 # The first line it is sent is initialize; nothing else goes until its answer (the prompts wait in
 # AL_queue, agent_drv.s). A turn streams: message_start names the message, a text block's start is a
@@ -48,9 +50,10 @@ found_al: .quad 0               # find_file's session
 # ---- start ----
 
 # cl_start(AL*) -> eax 1 with claude started and initialize written, 0 with AL_report saying why. Locals:
-#   [rsp] argv (20 slots), [rsp + 160] envp, [rsp + 168] the argv prefix (claude_exe)
+#   [rsp] argv (20 slots), [rsp + 160] envp, [rsp + 168] the argv prefix (claude_exe), [rsp + 176] where a
+#   copy's --session-id= starts in asb (-1: not a copy)
 cl_start:
-    PROLOGUE 176
+    PROLOGUE 192
     mov rbx, rdi
     mov r12, [rbx + AL_as]
     lea rdi, [rbx + AL_report]
@@ -91,15 +94,33 @@ cl_start:
     lea rax, [rip + .La_thinking]
     mov [r13 + 8], rax
     add r13, 16
-    # --session-id=UUID (new) or --resume=ID, then --permission-mode=MODE when [claude] initial_mode
-    # names one
+    # --session-id=UUID (new) or --resume=ID, or a copy's --resume=SRC --fork-session --session-id=UUID
+    # (its first start); before them --permission-mode=MODE when [claude] initial_mode names one
     lea rdi, [rip + asb]
     call sb_clear
+    mov qword ptr [rsp + 176], -1   # where a copy's --session-id= starts in asb
+    mov eax, [rbx + AL_flags]
+    and eax, ALF_NEW | ALF_FORK
+    cmp eax, ALF_NEW | ALF_FORK
+    jne 41f
+    lea rdi, [rip + asb]
+    lea rsi, [rip + .La_resume]
+    call sb_push_cstr
+    lea rdi, [rip + asb]
+    lea rsi, [rbx + AL_fork]
+    call sb_push_cstr
+    lea rdi, [rip + asb]
+    xor esi, esi
+    call sb_push_byte
+    mov rax, [rip + asb + SB_len]
+    mov [rsp + 176], rax
     lea rsi, [rip + .La_sid]
+    jmp 42f
+41: lea rsi, [rip + .La_sid]
     lea rax, [rip + .La_resume]
     test dword ptr [rbx + AL_flags], ALF_NEW
     cmovz rsi, rax
-    lea rdi, [rip + asb]
+42: lea rdi, [rip + asb]
     call sb_push_cstr
     lea rdi, [rip + asb]
     lea rsi, [rbx + AL_sid]
@@ -127,7 +148,15 @@ cl_start:
     add r13, 8
 5:  mov rax, [rip + asb + SB_ptr]
     mov [r13], rax
-    mov qword ptr [r13 + 8], 0
+    mov rcx, [rsp + 176]
+    cmp rcx, -1
+    je 51f
+    lea rdx, [rip + .La_fork]
+    mov [r13 + 8], rdx
+    add rax, rcx
+    mov [r13 + 16], rax
+    add r13, 16
+51: mov qword ptr [r13 + 8], 0
     call claude_env
     mov [rsp + 160], rax
     lea rax, [rip + cl_line]
@@ -461,10 +490,22 @@ cl_release:
     lea rdi, [rdi + AL_cn]
     jmp conn_end_input
 
-# cl_held(AL*) -> eax HOLDER_NONE
+# cl_held(AL*) -> eax HOLDER_*: whether another program has the conversation open (agent_holder.s); a new
+#   one (a copy too) is nobody else's
 cl_held:
+    PROLOGUE
+    mov rbx, rdi
     mov eax, HOLDER_NONE
-    ret
+    test dword ptr [rbx + AL_flags], ALF_NEW
+    jnz 9f
+    call resume_sid
+    mov ecx, eax
+    mov eax, HOLDER_NONE
+    test ecx, ecx
+    jz 9f                       # no id: the start says so
+    lea rdi, [rbx + AL_sid]
+    call holder_claude
+9:  EPILOGUE
 
 # ---- reading ----
 
@@ -2080,6 +2121,7 @@ cl_flags:
 .La_thinking: .asciz "--max-thinking-tokens=31999"
 .La_sid: .asciz "--session-id="
 .La_resume: .asciz "--resume="
+.La_fork: .asciz "--fork-session"
 .La_mode: .asciz "--permission-mode="
 .Lk_type: .asciz "type"
 .Lk_subtype: .asciz "subtype"

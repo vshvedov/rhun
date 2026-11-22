@@ -734,6 +734,224 @@ class ResumeTest(DrivenCase):
         self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
         self.assertEqual(self.prompts(), [])        # it never got past the start
 
+    def test_rows_after_stop_match_the_file_with_tools(self):
+        self.seed()
+        self.start()
+        old = self.open_listed()
+        self.command('agent-prompt auto')
+        self.command('wait-agent ready')
+        self.command('agent-prompt tool')
+        self.command('wait-agent waiting')
+        self.command('agent-card 1')
+        self.command('wait-agent ready')
+        streamed = self.thread()
+        self.assertEqual(streamed, old + ['user auto', 'tool(Bash) touch auto.txt', 'result ' + BASH_DONE,
+                                          REPLY + 'done', 'user tool', 'tool(Bash) touch approved.txt',
+                                          'result ' + BASH_DONE, 'agent done'])
+        self.command('agent-release')
+        self.command('wait-agent off')
+        self.assertEqual(self.thread(), streamed)
+        self.assertEqual(self.fresh_thread(), streamed)
+
+
+BASH_DONE = '(Bash completed with no output)'
+REJECTED = ("The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a "
+            "file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the "
+            "user to tell you how to proceed.")
+QUESTIONS_TWO = [{'question': 'Which language?', 'header': 'Language', 'multiSelect': False,
+                  'options': [{'label': 'Python', 'description': 'Scripts'}, {'label': 'Go', 'description': 'Services'},
+                              {'label': 'Rust', 'description': 'Systems'}]},
+                 {'question': 'Which tools?', 'header': 'Tools', 'multiSelect': True,
+                  'options': [{'label': 'git', 'description': ''}, {'label': 'make', 'description': ''},
+                              {'label': 'docker', 'description': ''}]}]
+
+
+class RequestTest(DrivenCase):
+    """Claude's tool calls as rows, its requests (permissions, questions, plans) as cards."""
+
+    def card(self):
+        """The open card's line of print-agent-input, or None."""
+        lines = self.command('print-agent-input').splitlines()
+        return lines[1] if len(lines) > 1 else None
+
+    def answers(self):
+        """The answers the fake took for single requests, in order."""
+        return [r['answer'] for r in self.records() if 'answer' in r]
+
+    def logged(self, key):
+        return [r[key] for r in self.records() if key in r]
+
+    def tool_ids(self):
+        """The ids of the tool calls in the conversation's file."""
+        path = self.work / '.claude/projects' / slug(self.project) / (self.sid() + '.jsonl')
+        records = [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line]
+        return [block['id'] for r in records if r.get('type') == 'assistant'
+                for block in r['message']['content'] if block.get('type') == 'tool_use']
+
+    def responses(self):
+        """The control_response lines the fake read."""
+        return [m['response'] for m in self.stdin() if m.get('type') == 'control_response']
+
+    def until(self, check, what, seconds=10):
+        deadline = time.monotonic() + seconds
+        while True:
+            value = check()
+            if value:
+                return value
+            self.assertLess(time.monotonic(), deadline, what)
+            time.sleep(0.05)
+
+    def test_tool_row_and_result(self):
+        self.start()
+        self.chat('auto')
+        self.assertEqual(self.thread(), ['user auto', 'tool(Bash) touch auto.txt', 'result ' + BASH_DONE,
+                                         REPLY + 'done'])
+        self.assertEqual(self.answers(), [])
+
+    def test_permission_allow(self):
+        self.start()
+        self.chat('tool', 'waiting')
+        self.assertEqual(self.card(), 'card=Allow this bash command? touch approved.txt options=Yes|No')
+        self.assertIn(' requests=1 ', self.live())
+        self.assertEqual(self.thread(), ['user tool', 'tool(Bash) touch approved.txt'])
+        self.command('agent-card 1')
+        self.command('wait-agent ready')
+        self.assertIsNone(self.card())
+        self.assertIn(' requests=0 ', self.live())
+        tid = self.tool_ids()
+        self.assertEqual(self.answers(), [{'behavior': 'allow', 'toolUseID': tid[0], 'updatedInput': {
+            'command': 'touch approved.txt', 'description': 'Run touch approved.txt'}}])
+        self.assertEqual(list(self.responses()[0]), ['subtype', 'request_id', 'response'])
+        self.assertTrue((self.project / 'approved.txt').exists())
+        self.assertEqual(self.thread(), ['user tool', 'tool(Bash) touch approved.txt', 'result ' + BASH_DONE,
+                                         REPLY + 'done'])
+
+    def test_permission_deny(self):
+        self.start()
+        self.chat('tool', 'waiting')
+        self.command('agent-card 2')
+        self.command('wait-agent ready')
+        tid = self.tool_ids()
+        self.assertEqual(self.answers(), [{'behavior': 'deny', 'message': REJECTED, 'interrupt': True,
+                                           'toolUseID': tid[0]}])
+        self.assertFalse((self.project / 'approved.txt').exists())
+        self.assertIn('result ' + REJECTED[:60], self.thread())
+
+    def test_numeric_request_ids_are_echoed_as_numbers(self):
+        self.start(env={'FAKE_CLAUDE_NUMERIC_IDS': '1'})
+        self.chat('tool', 'waiting')
+        self.command('agent-card 1')
+        self.command('wait-agent ready')
+        self.assertEqual(self.responses()[0]['request_id'], 7)
+        self.assertEqual(self.answers()[0]['behavior'], 'allow')
+
+    def test_input_that_cannot_be_echoed_is_denied(self):
+        self.start()
+        self.chat('deep')
+        self.assertIsNone(self.card())
+        tid = self.tool_ids()
+        self.assertEqual(self.answers(), [{'behavior': 'deny', 'message': 'rhun cannot pass this input back '
+                                           'unchanged', 'interrupt': False, 'toolUseID': tid[0]}])
+
+    def test_two_requests_queue(self):
+        self.start()
+        self.chat('tool2', 'waiting')
+        self.assertEqual(self.card(), 'card=Allow this bash command? touch approved.txt options=Yes|No')
+        self.command('agent-card 1')
+        self.command('wait-agent waiting')
+        self.assertEqual(self.card(), 'card=Allow this bash command? touch denied.txt options=Yes|No')
+        self.command('agent-card 2')
+        self.command('wait-agent ready')
+        self.assertEqual([a['behavior'] for a in self.answers()], ['allow', 'deny'])
+        self.assertEqual(self.thread()[-1], REPLY + 'done')
+
+    def test_question_cards_in_order(self):
+        self.start()
+        self.chat('ask2', 'waiting')
+        self.assertEqual(self.card(), 'card=Which language? options=Python|Go|Rust')
+        self.command('agent-card 2')
+        self.assertEqual(self.card(), 'card=Which tools? options=git|make|docker')
+        self.assertIn(' requests=1 ', self.live())
+        self.assertEqual(self.answers(), [])
+        self.command('agent-card 3')
+        self.command('wait-agent ready')
+        tid = self.tool_ids()
+        self.assertEqual(self.answers(), [{'behavior': 'allow', 'toolUseID': tid[0], 'updatedInput': {
+            'questions': QUESTIONS_TWO, 'answers': {'Which language?': 'Go', 'Which tools?': 'docker'}}}])
+        self.assertEqual(self.logged('questions_kept'), [True])
+
+    def test_plan_card(self):
+        self.start(self.claude_section('initial_mode = plan\n'))
+        self.chat('plan', 'waiting')
+        self.assertIn(' mode=plan ', self.live())
+        self.assertEqual(self.card(), 'card=Accept this plan? options=Yes|No, keep planning')
+        self.assertEqual(self.thread(), ['user plan', 'tool(ExitPlanMode) ', 'agent # Plan'])
+        self.command('agent-card 1')
+        self.command('wait-agent ready')
+        lines = [m for m in self.stdin() if m.get('type') in ('control_request', 'control_response')]
+        self.assertEqual(lines[-2]['request'], {'subtype': 'set_permission_mode', 'mode': 'default'})
+        self.assertEqual(lines[-1]['response']['response']['behavior'], 'allow')
+        answer = self.answers()[0]
+        self.assertEqual(answer['updatedInput']['plan'], '# Plan\n\n1. Add the file\n2. Test it')
+        self.assertEqual(self.thread()[-1], REPLY + 'approved default')
+        self.assertIn(' mode=default ', self.live())
+
+    def test_plan_keep_planning(self):
+        self.start(self.claude_section('initial_mode = plan\n'))
+        self.chat('plan', 'waiting')
+        self.command('agent-card 2')
+        self.command('wait-agent ready')
+        tid = self.tool_ids()
+        self.assertEqual(self.answers(), [{'behavior': 'deny', 'message': 'User chose to stay in plan mode and '
+                                           'continue planning', 'interrupt': False, 'toolUseID': tid[0]}])
+        self.assertNotIn('set_permission_mode', json.dumps(self.stdin()))
+        self.assertIn(' mode=plan ', self.live())
+
+    def test_withdrawn_request(self):
+        self.start()
+        self.chat('withdraw', 'waiting')
+        self.assertEqual(self.card(), 'card=Allow this bash command? touch withdrawn.txt options=Yes|No')
+        self.until(lambda: 'info Withdrawn by Claude' in self.thread(), 'the withdrawn row')
+        self.assertIsNone(self.card())
+        self.assertIn(' requests=0 ', self.live())
+        self.command('wait-agent ready')
+        self.assertEqual(self.answers(), [])
+        self.assertEqual(self.responses(), [])
+        self.assertEqual(self.thread(), ['user withdraw', 'tool(Bash) touch withdrawn.txt', 'info Withdrawn by Claude',
+                                         'result ' + REJECTED[:60], REPLY + 'done'])
+
+    def test_unknown_request_gets_an_error_reply(self):
+        self.start()
+        self.chat('unhandled')
+        error = {'behavior': 'error', 'message': 'not supported by rhun yet'}
+        self.assertEqual(self.logged('unhandled'), [[error] * 5])
+        self.assertEqual([r['subtype'] for r in self.responses()], ['error'] * 5)
+        self.assertIsNone(self.card())
+        self.assertEqual(self.thread(), ['user unhandled', REPLY + 'done'])
+
+    def test_33rd_request_is_refused(self):
+        self.start()
+        self.chat('many', 'waiting')
+        self.until(lambda: ' requests=32 ' in self.live(), 'the 32 requests kept')
+        for i in range(32):
+            self.assertEqual(self.card(), f'card=Allow this bash command? touch many{i}.txt options=Yes|No')
+            self.command('agent-card 1')
+        self.command('wait-agent ready 20000')
+        self.assertEqual(self.logged('many'), [['allow'] * 32 + ['error']])
+        self.assertIsNone(self.card())
+
+    def test_a_card_goes_when_the_process_ends(self):
+        self.start()
+        self.chat('tool', 'waiting')
+        self.command('agent-release')               # the process ends with the request unanswered
+        deadline = time.monotonic() + 10
+        while ' pid=1 ' in self.live():
+            self.assertLess(time.monotonic(), deadline)
+            time.sleep(0.05)
+        self.assertIsNone(self.card())
+        self.assertIn(' requests=0 ', self.live())
+        self.assertIn('info Claude Code ended before the request was answered.', self.thread())
+
 
 if __name__ == '__main__':
     unittest.main()

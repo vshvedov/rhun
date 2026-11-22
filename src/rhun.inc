@@ -2960,12 +2960,17 @@ ENDSTRUCT AL_SIZE
 STRUCT
 F AQ_kind, 4            # AQK_*
 F AQ_state, 4
-F AQ_id, 8              # owned cstr: the agent's request id
+F AQ_id, 8              # owned cstr: the agent's request id as JSON text (a string or a number, echoed)
 F AQ_tool, 8            # owned cstr
 F AQ_input, 8           # the tool input as JSON text, owned (echoed back on allow)
 F AQ_inlen, 8
-F AQ_q, 8               # owned cstr: the question of AQK_QUESTION
+F AQ_q, 8               # owned cstr: the card's prompt (AQK_PERMISSION)
+F AQ_tuid, 8            # owned cstr: the tool call's id (every answer's toolUseID), or 0
+F AQ_n, 8               # AQK_QUESTION: the question its card shows (from 0)
+F AQ_count, 8           # AQK_QUESTION: how many it asks
+F AQ_picks, SB_SIZE     # AQK_QUESTION: the option picked for each question answered, a byte each
 ENDSTRUCT AQ_SIZE
+.equ AQ_MAX, 32                 # requests waiting at most (AL_reqs); one more gets an error reply
 .equ AQK_PERMISSION, 1
 .equ AQK_QUESTION, 2
 .equ AQK_PLAN, 3

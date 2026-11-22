@@ -3315,6 +3315,16 @@ FN agents_reply_model
     call agents_msg_changed
 9:  EPILOGUE
 
+# FN agents_tool_summary(input jv) -> rax ptr, rdx len: what a tool call's row shows of its input, by the
+#   file reader's rule (the most telling field; a path inside the project relative to it)
+FN agents_tool_summary
+    jmp tool_summary
+
+# FN agents_text_of(jv) -> rax ptr, rdx len: a tool result's text as the file reader shows it (a string,
+#   or the text parts of an array, a line feed between them; valid until the next call)
+FN agents_text_of
+    jmp text_of
+
 # agents_msg_changed(AS*, index): a message's text changed in place: its row is measured again
 agents_msg_changed:
     imul rsi, rsi, AM_SIZE

@@ -29,8 +29,12 @@
 #   events drivers call (AL* first): ev_note(al, role, ptr, len), ev_failed(al, ptr, len) (could not
 #     start or broke: ALS_FAILED, an error row, the prompts that waited back in the box), ev_ready(al)
 #     (handshake done: the prompts that waited go), ev_text(al, key ptr, key len, ptr, len, replace) (a
-#     block's reply text), ev_mode(al, ptr, len), ev_turn_end(al, TE_*, ptr, len), ev_closed(al, err)
-#     (the process is gone: OFF unless FAILED, the conversation read again from its file)
+#     block's reply text), ev_tool(al, name, ptr, len) (a finished tool call: its summary),
+#     ev_result_row(al, ptr, len) (a tool's output), ev_request(al, AQ*, prompt ptr, len, opts, n) (a
+#     request's card: WAITING), ev_request_gone(al, AQ*) (it is answered or withdrawn: its card goes, it
+#     leaves AL_reqs and is freed), ev_mode(al, ptr, len), ev_turn_end(al, TE_*, ptr, len),
+#     ev_closed(al, err) (the process is gone: OFF unless FAILED, the requests it waited on go with an
+#     info row, the conversation read again from its file)
 #
 # While a session's program runs or is about to (STARTING to HELD) its transcript is not read
 # (session_update, agents.s): its rows come from the stream; ev_closed reads the file again.
@@ -39,6 +43,8 @@
 
 .equ R_USER, 1                  # the roles of agents.s's messages
 .equ R_ASSIST, 2
+.equ R_TOOL, 3
+.equ R_RESULT, 4
 .equ R_ERROR, 5
 .equ R_INFO, 6
 .equ ENV_TICK_MS, 50            # a start waiting for the login environment looks again this often
@@ -235,6 +241,10 @@ live_free:
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
+# FN agent_aq_free(AQ*): a request and what it owns (a driver's that never joined AL_reqs)
+FN agent_aq_free
+    jmp aq_free
+
 # aq_free(AQ*): a request and what it owns
 aq_free:
     PROLOGUE
@@ -249,6 +259,10 @@ aq_free:
     call mem_free
     mov rdi, [rbx + AQ_q]
     call mem_free
+    mov rdi, [rbx + AQ_tuid]
+    call mem_free
+    lea rdi, [rbx + AQ_picks]
+    call sb_free
     mov rdi, rbx
     call mem_free
 9:  EPILOGUE
@@ -815,6 +829,111 @@ FN ev_text
 8:  mov qword ptr [rbx + AL_row], -1
 9:  EPILOGUE
 
+# FN ev_tool(al, name cstr or 0, ptr, len): a finished tool call: its row (the name, "tool" without one),
+#   the summary of its input as the file reader shows it
+FN ev_tool
+    mov rdi, [rdi + AL_as]
+    mov r8, rsi
+    test r8, r8
+    jnz 1f
+    lea r8, [rip + .Ltool]
+1:  mov esi, R_TOOL
+    jmp agents_msg_add
+
+# FN ev_result_row(al, ptr, len): a tool's output, as a result row (none when it is empty: the file
+#   reader shows none)
+FN ev_result_row
+    PROLOGUE
+    mov rbx, [rdi + AL_as]
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, rsi
+    mov rsi, rdx
+    call trim
+    test rdx, rdx
+    jz 9f
+    mov rdi, rbx
+    mov esi, R_RESULT
+    mov rdx, r12
+    mov rcx, r13
+    xor r8d, r8d
+    call agents_msg_add
+9:  EPILOGUE
+
+# FN ev_request(al, AQ*, prompt ptr, len, opts cstr*, n) -> eax 1 shown: the request's card on the
+#   session (the one at the head of AL_reqs); the state is WAITING
+FN ev_request
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, [rbx + AL_as]
+    call agentext_card
+    test eax, eax
+    jz 9f
+    mov rdi, rbx
+    mov esi, ALS_WAITING
+    call agent_state_set
+    mov eax, 1
+9:  EPILOGUE
+
+# FN ev_request_gone(al, AQ*): answered or withdrawn: its card goes (when it shows), it leaves AL_reqs
+#   (the others keep their order) and is freed
+FN ev_request_gone
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, [rbx + AL_as]
+    call agentext_card_token
+    cmp rax, r12
+    jne 1f
+    mov rdi, [rbx + AL_as]
+    call agentext_card_drop
+1:  xor ecx, ecx
+2:  cmp rcx, [rbx + AL_reqs + VEC_len]
+    jae 5f
+    mov rax, [rbx + AL_reqs + VEC_ptr]
+    cmp [rax + rcx*8], r12
+    je 3f
+    inc rcx
+    jmp 2b
+3:  mov rdx, [rbx + AL_reqs + VEC_len]
+    dec rdx
+    mov [rbx + AL_reqs + VEC_len], rdx
+4:  cmp rcx, rdx
+    jae 5f
+    mov r8, [rax + rcx*8 + 8]
+    mov [rax + rcx*8], r8
+    inc rcx
+    jmp 4b
+5:  mov rdi, r12
+    call aq_free
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# reqs_drop(AL*) -> eax how many requests waited: they go unanswered, with the card
+reqs_drop:
+    PROLOGUE
+    mov rbx, rdi
+    mov r13, [rbx + AL_reqs + VEC_len]
+    test r13, r13
+    jz 9f
+    mov rdi, [rbx + AL_as]
+    call agentext_card_token
+    test rax, rax
+    jz 1f
+    mov rdi, [rbx + AL_as]
+    call agentext_card_drop
+1:  xor r12d, r12d
+2:  cmp r12, r13
+    jae 3f
+    mov rax, [rbx + AL_reqs + VEC_ptr]
+    mov rdi, [rax + r12*8]
+    call aq_free
+    inc r12
+    jmp 2b
+3:  mov qword ptr [rbx + AL_reqs + VEC_len], 0
+9:  mov eax, r13d
+    EPILOGUE
+
 # FN ev_mode(al, ptr, len): the permission mode the agent reports (the label by the box)
 FN ev_mode
     cmp rdx, 31
@@ -874,9 +993,10 @@ FN ev_turn_end
     call agent_state_set
 9:  EPILOGUE
 
-# FN ev_closed(al, err): the agent's process is gone: the state is OFF unless it FAILED, and the
-#   conversation is read again from its file, which is the truth (a new conversation that has no file yet
-#   keeps the rows the stream fed); a failure's error row follows the file's rows
+# FN ev_closed(al, err): the agent's process is gone: the state is OFF unless it FAILED, the requests it
+#   waited on go with their card, and the conversation is read again from its file, which is the truth (a
+#   new conversation that has no file yet keeps the rows the stream fed); an info row for the unanswered
+#   requests and a failure's error row follow the file's rows
 FN ev_closed
     PROLOGUE
     mov rbx, rdi
@@ -889,16 +1009,21 @@ FN ev_closed
     mov qword ptr [rbx + AL_row], -1
     mov byte ptr [rbx + AL_rowkey], 0
     and dword ptr [rbx + AL_flags], ~ALF_STOP_ASKED
+    mov rdi, rbx                # nobody waits for an answer now: the cards go
+    call reqs_drop
+    mov r13d, eax
     mov r12, [rbx + AL_as]
     mov rdi, [r12 + AS_path]
     test rdi, rdi
-    jz 9f
+    jz 8f
     call file_missing
     test eax, eax
-    jnz 9f
+    jnz 8f
     and dword ptr [rbx + AL_flags], ~ALF_NEW
     mov rdi, r12
     call agents_resync
+    mov edi, r13d
+    call closed_note
     cmp dword ptr [rbx + AL_state], ALS_FAILED
     jne 9f
     cmp qword ptr [rbx + AL_report + SB_len], 0
@@ -909,8 +1034,27 @@ FN ev_closed
     mov rcx, [rbx + AL_report + SB_len]
     xor r8d, r8d
     call agents_msg_add
+    jmp 9f
+8:  mov edi, r13d               # no file to read again: the rows the stream fed stay
+    call closed_note
 9:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
+
+# closed_note(n): ev_closed (rbx AL*): when n requests were left unanswered, an info row says so
+closed_note:
+    test edi, edi
+    jz 9f
+    PROLOGUE
+    lea rdi, [rip + .Lunanswered]
+    call strlen
+    mov rdi, [rbx + AL_as]
+    mov esi, R_INFO
+    lea rdx, [rip + .Lunanswered]
+    mov rcx, rax
+    xor r8d, r8d
+    call agents_msg_add
+    EPILOGUE
+9:  ret
 
 # FN ev_failed(al, ptr, len): it could not start or broke: ALS_FAILED, the reason in AL_report and as an
 #   error row, and the prompts that waited back in the box
@@ -1139,6 +1283,8 @@ ags_of: .long AGS_IDLE, AGS_WORKING, AGS_IDLE, AGS_WORKING, AGS_WAITING, AGS_WAI
 .Lprompt_long: .asciz "The prompt is longer than 50,000 characters."
 .Lturn_failed: .asciz "The turn failed."
 .Linterrupted: .asciz "Interrupted"
+.Ltool: .asciz "tool"
+.Lunanswered: .asciz "Claude Code ended before the request was answered."
 .Ld_state: .asciz "state="
 .Ld_pid: .asciz " pid="
 .Ld_sid: .asciz " sid="

@@ -38,7 +38,7 @@ TRACESTATE);
 FAKE_CLAUDE_LOG (a file of JSON lines, each with the fake's pid: {"start": "auth"|"stream"|"refused",
 "argv", "cwd", "env": {NAME: value or null for the names above}, "names": [every CLAUDE* and ANTHROPIC*
 name it got], "sources": [the --setting-sources]} per start, {"stdin": LINE} per line read, {"answer": ...} per answer to a single
-request, {"questions_kept": ...} and {"many": [...]} from those scenarios, {"error": TRACEBACK} when a
+request, {"questions_kept": ...}, {"many": [...]} and {"unhandled": [...]} from those scenarios, {"error": TRACEBACK} when a
 record or answer of a shape it cannot read failed, {"exit": N} at the end).
 
 It never runs the real CLI or touches the network. When its stdin closes it finishes the turn that
@@ -1013,6 +1013,32 @@ def s_many(prompt):
         final('done')
 
 
+UNHANDLED = [   # control requests of the kinds rhun does not answer yet (ext-host-protocol 2.5; unrecorded)
+    {'subtype': 'hook_callback', 'callback_id': 'hook_0', 'input': {'hook_event_name': 'PreToolUse'}},
+    {'subtype': 'mcp_message', 'server_name': 'a_server', 'message': {'jsonrpc': '2.0', 'id': 1, 'method': 'ping'}},
+    {'subtype': 'elicitation', 'mcp_server_name': 'a_server', 'message': 'Sign in?', 'mode': 'url',
+     'url': 'https://example.com/sign-in', 'elicitation_id': 'e1'},
+    {'subtype': 'request_user_dialog', 'dialog_kind': 'a_dialog', 'payload': {}},
+    {'subtype': 'a_subtype_nobody_knows'}]
+
+
+def s_unhandled(prompt):
+    """the control requests of UNHANDLED, sent at once, each waiting for its answer; the answers are logged
+    ({"unhandled": [...]}, an error reply as {"behavior": "error", "message": ...}), then the reply"""
+    ids = []
+    with COND:
+        for request in UNHANDLED:
+            rid = request_id()
+            PENDING[rid] = None
+            ids.append(rid)
+            emit({'type': 'control_request', 'request_id': rid, 'request': request})
+        while not (withdrawn() or all(PENDING.get(rid) is not None for rid in ids)):
+            COND.wait(0.05)
+        answers = [PENDING.pop(rid, None) for rid in ids]
+    log(unhandled=answers)
+    final('done')
+
+
 def s_unknown(prompt):
     """what a newer CLI may send: a record type and a system subtype nobody knows and a line that is not
     JSON (ext-host-protocol 2.6: a reader ignores them), then the plain reply"""
@@ -1036,7 +1062,7 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'racing': s_racing, 'subagent': s_subagent, 'exit': s_exit, 'big': s_big, 'error': s_error,
              'wait': s_wait, 'many': s_many, 'ran': s_ran, 'fails': s_fails, 'early': s_early,
              'replay': s_replay, 'mcp': s_mcp, 'noid': s_noid, 'askx': s_askx, 'deep': s_deep,
-             'withdraw': s_withdraw, 'unsaved': s_unsaved, 'unknown': s_unknown}
+             'withdraw': s_withdraw, 'unsaved': s_unsaved, 'unknown': s_unknown, 'unhandled': s_unhandled}
 
 
 COMMANDS = [{'name': 'compact', 'description': 'Clear history but keep a summary', 'argumentHint': ''}]

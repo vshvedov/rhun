@@ -100,6 +100,11 @@ cfg_update_check: .long 1
 cfg_secrets: .long 0
 .globl cfg_ext_updates
 cfg_ext_updates: .long 0         # [updates] extensions: XM_INSTALL, XM_CHECK or XM_OFF (extension management)
+# Claude Code's chat ([claude]; the env pairs, finding the program: claudecfg.s)
+.globl cfg_claude_chat, cfg_claude_initial_mode, cfg_agents_idle_stop, cfg_claude_executable, cfg_claude_wrapper
+cfg_claude_chat: .long 1
+cfg_claude_initial_mode: .long 0 # g_claude_mode_opts: 0 the CLI's own default
+cfg_agents_idle_stop: .long 10   # [agents] idle_stop_minutes: a conversation's process stops after them, 0 never
 .p2align 3
 cfg_theme: .quad cfg_def_theme
 cfg_dark_theme: .quad cfg_def_theme
@@ -116,6 +121,8 @@ cfg_commit_model: .quad .Ldefault_model
 cfg_save_actions: .quad .Lempty
 .globl cfg_remote_agent_binary
 cfg_remote_agent_binary: .quad .Lempty  # remote hosts: the Linux rhun to start on hosts (remote.s)
+cfg_claude_executable: .quad .Lempty    # [claude] executable: empty finds claude (claudecfg.s)
+cfg_claude_wrapper: .quad .Lempty       # [claude] wrapper: started with claude and its arguments after it
 .Lcfg_strings_end:
 cfg_agent_sources: .quad .Ldef_sources  # the switched-on providers' names, for the discovery worker
 
@@ -284,7 +291,15 @@ FN setting_assign
     call scmext_ai_config
     test eax, eax
     jnz 9f
-20: xor r15d, r15d
+20: lea rax, [rip + cfg_claude_initial_mode]   # Claude Code: empty and manual (claudecfg.s)
+    cmp r14, rax
+    jne 23f
+    mov rdi, r12
+    mov rsi, r13
+    call claude_mode_alias
+    mov r12, rax
+    mov r13, rdx
+23: xor r15d, r15d
 21: mov rdi, [rbx + SET_opts]
     mov esi, r15d
     call choice_entry
@@ -415,6 +430,7 @@ FN config_load
 2:  mov qword ptr [rip + g_keylines + VEC_len], 0
     mov dword ptr [rip + old_sources], 0
     call agentext_config_reset  # AI: the extension sources switched off come from this read
+    call claudecfg_reset        # Claude Code: the [claude] env pairs too (claudecfg.s)
     call ce_config_reset        # custom editors: the [editors] choices too (customed.s)
     # taken before the read: a write that lands during it still counts as a change
     call config_path
@@ -476,6 +492,15 @@ FN config_load
     call setting_find
     test rax, rax
     jnz 3f
+    mov rdi, [rip + it + INI_sec]   # Claude Code: [claude] env.NAME = value (claudecfg.s)
+    mov rsi, [rip + it + INI_seclen]
+    mov rdx, [rip + it + INI_key]
+    mov rcx, [rip + it + INI_keylen]
+    mov r8, [rip + it + INI_val]
+    mov r9, [rip + it + INI_vallen]
+    call claudecfg_key
+    test eax, eax
+    jnz .Lcl_next
     mov rdi, [rip + it + INI_sec]   # AI: [agents] OWNER/NAME = false (agentext.s)
     mov rsi, [rip + it + INI_seclen]
     mov rdx, [rip + it + INI_key]
@@ -684,6 +709,8 @@ FN config_save
     call choice_entry
     test rax, rax
     jz 5f
+    cmp word ptr [rax], 0x20    # the value " " is written empty ([claude] initial_mode)
+    je 5f
     lea rdi, [rsp]
     mov rsi, rax
     call sb_push_cstr
@@ -694,11 +721,16 @@ FN config_save
 5:  lea rdi, [rsp]
     mov esi, 10
     call sb_push_byte
-    lea rax, [rip + cfg_agents_opencode]
+    lea rax, [rip + cfg_agents_idle_stop]
     cmp [rbx + SET_ptr], rax
-    jne .Lcs_skip
+    jne 51f
     lea rdi, [rsp]              # AI: the extension sources switched off (agentext.s)
     call agentext_config_save
+51: lea rax, [rip + cfg_claude_initial_mode]
+    cmp [rbx + SET_ptr], rax
+    jne .Lcs_skip
+    lea rdi, [rsp]              # Claude Code: the env pairs (claudecfg.s)
+    call claudecfg_save
 .Lcs_skip:
     add rbx, SET_SIZE
     jmp .Lcs_next
@@ -866,6 +898,7 @@ legacy_names: .quad .Ln_claude, cfg_agents_claude, .Ln_codex, cfg_agents_codex, 
 .Ls_testing: .asciz "testing"
 .Ls_debug: .asciz "debug"
 .Ls_extensions: .asciz "extensions"
+.Ls_claude: .asciz "claude"
 
 .macro SETTING sec, key, type, ptr, min, max, step, dec, label, desc, opts=0, live_desc=0
     .quad \sec, 1f, \ptr, 2f
@@ -960,6 +993,12 @@ g_settings:
     SETTING .Ls_agents, codex, ST_BOOL, cfg_agents_codex, 0, 1, 1, 0, "Codex", "Show Codex sessions in the agents panel."
     SETTING .Ls_agents, grok, ST_BOOL, cfg_agents_grok, 0, 1, 1, 0, "Grok Build", "Show Grok Build sessions in the agents panel."
     SETTING .Ls_agents, opencode, ST_BOOL, cfg_agents_opencode, 0, 1, 1, 0, "OpenCode", "Show OpenCode sessions in the agents panel."
+    SETTING .Ls_agents, idle_stop_minutes, ST_INT, cfg_agents_idle_stop, 0, 240, 5, 0, "Stop idle agents after", "Minutes without activity before a conversation's process is stopped. 0 never stops it."
+    # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
+    SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
+    SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."
+    SETTING .Ls_claude, wrapper, ST_STR, cfg_claude_wrapper, 0, 0, 0, 0, "Wrapper program", "A program that is started with claude and its arguments after it."
+    SETTING .Ls_claude, initial_mode, ST_CHOICE, cfg_claude_initial_mode, 0, 3, 1, 0, "Permission mode", "The mode a conversation starts in.", g_claude_mode_opts
     SETTING .Ls_terminal, shell, ST_STR, cfg_term_shell, 0, 0, 0, 0, "Shell", "Program the terminal runs. Empty uses $SHELL."
     SETTING .Ls_terminal, font_size, ST_INT, cfg_term_font_size, 8, 40, 1, 0, "Terminal font size", "Font size of the terminal panel."
     SETTING .Ls_terminal, font, ST_STR, cfg_term_font, 0, 0, 0, 0, "Terminal font", "Path to a monospace .ttf file. Empty uses the editor font."

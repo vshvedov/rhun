@@ -274,8 +274,9 @@ index_start:
     mov rax, [rdx + AS_path]
 1:  mov [rsp + 40], rax
     mov qword ptr [rsp + 48], 0
+    call claude_index_envp      # Claude Code: an env.CLAUDE_CONFIG_DIR set reaches discovery (claudecfg.s)
+    mov rsi, rax
     mov rdi, rsp
-    mov rsi, [rip + g_envp]
     xor edx, edx
     xor ecx, ecx
     xor r8d, r8d

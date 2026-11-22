@@ -113,14 +113,14 @@ class SettingsSearch(unittest.TestCase):
 
     def test_the_tab_coming_back_has_the_keys(self):
         out = self.run_editor(['cmd settings', 'type vim', 'key ctrl+Tab', 'key ctrl+Tab',
-                               'key BackSpace', 'key BackSpace', 'key BackSpace', 'type wrap',
+                               'key BackSpace', 'key BackSpace', 'key BackSpace', 'type word wrap',
                                'print-settings'])
         self.assertEqual(out.split(), ['editor.word_wrap'])
 
     def test_a_click_on_the_tab_gives_the_field_the_keys(self):
         # a.txt, then Settings: the click that brings it is not a click away from the field
         out = self.run_editor(['cmd settings', 'type vim', 'click 30 58', 'click 130 58',
-                               'key BackSpace', 'key BackSpace', 'key BackSpace', 'type wrap',
+                               'key BackSpace', 'key BackSpace', 'key BackSpace', 'type word wrap',
                                'print-settings'])
         self.assertEqual(out.split(), ['editor.word_wrap'])
 
@@ -135,22 +135,22 @@ class SettingsSearch(unittest.TestCase):
     def test_the_keys_come_back_to_the_field(self):
         # a tab closed in front of it, the terminal hidden: no editor takes the keys there
         self.assertEqual(self.rows('type vim', 'open ' + self.file.as_posix(), 'cmd close_tab',
-                                   'key BackSpace', 'key BackSpace', 'key BackSpace', 'type wrap'),
+                                   'key BackSpace', 'key BackSpace', 'key BackSpace', 'type word wrap'),
                          ['editor.word_wrap'])
         self.assertEqual(self.rows('cmd toggle_terminal', 'wait 300', 'cmd toggle_terminal',
-                                   'type wrap'), ['editor.word_wrap'])
+                                   'type word wrap'), ['editor.word_wrap'])
 
     def test_keypad_enter_leaves_the_field(self):
         everything = self.rows()
         self.assertEqual(self.rows('key KP_Enter', 'type vim'), everything)
 
     def test_find_goes_to_the_search_field(self):
-        self.assertEqual(self.rows('type vim', 'key Return', 'type x', f'key {MOD}+f', 'type wrap'),
+        self.assertEqual(self.rows('type vim', 'key Return', 'type x', f'key {MOD}+f', 'type word wrap'),
                          ['editor.word_wrap'])
         # Find Next with no query opens Find too
-        self.assertEqual(self.rows('type vim', 'key Return', 'key F3', 'type wrap'),
+        self.assertEqual(self.rows('type vim', 'key Return', 'key F3', 'type word wrap'),
                          ['editor.word_wrap'])
-        self.assertEqual(self.rows('type vim', 'key Return', 'key shift+F3', 'type wrap'),
+        self.assertEqual(self.rows('type vim', 'key Return', 'key shift+F3', 'type word wrap'),
                          ['editor.word_wrap'])
 
     def test_a_new_settings_tab_starts_unfiltered(self):

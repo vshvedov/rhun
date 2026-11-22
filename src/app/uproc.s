@@ -24,6 +24,7 @@
 #   uproc_end(pid, grace ms)                  the caller is done with it: SIGHUP and SIGTERM to the
 #                                             group now, SIGKILL at the deadline, reaped here
 #   uproc_env_failed() -> 1 when the login shell could not tell its environment (rhun's own is used)
+#   uproc_env_ready() -> 1 once uproc_envp() would not block (asks the login shell when nobody has)
 .include "rhun.inc"
 
 .equ UP_MAX, 128
@@ -382,6 +383,31 @@ env_skipped:
 FN uproc_env_failed
     mov eax, [rip + env_fail]
     ret
+
+# uproc_env_ready() -> eax 1 once uproc_envp() would not block: the login environment is known, or
+#   was given up on. It asks the login shell itself when nobody has yet (as uproc_envp does) and is 0
+#   while the shell answers; past the shell's time it gives up on it, as uproc_envp would. Callers
+#   that must not block the loop (the chat's start) wait for it in their tick
+FN uproc_env_ready
+    PROLOGUE
+    cmp dword ptr [rip + env_state], 0
+    jne 1f
+    call uproc_env_start
+1:
+.ifndef WINDOWS
+    cmp dword ptr [rip + env_state], 1
+    jne 8f
+    call time_ms
+    cmp rax, [rip + env_deadline]
+    jb 7f
+    mov dword ptr [rip + env_fail], 1
+    call env_done
+    jmp 8f
+7:  xor eax, eax
+    EPILOGUE
+.endif
+8:  mov eax, 1
+    EPILOGUE
 
 # uproc_envp() -> the environment programs start from: the login shell's once known (waiting for the
 #   rest of its 5 s when it is still telling), else rhun's own

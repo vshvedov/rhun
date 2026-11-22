@@ -101,11 +101,16 @@ FN settings_dump
     mov rdi, r12
     mov esi, 10
     call sb_push_byte
-    lea rax, [rip + cfg_agents_opencode]
+    lea rax, [rip + cfg_agents_idle_stop]
     cmp [rbx + SET_ptr], rax
-    jne 2f
+    jne 3f
     mov rdi, r12                # AI: the extension sources (agentext.s)
     call agentext_settings_dump
+3:  lea rax, [rip + cfg_claude_initial_mode]
+    cmp [rbx + SET_ptr], rax
+    jne 2f
+    mov rdi, r12                # Claude Code: the env pairs, never their values (claudecfg.s)
+    call claudecfg_dump
 2:  add rbx, SET_SIZE
     jmp 1b
 9:  EPILOGUE
@@ -438,6 +443,9 @@ section_title:
     je 1f
     lea rax, [rip + .Lt_debug]          # debugger
     cmp byte ptr [rdi], 'd'
+    je 1f
+    lea rax, [rip + .Lt_claude]
+    cmp byte ptr [rdi], 'c'
     je 1f
     lea rax, [rip + .Lt_agents]
 1:  ret
@@ -1317,7 +1325,7 @@ FN settings_draw
     call gfx_clip_pop
     add r12d, r13d
     add r12d, [rip + g_mt + 4*MI_8]
-    lea rax, [rip + cfg_agents_opencode]
+    lea rax, [rip + cfg_agents_idle_stop]
     cmp [rbx + SET_ptr], rax
     jne .Lsd_skip
     mov edi, [rsp + 20]         # AI: a switch per extension source (agentext.s)
@@ -1583,6 +1591,7 @@ FN ui_text_v_fit
 .Lt_git: .asciz "Git"
 .Lt_updates: .asciz "Updates"
 .Lt_debug: .asciz "Debugger"
+.Lt_claude: .asciz "Claude Code"
 .Lwebsite: .asciz "https://rhun.app"
 .Lemail: .asciz "hi@rhun.app"
 .Lfeedback: .asciz "Feedback and issues: GitHub"

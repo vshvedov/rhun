@@ -2444,6 +2444,7 @@ ctl_tables:
     .quad tasks_ctl             # tasks and terminals (runctl.s)
     .quad test_ctl              # testing (testview.s)
     .quad ai_ctl                # AI: agent sessions, the Review tab, tools (aictl.s)
+    .quad claude_ctl            # Claude Code: its program and its conversations' paths (claudecfg.s)
     .quad md_ctl                # Markdown rendering (views group: mdctl.s)
     .quad views_ctl             # views group: places and retained views (viewsctl.s)
     .quad nb_ctl                # notebooks (nbctl.s)

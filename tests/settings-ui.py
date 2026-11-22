@@ -38,6 +38,7 @@ BOOLS = {
                'semantic_highlighting'),
     'files': 'trim_trailing_whitespace final_newline format_on_save restore_session restore_project',
     'agents': 'claude codex grok opencode',
+    'claude': 'chat',
     'git': 'enabled', 'updates': 'check',
     'testing': 'gutter',
     'debug': 'show_on_start keys_in_terminal',
@@ -54,6 +55,7 @@ INTS = {
     ('terminal', 'line_height'): (1., 2.5, .05),
     ('terminal', 'scrollback'): (0, 100000, 1000), ('terminal', 'height'): (80, 2000, 10),
     ('debug', 'console_lines'): (1000, 100000, 1000),
+    ('agents', 'idle_stop_minutes'): (0, 240, 5),
 }
 STRINGS = {
     ('ui', 'font'): 'missing font café.ttf', ('editor', 'font'): 'missing mono café.ttf',
@@ -63,13 +65,16 @@ STRINGS = {
     ('terminal', 'shell'): 'missing shell café', ('terminal', 'font'): 'missing term café.ttf',
     ('git', 'commit_model'): 'model:café',
     ('remote', 'agent_binary'): '/opt/rhun café/linux/rhun',
+    ('claude', 'executable'): '/opt/claude café/bin/claude', ('claude', 'wrapper'): 'wrap café',
 }
 CHOICES = {('editor', 'multi_cursor_paste'): ('spread', 'full'),
            ('editor', 'multi_cursor_modifier'): ('alt', 'ctrl'),
            ('ui', 'decorations'): ('auto', 'client', 'server'),
            ('git', 'commit_ai'): ('off', 'claude', 'codex', 'ollama'),
            ('updates', 'extensions'): ('install', 'check', 'off'),
-           ('extensions', 'secrets'): ('system', 'memory', 'file')}
+           ('extensions', 'secrets'): ('system', 'memory', 'file'),
+           # the first is the CLI's own default, written as an empty value
+           ('claude', 'initial_mode'): ('', 'default', 'acceptEdits', 'plan')}
 
 
 # Theme shows without Follow system dark mode, the dark and light mode's themes with it.
@@ -224,7 +229,8 @@ class SettingsUI(unittest.TestCase):
                   ('ui', 'decorations'): (55, 55, 78),
                   ('git', 'commit_ai'): (45, 92, 59, 116),
                   ('updates', 'extensions'): (67, 84, 45),
-                  ('extensions', 'secrets'): (76, 70, 44)}
+                  ('extensions', 'secrets'): (76, 70, 44),
+                  ('claude', 'initial_mode'): (166, 58, 141, 50)}
         for (section, key), options in CHOICES.items():
             for index, option in enumerate(options):
                 with self.subTest(setting=f'{section}.{key}', option=option):

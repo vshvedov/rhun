@@ -840,7 +840,18 @@ class RequestTest(DrivenCase):
         self.assertEqual(self.answers(), [{'behavior': 'deny', 'message': REJECTED, 'interrupt': True,
                                            'toolUseID': tid[0]}])
         self.assertFalse((self.project / 'approved.txt').exists())
-        self.assertIn('result ' + REJECTED[:60], self.thread())
+        # a deny that interrupts ends the turn (the real CLI: its interrupt mark, then an aborted_tools result)
+        streamed = self.thread()
+        self.assertEqual(streamed, ['user tool', 'tool(Bash) touch approved.txt', 'result ' + REJECTED[:60],
+                                    'info Interrupted'])
+        self.command('agent-prompt hello')          # and the conversation goes on
+        self.command('wait-agent ready')
+        self.assertEqual(self.thread(), streamed + ['user hello', REPLY + 'ok: hello'])   # its first reply
+        streamed = self.thread()
+        self.command('agent-release')               # the file gives the same rows
+        self.command('wait-agent off')
+        self.until_gone()
+        self.assertEqual(self.thread(), streamed)
 
     def test_numeric_request_ids_are_echoed_as_numbers(self):
         self.start(env={'FAKE_CLAUDE_NUMERIC_IDS': '1'})
@@ -868,7 +879,7 @@ class RequestTest(DrivenCase):
         self.command('agent-card 2')
         self.command('wait-agent ready')
         self.assertEqual([a['behavior'] for a in self.answers()], ['allow', 'deny'])
-        self.assertEqual(self.thread()[-1], REPLY + 'done')
+        self.assertEqual(self.thread()[-1], 'info Interrupted')     # No interrupts: the turn ends there
 
     def test_question_cards_in_order(self):
         self.start()

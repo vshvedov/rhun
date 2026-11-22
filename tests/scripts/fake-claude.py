@@ -587,7 +587,9 @@ def bash(command, ask=True, extra=None, rules=None):
     if answer is not None and ask:
         log(answer=answer)
     bash_result(tid, tool_input, answer)
-    if answer is None:
+    # withdrawn, or a deny that interrupts: the turn ends there (the real 2.1.330, given rhun's No: the
+    # rejected tool_result, "[Request interrupted by user for tool use]", result aborted_tools)
+    if answer is None or (answer.get('behavior') == 'deny' and answer.get('interrupt') is True):
         cut_off(tool_turn=True)
         return False
     return True

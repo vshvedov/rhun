@@ -2823,7 +2823,7 @@ F AS_mtime, 8
 F AS_off, 8             # bytes parsed
 F AS_msgs, VEC_SIZE     # AM
 F AS_part, SB_SIZE      # incomplete trailing line
-F AS_kind, 4            # 1 claude, 2 codex, 3 grok, 4 opencode
+F AS_kind, 4            # AG_CLAUDE 1, AG_CODEX 2, AG_GROK 3, AG_OPENCODE 4, AS_KIND_EXT 5
 F AS_loaded, 4          # messages parsed (opened at least once)
 F AS_titled, 4          # has a custom title
 F AS_pad, 4
@@ -2847,14 +2847,19 @@ F AS_shown_model, 8     # parse: the model on the last reply labeled with one
 # and worktree in the fields above
 F AS_ext, 8             # kind 5: the extension that lists it (EXT*)
 F AS_sid, 8             # kind 5: its session id, cstr
-F AS_state, 4           # kind 5: AGS_*
+F AS_state, 4           # kind 5: AGS_*; a session rhun drives: kept in step by agent_state_set
 F AS_xflags, 4          # kind 5: AXF_*
 F AS_total, 8           # kind 5: messages the extension says the session has
 F AS_dirty, 8           # kind 5: the first message to fetch again, -1 when the copy is current
 F AS_req, 8             # kind 5: the agent-transcript request in flight (its id), 0 when none
 F AS_from, 8            # kind 5: the FROM of that request
-F AS_ask, 8             # kind 5 (D4): the open card, an AK record, or 0
+F AS_ask, 8             # D4: the open card (an AXK record, agentext.s), or 0
+F AS_live, 8            # the live record of a session rhun drives (AL*, agent_drv.s), or 0
 ENDSTRUCT AS_SIZE
+.equ AG_CLAUDE, 1               # AS_kind of the built-in sources (AS_KIND_EXT 5: an extension's)
+.equ AG_CODEX, 2
+.equ AG_GROK, 3
+.equ AG_OPENCODE, 4
 
 # ---- agent connections (src/app/agent_conn.s): a long-lived child on three pipes (embedded, caller's) ----
 STRUCT
@@ -2907,6 +2912,83 @@ ENDSTRUCT CN_SIZE
 .equ CN_KILL_MS, 5000   # SIGTERM -> SIGKILL
 .equ CN_DRAIN, 262144   # stdout bytes read per wake-up
 .equ CN_EOF_MS, 5000    # stdout closed but the child still runs -> the stop sequence
+
+# ---- the driver seam (src/app/agent_drv.s): sessions rhun drives through a driver's table ----
+# AL: a driven session's live record (AS_live), made on its first use and freed with its row
+STRUCT
+F AL_as, 8              # its session
+F AL_drv, 8             # DRV*
+F AL_cn, CN_SIZE        # the connection to its program (agent_conn.s)
+F AL_state, 4           # ALS_*
+F AL_flags, 4           # ALF_*
+F AL_sid, 40            # cstr: the conversation's id
+F AL_mode, 32           # cstr: the permission mode the agent reports, or empty
+F AL_queue, VEC_SIZE    # owned prompt texts (cstr, 8-byte slots) waiting for "ready"
+F AL_reqs, VEC_SIZE     # AQ*: the requests the agent waits on, the oldest first (its card shows)
+F AL_live_from, 8       # the first AS_msgs index the stream fed
+F AL_msgid, 64          # cstr: the message the stream is in
+F AL_block, 8           # the content block text streams into
+F AL_row, 8             # the AM index text is streaming into, -1 none
+F AL_used, 8            # time_ms of the last turn, card or key (the idle stop)
+F AL_report, SB_SIZE    # why it failed (shown as an error row, print-agent-live)
+F AL_out, VEC_SIZE      # requests rhun sent and awaits: {n, act} 16-byte slots
+F AL_next, 8            # the number of rhun's next request
+F AL_hold_until, 8      # time_ms the wait for another holder ends (agent_holder.s)
+F AL_cfg, 8             # the driver's own
+ENDSTRUCT AL_SIZE
+.equ ALS_OFF, 0                 # no process
+.equ ALS_STARTING, 1
+.equ ALS_READY, 2
+.equ ALS_WORKING, 3
+.equ ALS_WAITING, 4             # a card is up
+.equ ALS_HELD, 5                # open elsewhere, asked
+.equ ALS_FAILED, 6
+.equ ALF_NEW, 1                 # no transcript yet
+.equ ALF_STOP_ASKED, 2
+.equ ALF_RESYNC, 4
+.equ ALF_FORK, 8
+.equ ALF_ENVWAIT, 16            # a start waits for the login environment (the tick starts it)
+.equ AL_QUEUE_MAX, 4            # prompts waiting for "ready"
+# AQ: a request the agent waits on (the plan's PR: that prefix is the Problems tab's)
+STRUCT
+F AQ_kind, 4            # AQK_*
+F AQ_state, 4
+F AQ_id, 8              # owned cstr: the agent's request id
+F AQ_tool, 8            # owned cstr
+F AQ_input, 8           # the tool input as JSON text, owned (echoed back on allow)
+F AQ_inlen, 8
+F AQ_q, 8               # owned cstr: the question of AQK_QUESTION
+ENDSTRUCT AQ_SIZE
+.equ AQK_PERMISSION, 1
+.equ AQK_QUESTION, 2
+.equ AQK_PLAN, 3
+.equ AQK_HELD, 4
+# DRV: a driver's table (read-only)
+STRUCT
+F DRV_kind, 4           # the AS_kind it drives
+F DRV_caps, 4           # DRVC_*
+F DRV_name, 8           # cstr: "Claude Code"
+F DRV_start, 8          # (AL*) -> eax 1 started, 0 failed with AL_report set
+F DRV_send, 8           # (AL*, ptr, len) -> eax 1 written
+F DRV_stop, 8           # (AL*): interrupt the turn
+F DRV_answer, 8         # (AL*, AQ*, n) -> eax 1: option n (from 0) of that request
+F DRV_release, 8        # (AL*): end the process politely (the stop sequence)
+F DRV_held, 8           # (AL*) -> eax HOLDER_*
+ENDSTRUCT DRV_SIZE
+.equ DRVC_NEW, 1                # can start a conversation
+.equ DRVC_RESUME, 2
+.equ DRVC_FORK, 4
+.equ DRVC_SESSION, 8            # keeps no live record: its functions take the AS* where the others take
+                                # the AL*, and send returns SEND_* (an extension's: it keeps the state)
+.equ HOLDER_NONE, 0
+.equ HOLDER_OTHER, 1
+.equ HOLDER_UNKNOWN, 2
+.equ SEND_OK, 0
+.equ SEND_QUEUED, 1
+.equ SEND_FULL, 2
+.equ SEND_REFUSED, 3
+.equ SEND_FAILED, 4
+.equ SEND_EMPTY, 5
 
 # ---- debugger (DAP client): debugcfg.s, dapwire.s, dap.s, bp.s, debugconsole.s, debugctl.s ----
 .equ NEEDS_DEBUG, 0x10000           # [needs] debug = yes: start debug adapters that run as the user

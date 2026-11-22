@@ -657,6 +657,7 @@ apply_page:
     call session_update        # never suppress open transcript growth with an index stamp
 11: mov rdi, [rsp + 8]
     call mem_free
+    call pin_live              # sessions rhun drives stay listed when the page lacks them
     # Retain transcripts, release metadata for unopened rows no longer in the page.
     xor ebx, ebx
     xor r12d, r12d
@@ -668,6 +669,8 @@ apply_page:
     jne 13f
     cmp dword ptr [r13 + AS_loaded], 0
     jne 13f
+    cmp qword ptr [r13 + AS_live], 0
+    jne 13f                    # never a session rhun drives
     mov rdi, r13
     call agent_session_free
     jmp 14f
@@ -720,6 +723,8 @@ index_dirty:
 FN agent_session_free
     PROLOGUE
     mov rbx, rdi
+    call agent_closed           # a session rhun drives: its program ends, its record goes (agent_drv.s)
+    mov rdi, rbx
     call session_clear_msgs
     lea rdi, [rbx + AS_msgs]
     call vec_free
@@ -2874,7 +2879,7 @@ FN agents_key
     call agentext_new_active    # AI (D4): a new session's draft hides the conversation and its card
     test rax, rax
     jnz 4f
-    call agents_ext_open        # 1 to 9 pick an option of the open session's card
+    call agents_open_driven     # 1 to 9 pick an option of the open session's card
     test rax, rax
     jz 4f
     mov rbx, rax
@@ -2894,11 +2899,7 @@ FN agents_key
     je 6f
     cmp r12d, KEY_TAB
     jne 4f
-6:  mov rdi, rbx
-    call agentext_prompts
-    test eax, eax
-    jz 4f
-    mov dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
+6:  mov dword ptr [rip + g_focus], FOCUS_AGENT_INPUT  # it has a driver: the box is there
     mov dword ptr [rip + g_dirty], 1
     jmp 5f
 4:  call agentext_new_active
@@ -3022,7 +3023,10 @@ FN agents_ext_rows
     mov r15, [rax + r12*8]
     inc r12
     cmp r15, [rsp]
-    jne 8b                      # a pinned row stays only while it is the open conversation
+    je 81f
+    cmp qword ptr [r15 + AS_live], 0
+    je 8b                       # a pinned row stays while it is the open conversation or driven
+81:
     lea rdi, [rip + sessions]
     mov esi, 8
     call vec_push
@@ -3088,6 +3092,221 @@ FN agents_ext_is_open
     jne 1f
     inc eax
 1:  ret
+
+# FN agents_open_driven() -> rax the conversation the panel shows when it has a driver (agent_drv.s):
+#   the one its prompt box, card, Stop and the headless agent commands act on; or 0
+FN agents_open_driven
+    xor eax, eax
+    mov rcx, [rip + view]
+    test rcx, rcx
+    js 1f
+    cmp rcx, [rip + sessions + VEC_len]
+    jae 1f
+    mov rdx, [rip + sessions + VEC_ptr]
+    mov rdi, [rdx + rcx*8]
+    push rdi
+    push rdi
+    call agent_drv_of
+    pop rdi
+    pop rdi
+    test rax, rax
+    jz 1f
+    mov rax, rdi
+1:  ret
+
+# FN agents_adopt(AS*): a session made here joins the pool and the list (pinned after the page's rows
+#   until discovery lists it); it counts as opened and seen
+FN agents_adopt
+    PROLOGUE
+    mov rbx, rdi
+    mov dword ptr [rbx + AS_loaded], 1
+    mov qword ptr [rbx + AS_seen], 1
+    xor ecx, ecx
+1:  cmp rcx, [rip + pool + VEC_len]
+    jae 2f
+    mov rax, [rip + pool + VEC_ptr]
+    cmp [rax + rcx*8], rbx
+    je 3f
+    inc rcx
+    jmp 1b
+2:  lea rdi, [rip + pool]
+    mov esi, 8
+    call vec_push
+    mov [rax], rbx
+3:  xor ecx, ecx
+4:  cmp rcx, [rip + sessions + VEC_len]
+    jae 5f
+    mov rax, [rip + sessions + VEC_ptr]
+    cmp [rax + rcx*8], rbx
+    je 9f
+    inc rcx
+    jmp 4b
+5:  lea rdi, [rip + sessions]
+    mov esi, 8
+    call vec_push
+    mov [rax], rbx
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# pin_live(): apply_page: the pool's sessions rhun drives that the page lacks go after its rows
+pin_live:
+    PROLOGUE
+    xor ebx, ebx
+1:  cmp rbx, [rip + pool + VEC_len]
+    jae 9f
+    mov rax, [rip + pool + VEC_ptr]
+    mov r12, [rax + rbx*8]
+    inc rbx
+    cmp qword ptr [r12 + AS_live], 0
+    je 1b
+    cmp qword ptr [r12 + AS_seen], 0
+    jne 1b                      # in the page, or the open one pinned already
+    mov qword ptr [r12 + AS_seen], 1
+    lea rdi, [rip + sessions]
+    mov esi, 8
+    call vec_push
+    mov [rax], r12
+    jmp 1b
+9:  EPILOGUE
+
+# FN agents_msg_add(AS*, role, ptr, len, name cstr or 0) -> rax the new message's index, or -1 when
+#   nothing was added: a row of a session rhun drives (an empty one stays: streamed text fills it)
+FN agents_msg_add
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rbx + AS_msgs + VEC_len]
+    mov dword ptr [rip + keep_empty], 1
+    call add_msg
+    mov dword ptr [rip + keep_empty], 0
+    call time_ms
+    mov [rbx + AS_changed], rax
+    mov dword ptr [rip + g_dirty], 1
+    mov rax, -1
+    cmp [rbx + AS_msgs + VEC_len], r12
+    je 9f
+    mov rax, r12
+9:  EPILOGUE
+
+# FN agents_msg_append(AS*, index, ptr, len): more text for that message (streaming)
+FN agents_msg_append
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    cmp r12, [rbx + AS_msgs + VEC_len]
+    jae 9f
+    imul r15, r12, AM_SIZE
+    add r15, [rbx + AS_msgs + VEC_ptr]
+    mov rdi, [r15 + AM_text]
+    mov rsi, [r15 + AM_len]
+    lea rsi, [rsi + r14 + 1]
+    call mem_realloc
+    mov [r15 + AM_text], rax
+    mov rdi, rax
+    add rdi, [r15 + AM_len]
+    mov rsi, r13
+    mov rdx, r14
+    call msg_clean
+    add rax, [r15 + AM_len]
+    mov [r15 + AM_len], rax
+    mov rcx, [r15 + AM_text]
+    mov byte ptr [rcx + rax], 0
+    mov rdi, rbx
+    mov rsi, r12
+    call agents_msg_changed
+9:  EPILOGUE
+
+# FN agents_msg_set(AS*, index, ptr, len): that message's finished text (trimmed, as a read file shows it)
+FN agents_msg_set
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    cmp r12, [rbx + AS_msgs + VEC_len]
+    jae 9f
+    mov rdi, r13
+    mov rsi, r14
+    call trim
+    mov r13, rax
+    mov r14, rdx
+    lea rdi, [r14 + 1]
+    call mem_alloc
+    mov r15, rax
+    mov rdi, rax
+    mov rsi, r13
+    mov rdx, r14
+    call msg_clean
+    mov byte ptr [r15 + rax], 0
+    mov r13, rax
+    imul rcx, r12, AM_SIZE
+    add rcx, [rbx + AS_msgs + VEC_ptr]
+    mov rdi, [rcx + AM_text]
+    mov [rcx + AM_text], r15
+    mov [rcx + AM_len], r13
+    call mem_free
+    mov rdi, rbx
+    mov rsi, r12
+    call agents_msg_changed
+9:  EPILOGUE
+
+# agents_msg_changed(AS*, index): a message's text changed in place: its row is measured again
+agents_msg_changed:
+    imul rsi, rsi, AM_SIZE
+    add rsi, [rdi + AS_msgs + VEC_ptr]
+    mov dword ptr [rsi + AM_w], -1
+    mov dword ptr [rip + g_dirty], 1
+    ret
+
+# msg_clean(dst, src, len) -> rax bytes written to dst (at most len): add_msg's rule: tabs and other
+#   controls are spaces, CR goes, an escape sequence shows nothing
+msg_clean:
+    xor ecx, ecx
+    xor eax, eax
+1:  cmp rcx, rdx
+    jae 9f
+    movzx r8d, byte ptr [rsi + rcx]
+    inc rcx
+    cmp r8d, 10
+    je 2f
+    cmp r8d, 13
+    je 1b
+    cmp r8d, 27
+    je 3f
+    cmp r8d, 32
+    jae 2f
+    mov r8d, ' '
+2:  mov [rdi + rax], r8b
+    inc rax
+    jmp 1b
+3:  cmp rcx, rdx
+    jae 1b
+    cmp byte ptr [rsi + rcx], '['
+    jne 1b
+    inc rcx
+4:  cmp rcx, rdx
+    jae 1b
+    movzx r8d, byte ptr [rsi + rcx]
+    inc rcx
+    sub r8d, 0x40
+    cmp r8d, 0x3e
+    ja 4b
+    jmp 1b
+9:  ret
+
+# FN agents_resync(AS*): its rows go and its file is read again from the start (the file is the truth
+#   once rhun stops driving it)
+FN agents_resync
+    PROLOGUE
+    mov rbx, rdi
+    call session_clear_msgs
+    mov qword ptr [rbx + AS_off], 0
+    mov qword ptr [rbx + AS_part + SB_len], 0
+    mov rdi, rbx
+    call session_update
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
 
 # FN agents_ext_truncate(AS*, n): the messages from n on go
 FN agents_ext_truncate
@@ -3413,8 +3632,10 @@ is_live:
     push rbx
     mov rbx, rdi
     cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    jne 3f
-    mov eax, [rbx + AS_state]   # an extension's session is live while it works or waits
+    je 4f
+    cmp qword ptr [rbx + AS_live], 0
+    je 3f
+4:  mov eax, [rbx + AS_state]   # an extension's or a driven session is live while it works or waits
     cmp eax, AGS_WORKING
     je 2f
     cmp eax, AGS_WAITING
@@ -3897,8 +4118,10 @@ list_draw:
     lea rsi, [rip + buf]
     call sb_push_cstr
     cmp dword ptr [r14 + AS_kind], AS_KIND_EXT
-    jne 73f
-    mov eax, [r14 + AS_state]   # an extension's session says what it does
+    je 74f
+    cmp qword ptr [r14 + AS_live], 0
+    je 73f
+74: mov eax, [r14 + AS_state]   # an extension's or a driven session says what it does
     test eax, eax
     jz 8f
     lea rcx, [rip + ext_state_labels]
@@ -4052,8 +4275,12 @@ thread_draw:
     mov [rsp + 24], eax         # area h
     mov dword ptr [rsp + 160], 0
     cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    jne 41f
-    mov rdi, rbx                # AI (D4): its card and prompt box go under the messages
+    je 44f
+    mov rdi, rbx                # a session with a driver too (agent_drv.s)
+    call agent_drv_of
+    test rax, rax
+    jz 41f
+44: mov rdi, rbx                # AI (D4): its card and prompt box go under the messages
     mov esi, [rsp + 8]
     call agentext_bottom_h
     mov ecx, [rsp + 24]

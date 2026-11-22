@@ -113,6 +113,17 @@ class ChatCase(unittest.TestCase):
             self.assertNotIn(reply, ('', 'error\n'), line)
             output.append(reply)
 
+    def reply(self, line):
+        """Send one control command; its output and whether it answered ok (rather than error)."""
+        self.client.sendall((line + '\n').encode('utf-8'))
+        output = []
+        while True:
+            reply = self.reader.readline()
+            if reply in ('ok\n', 'error\n'):
+                return ''.join(output), reply == 'ok\n'
+            self.assertNotEqual(reply, '', line)
+            output.append(reply)
+
     def quit(self):
         """End rhun the way the user does (it writes its config if a setting changed), and wait."""
         self.client.sendall(b'quit\n')
@@ -292,6 +303,95 @@ class DiscoveryTest(ChatCase):
         self.command('cmd focus_agents')
         self.command('wait-agents')
         self.assertEqual(self.command('print-agents-page'), 'shown=1 total=1 loading=0 error=0\n')
+
+
+
+class SeamTest(ChatCase):
+    """The prompt box and cards through the driver table (agent_drv.s): a Claude Code conversation has
+    the box when the chat is on; other sessions keep none. The Claude driver itself is not built yet."""
+
+    def setUp(self):
+        super().setUp()
+        self.env['CODEX_HOME'] = str(self.work / '.codex')
+        self.env['GROK_HOME'] = str(self.work / '.grok')
+        sessions = self.work / '.claude/projects' / slug(self.project)
+        sessions.mkdir(parents=True)
+        fixture = (ROOT / 'tests/data/agents/claude.jsonl').read_text(encoding='utf-8')
+        (sessions / 's1.jsonl').write_text(fixture.replace('@PROJECT@', self.project.as_posix()),
+                                           encoding='utf-8')
+        codex = self.work / '.codex/sessions/2026/09/26'
+        codex.mkdir(parents=True)
+        fixture = (ROOT / 'tests/data/agents/codex.jsonl').read_text(encoding='utf-8')
+        (codex / 'rollout-c1.jsonl').write_text(fixture.replace('@PROJECT@', self.project.as_posix()),
+                                                encoding='utf-8')
+
+    def rows(self):
+        """The list's rows (print-agents before anything is open), waiting for discovery."""
+        self.command('cmd focus_agents')
+        self.command('wait-agents')
+        rows = self.command('print-agents').splitlines()
+        self.assertEqual(len(rows), 2, rows)
+        return rows
+
+    def open_row(self, kind):
+        """Open the first row of that kind (Claude, Codex); its print-agent-input lines."""
+        n = next(i for i, row in enumerate(self.rows()) if row.startswith(kind + ':')) + 1
+        self.command(f'print-agents {n}')
+        return self.command('print-agent-input').splitlines()
+
+    def test_a_claude_conversation_has_the_box(self):
+        self.start()
+        lines = self.open_row('Claude')
+        self.assertTrue(lines[0].endswith(' box=1'), lines)
+        self.assertEqual(self.command('print-agent-live'),
+                         'state=off pid=0 sid= mode= queued=0 requests=0 new=0\n')
+
+    def test_send_gives_the_drivers_error_row(self):
+        self.start()
+        self.open_row('Claude')
+        out, ok = self.reply('agent-prompt hello')
+        self.assertTrue(ok)
+        self.command('wait-agent failed 5000')
+        thread = self.command('print-agents').splitlines()
+        self.assertEqual(thread[-1], 'error not built yet')
+        self.assertNotIn('user hello', thread)      # it never went: the text stays in the box
+        self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
+        self.assertEqual(self.command('print-agent-live').splitlines(),
+                         ['state=failed pid=0 sid= mode= queued=0 requests=0 new=0', 'report=not built yet'])
+
+    def test_chat_off_has_no_box(self):
+        self.start(self.claude_section('chat = false\n'))
+        lines = self.open_row('Claude')
+        self.assertTrue(lines[0].endswith(' box=0'), lines)
+        out, ok = self.reply('agent-prompt x')
+        self.assertFalse(ok)
+        self.assertNotIn('error x', self.command('print-agents'))
+        out, ok = self.reply('agent-new claude')
+        self.assertFalse(ok)
+
+    def test_a_codex_session_has_no_box(self):
+        self.start()
+        lines = self.open_row('Codex')
+        self.assertTrue(lines[0].endswith(' box=0'), lines)
+        out, ok = self.reply('agent-prompt x')
+        self.assertFalse(ok)
+
+    def test_a_new_claude_draft(self):
+        self.start()
+        self.command('agent-new claude')
+        self.assertEqual(self.command('print-agent-input'), 'input= focus=1 new=claude pending=0 box=1\n')
+        self.command('key Escape')                  # out of the box
+        self.command('key Escape')                  # and the draft
+        self.assertEqual(self.command('print-agent-input'), 'input= focus=0 new=- pending=0 box=0\n')
+
+    def test_wait_agent_times_out_with_the_state(self):
+        self.start()
+        self.open_row('Claude')
+        out, ok = self.reply('wait-agent ready|working 300')
+        self.assertFalse(ok)
+        self.assertEqual(out, 'timeout state=off\n')
+        out, ok = self.reply('wait-agent bogus 300')
+        self.assertFalse(ok)
 
 
 if __name__ == '__main__':

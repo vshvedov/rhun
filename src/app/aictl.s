@@ -117,13 +117,23 @@ c_review:
 9:  xor eax, eax
     EPILOGUE
 
-# agent-new OWNER/NAME: the agents panel writes a new session of that extension (D4)
+# agent-new OWNER/NAME | KIND: the agents panel writes a new session of that extension (D4), or a new
+#   conversation of a built-in driver (a name without "/": claude); error when that driver is off
 c_agent_new:
     PROLOGUE
     call ai_set
     call ai_arg
-    mov rdi, rax
-    mov rsi, rdx
+    mov rbx, rax
+    mov r12, rdx
+    xor ecx, ecx
+1:  cmp rcx, r12
+    jae 3f
+    cmp byte ptr [rbx + rcx], '/'
+    je 2f
+    inc rcx
+    jmp 1b
+2:  mov rdi, rbx
+    mov rsi, r12
     call agentext_named
     test rax, rax
     jz 9f
@@ -133,8 +143,40 @@ c_agent_new:
     call agentext_new
 9:  xor eax, eax
     EPILOGUE
+3:  mov rdi, rbx
+    mov rsi, r12
+    call agent_kind_named
+    test eax, eax
+    jz 8f
+    mov ebx, eax
+    mov edi, eax
+    call agent_drv_for_kind
+    test rax, rax
+    jz 8f
+    call cmd_focus_agents
+    mov edi, ebx
+    call agentext_new_kind
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
 
-# agent-prompt TEXT: TEXT in the prompt box, sent as Enter sends it
+# has_target() -> eax 1 when the box has someone to go to: a new session being written, or an open
+#   session with a driver
+has_target:
+    PROLOGUE
+    call agentext_new_active
+    mov ebx, 1
+    test rax, rax
+    jnz 9f
+    call agents_open_driven
+    xor ebx, ebx
+    test rax, rax
+    setnz bl
+9:  mov eax, ebx
+    EPILOGUE
+
+# agent-prompt TEXT: TEXT in the prompt box, sent as Enter sends it; error when no session takes it
 c_agent_prompt:
     PROLOGUE
     call ai_set
@@ -146,19 +188,53 @@ c_agent_prompt:
     mov rsi, rbx
     mov rdx, r12
     call tf_set
+    call has_target
+    test eax, eax
+    jz 8f
     call agentext_send
     xor eax, eax
     EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
 
-# agent-stop: Stop in the open extension session
+# agent-type TEXT: TEXT typed into the prompt box, not sent (the session's program starts)
+c_agent_type:
+    PROLOGUE
+    call ai_set
+    call has_target
+    test eax, eax
+    jz 8f
+    call ai_arg_rest
+    mov rdi, rax
+    mov rsi, rdx
+    call agentext_paste
+    call agentext_typed
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# agent-stop: Stop in the open session
 c_agent_stop:
     PROLOGUE
     call ai_set
-    call agents_ext_open
+    call agents_open_driven
     test rax, rax
     jz 9f
     mov rdi, rax
-    call agentext_stop
+    call agent_stop
+9:  xor eax, eax
+    EPILOGUE
+
+# agent-release: the open session's program ends politely, as the idle stop ends it
+c_agent_release:
+    PROLOGUE
+    call ai_set
+    call agents_open_driven
+    test rax, rax
+    jz 9f
+    mov rdi, rax
+    call agent_release
 9:  xor eax, eax
     EPILOGUE
 
@@ -171,7 +247,7 @@ c_agent_card:
     mov rsi, rdx
     call parse_u64
     lea rbx, [rax - 1]
-    call agents_ext_open
+    call agents_open_driven
     test rax, rax
     jz 9f
     mov rdi, rax
@@ -180,7 +256,7 @@ c_agent_card:
 9:  xor eax, eax
     EPILOGUE
 
-# print-agent-input: the prompt box, the new session, the prompt in flight and the open card
+# print-agent-input: the prompt box, the new session, the prompt in flight, the box, the open card
 c_print_agent_input:
     PROLOGUE
     call ai_set
@@ -188,6 +264,163 @@ c_print_agent_input:
     mov rdi, rax
     call agentext_input_dump
     xor eax, eax
+    EPILOGUE
+
+# print-agent-live: the open session's live record (agent_live_dump)
+c_print_agent_live:
+    PROLOGUE
+    call ai_set
+    call agents_open_driven
+    mov rbx, rax
+    call ai_out
+    mov rdi, rax
+    mov rsi, rbx
+    call agent_live_dump
+    xor eax, eax
+    EPILOGUE
+
+# wait-agent STATE[|STATE...] [MS]: until the open session's live state is one of them (off starting
+#   ready working waiting held failed; default 10000 ms); an error line with the state on timeout
+c_wait_agent:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov r12, rax                # the states, then the mask
+    mov r13, rdx
+    xor r14d, r14d
+1:  test r13, r13
+    jz 4f
+    xor ecx, ecx                # one word up to '|'
+2:  cmp rcx, r13
+    jae 3f
+    cmp byte ptr [r12 + rcx], '|'
+    je 3f
+    inc rcx
+    jmp 2b
+3:  push rcx
+    push rcx
+    mov rdi, r12
+    mov rsi, rcx
+    call state_named
+    pop rcx
+    pop rcx
+    test eax, eax
+    js 8f
+    bts r14, rax
+    lea r12, [r12 + rcx]
+    sub r13, rcx
+    test r13, r13
+    jz 4f
+    inc r12                     # the '|'
+    dec r13
+    jmp 1b
+4:  test r14d, r14d
+    jz 8f
+    mov r15d, 10000
+    call ai_arg
+    test rdx, rdx
+    jz 5f
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov r15, rax
+5:  call time_ms
+    lea rbx, [rax + r15]
+6:  call agents_open_driven
+    mov rdi, rax
+    call agent_live_state
+    bt r14, rax
+    jc 7f
+    call time_ms
+    cmp rax, rbx
+    jae 81f
+    mov edi, 20
+    call loop_poll
+    call app_tick
+    jmp 6b
+7:  xor eax, eax
+    EPILOGUE
+81: call ai_out                 # timed out: the state it is in
+    mov rdi, rax
+    lea rsi, [rip + .Lw_timeout]
+    call sb_push_cstr
+    call agents_open_driven
+    mov rdi, rax
+    call agent_live_state
+    lea rcx, [rip + live_states]
+    mov rsi, [rcx + rax*8]
+    call ai_out
+    mov rdi, rax
+    call sb_push_cstr
+    call ai_out
+    mov rdi, rax
+    mov esi, 10
+    call sb_push_byte
+8:  mov rax, -1
+    EPILOGUE
+
+# state_named(ptr, len) -> eax the ALS_* that word names, or -1
+state_named:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    xor ebx, ebx
+1:  cmp ebx, ALS_FAILED
+    ja 8f
+    lea rax, [rip + live_states]
+    mov rdx, [rax + rbx*8]
+    mov rdi, r12
+    mov rsi, r13
+    call str_eq_cstr
+    test eax, eax
+    jnz 2f
+    inc ebx
+    jmp 1b
+2:  mov eax, ebx
+    EPILOGUE
+8:  mov eax, -1
+    EPILOGUE
+
+# agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N]: shorter times for tests
+c_agent_timing:
+    PROLOGUE
+    call ai_set
+1:  call ai_arg
+    test rdx, rdx
+    jz 9f
+    mov rbx, rax
+    mov r12, rdx
+    xor ecx, ecx                # NAME=VALUE
+2:  cmp rcx, r12
+    jae 8f
+    cmp byte ptr [rbx + rcx], '='
+    je 3f
+    inc rcx
+    jmp 2b
+3:  mov r13, rcx
+    lea rdi, [rbx + rcx + 1]
+    mov rsi, r12
+    sub rsi, rcx
+    dec rsi
+    call parse_u64
+    mov r14, rax
+    lea r15, [rip + timings]
+4:  mov rdx, [r15]
+    test rdx, rdx
+    jz 8f
+    mov rdi, rbx
+    mov rsi, r13
+    call str_eq_cstr
+    test eax, eax
+    jnz 5f
+    add r15, 16
+    jmp 4b
+5:  mov rax, [r15 + 8]
+    mov [rax], r14d
+    jmp 1b
+8:  mov rax, -1
+    EPILOGUE
+9:  xor eax, eax
     EPILOGUE
 
 # print-tools: the tools a tools request lists, then the calls in flight
@@ -240,6 +473,25 @@ c_tool_confirm:
 .Lc_agent_stop: .asciz "agent-stop"
 .Lc_agent_card: .asciz "agent-card"
 .Lc_print_agent_input: .asciz "print-agent-input"
+.Lc_agent_type: .asciz "agent-type"
+.Lc_agent_release: .asciz "agent-release"
+.Lc_wait_agent: .asciz "wait-agent"
+.Lc_print_agent_live: .asciz "print-agent-live"
+.Lc_agent_timing: .asciz "agent-timing"
+.Lw_timeout: .asciz "timeout state="
+.Ls_off: .asciz "off"
+.Ls_starting: .asciz "starting"
+.Ls_ready: .asciz "ready"
+.Ls_working: .asciz "working"
+.Ls_waiting: .asciz "waiting"
+.Ls_held: .asciz "held"
+.Ls_failed: .asciz "failed"
+.Lt_idle: .asciz "idle"
+.Lt_term: .asciz "term"
+.Lt_kill: .asciz "kill"
+.Lt_eof: .asciz "eof"
+.Lt_hold: .asciz "hold"
+.Lt_guard: .asciz "guard"
 .Lc_print_tools: .asciz "print-tools"
 .Lc_tool_confirm: .asciz "tool-confirm"
 .Lw_once: .asciz "once"
@@ -258,4 +510,10 @@ ai_ctl:
     .quad .Lc_agent_new, c_agent_new, .Lc_agent_prompt, c_agent_prompt
     .quad .Lc_agent_stop, c_agent_stop, .Lc_agent_card, c_agent_card
     .quad .Lc_print_agent_input, c_print_agent_input
+    .quad .Lc_agent_type, c_agent_type, .Lc_agent_release, c_agent_release
+    .quad .Lc_wait_agent, c_wait_agent, .Lc_print_agent_live, c_print_agent_live
+    .quad .Lc_agent_timing, c_agent_timing
     .quad 0, 0
+live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
+timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_conn_kill_ms
+    .quad .Lt_eof, g_conn_eof_ms, .Lt_hold, g_drv_hold_ms, .Lt_guard, g_conn_max, 0, 0

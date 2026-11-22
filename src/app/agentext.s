@@ -1604,6 +1604,12 @@ agentext_state_names: .quad .Ls_idle, .Ls_working, .Ls_waiting, .Ls_error
 # the extension asks with agent-ask: a prompt line and up to 16 options as buttons (1 to 9 pick).
 # A new session starts from the list's + button: its first prompt goes as agent-prompt - LEN, and
 # the session the answer names opens once the extension lists it.
+#
+# The box and the cards are the generic part: a session gets them when it has a driver
+# (agent_drv_of, agent_drv.s), and Send, Stop and a card's pick go through it (agent_send,
+# agent_stop, agent_answer). The extension's own requests are its driver's table: agentext_ext_send,
+# agentext_stop, agentext_ext_pick. A new conversation is written for an extension (new_ext) or for
+# a built-in driver (new_kind, "+ Claude Code").
 
 .equ AXK_OPTS_MAX, 16
 .equ AXK_OPT_MAX, 200
@@ -1625,6 +1631,7 @@ ENDSTRUCT AXK_SIZE
 in_tf: .zero TF_SIZE            # the prompt box
 in_as: .quad 0                  # the session it belongs to
 new_ext: .quad 0                # a new session of this extension is being written
+new_kind: .quad 0               # or a new conversation of this built-in driver (AG_*)
 pend_id: .quad 0                # the agent-prompt in flight: its id, extension
 pend_ext: .quad 0
 pend_new: .quad 0               # 1 when it starts a new session
@@ -1654,13 +1661,15 @@ FN agentext_prompts
 # FN agentext_ask(ext, id, sid ptr, sid len, body, len) -> rax 0 (answered when the user picks), or the
 #   error reply: a card in the session's conversation; one replaces the session's earlier card
 FN agentext_ask
-    PROLOGUE 32
+    PROLOGUE 176                # [rsp] id, [8] body, [16] its len, [24] prompt, [32] options, [40] them
     mov rbx, rdi
     mov [rsp], rsi
     mov r12, rcx                # sid len
     mov r13, rdx                # sid
     mov [rsp + 8], r8
     mov [rsp + 16], r9
+    mov qword ptr [rsp + 24], 0
+    mov qword ptr [rsp + 32], 0
     mov rdi, rbx
     call ai_ext
     mov rdi, rax
@@ -1670,12 +1679,6 @@ FN agentext_ask
     test rax, rax
     jz .Lak_none
     mov r14, rax
-    mov edi, AXK_SIZE
-    call mem_alloc
-    mov r15, rax
-    mov [r15 + AXK_ext], rbx
-    mov rax, [rsp]
-    mov [r15 + AXK_id], rax
     mov rdi, [rsp + 8]
     mov rsi, [rsp + 16]
     call ai_rd_init
@@ -1689,7 +1692,7 @@ FN agentext_ask
     mov rdi, rax
     mov rsi, rdx
     call ai_dup
-    mov [r15 + AXK_prompt], rax
+    mov [rsp + 24], rax
 1:  call ai_rd_done
     test eax, eax
     jnz 3f
@@ -1708,7 +1711,7 @@ FN agentext_ask
     pop rax
 2:  test rdx, rdx
     jz .Lak_syntax              # an empty option
-    cmp qword ptr [r15 + AXK_opts + VEC_len], AXK_OPTS_MAX
+    cmp qword ptr [rsp + 32], AXK_OPTS_MAX
     jae .Lak_toobig
     mov rdi, rax
     mov rsi, rdx
@@ -1717,34 +1720,139 @@ FN agentext_ask
     mov rdi, rax
     mov rsi, rdx
     call ai_dup
-    mov [rsp + 24], rax
-    lea rdi, [r15 + AXK_opts]
-    mov esi, 8
-    call vec_push
-    mov rcx, [rsp + 24]
-    mov [rax], rcx
+    mov rcx, [rsp + 32]
+    mov [rsp + 40 + rcx*8], rax
+    inc qword ptr [rsp + 32]
     jmp 1b
-3:  cmp qword ptr [r15 + AXK_opts + VEC_len], 0
+3:  cmp qword ptr [rsp + 32], 0
     je .Lak_syntax
     mov rdi, r14
     call agentext_ask_drop      # the card it had
-    mov [r14 + AS_ask], r15
-    mov dword ptr [rip + g_dirty], 1
+    mov rdi, [rsp + 24]
+    call strlen
+    mov rdi, r14
+    xor esi, esi                # an extension's card: its request below
+    mov rdx, [rsp + 24]
+    mov rcx, rax
+    lea r8, [rsp + 40]
+    mov r9, [rsp + 32]
+    call agentext_card
+    mov rax, [r14 + AS_ask]
+    mov [rax + AXK_ext], rbx
+    mov rcx, [rsp]
+    mov [rax + AXK_id], rcx
+    lea rdi, [rsp]
+    call ask_temps_free
     xor eax, eax
     EPILOGUE
 .Lak_none:
     lea rax, [rip + .Le_no_session]
     EPILOGUE
 .Lak_toobig:
-    mov rdi, r15
-    call card_free
+    lea rdi, [rsp]
+    call ask_temps_free
     lea rax, [rip + .Le_card_toobig]
     EPILOGUE
 .Lak_syntax:
-    mov rdi, r15
-    call card_free
+    lea rdi, [rsp]
+    call ask_temps_free
     lea rax, [rip + .Le_card_syntax]
     EPILOGUE
+
+# ask_temps_free(frame): agentext_ask's copies of the prompt and the options go (its frame)
+ask_temps_free:
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, [rbx + 24]
+    call mem_free
+    xor r12d, r12d
+1:  cmp r12, [rbx + 32]
+    jae 9f
+    mov rdi, [rbx + 40 + r12*8]
+    call mem_free
+    inc r12
+    jmp 1b
+9:  EPILOGUE
+
+# FN agentext_card(AS*, token, prompt ptr, len, opts cstr*, n) -> eax 1: a card on any session (it
+#   replaces the one it had, unanswered); token 0 is an extension's card (agentext_ask fills AXK_ext and
+#   AXK_id), else the driver's own (its AQ*, agentext_card_token). 0 without options or past 16
+FN agentext_card
+    PROLOGUE 16
+    mov rbx, rdi
+    mov [rsp], rsi
+    mov r12, rdx
+    mov r13, rcx
+    mov r14, r8
+    mov r15, r9
+    xor eax, eax
+    test r15, r15
+    jz 9f
+    cmp r15, AXK_OPTS_MAX
+    ja 9f
+    mov rdi, rbx
+    call agentext_card_drop
+    mov edi, AXK_SIZE
+    call mem_alloc
+    mov [rbx + AS_ask], rax
+    mov rcx, [rsp]
+    mov [rax + AXK_id], rcx
+    mov rdi, r12
+    mov rsi, r13
+    mov edx, AXK_PROMPT_MAX
+    call ai_cut
+    mov rdi, rax
+    mov rsi, rdx
+    call ai_dup
+    mov rcx, [rbx + AS_ask]
+    mov [rcx + AXK_prompt], rax
+    xor r12d, r12d
+1:  cmp r12, r15
+    jae 2f
+    mov rdi, [r14 + r12*8]
+    call strlen
+    mov rdi, [r14 + r12*8]
+    mov rsi, rax
+    mov edx, AXK_OPT_MAX
+    call ai_cut
+    mov rdi, rax
+    mov rsi, rdx
+    call ai_dup
+    mov [rsp + 8], rax
+    mov rdi, [rbx + AS_ask]
+    add rdi, AXK_opts
+    mov esi, 8
+    call vec_push
+    mov rcx, [rsp + 8]
+    mov [rax], rcx
+    inc r12
+    jmp 1b
+2:  mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+9:  EPILOGUE
+
+# FN agentext_card_drop(AS*): its card goes without an answer
+FN agentext_card_drop
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, [rbx + AS_ask]
+    test rdi, rdi
+    jz 9f
+    mov qword ptr [rbx + AS_ask], 0
+    call card_free
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# FN agentext_card_token(AS*) -> rax the token of a driver's card on the session (its AQ*), or 0
+FN agentext_card_token
+    xor eax, eax
+    mov rcx, [rdi + AS_ask]
+    test rcx, rcx
+    jz 1f
+    cmp qword ptr [rcx + AXK_ext], 0
+    jne 1f
+    mov rax, [rcx + AXK_id]
+1:  ret
 
 # card_free(AXK*)
 card_free:
@@ -1768,14 +1876,18 @@ card_free:
     call mem_free
 9:  EPILOGUE
 
-# FN agentext_ask_drop(AS*): its card goes, answered cancelled
+# FN agentext_ask_drop(AS*): its card goes, answered cancelled (a driver's card goes unanswered)
 FN agentext_ask_drop
     PROLOGUE
     mov rbx, rdi
     mov r12, [rbx + AS_ask]
     test r12, r12
     jz 9f
-    mov qword ptr [rbx + AS_ask], 0
+    cmp qword ptr [r12 + AXK_ext], 0
+    jne 1f
+    call agentext_card_drop
+    jmp 9f
+1:  mov qword ptr [rbx + AS_ask], 0
     lea rdi, [rip + .Le_cancelled]
     call strlen
     mov rdi, [r12 + AXK_ext]
@@ -1790,16 +1902,32 @@ FN agentext_ask_drop
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
-# FN agentext_pick(AS*, n): the user chose option n (from 0) of the session's card
+# FN agentext_pick(AS*, n): the user chose option n (from 0) of the session's card: its driver answers
 FN agentext_pick
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    mov rcx, [rdi + AS_ask]
+    test rcx, rcx
+    jz 1f
+    cmp rsi, [rcx + AXK_opts + VEC_len]
+    jae 1f
+    jmp agent_answer
+1:  ret
+
+# FN agentext_ext_pick(AS*, n) -> eax 1: the extension driver's answer: "N+1" to its agent-ask
+FN agentext_ext_pick
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    xor eax, eax
     mov r13, [rbx + AS_ask]
     test r13, r13
     jz 9f
     cmp r12, [r13 + AXK_opts + VEC_len]
     jae 9f
+    cmp qword ptr [r13 + AXK_ext], 0
+    je 9f
     mov qword ptr [rbx + AS_ask], 0
     lea rdi, [rip + num]
     lea rsi, [r12 + 1]
@@ -1814,6 +1942,7 @@ FN agentext_pick
     mov rdi, r13
     call card_free
     mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
 9:  EPILOGUE
 
 # FN agentext_cancel(ext, id) -> eax 1 when it was one of its cards: it goes, answered cancelled
@@ -1843,11 +1972,10 @@ FN agentext_cancel
 
 # ---- prompts ----
 
-# FN agentext_send(): the box's text to the session it belongs to, or to a new session
+# FN agentext_send(): the box's text to the session it belongs to, or to a new session: its driver
+#   takes it (agent_send), and the box empties when it went or waits to go
 FN agentext_send
     PROLOGUE 16
-    cmp qword ptr [rip + pend_id], 0
-    jne 9f                      # one prompt at a time
     lea rdi, [rip + in_tf]
     call tf_text
     mov r12, rax
@@ -1859,16 +1987,76 @@ FN agentext_send
     inc rcx
     cmp eax, ' '
     jbe 71b
-    cmp r13, AX_PROMPT_MAX
-    ja 7f
-    xor ebx, ebx
-    mov r14, [rip + new_ext]
-    test r14, r14
-    jnz 1f                      # a new session
-    call agents_ext_open        # else the session the panel shows
+    cmp qword ptr [rip + new_ext], 0
+    je 1f
+    xor edi, edi                # a new session of an extension
+    mov rsi, r12
+    mov rdx, r13
+    call agentext_ext_send
+    jmp 5f
+1:  mov rdi, [rip + new_kind]
+    test rdi, rdi
+    jz 2f
+    mov qword ptr [rip + keep_box], 1   # a new conversation of a built-in driver opens with the text
+    call agent_new
+    mov qword ptr [rip + keep_box], 0
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    lea rdi, [rip + in_tf]      # opening it may have moved the text
+    call tf_text
+    mov r12, rax
+    mov r13, rdx
+    jmp 3f
+2:  call agents_open_driven     # else the session the panel shows
     test rax, rax
     jz 9f
     mov rbx, rax
+    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
+    je 4f                       # an extension's driver takes the box itself (agentext_ext_send)
+3:  cmp [rip + in_as], rbx      # the box is this session's from now on
+    je 4f
+    mov [rip + in_as], rbx
+    inc qword ptr [rip + in_gen]
+4:  mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call agent_send
+5:  cmp eax, SEND_OK
+    je 6f
+    cmp eax, SEND_QUEUED
+    je 6f
+    lea rdi, [rip + .Lsend_refused]
+    cmp eax, SEND_REFUSED
+    je 7f
+    lea rdi, [rip + .Lsend_full]
+    cmp eax, SEND_FULL
+    jne 9f
+7:  call app_toast
+    EPILOGUE
+6:  lea rdi, [rip + in_tf]
+    call tf_clear
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+8:  lea rdi, [rip + .Lnew_failed]
+    call app_toast
+9:  EPILOGUE
+
+# FN agentext_ext_send(AS* or 0 for a new session of new_ext, ptr, len) -> eax SEND_OK when the
+#   agent-prompt went (its text is kept until the answer), else SEND_FAILED: the extension driver's send
+FN agentext_ext_send
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r15d, SEND_FAILED
+    cmp qword ptr [rip + pend_id], 0
+    jne 9f                      # one prompt at a time
+    cmp r13, AX_PROMPT_MAX
+    ja 7f
+    mov r14, [rip + new_ext]
+    test rbx, rbx
+    jz 1f                       # a new session
     mov rdi, rbx
     call agentext_prompts
     test eax, eax
@@ -1924,15 +2112,34 @@ FN agentext_send
     mov rsi, r12
     mov rdx, r13
     call sb_push
-    lea rdi, [rip + in_tf]
-    call tf_clear
-    mov dword ptr [rip + g_dirty], 1
-    EPILOGUE
+    mov r15d, SEND_OK
+    jmp 9f
 8:  lea rdi, [rip + .Lnot_running]
     call app_toast
-    EPILOGUE
+    jmp 9f
 7:  lea rdi, [rip + .Lprompt_long]
     call app_toast
+9:  mov eax, r15d
+    EPILOGUE
+
+# FN agentext_restore(AS*, ptr, len): text that did not go goes back in the box when the box is that
+#   session's and empty (a driver's start failed with prompts waiting)
+FN agentext_restore
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    cmp [rip + in_as], rbx
+    jne 9f
+    lea rdi, [rip + in_tf]
+    call tf_text
+    test rdx, rdx
+    jnz 9f
+    lea rdi, [rip + in_tf]
+    mov rsi, r12
+    mov rdx, r13
+    call tf_set
+    mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
 # FN agentext_prompt_reply(ext, id, ok, body, len) -> eax 1 when it answered the prompt in flight:
@@ -2091,13 +2298,34 @@ FN agentext_new
     test eax, eax
     jz 9f
     mov [rip + new_ext], rbx
+    mov qword ptr [rip + new_kind], 0
+    call draft_begin
+9:  EPILOGUE
+
+# FN agentext_new_kind(kind) -> eax 1: a new conversation of that built-in driver is being written (the
+#   box, no messages yet); 0 when the driver is not available
+FN agentext_new_kind
+    PROLOGUE
+    mov rbx, rdi
+    call agent_drv_for_kind
+    test rax, rax
+    jz 9f
+    mov qword ptr [rip + new_ext], 0
+    mov [rip + new_kind], rbx
+    call draft_begin
+    mov eax, 1
+9:  EPILOGUE
+
+# draft_begin(): the box is the new session's, empty, with the keys
+draft_begin:
+    PROLOGUE
     mov qword ptr [rip + in_as], 0
     inc qword ptr [rip + in_gen]
     lea rdi, [rip + in_tf]
     call tf_clear
     mov dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
     mov dword ptr [rip + g_dirty], 1
-9:  EPILOGUE
+    EPILOGUE
 
 # prompts_ok(ext) -> eax 1 when a new session of it can be written: it runs, agreed agents and
 #   agent-prompts, lists sessions, and is switched on in Settings > Agents
@@ -2129,6 +2357,7 @@ FN agentext_opened
     PROLOGUE
     mov rbx, rdi
     mov qword ptr [rip + new_ext], 0
+    mov qword ptr [rip + new_kind], 0
     call want_clear
     cmp [rip + in_as], rbx
     je 9f
@@ -2140,14 +2369,19 @@ FN agentext_opened
     call tf_clear
 9:  EPILOGUE
 
-# FN agentext_new_active() -> rax the extension a new session is written for, or 0
+# FN agentext_new_active() -> rax not 0 while a new session is written: its extension (EXT*), or the
+#   built-in driver's kind (AG_*)
 FN agentext_new_active
     mov rax, [rip + new_ext]
-    ret
+    test rax, rax
+    jnz 1f
+    mov rax, [rip + new_kind]
+1:  ret
 
 # FN agentext_new_leave(): back to the list
 FN agentext_new_leave
     mov qword ptr [rip + new_ext], 0
+    mov qword ptr [rip + new_kind], 0
     cmp dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
     jne 1f
     mov dword ptr [rip + g_focus], FOCUS_AGENTS
@@ -2160,6 +2394,22 @@ FN agentext_new_leave
 FN agentext_field
     lea rax, [rip + in_tf]
     ret
+
+# FN agentext_typed(): text was typed into the box: the session it belongs to hears of it (agent_typing:
+#   a driven session's program starts). A new conversation's session is the driver's to make
+FN agentext_typed
+    cmp qword ptr [rip + new_ext], 0
+    jne 1f
+    cmp qword ptr [rip + new_kind], 0
+    jne 1f
+    push rbx
+    call agents_open_driven
+    pop rbx
+    test rax, rax
+    jz 1f
+    mov rdi, rax
+    jmp agent_typing
+1:  ret
 
 # FN agentext_paste(ptr, len)
 FN agentext_paste
@@ -2181,7 +2431,9 @@ FN agentext_input_key
     jmp 9f
 6:  cmp qword ptr [rip + new_ext], 0
     jne 0f
-    call agents_ext_open        # the box has no session any more: the panel takes the keys
+    cmp qword ptr [rip + new_kind], 0
+    jne 0f
+    call agents_open_driven     # the box has no session any more: the panel takes the keys
     test rax, rax
     jz 7f
 0:  cmp r12d, KEY_ESCAPE
@@ -2351,8 +2603,8 @@ opt_w:
     cmovg eax, ecx
     EPILOGUE
 
-# FN agentext_bottom_h(AS*, w) -> eax the height under a session's messages: its card and, when its
-#   extension takes prompts, the prompt box
+# FN agentext_bottom_h(AS*, w) -> eax the height under a session's messages: its card and, when it has
+#   a driver, the prompt box
 FN agentext_bottom_h
     PROLOGUE
     mov rbx, rdi
@@ -2360,8 +2612,8 @@ FN agentext_bottom_h
     call card_h
     mov r13d, eax
     mov rdi, rbx
-    call agentext_prompts
-    test eax, eax
+    call agent_drv_of
+    test rax, rax
     jz 1f
     mov edi, r12d
     call input_h
@@ -2425,9 +2677,9 @@ FN agentext_bottom_draw
     jz 2f
     mov [rsp + 20], eax
     mov rdi, rbx                # the box keeps its room; a card that does not fit is cut
-    call agentext_prompts
+    call agent_drv_of
     xor ecx, ecx
-    test eax, eax
+    test rax, rax
     jz 11f
     mov edi, [rsp + 8]
     call input_h
@@ -2454,8 +2706,8 @@ FN agentext_bottom_draw
     mov eax, [rsp + 20]
     add [rsp + 16], eax
 2:  mov rdi, rbx
-    call agentext_prompts
-    test eax, eax
+    call agent_drv_of
+    test rax, rax
     jz 9f
 3:  # the box
     mov edi, [rsp + 8]
@@ -2553,7 +2805,7 @@ FN agentext_bottom_draw
     call agentext_send
     jmp 9f
 8:  mov rdi, rbx
-    call agentext_stop
+    call agent_stop
 9:  EPILOGUE
 
 # card_draw(AS*, x, y, w, h): the card's prompt and its options as buttons (1 to 9 pick)
@@ -2772,8 +3024,16 @@ FN agentext_new_draw
     lea rsi, [rip + .Lnew_head]
     call sb_push_cstr
     mov rdi, [rip + new_ext]
+    test rdi, rdi
+    jz 11f
     call agentext_title
-    lea rdi, [rip + tmp]
+    jmp 12f
+11: mov rdi, [rip + new_kind]   # a built-in driver's: its name
+    call agent_drv_for_kind
+    test rax, rax
+    jz 12f
+    mov rax, [rax + DRV_name]
+12: lea rdi, [rip + tmp]
     mov rsi, rax
     call sb_push_cstr
     lea rdi, [rip + tmp]
@@ -2824,7 +3084,8 @@ FN agentext_new_draw
 9:  EPILOGUE
 
 # FN agentext_list_buttons(right, y, h) -> eax the left edge: "+ TITLE" for each running extension
-#   that takes prompts, right to left; a click starts a new session of it
+#   that takes prompts, right to left, then "+ Claude Code" when its driver is available; a click starts
+#   a new session of it
 FN agentext_list_buttons
     PROLOGUE 32
     mov r13d, edi
@@ -2840,15 +3101,56 @@ FN agentext_list_buttons
     call prompts_ok
     test eax, eax
     jz 1b
+    mov rdi, rbx
+    call agentext_title
+    lea edi, [r12 + ID_AI_CARD + 40 - 1]
+    mov rsi, rax
+    mov edx, r13d
+    mov ecx, [rsp]
+    mov r8d, [rsp + 4]
+    call plus_btn
+    mov r13d, eax
+    test edx, edx
+    jz 3f
+    mov rdi, rbx
+    call agentext_new
+3:  sub r13d, [rip + g_mt + 4*MI_4]
+    jmp 1b
+9:  mov edi, AG_CLAUDE          # the built-in driver, leftmost
+    call agent_drv_for_kind
+    test rax, rax
+    jz 10f
+    mov edi, ID_AI_CARD + 36
+    mov rsi, [rax + DRV_name]
+    mov edx, r13d
+    mov ecx, [rsp]
+    mov r8d, [rsp + 4]
+    call plus_btn
+    mov r13d, eax
+    sub r13d, [rip + g_mt + 4*MI_4]
+    test edx, edx
+    jz 10f
+    mov edi, AG_CLAUDE
+    call agentext_new_kind
+10: mov eax, r13d
+    EPILOGUE
+
+# plus_btn(id, title cstr, right, y, h) -> eax its left edge, edx 1 when it was clicked: "+ TITLE"
+#   ending at right
+plus_btn:
+    PROLOGUE 16
+    mov [rsp], edi
+    mov rbx, rsi
+    mov r13d, edx
+    mov [rsp + 4], ecx
+    mov [rsp + 8], r8d
     lea rdi, [rip + tmp]
     call sb_clear
     lea rdi, [rip + tmp]
     lea rsi, [rip + .Lplus_sp]
     call sb_push_cstr
-    mov rdi, rbx
-    call agentext_title
     lea rdi, [rip + tmp]
-    mov rsi, rax
+    mov rsi, rbx
     call sb_push_cstr
     lea rdi, [rip + g_face_small]
     mov rsi, [rip + tmp + SB_ptr]
@@ -2857,27 +3159,27 @@ FN agentext_list_buttons
     add eax, [rip + g_mt + 4*MI_16]
     mov r14d, eax
     sub r13d, eax
-    lea edi, [r12 + ID_AI_CARD + 40 - 1]
+    mov edi, [rsp]
     mov esi, r13d
-    mov edx, [rsp]
+    mov edx, [rsp + 4]
     mov ecx, r14d
-    mov r8d, [rsp + 4]
+    mov r8d, [rsp + 8]
     call ui_btn
     mov r15d, eax
     test r15d, UB_HOVER
     jz 2f
     mov edi, r13d
-    mov esi, [rsp]
+    mov esi, [rsp + 4]
     mov edx, r14d
-    mov ecx, [rsp + 4]
+    mov ecx, [rsp + 8]
     M r8d, MI_RADIUS
     COLOR r9d, T_HOVER
     call gfx_round_rect
 2:  lea rdi, [rip + g_face_small]
     mov esi, r13d
     add esi, [rip + g_mt + 4*MI_8]
-    mov edx, [rsp]
-    mov ecx, [rsp + 4]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
     mov r8, [rip + tmp + SB_ptr]
     mov r9, [rip + tmp + SB_len]
     COLOR eax, T_ACCENT
@@ -2885,17 +3187,14 @@ FN agentext_list_buttons
     push rax
     call ui_text_v
     add rsp, 16
+    mov eax, r13d
+    xor edx, edx
     test r15d, UB_CLICK
-    jz 3f
-    mov rdi, rbx
-    call agentext_new
-3:  sub r13d, [rip + g_mt + 4*MI_4]
-    jmp 1b
-9:  mov eax, r13d
+    setnz dl
     EPILOGUE
 
-# FN agentext_input_dump(sb): "input=TEXT focus=0|1 new=OWNER/NAME|- pending=0|1" and the open card's
-#   "card=PROMPT options=A|B" (print-agent-input)
+# FN agentext_input_dump(sb): "input=TEXT focus=0|1 new=OWNER/NAME|KIND|- pending=0|1 box=0|1" and the
+#   open card's "card=PROMPT options=A|B" (print-agent-input)
 FN agentext_input_dump
     PROLOGUE
     mov rbx, rdi
@@ -2922,7 +3221,12 @@ FN agentext_input_dump
     test rdi, rdi
     jz 1f
     call ext_qualified
-1:  mov rdi, rbx
+    jmp 12f
+1:  mov rdi, [rip + new_kind]   # a built-in driver's new conversation: its word (agent-new claude)
+    test rdi, rdi
+    jz 12f
+    call agent_kind_name
+12: mov rdi, rbx
     mov rsi, rax
     call sb_push_cstr
     mov rdi, rbx
@@ -2933,10 +3237,23 @@ FN agentext_input_dump
     setne sil
     mov rdi, rbx
     call sb_push_u64
+    mov rdi, rbx                # box=1 when the draft or the open session has a driver
+    lea rsi, [rip + .Ld_box]
+    call sb_push_cstr
+    call agentext_new_active
+    mov esi, 1
+    test rax, rax
+    jnz 13f
+    call agents_open_driven
+    xor esi, esi
+    test rax, rax
+    setnz sil
+13: mov rdi, rbx
+    call sb_push_u64
     mov rdi, rbx
     mov esi, 10
     call sb_push_byte
-    call agents_ext_open
+    call agents_open_driven
     test rax, rax
     jz 9f
     mov r12, [rax + AS_ask]
@@ -2997,6 +3314,9 @@ FN agentext_prompts_gone
 .Lnot_running: .asciz "The agent's extension is not running"
 .Lprompt_failed: .asciz "The agent refused the prompt: "
 .Lprompt_long: .asciz "The prompt is longer than 64 KB"
+.Lsend_refused: .asciz "Claude is still working. Stop it or wait for the reply."
+.Lsend_full: .asciz "Four prompts are already waiting to be sent."
+.Lnew_failed: .asciz "The new conversation could not be started."
 .Lph_reply: .asciz "Reply to the agent (Enter sends, Shift+Enter a new line)"
 .Lph_new: .asciz "What should the agent do? (Enter starts the session)"
 .Lb_send: .asciz "Send"
@@ -3009,6 +3329,7 @@ FN agentext_prompts_gone
 .Ld_focus: .asciz " focus="
 .Ld_pending: .asciz " pending="
 .Ld_new: .asciz " new="
+.Ld_box: .asciz " box="
 .Ld_card: .asciz "card="
 .Ld_options: .asciz " options="
 .Le_cancelled: .asciz "cancelled"

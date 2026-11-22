@@ -182,6 +182,7 @@ FN main
 1:
     call dap_shutdown           # debugger: sessions disconnect, adapters are stopped
     call bp_save
+    call agent_drv_shutdown     # agents: the sessions rhun drives end with their programs
     call agent_conn_shutdown    # agents: their programs' pipes close, SIGTERM now
     call uproc_quit_begin       # programs run as the user: SIGTERM now, up to 300 ms with the extensions
     call testexec_quit          # testing: test processes do not outlive rhun

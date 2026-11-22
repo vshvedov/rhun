@@ -3987,10 +3987,12 @@ msg_doc:
 
 # th_prepare(AS*, frame*, total) -> eax the total again: the replies in view this frame that were
 #   never parsed get their Markdown before anything is drawn (frame: thread_draw's, x [0], w [8], the
-#   area's y [20] and h [24], the text width [32]). A row that begins above the view moves the scroll
-#   by what it grew, so the rows after it stay where they were
+#   area's y [20] and h [24], the text width [32]). A row before the first one that was drawn last
+#   frame and is still in view (scrolling up brings rows in above it) moves the scroll by what it grew,
+#   so the rows that were in view stay where they were; with no such row, one that begins above the
+#   view does
 th_prepare:
-    PROLOGUE 32
+    PROLOGUE 48
     mov rbx, rdi
     mov r14, rsi
     mov r15d, edx
@@ -4030,6 +4032,37 @@ th_prepare:
     mov r13d, [r14 + 20]
     add r13d, [rip + g_mt + 4*MI_12]
     sub r13d, eax
+    mov [rsp + 32], r13d
+    # the anchor: the first row drawn last frame that is in view at this scroll
+    mov qword ptr [rsp + 24], -1
+    xor r12d, r12d
+.Ltp_anchor:
+    cmp r12, [rbx + AS_msgs + VEC_len]
+    jae .Ltp_walk
+    mov eax, [r14 + 20]
+    add eax, [r14 + 24]
+    cmp r13d, eax
+    jge .Ltp_walk
+    imul rdi, r12, AM_SIZE
+    add rdi, [rbx + AS_msgs + VEC_ptr]
+    mov [rsp + 8], rdi
+    mov esi, [r14 + 32]
+    call msg_height
+    add r13d, eax
+    mov rdi, [rsp + 8]
+    mov ecx, [rip + th_serial]
+    dec ecx                     # last frame's
+    cmp [rdi + AM_dser], ecx
+    jne 6f
+    cmp r13d, [r14 + 20]
+    jl 6f
+    mov [rsp + 24], r12
+    jmp .Ltp_walk
+6:  add r13d, [rip + g_mt + 4*MI_8]
+    inc r12
+    jmp .Ltp_anchor
+.Ltp_walk:
+    mov r13d, [rsp + 32]
     xor r12d, r12d
 .Ltp_row:
     cmp r12, [rbx + AS_msgs + VEC_len]
@@ -4061,9 +4094,15 @@ th_prepare:
     sub ecx, [rsp]
     mov [rsp], eax
     add r15d, ecx
-    cmp r13d, [r14 + 20]
+    mov rax, [rsp + 24]
+    test rax, rax
+    js 7f
+    cmp r12, rax
+    jae .Ltp_next               # at or after the anchor: it grows downwards
+    jmp 8f
+7:  cmp r13d, [r14 + 20]
     jge .Ltp_next
-    cmp dword ptr [rsp + 20], 0
+8:  cmp dword ptr [rsp + 20], 0
     jne 5f
     cmp dword ptr [rip + th_follow], 0
     jne .Ltp_next               # following: the end stays at the bottom

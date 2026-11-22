@@ -11,6 +11,11 @@ pollfds: .zero 8 * MAX_WATCH
 g_plat: .zero PLAT_SIZE
 g_quit: .long 0
 g_dirty: .long 0
+# loop_run's passes and the frames it drew, since rhun started (print-loop-stats, the idle baseline)
+.p2align 3
+.globl g_loop_passes, g_loop_draws
+g_loop_passes: .quad 0
+g_loop_draws: .quad 0
 
 .text
 
@@ -89,8 +94,10 @@ FN loop_run
 .Llr_loop:
     cmp dword ptr [rip + g_quit], 0
     jne .Llr_ret
+    inc qword ptr [rip + g_loop_passes]
     cmp dword ptr [rip + g_dirty], 0
     je 1f
+    inc qword ptr [rip + g_loop_draws]
     PCALL P_draw
 1:  PCALL P_flush
     # timeout = min(plat, app)

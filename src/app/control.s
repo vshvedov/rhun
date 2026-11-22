@@ -1471,6 +1471,26 @@ c_print_frames:
     xor eax, eax
     ret
 
+# print-loop-stats: the main loop's passes and the frames it drew, since rhun started
+c_print_loop_stats:
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_passes]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov rsi, qword ptr [rip + g_loop_passes]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_draws]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov rsi, qword ptr [rip + g_loop_draws]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    ret
+
 # print-update: the updater's state, the running and the latest version, the last error, and the
 # Check now row's text in Settings on a second line (desc=)
 c_print_update:
@@ -2329,6 +2349,7 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Lc_wait_update: .asciz "wait-update"
 .Lc_print_update: .asciz "print-update"
 .Lc_print_frames: .asciz "print-frames"
+.Lc_print_loop_stats: .asciz "print-loop-stats"
 .Lc_apply_document: .asciz "apply-document"
 .Lc_provider_set: .asciz "provider-set"
 .Lc_print_providers: .asciz "print-providers"
@@ -2392,6 +2413,8 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Ls_agents_eq: .asciz " agents="
 .Ls_toast: .asciz "toast="
 .Ls_frames: .asciz "frames="
+.Ls_passes: .asciz "passes="
+.Ls_draws: .asciz " draws="
 .Ls_term: .asciz " term="
 .Ls_hidden: .asciz " hidden"
 .Ls_builtin: .asciz "built-in"
@@ -2450,7 +2473,8 @@ ctl_table:
     .quad .Lc_print_scm, c_print_scm
     .quad .Lc_wait_ai, c_wait_ai, .Lc_print_ai, c_print_ai
     .quad .Lc_wait_update, c_wait_update, .Lc_print_update, c_print_update
-    .quad .Lc_print_frames, c_print_frames, .Lc_print_project, c_print_project
+    .quad .Lc_print_frames, c_print_frames, .Lc_print_loop_stats, c_print_loop_stats
+    .quad .Lc_print_project, c_print_project
     .quad .Lc_print_panels, c_print_panels, .Lc_print_tabs, c_print_tabs
     .quad .Lc_print_palette, c_print_palette, .Lc_print_menu, c_print_menu
     .quad .Lc_print_tip, c_print_tip, .Lc_print_toast, c_print_toast, .Lc_print_link, c_print_link

@@ -2892,6 +2892,7 @@ timeout_fns:
     .quad ext_provider_timeout
     .quad save_timeout
     .quad uproc_timeout
+    .quad agent_conn_timeout    # agents: connections to their programs (agent_conn.s)
     .quad termproto_timeout     # tasks: terminal output waiting for its budget (termproto.s)
     .quad query_timeout
     .quad testing_timeout
@@ -2932,6 +2933,7 @@ FN app_tick
     mov dword ptr [rip + g_dirty], 1
 2:  call agents_tick
     call uproc_tick
+    call agent_conn_tick        # agents: connections to their programs (agent_conn.s)
     call term_tick
     call problems_tick          # documents opened since get their problems' marks
     call termproto_tick         # extensions' terminal output

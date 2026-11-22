@@ -96,6 +96,10 @@ check syntax-word build/grammar_test --try tests/data/region-word.syn tests/data
 check themes build/theme_test
 check term build/term_test
 check diff build/diff_test
+# agents: connections to a long-lived child (agent_conn.s)
+for s in exit stderr spawnfail echo fill stop linger bigline biglinenl watchfull watchlate guard reopen breaklast; do
+    check agent-conn-$s build/agent_conn_test $s tests/scripts/fake-agent.py
+done
 # debugger: the JSON builder and parser
 check json build/json_test
 check images build/image_test $(ls tests/data/images/* | LC_ALL=C sort)

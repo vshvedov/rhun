@@ -2856,6 +2856,58 @@ F AS_from, 8            # kind 5: the FROM of that request
 F AS_ask, 8             # kind 5 (D4): the open card, an AK record, or 0
 ENDSTRUCT AS_SIZE
 
+# ---- agent connections (src/app/agent_conn.s): a long-lived child on three pipes (embedded, caller's) ----
+STRUCT
+F CN_pid, 4             # the child (uproc.s)
+F CN_fd_in, 4           # rhun writes the child's stdin here; -1 once closed
+F CN_fd_out, 4          # its stdout; -1 after EOF
+F CN_fd_err, 4          # its stderr; -1 after EOF
+F CN_state, 4           # CN_IDLE, CN_UP, CN_STOPPING, CN_DEAD
+F CN_exit, 4            # exit status once reaped; -1 before, and for a child that was not ours any more
+F CN_gen, 4             # incremented by every conn_open
+F CN_err, 4             # CN_E_* of the end, or of the failed open
+F CN_rbuf, SB_SIZE      # stdout bytes not yet delivered (a partial line)
+F CN_scanned, 8         # bytes at the front of CN_rbuf known to hold no newline
+F CN_ebuf, SB_SIZE      # the last CN_ERR_KEEP bytes of stderr (kept after the end, for error rows)
+F CN_wbuf, SB_SIZE      # bytes queued for stdin
+F CN_wpos, 8            # bytes at the front of CN_wbuf already written
+F CN_on_line, 8         # (CN*, ptr, len): one stdout line, without its newline
+F CN_on_close, 8        # (CN*, err): once, when the child is reaped or the connection broke
+F CN_ctx, 8             # the caller's
+F CN_moved, 8           # time_ms when the queue last moved (stall detection)
+F CN_stop_at, 8         # time_ms of the stop sequence's next signal, 0 none
+F CN_eof_at, 8          # time_ms stdout reached its end, 0 before
+F CN_flags, 4           # CNF_*
+F CN_pad, 4
+F CN_reap_from, 8       # time_ms reaping began or a signal went: uproc_wait each tick for 500 ms after
+F CN_reap_at, 8         # then at this time_ms (1 s steps)
+ENDSTRUCT CN_SIZE
+.equ CN_IDLE, 0
+.equ CN_UP, 1
+.equ CN_STOPPING, 2     # its input ended or is ending: no more writes; lines still come
+.equ CN_DEAD, 3         # on_close was delivered; buffers stay until conn_close or conn_open
+.equ CNF_ENDIN, 1       # close stdin once the queue drained (conn_end_input)
+.equ CNF_TERM, 2        # SIGTERM went
+.equ CNF_KILL, 4        # SIGKILL went
+.equ CN_E_NONE, 0
+.equ CN_E_SPAWN, 1      # argv[0] is not there, or no pipe or process could be made
+.equ CN_E_WATCH, 2      # the event loop's watch table is full
+.equ CN_E_LINE, 3       # a line above CN_LINE_MAX
+.equ CN_E_STALL, 4      # the queue did not move for g_conn_stall_ms
+.equ CN_E_WRITE, 5      # EPIPE or another error writing stdin
+.equ CN_E_READ, 6
+.equ CN_E_EXIT, 7       # the child is gone; CN_exit holds its status
+.equ CN_E_GUARD, 8      # g_conn_max connections are open
+.equ CN_MAX, 32
+.equ CN_LINE_MAX, 64 << 20
+.equ CN_QUEUE_MAX, 16 << 20
+.equ CN_STALL_MS, 30000
+.equ CN_ERR_KEEP, 65536
+.equ CN_TERM_MS, 2000   # input closed -> SIGTERM
+.equ CN_KILL_MS, 5000   # SIGTERM -> SIGKILL
+.equ CN_DRAIN, 262144   # stdout bytes read per wake-up
+.equ CN_EOF_MS, 5000    # stdout closed but the child still runs -> the stop sequence
+
 # ---- debugger (DAP client): debugcfg.s, dapwire.s, dap.s, bp.s, debugconsole.s, debugctl.s ----
 .equ NEEDS_DEBUG, 0x10000           # [needs] debug = yes: start debug adapters that run as the user
 .equ DBG_MAX, 64                    # debuggers ([debugger.TYPE] sections), in all

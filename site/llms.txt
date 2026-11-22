@@ -1,6 +1,6 @@
 # rhun
 
-> rhun is a small, very fast code editor for Linux (x86-64), macOS (Apple silicon) and Windows (x64), written in assembly. It has tabs, a file explorer, syntax highlighting for 127 languages and file formats, find and replace, a built-in terminal, Git history and diffs, fuzzy search, an optional Vim mode, 40 color themes and an agents panel that shows Claude Code and Codex sessions live. Free and open source (MIT). Current version: @VERSION@.
+> rhun is a small, very fast code editor for Linux (x86-64), macOS (Apple silicon) and Windows (x64), written in assembly. It has tabs, a file explorer, syntax highlighting for 127 languages and file formats, find and replace, a built-in terminal, Git history and diffs, fuzzy search, an optional Vim mode, 40 color themes and an agents panel that shows Claude Code, Codex, Grok Build and OpenCode sessions live and talks to Claude Code, with replies drawn as Markdown. Free and open source (MIT). Current version: @VERSION@.
 
 Facts:
 

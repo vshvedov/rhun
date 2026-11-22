@@ -77,13 +77,17 @@
   {
     "slug": "agents",
     "title": "Agents",
-    "description": "Follow Claude Code and Codex sessions across your project and worktrees.",
+    "description": "Talk to Claude Code and follow your agents' sessions across your project and worktrees.",
     "image": "agents",
     "alt": "The rhun agents panel showing project sessions",
     "sections": [
       [
         "start",
         "Bring your agent"
+      ],
+      [
+        "talk",
+        "Talk to Claude Code"
       ],
       [
         "sessions",

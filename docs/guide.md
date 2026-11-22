@@ -11,6 +11,7 @@ rhun draws everything itself: it rasterizes TrueType fonts, icons and widgets in
 - 40 color themes, dark and light, with a match for every Omarchy theme; add your own. A dark and a light theme switch with the system's dark mode on macOS, Windows and Linux, as in VS Code
 - Settings page and a readable config file, both applied while running
 - Agents panel: Claude Code, Codex, Grok Build and OpenCode sessions of the project and its Git worktrees, with theme-colored provider badges and icons, updated live as the agent works. Worktree sessions show a branch icon and the worktree name in a badge beside the provider. Each row names the model its session last used, and in a conversation a reply's label names its model where it changed (Grok Build's row shows the session's current model). The list starts with the 50 most recently active sessions across all providers and related worktrees. Load more adds 50. Discovery runs in the background and reuses a saved metadata index; routine refreshes are silent, and pause while the panel is hidden.
+  You can talk to Claude Code in the panel itself, with cards for its permissions, questions and plans (see [Talk to Claude Code](#talk-to-claude-code)). Every agent's replies are drawn as Markdown, and the panel has a text size of its own.
   Grok Build sessions come from `~/.grok/sessions` (`$GROK_HOME/sessions` when set) with the titles Grok gives them; one shows once it has a prompt, and a subagent's session stays inside its parent's. The clones Grok makes with `grok --worktree` are not Git worktrees of the project, so their sessions are not listed. Settings has a switch for each provider under Agents, all on by default (`[agents]` `claude`, `codex`, `grok` and `opencode` in the config file). A config from before the switches keeps its `sources` selection for the others and gets OpenCode on.
   Git worktree registrations supply the checkout roots. Rhun remembers verified worktree paths in repository-specific state, so their agent history stays visible after the checkouts are deleted or Git prunes their registrations. Nested Claude worktree history can also be recovered from its exact recorded path without prior Rhun state. If another repository takes over a remembered checkout path, Rhun keeps previously verified sessions and excludes new sessions from that repository. When Git metadata is stored outside the main checkout and contains no reference to its path, open the main checkout to include its sessions.
 - Terminal panel: shells with 24-bit color, mouse, scrollback and full-screen programs; Cmd+click (Ctrl+click on Linux and Windows) opens links in the browser and files in a tab
@@ -80,6 +81,159 @@ question about unsaved files when closing or quitting ask the same; Vim's `:wq` 
 Overwrite, and `:wa` leaves read-only files unsaved. In a folder that takes no new file, a save fails
 as any other.
 
+## Talk to Claude Code
+
+rhun talks to Claude Code from the agents panel. It runs the `claude` you have installed, one
+process per conversation you use, with whatever Claude Code is signed in with. Conversations use
+your plan's limits as they do in the CLI; rhun makes no request to Anthropic itself. The terminal
+stays a way to use Claude Code as before: a conversation is the same one `claude --resume` shows,
+so you can go on with it in either place.
+
+**+ Claude Code** in the panel's header starts a new conversation: write the first prompt in the
+box and press Enter. To continue an existing conversation, open it from the list and write in the
+box under it. Enter sends and Shift+Enter starts a new line; in the panel, Enter or Tab goes to the
+box and Escape leaves it. The reply streams in as Claude writes it. A tool call shows as a row once
+Claude has written it, and its output as a result row; thinking and the work of subagents are not
+shown. The permission mode Claude Code reports shows as `mode: NAME` beside Send.
+
+The process starts when you type the first character in a conversation's box, so it is usually
+ready by the time you send; reading conversations starts nothing. Up to four prompts sent while it
+starts wait for it. While a turn runs, Send leaves the text in the box and says so: stop the turn
+or wait for the reply. A prompt is at most 50,000 characters. **Stop**, or Escape while the panel
+or its box has the focus, interrupts the turn, and an "Interrupted" row marks it. After
+`idle_stop_minutes` without a turn, a card or typing, the process is stopped; the next prompt
+starts it again and goes on with the same conversation. A new conversation you leave before
+sending anything is dropped, with its process. Quitting rhun, opening another folder or turning
+the chat off ends every process rhun started. A process that ends by itself during a turn leaves
+an error row with the last lines it printed, and prompts that were still waiting go back into the
+box.
+
+While rhun talks to Claude Code, the rows come from the process. When the process ends, the
+conversation is read again from Claude Code's own file, so the panel shows what the file holds. A
+running process keeps the program, wrapper and environment it was started with; changed settings
+apply to the next start. In a [remote window](#remote-hosts) Claude Code's conversations are listed
+and read, without a box.
+
+| Key | Action |
+| --- | --- |
+| Enter, Tab | In the panel: go to the prompt box |
+| Enter, Shift+Enter | In the box: send, new line |
+| Escape | Stop the turn while one runs; otherwise leave the box, then the conversation |
+| 1 to 9; arrows and Enter | Pick an option of the card (while the panel has the focus) |
+| Ctrl+Plus, Ctrl+Minus, Ctrl+0 | The panel's text size, while the panel or its box has the focus |
+
+### Permissions, questions and plans
+
+When Claude Code asks before using a tool, a card shows under the conversation with the question
+for that tool, such as "Allow this bash command?" and the command, "Make this edit to FILE?" or
+"Allow write to FILE?", and the buttons **Yes** and **No**. Yes lets the tool run with its input
+unchanged; No refuses it, and Claude stops and waits for you to say how to go on. One card shows at
+a time, the oldest first, and the others wait behind it. A request Claude withdraws goes, with a
+"Withdrawn by Claude" row. If the process ends while a card is up, the card goes and a row says so.
+
+Claude's questions show the same way, one card per question with a button per answer, in the order
+asked; a question that takes several answers takes one here. A plan Claude asks you to approve
+shows as a reply, then a card "Accept this plan?": **Yes** leaves plan mode, so Claude can go on
+and edit, and **No, keep planning** keeps it planning. Requests of other kinds (from hooks, MCP
+servers or forms) are answered as not supported, so Claude never waits for a card that is not
+there.
+
+### Open somewhere else
+
+Before continuing a conversation, rhun looks in Claude Code's records of its running sessions for
+another Claude Code that has it open, such as one in a terminal. It waits up to 10 seconds for that
+one to let go, then asks: "This conversation is still open somewhere else." **Open here anyway**
+continues it in rhun too. **Continue in a copy** makes a new conversation from it, "Copy of TITLE",
+sends your prompt there and leaves the original alone. **Cancel** puts your prompt back into the
+box. rhun does not check on Windows.
+
+### Sign-in and folder trust
+
+Signing in is Claude Code's own: run `claude auth login` in rhun's terminal, or anywhere else, and
+rhun uses that sign-in through the CLI. rhun never signs in, reads or stores Claude Code's
+credentials. When the CLI says it is not signed in, the box shows "Claude Code is not signed in."
+with **Sign In**, which puts `claude auth login` in rhun's terminal prompt; it runs when you press
+Enter. When `claude` cannot be found, the conversation shows an error row that names Settings >
+Claude Code, and **Run claude in Terminal** puts `claude` in the terminal prompt to see what it
+says.
+
+Claude Code reads the project's own settings only in a folder rhun trusts: one you opened yourself,
+or one you trusted after a `rhun://` link opened it (see **Trust folder** above). In any other
+folder it starts with only your user settings: the project's `.claude/settings.json` and
+`.claude/settings.local.json`, with the hooks and permission rules they hold, are not read. The
+first conversation in such a folder asks first: "Trust this folder? Claude Code would then use the
+project's own settings, hooks and servers." **Trust** trusts the folder, as **Trust Folder for
+Git** does, and starts Claude Code with all its settings; **Continue without** starts it with your
+user settings only, and the window remembers that choice.
+
+### Settings for the chat
+
+These are in Settings > Claude Code and Settings > Agents:
+
+```ini
+[claude]
+chat = true
+executable =
+wrapper =
+initial_mode =
+env.CLAUDE_CONFIG_DIR = /home/me/.claude-work
+[agents]
+idle_stop_minutes = 10
+font_size = 0
+```
+
+- `chat` (**Chat with Claude Code**, on by default): off, Claude Code's conversations get no box,
+  the header has no **+ Claude Code**, and the processes that run are ended.
+- `executable` (**Claude Code program**): the path of `claude`, or a name looked up on the PATH.
+  Empty finds `claude` on your login shell's PATH, then in `~/.local/bin`, `~/.claude/local`,
+  `/opt/homebrew/bin`, `/usr/local/bin`, `~/.npm-global/bin` and `~/.bun/bin` (on Windows
+  `~/.local/bin/claude.exe`).
+- `wrapper` (**Wrapper program**): a program started with `claude` and its arguments after it,
+  found the same way; empty starts `claude` itself.
+- `initial_mode` (**Permission mode**): the mode a conversation starts in. Empty (the default)
+  leaves it to Claude Code's own settings; `default` (Manual), `acceptEdits` (Edit automatically)
+  or `plan` names one. `manual` is read as `default`.
+- `env.NAME = value`: a variable for Claude Code's environment, a line each, at most 64. NAME is
+  letters, digits and `_`, and does not start with a digit. The values are only in the config file:
+  `print-settings` shows `claude.env.NAME=(set)`, and no value is printed or logged. An absolute
+  `env.CLAUDE_CONFIG_DIR` is also where the agents panel finds Claude Code's conversations.
+- `idle_stop_minutes` (**Stop idle agents after**, 10 by default, 0 to 240): minutes without a
+  turn, a card or typing before a conversation's process is stopped. 0 never stops it.
+- `font_size` (**Font size**, under Agents): see [Text size](#text-size) below.
+
+Otherwise Claude Code gets your login shell's environment, without the variables a Claude Code that
+started rhun leaves in it (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`), and with
+`CLAUDE_CODE_ENTRYPOINT=rhun`.
+
+### Markdown replies
+
+The replies in every agent's conversation, read or driven, are drawn as Markdown: headings, bold
+and italic, lists, tables, block quotes, inline code, fenced code blocks with a **Copy** button, and
+links. Your own prompts stay plain text, and tool, result, error and info rows are as before. A
+reply that is still streaming is drawn as it grows; a code block that has not been closed yet shows
+as code.
+
+`http` and `https` links open in the browser and `rhun://` links as rhun opens them. A link to a
+file opens it in the editor at its line: `path`, `path:12`, `path:12:5`, `path:12-20`, `path#L12`
+or `path#L12-L20`, absolute, or relative to the conversation's checkout and then to the project. A
+range goes to its first line, and a file that does not exist shows a message instead.
+
+### Text size
+
+The agents panel has a text size of its own: **Font size** in Settings > Agents (`font_size` under
+`[agents]`). 0, the default, follows the interface's size (**Interface font size** in Settings >
+Appearance); otherwise it is 8 to 32, and 1 to 7 act as 8. It sizes all the panel's text: the
+list, the conversation and its Markdown, cards and the prompt box. Rows, badges and buttons grow
+with it.
+
+**Agents: Increase Font Size**, **Agents: Decrease Font Size** and **Agents: Reset Font Size** in
+the command palette change it wherever the focus is (`agents_font_increase`,
+`agents_font_decrease` and `agents_font_reset` for key bindings). Increase from 0 goes to the
+interface's size plus one, Decrease from 8 goes back to 0, and Reset follows the interface again.
+While the panel or its prompt box has the focus, Zoom In, Zoom Out and Reset Zoom (Command+Plus,
+Command+Minus and Command+0 on macOS; Ctrl+Plus, Ctrl+Minus and Ctrl+0 on Linux and Windows; the
+keypad's plus, minus and 0 too) change this size instead of the editor's.
+
 ## OpenCode sessions
 
 Install the [OpenCode CLI](https://opencode.ai/docs/) and open a terminal in rhun's project.
@@ -95,7 +249,8 @@ and results. Streaming edits replace the stored conversation snapshot; routine b
 refreshes pick them up, including a conversation that remains open after leaving the first page.
 After `/undo` the undone messages are left out until `/redo`, as in OpenCode.
 Archived sessions and subagent sessions are omitted. Use **Refresh** for an immediate scan.
-The panel reads history, as it does for the other agents; interact with OpenCode in the terminal.
+The panel reads OpenCode's history, as it does for Codex and Grok Build; interact with OpenCode in
+the terminal.
 
 OpenCode discovery works with OpenCode 1 (verified with 1.19.0) and OpenCode 2 (verified with
 2.0.28). It runs local SELECT queries in the background, without starting a server or making
@@ -354,6 +509,7 @@ On macOS the title bar is rhun's too, with the window buttons in it. Command wor
 | Ctrl+Tab, Ctrl+W | Next tab, close tab |
 | Ctrl+Shift+W | Close all tabs |
 | Ctrl+Shift+T | Reopen closed tab |
+| Ctrl+Plus, Ctrl+Minus, Ctrl+0 | Zoom in, out, reset: the focused editor, terminal or agents panel |
 
 The **+** after the last tab opens an untitled file at the end of the tabs, and so does a double click on the empty space after them; New File (Ctrl+N) opens one next to the current tab. With more tabs than fit, the + stays at the right end and the wheel scrolls the tabs.
 
@@ -371,7 +527,7 @@ Links in the terminal open with Cmd+click on macOS and Ctrl+click on Linux and W
 
 Programs that turn on the kitty keyboard protocol, such as the Pi agent and fish 4, tell Shift+Enter, Alt+Enter and Ctrl+Enter apart from Enter, so Shift+Enter can start a new line in an agent's prompt instead of sending it. rhun reports those keys, Escape, and Ctrl or Alt with a character as `CSI` codes while a program asks for them (the protocol's first level); other programs get the usual bytes.
 
-Zoom In, Zoom Out and Reset Zoom change the focused editor or terminal independently. On macOS use Command+Plus, Command+Minus and Command+0; on Linux and Windows use Ctrl+Plus, Ctrl+Minus and Ctrl+0. The keypad's plus, minus and 0 work too (its 0 with Num Lock on). Settings > Terminal > Font size controls the terminal separately from Settings > Editor > Font size. The terminal has its own font and line height too: `font` under `[terminal]` names a monospace .ttf file (empty uses the editor's font), and `line_height` is a multiple of the font's own line height, 1.0 by default.
+Zoom In, Zoom Out and Reset Zoom change the focused editor, terminal or agents panel independently. On macOS use Command+Plus, Command+Minus and Command+0; on Linux and Windows use Ctrl+Plus, Ctrl+Minus and Ctrl+0. The keypad's plus, minus and 0 work too (its 0 with Num Lock on). Settings > Terminal > Font size controls the terminal separately from Settings > Editor > Font size, and Settings > Agents > Font size the agents panel (see [Text size](#text-size)). The terminal has its own font and line height too: `font` under `[terminal]` names a monospace .ttf file (empty uses the editor's font), and `line_height` is a multiple of the font's own line height, 1.0 by default.
 
 ### Folders and files
 
@@ -835,7 +991,7 @@ shot /tmp/rhun.ppm
 print-state
 ```
 
-Commands: `key`, `type`, `click x y [right|middle|shift|ctrl]` (ctrl is Cmd+click on macOS), `move`, `down`, `up`, `up-down` (a release and the next press in one frame), `scroll dy [MODS]` (modifiers as a key combination names them: `ctrl`, `shift+alt`), `open`, `cmd`, `shot`, `wait`, `wait-git`, `wait-agents` (until session discovery finishes), `agents-more`, `print-agents-page`, `print-agents-runs` (discovery runs started so far), `print-agents` (sessions and an optional open session number), `wait-grep` (until find in files has read the project), `wait-term TEXT` (until the terminal shows TEXT), `wait-update`, `resize`, `print-doc`, `print-state`, `print-project`, `print-panels` (whether the explorer, the agents panel and the terminal are shown), `print-palette`, `print-menu`, `print-tip` (the tooltip on screen), `print-term`, `print-term-cell ROW COL` (the middle of that terminal cell), `print-link` (the terminal link under the pointer), `print-settings` (the rows the Settings page shows, `section.key` each), `print-scroll` (the editor's horizontal scroll, its vertical one in 1/256 lines, the horizontal limit and the scrollbar's track), `scroll-x dx` (a sideways wheel), `print-git`, `print-gitlog`, `print-scm`, `print-update`, `print-frames`, `print-loop-stats` (the main loop's passes and the frames it drew since rhun started), `print-shape` (the mouse cursor's CUR_* value), `appearance dark|light|unknown` (the system's dark mode changes, as a platform reports it), `print-appearance` (that mode, `follow_system`, the three theme settings and the theme shown), `focus out|in` (the window loses or gets the keyboard, as a platform reports it), `echo`, `quit`. A headless run takes the system's mode from `RHUN_APPEARANCE` (`dark` or `light`). `cmd` runs anything from the command palette by its snake case name.
+Commands: `key`, `type`, `click x y [right|middle|shift|ctrl]` (ctrl is Cmd+click on macOS), `move`, `down`, `up`, `up-down` (a release and the next press in one frame), `scroll dy [MODS]` (modifiers as a key combination names them: `ctrl`, `shift+alt`), `open`, `cmd`, `shot`, `wait`, `wait-git`, `wait-agents` (until session discovery finishes), `agents-more`, `print-agents-page`, `print-agents-runs` (discovery runs started so far), `print-agents` (sessions and an optional open session number), `agent-new claude` (a new Claude Code conversation, opened; `agent-new OWNER/NAME` for an extension's agent), `agent-type TEXT` (typed into the open conversation's box, not sent: its process starts), `agent-prompt TEXT` (the text in the box, then Enter), `agent-stop`, `agent-card N` (option N of the open card, from 1), `agent-release` (the open conversation's process ends, as the idle stop ends it), `wait-agent STATE[|STATE...] [MS]` (until the open conversation's process is `off`, `starting`, `ready`, `working`, `waiting`, `held` or `failed`; 10000 ms by default, an error line with the state after them), `print-agent-input` (the box, the new conversation, the card), `print-agent-live` (`state= pid=0|1 sid= mode= queued= requests= new=0|1`, then `report=` and why it failed), `agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N]` (shorter waits for tests), `print-agent-row N` (row N of the open conversation as drawn: a reply's Markdown a line per block), `agent-test-append TEXT` (more text for the open conversation's last reply, as a stream adds it), `print-agents-metrics` (the panel's text size: `size= points= px= small= line= row=`), `print-claude-exe` (the program the chat would start, a word a line, or `none`), `print-claude-path CWD SID` (the file Claude Code keeps that conversation in), `wait-grep` (until find in files has read the project), `wait-term TEXT` (until the terminal shows TEXT), `wait-update`, `resize`, `print-doc`, `print-state`, `print-project`, `print-panels` (whether the explorer, the agents panel and the terminal are shown), `print-palette`, `print-menu`, `print-tip` (the tooltip on screen), `print-term`, `print-term-cell ROW COL` (the middle of that terminal cell), `print-link` (the terminal link under the pointer), `print-settings` (the rows the Settings page shows, `section.key` each), `print-scroll` (the editor's horizontal scroll, its vertical one in 1/256 lines, the horizontal limit and the scrollbar's track), `scroll-x dx` (a sideways wheel), `print-git`, `print-gitlog`, `print-scm`, `print-update`, `print-frames`, `print-loop-stats` (the main loop's passes and the frames it drew since rhun started), `print-shape` (the mouse cursor's CUR_* value), `appearance dark|light|unknown` (the system's dark mode changes, as a platform reports it), `print-appearance` (that mode, `follow_system`, the three theme settings and the theme shown), `focus out|in` (the window loses or gets the keyboard, as a platform reports it), `echo`, `quit`. A headless run takes the system's mode from `RHUN_APPEARANCE` (`dark` or `light`). `cmd` runs anything from the command palette by its snake case name.
 
 Managing extensions: `ext-install OWNER/NAME[@VERSION]` and `wait-install` (then `print-dialog`,
 `dialog yes|no`), `ext-install-folder PATH [copy|link]`, `ext-install-archive PATH`,
@@ -1078,7 +1234,8 @@ with inactive and readonly documents and preserves the editor's selection. See t
 
 ### Agents, reviews and tools
 
-rhun does not drive agents; you talk to them in a terminal. Extensions add to what rhun shows
+rhun talks to Claude Code itself, in the agents panel (see [Talk to Claude Code](#talk-to-claude-code)).
+Other agents you talk to in a terminal, or through an extension. Extensions add to what rhun shows
 of them:
 
 - **More agents in the agents panel.** An extension can list the sessions of another agent

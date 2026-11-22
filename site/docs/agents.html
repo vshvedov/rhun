@@ -1,12 +1,21 @@
 <section id="start">
 <h2>Bring your agent</h2>
-<p>Use your installed Claude Code or Codex CLI in the <a href="/docs/terminal/">built-in terminal</a>. Each tool uses its own setup and authentication.</p>
+<p>Talk to Claude Code right in the Agents panel, or use Claude Code, Codex and other agents in the <a href="/docs/terminal/">built-in terminal</a>. Each tool uses its own setup and authentication.</p>
 <p>Open the Agents panel with <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>A</kbd> (<kbd>Cmd</kbd> + <kbd>Shift</kbd> + <kbd>A</kbd> on macOS) to follow sessions associated with your project.</p>
+</section>
+<section id="talk">
+<h2>Talk to Claude Code</h2>
+<p>rhun runs the <code>claude</code> you have installed, with whatever it is signed in with. Conversations use your plan’s limits, as they do in the terminal, and rhun never handles your credentials. To sign in, run <code>claude auth login</code> in the terminal.</p>
+<p>Click <strong>+ Claude Code</strong> to start a conversation, or open one from the list to continue it. <kbd>Enter</kbd> sends and <kbd>Shift</kbd> + <kbd>Enter</kbd> starts a new line. <strong>Stop</strong> or <kbd>Esc</kbd> interrupts a reply.</p>
+<p>When Claude asks to use a tool, a card shows <strong>Yes</strong> and <strong>No</strong>. Questions and plans to approve show as cards too. Press <kbd>1</kbd> to <kbd>9</kbd>, or use the arrow keys and <kbd>Enter</kbd>.</p>
+<div class="doc-note"><strong>Only while you use it</strong><p>Claude Code starts when you begin to type and stops after ten idle minutes. Change that with <code>idle_stop_minutes</code> in <strong>Settings › Agents</strong>.</p></div>
 </section>
 <section id="sessions">
 <h2>Follow your sessions</h2>
-<p>The panel brings Claude Code and Codex sessions into one list. Sessions update in the background while you work, without needing a manual refresh.</p>
+<p>The panel brings Claude Code, Codex, Grok Build and OpenCode sessions into one list. Sessions update in the background while you work, without needing a manual refresh.</p>
 <p>The first view shows the 50 most recent sessions across providers and worktrees. Use <strong>Load more</strong> to bring in the next 50.</p>
+<p>Replies are drawn as Markdown, with headings, lists, tables and code. A link to a file opens it in the editor at its line.</p>
+<p>The panel has its own text size. Focus it and use <kbd>Ctrl</kbd> + <kbd>+</kbd> and <kbd>Ctrl</kbd> + <kbd>-</kbd> (<kbd>Cmd</kbd> on macOS), or set <strong>Font size</strong> in <strong>Settings › Agents</strong>.</p>
 <div class="doc-note"><strong>Out of the way when you are done</strong><p>Background refresh pauses when the Agents panel is hidden.</p></div>
 </section>
 <section id="worktrees">

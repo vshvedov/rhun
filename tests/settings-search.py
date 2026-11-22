@@ -82,7 +82,7 @@ class SettingsSearch(unittest.TestCase):
         # "font" once kept Explorer width ("of the file explorer in points") and the like
         self.assertEqual(self.rows('type font'), [
             'ui.font_size', 'ui.font', 'editor.font_size', 'editor.font', 'editor.line_height',
-            'terminal.font_size', 'terminal.font', 'terminal.line_height'])
+            'agents.font_size', 'terminal.font_size', 'terminal.font', 'terminal.line_height'])
         self.assertEqual(self.rows('type terminal font'),
                          ['terminal.font_size', 'terminal.font', 'terminal.line_height'])
 

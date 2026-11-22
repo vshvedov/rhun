@@ -142,6 +142,33 @@ def fixtures(work):
     return locals()
 
 
+def long_conversation(project, seed=0):
+    """a Claude Code transcript of 400 turns (about 750 KB): a prompt, a reply in Markdown (a heading,
+    a list, a table, a code block, links), a tool call and its result each"""
+    rng = random.Random(11 + seed)
+    words = ('the panel layout code reads each row once and keeps its height until the width '
+             'changes so scrolling stays smooth while replies stream in').split()
+    cwd = project.as_posix()
+    lines = []
+    for i in range(400):
+        prose = lambda n: ' '.join(rng.choice(words) for _ in range(n))
+        reply = '\n'.join(['## Step %d' % i, '', prose(40) + ' **' + prose(3) + '** ' + prose(20) + '.', '',
+                            '- ' + prose(8), '- ' + prose(10), '- `src/app/f%d.s` ' % i + prose(6), '',
+                            '| file | lines |', '| --- | ---: |', '| a.s | %d |' % i, '| b.s | %d |' % (i * 3), '',
+                            '```python', *('def f%d_%d(x):\n    return x * %d' % (i, j, j) for j in range(6)), '```',
+                            '', 'See [the code](src/app/f%d.s:%d) and [the notes](https://example.com/%d).'
+                            % (i, i + 1, i)])
+        lines.append({'type': 'user', 'message': {'role': 'user', 'content': 'step %d: ' % i + prose(25)},
+                      'cwd': cwd, 'sessionId': 'long%d' % seed})
+        lines.append({'type': 'assistant', 'message': {'role': 'assistant', 'content': [
+            {'type': 'text', 'text': reply},
+            {'type': 'tool_use', 'id': 't%d' % i, 'name': 'Bash', 'input': {'command': 'grep -n f%d src' % i}}]}})
+        lines.append({'type': 'user', 'message': {'role': 'user', 'content': [
+            {'type': 'tool_result', 'tool_use_id': 't%d' % i, 'content': '\n'.join(prose(12) for _ in range(6))}]}})
+    lines.append({'type': 'custom-title', 'customTitle': 'Long conversation %d' % seed, 'sessionId': 'long%d' % seed})
+    return ''.join(json.dumps(line) + '\n' for line in lines)
+
+
 def measure(exe, work):
     """one sample of every workload"""
     f = FIXTURES
@@ -193,6 +220,21 @@ def measure(exe, work):
     os.utime(session, (old, old))
     b.run([project], ['wait-agents', 'wait 300', 'print-frames', 'wait 3000', 'print-frames'], agents=True, home=home)
     results['idle frames in 3 s, agents panel shown'] = int(b.out.strip().splitlines()[-1].split('=')[1])
+    # opening a long conversation in the agents panel: its file read, its rows measured, the replies
+    # in view drawn as Markdown (the largest fixture, made here; 8 of them, each opened once)
+    long_home = work / 'long-home'
+    long_project = work / 'long-project'
+    long_project.mkdir(exist_ok=True)
+    long_slug = ''.join(c if c.isalnum() else '-' for c in long_project.as_posix())
+    long_sessions = long_home / '.claude/projects' / long_slug
+    long_sessions.mkdir(parents=True, exist_ok=True)
+    for i in range(8):
+        (long_sessions / ('long%d.jsonl' % i)).write_text(long_conversation(long_project, i), encoding='utf-8')
+    setup = ['wait-agents', 'wait 300']
+    results['open a conversation of 400 turns (ms)'] = (
+        b.median([long_project], setup + ['print-agents %d' % (i + 1) for i in range(8)], agents=True,
+                 home=long_home)
+        - b.median([long_project], setup, agents=True, home=long_home)) * 1000 / 8
     # idle wake-ups: main loop passes in 10 s on the same project, the panel shown and hidden
     if os.name != 'nt':
         results['idle loop passes in 10 s, agents panel shown'] = b.idle_passes([project], home, True)

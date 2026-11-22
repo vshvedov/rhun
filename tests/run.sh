@@ -147,6 +147,7 @@ python3 tests/focused-zoom.py || fail=1
 python3 tests/agents.py || fail=1
 python3 tests/opencode.py || fail=1
 python3 tests/agents-refresh.py || fail=1
+python3 tests/agents-markdown.py || fail=1   # replies drawn as Markdown
 python3 tests/fake-claude.py || fail=1   # the fake Claude Code against the recorded shapes
 python3 tests/claude-chat.py || fail=1   # Claude Code's chat against the fake
 python3 tests/ext-agents.py || fail=1

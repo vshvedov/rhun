@@ -12,6 +12,9 @@
 #                                           a file relative to the base: a tab)
 #   md_set_base(m, ptr, len)                the absolute folder relative links name
 #   md_set_flat(m)                         code blocks use the containing surface
+#   md_set_size(m, px)                      its text at px (0: the interface's faces), its other
+#                                           faces in proportion; md_set_compact(m, 1): headings
+#                                           little bigger than the text (the agents panel)
 #   m = md_from_body(ext, ptr, len)         a rich-document body ("doc LEN" + Markdown, "base
 #                                           LEN" + folder: views design 3.8.4), or 0
 #   md_free(m)
@@ -57,6 +60,8 @@
 .equ MDF_HUGE, 3
 .equ MDF_CODE, 4
 .equ MDF_EM, 5                  # emphasis: the ui face sheared (em_face)
+.equ MDF_H3, 6                  # a compact document's level 3 heading (md_set_compact)
+.equ MDF_COUNT, 7
 
 .equ MD_LISTS, 8                # nesting kept for lists
 .equ MD_COLS, 32                # table columns
@@ -94,6 +99,8 @@ F MD_slugh, 8           # an open-addressing table of MD_slugv index + 1
 F MD_slughcap, 4
 F MD_slugdone, 4
 F MD_imgs, VEC_SIZE     # MDM: images, resolved when first laid out
+F MD_size, 4            # its text's pixels (md_set_size), 0 for the interface's faces
+F MD_compact, 4         # headings at 1.4, 1.25 and 1.1 times the text (md_set_compact)
 ENDSTRUCT MD_SIZE
 
 # an image (MD_imgs)
@@ -173,6 +180,7 @@ ENDSTRUCT MDI_SIZE
 pm: .quad 0                     # the document being parsed or laid out
 body_rr: .zero RR_SIZE          # md_from_body's record
 em_face: .zero FACE_SIZE        # emphasis: the ui face, oblique (em_face_init)
+sz_faces: .zero FACE_SIZE * MDF_COUNT   # the faces of documents with a size (sized_faces), by MDF_*
 slug_buf: .zero SB_SIZE         # md_anchor: a heading's slug, and an earlier one's
 slug_buf2: .zero SB_SIZE
 hc_mem: .zero 96                # has_closer's failures: ptr, len, from, n for * _ ~
@@ -236,6 +244,12 @@ tbuf: .zero 64
 .data
 .p2align 2
 em_gen: .long -1                # g_face_gen when em_face was made, -1 never
+sz_px: .long 0                  # what sz_faces were made for: the size, compact, g_face_gen after
+sz_compact: .long 0
+sz_gen: .long -1
+cur_sized: .long 0              # the document laid out, drawn or pointed at has a size (use_doc)
+.p2align 3
+sz_tab: .zero 8 * MDF_COUNT     # its faces by MDF_*: sz_faces' or the interface's (sized_faces)
 in_link: .long -1
 
 .text
@@ -346,6 +360,16 @@ FN md_link
     mov rax, [rdi + MD_text + SB_ptr]
     add rax, rcx
 9:  ret
+
+# md_is_copy(m, i) -> eax 1 when link i is a code block's Copy action (md_open_link copies the code)
+FN md_is_copy
+    xor eax, eax
+    cmp rsi, [rdi + MD_links + VEC_len]
+    jae 1f
+    mov rcx, [rdi + MD_links + VEC_ptr]
+    test dword ptr [rcx + rsi*8 + MDL_len], MDL_COPY
+    setnz al
+1:  ret
 
 # md_open_link(m, i) -> eax 1 when rhun followed it: http and https in the browser, rhun:// in rhun
 FN md_open_link
@@ -1068,6 +1092,15 @@ slug_char:
 FN md_select_mouse
     PROLOGUE 16
     mov rbx, rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    call use_doc
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
     mov r12d, esi
     mov r13d, edx
     mov r14d, ecx
@@ -1406,6 +1439,28 @@ FN md_set_flat
     test rdi, rdi
     jz 1f
     mov dword ptr [rdi + MD_flat], 1
+    mov dword ptr [rdi + MD_width], -1
+1:  ret
+
+# md_set_size(m, px): its text at px and every other face in proportion (headings, the small face,
+#   code at the text's size, not the editor's); 0 is the interface's faces, as without it. Only one
+#   size is kept made at a time: callers share one (the agents panel)
+FN md_set_size
+    test rdi, rdi
+    jz 1f
+    cmp esi, 0
+    jge 2f
+    xor esi, esi
+2:  mov [rdi + MD_size], esi
+    mov dword ptr [rdi + MD_width], -1
+1:  ret
+
+# md_set_compact(m, on): its headings little bigger than the text: level 1 at 1.4 times, 2 at 1.25,
+#   3 at 1.1, deeper at the text's size, all bold (with md_set_size; a chat column)
+FN md_set_compact
+    test rdi, rdi
+    jz 1f
+    mov [rdi + MD_compact], esi
     mov dword ptr [rdi + MD_width], -1
 1:  ret
 
@@ -4073,9 +4128,17 @@ entity:
 
 # ---------------- layout ----------------
 
-# face_of(MDF_*) -> rax FACE* (the emphasis face made again when the ui face changed)
+# face_of(MDF_*) -> rax FACE* (the emphasis face made again when the ui face changed): the
+#   interface's, or a sized document's (use_doc says which)
 face_of:
-    cmp edi, MDF_EM
+    cmp dword ptr [rip + cur_sized], 0
+    je 2f
+    lea rax, [rip + sz_tab]
+    mov rax, [rax + rdi*8]
+    lea rcx, [rip + em_face]
+    cmp rax, rcx
+    jne 9f                      # the interface's emphasis face is made below when it changed
+2:  cmp edi, MDF_EM
     jne 1f
     mov eax, [rip + g_face_gen]
     cmp eax, [rip + em_gen]
@@ -4085,7 +4148,127 @@ face_of:
     pop rdi
 1:  lea rax, [rip + md_faces]
     mov rax, [rax + rdi*8]
-    ret
+9:  ret
+
+# use_doc(m): face_of answers for this document from here on (its size's faces, made if needed)
+use_doc:
+    mov eax, [rdi + MD_size]
+    mov [rip + cur_sized], eax
+    test eax, eax
+    jz 1f
+    push rbx
+    mov esi, [rdi + MD_compact]
+    mov edi, eax
+    call sized_faces
+    pop rbx
+    cmp qword ptr [rip + sz_tab], 0
+    jne 1f
+    mov dword ptr [rip + cur_sized], 0  # no fonts yet: the interface's faces
+1:  ret
+
+# sized_faces(px, compact): sz_tab for that size, made again when the size, the headings or any face
+#   changed (g_face_gen); making them moves g_face_gen on, so documents are laid out again once. A face
+#   the interface has at that size is the interface's own (its glyphs are drawn already): the text,
+#   small and emphasis faces at the interface's size, the code face at the editor's
+sized_faces:
+    PROLOGUE
+    mov ebx, edi
+    mov r12d, esi
+    cmp ebx, [rip + sz_px]
+    jne 1f
+    cmp r12d, [rip + sz_compact]
+    jne 1f
+    mov eax, [rip + g_face_gen]
+    cmp eax, [rip + sz_gen]
+    je 9f
+1:  cmp qword ptr [rip + g_face_ui + FACE_font], 0
+    je 9f
+    cmp qword ptr [rip + g_face_code + FACE_font], 0
+    je 9f
+    mov [rip + sz_px], ebx
+    mov [rip + sz_compact], r12d
+    cmp ebx, [rip + g_face_ui + FACE_px]
+    jne 11f
+    lea rax, [rip + g_face_ui]
+    mov [rip + sz_tab + 8*MDF_UI], rax
+    lea rax, [rip + g_face_small]
+    mov [rip + sz_tab + 8*MDF_SMALL], rax
+    lea rax, [rip + em_face]
+    mov [rip + sz_tab + 8*MDF_EM], rax
+    jmp 12f
+11: mov edi, MDF_UI
+    mov esi, 100
+    call sz_make
+    mov edi, MDF_EM
+    mov esi, 100
+    call sz_make
+    mov dword ptr [rip + sz_faces + MDF_EM * FACE_SIZE + FACE_oblique], 1
+    mov eax, [rip + g_face_ui + FACE_embolden]
+    mov [rip + sz_faces + MDF_EM * FACE_SIZE + FACE_embolden], eax
+    cvtsi2ss xmm0, ebx          # small: 1.5 points less, as the interface's
+    movss xmm1, [rip + g_s]
+    mulss xmm1, [rip + f_sz_small]
+    subss xmm0, xmm1
+    cvtss2si edx, xmm0
+    mov edi, MDF_SMALL
+    call sz_make_px
+12: mov edi, MDF_BIG
+    mov esi, 155
+    test r12d, r12d
+    jz 2f
+    mov esi, 125
+2:  call sz_make
+    mov edi, MDF_HUGE
+    mov esi, 340
+    test r12d, r12d
+    jz 3f
+    mov esi, 140
+3:  call sz_make
+    mov edi, MDF_H3
+    mov esi, 100
+    test r12d, r12d
+    jz 4f
+    mov esi, 110
+4:  call sz_make
+    lea rax, [rip + g_face_code]    # code: the editor's font at the text's size
+    cmp ebx, [rip + g_face_code + FACE_px]
+    je 6f
+    mov edx, ebx
+    lea rdi, [rip + sz_faces + MDF_CODE * FACE_SIZE]
+    mov rsi, [rip + g_face_code + FACE_font]
+    cmp edx, 4
+    jge 5f
+    mov edx, 4
+5:  call face_init
+    lea rax, [rip + sz_faces + MDF_CODE * FACE_SIZE]
+6:  mov [rip + sz_tab + 8*MDF_CODE], rax
+    mov eax, [rip + g_face_gen]
+    mov [rip + sz_gen], eax
+9:  EPILOGUE
+
+# sz_make(MDF_*, percent) using ebx = the size: that face of sz_faces, the interface's font at
+#   percent of the size; sz_make_px(MDF_*, edx px) at px
+sz_make:
+    mov eax, ebx
+    imul eax, esi
+    add eax, 50
+    xor edx, edx
+    mov ecx, 100
+    div ecx
+    mov edx, eax
+sz_make_px:
+    cmp edx, 4
+    jge 1f
+    mov edx, 4
+1:  mov eax, edi
+    imul rax, rax, FACE_SIZE
+    lea rcx, [rip + sz_faces]
+    add rax, rcx
+    lea rcx, [rip + sz_tab]
+    mov [rcx + rdi*8], rax
+    mov rdi, rax
+    mov rsi, [rip + g_face_ui + FACE_font]
+    jmp face_init
 
 # em_face_init(): em_face is the ui face's font and size, sheared; g_face_gen stays (it is ours)
 em_face_init:
@@ -4140,6 +4323,9 @@ FN md_layout
     PROLOGUE 48
     mov rbx, rdi
     mov [rip + pm], rdi
+    mov [rsp], esi
+    call use_doc
+    mov esi, [rsp]
     cmp [rbx + MD_width], esi
     jne 1f
     mov eax, [rip + g_face_gen]
@@ -4216,6 +4402,8 @@ FN md_layout
     jne 3f
     mov dword ptr [rip + lay_bold], 1
     mov ecx, [r13 + MDB_level]
+    cmp dword ptr [rbx + MD_compact], 0
+    jne 24f
     cmp ecx, 1
     jne 23f
     mov dword ptr [rip + lay_face], MDF_HUGE
@@ -4224,6 +4412,17 @@ FN md_layout
 23: cmp ecx, 2
     jne 3f
     mov dword ptr [rip + lay_face], MDF_BIG
+    jmp 3f
+24: mov edx, MDF_HUGE           # compact: every level bold, the first three a little bigger
+    cmp ecx, 1
+    je 25f
+    mov edx, MDF_BIG
+    cmp ecx, 2
+    je 25f
+    mov edx, MDF_H3
+    cmp ecx, 3
+    jne 3f
+25: mov [rip + lay_face], edx
 3:  mov edi, [rip + lay_face]
     call face_of
     mov ecx, [rax + FACE_lineh]
@@ -5170,6 +5369,19 @@ FN md_measure
 FN md_draw
     PROLOGUE 64
     mov rbx, rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    push r9
+    push r9
+    call use_doc
+    pop r9
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
     mov [rsp], esi
     mov [rsp + 4], edx
     mov [rsp + 8], ecx
@@ -5465,7 +5677,8 @@ url_trail: .asciz ".,:;!?\"')"
 .p2align 3
 entities: .quad .Le_amp, '&', .Le_lt, '<', .Le_gt, '>', .Le_quot, '"', .Le_apos, 0x27
     .quad .Le_nbsp, 0xa0, .Le_copy, 0xa9, .Le_mdash, 0x2014, .Le_ndash, 0x2013, .Le_hellip, 0x2026, 0, 0
-md_faces: .quad g_face_ui, g_face_small, g_face_big, g_face_huge, g_face_code, em_face
+md_faces: .quad g_face_ui, g_face_small, g_face_big, g_face_huge, g_face_code, em_face, g_face_ui
+f_sz_small: .float 1.5
 # bytes that end a stretch of plain text in inline parsing
 special:
     .byte 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0     # 0x00: \x01, LF
@@ -5665,6 +5878,330 @@ FN md_dump
     jmp 6b
 9:  EPILOGUE
 
+# md_row_dump(m, sb, x, y): what is drawn of a document, a line per block: "heading:L TEXT", "para
+#   TEXT", "item TEXT" (a list item's first block), "code:LANG N lines", "table RxC" (at its header
+#   row), "rule"; "list N items" before a list's first block; "> " per quote level and "  " per list
+#   level before a line. After a block, "link TEXT -> TARGET" per link in it, with " at X Y" (the
+#   middle of its first item on screen, the document drawn with its top left at x, y) unless x is -1
+FN md_row_dump
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, rsi
+    mov [rsp], edx
+    mov [rsp + 4], ecx
+    mov dword ptr [rsp + 8], 0  # in a list
+    xor r13d, r13d
+.Lrd_block:
+    cmp r13, [rbx + MD_blocks + VEC_len]
+    jae .Lrd_done
+    imul r14, r13, MDB_SIZE
+    add r14, [rbx + MD_blocks + VEC_ptr]
+    cmp dword ptr [r14 + MDB_list], 0
+    jne 1f
+    mov dword ptr [rsp + 8], 0
+    jmp 4f
+1:  cmp dword ptr [rsp + 8], 0
+    jne 4f
+    mov dword ptr [rsp + 8], 1  # a list begins: its items at the first level
+    xor r15d, r15d
+    mov rax, r13
+2:  cmp rax, [rbx + MD_blocks + VEC_len]
+    jae 3f
+    imul rdx, rax, MDB_SIZE
+    add rdx, [rbx + MD_blocks + VEC_ptr]
+    cmp dword ptr [rdx + MDB_list], 0
+    je 3f
+    cmp dword ptr [rdx + MDB_list], 1
+    jne 21f
+    cmp dword ptr [rdx + MDB_marker], 0
+    je 21f
+    inc r15d
+21: inc rax
+    jmp 2b
+3:  xor esi, esi
+    call rd_prefix
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_list]
+    call sb_push_cstr
+    mov rdi, r12
+    mov esi, r15d
+    call sb_push_u64
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_items]
+    call sb_push_cstr
+4:  mov eax, [r14 + MDB_type]
+    cmp eax, MDB_TROW
+    jne 41f
+    cmp dword ptr [r14 + MDB_hdr], 0
+    je .Lrd_links
+41: mov esi, [r14 + MDB_list]
+    call rd_prefix
+    mov eax, [r14 + MDB_type]
+    cmp eax, MDB_HEAD
+    je .Lrd_head
+    cmp eax, MDB_CODE
+    je .Lrd_code
+    cmp eax, MDB_RULE
+    je .Lrd_rule
+    cmp eax, MDB_TROW
+    je .Lrd_table
+    lea rsi, [rip + .Lrd_para]
+    cmp dword ptr [r14 + MDB_marker], 0
+    je 5f
+    lea rsi, [rip + .Lrd_item]
+5:  mov rdi, r12
+    call sb_push_cstr
+    mov esi, -2
+    call rd_runs
+    jmp .Lrd_eol
+.Lrd_head:
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_heading]
+    call sb_push_cstr
+    mov rdi, r12
+    mov esi, [r14 + MDB_level]
+    call sb_push_u64
+    mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+    mov esi, -2
+    call rd_runs
+    jmp .Lrd_eol
+.Lrd_code:
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_codek]
+    call sb_push_cstr
+    mov rsi, [rbx + MD_text + SB_ptr]
+    mov eax, [r14 + MDB_lang]
+    add rsi, rax
+    mov edx, [r14 + MDB_langlen]
+    mov rdi, r12
+    call sb_push
+    mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+    mov rsi, [rbx + MD_text + SB_ptr]   # its lines: the code ends with a LF
+    mov eax, [r14 + MDB_code]
+    add rsi, rax
+    mov ecx, [r14 + MDB_codelen]
+    xor edx, edx
+    xor eax, eax
+6:  cmp eax, ecx
+    jae 61f
+    cmp byte ptr [rsi + rax], 10
+    jne 62f
+    inc edx
+62: inc eax
+    jmp 6b
+61: test ecx, ecx
+    jz 63f
+    cmp byte ptr [rsi + rcx - 1], 10
+    je 63f
+    inc edx
+63: mov rdi, r12
+    mov esi, edx
+    call sb_push_u64
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_lines]
+    call sb_push_cstr
+    jmp .Lrd_eol
+.Lrd_rule:
+    mov rdi, r12
+    lea rsi, [rip + .Lt_rule]
+    call sb_push_cstr
+    jmp .Lrd_eol
+.Lrd_table:
+    mov r15d, 0                 # its rows: the header's and the rows after it naming it
+    mov rax, r13
+7:  cmp rax, [rbx + MD_blocks + VEC_len]
+    jae 71f
+    imul rdx, rax, MDB_SIZE
+    add rdx, [rbx + MD_blocks + VEC_ptr]
+    cmp dword ptr [rdx + MDB_type], MDB_TROW
+    jne 71f
+    cmp [rdx + MDB_tbl], r13d
+    jne 71f
+    inc r15d
+    inc rax
+    jmp 7b
+71: mov rdi, r12
+    lea rsi, [rip + .Lrd_tablek]
+    call sb_push_cstr
+    mov rdi, r12
+    mov esi, r15d
+    call sb_push_u64
+    mov rdi, r12
+    mov esi, 'x'
+    call sb_push_byte
+    mov rdi, r12
+    mov esi, [r14 + MDB_ncols]
+    call sb_push_u64
+.Lrd_eol:
+    mov rdi, r12
+    mov esi, 10
+    call sb_push_byte
+.Lrd_links:
+    # its links, each once
+    mov dword ptr [rsp + 12], -1
+    mov dword ptr [rsp + 16], 0
+.Lrd_run:
+    mov eax, [rsp + 16]
+    cmp eax, [r14 + MDB_nrun]
+    jae .Lrd_next
+    add eax, [r14 + MDB_run0]
+    imul rcx, rax, MDR_SIZE
+    add rcx, [rbx + MD_runs + VEC_ptr]
+    mov r15d, [rcx + MDR_link]
+    test r15d, r15d
+    js .Lrd_run_next
+    cmp r15d, [rsp + 12]
+    je .Lrd_run_next
+    mov [rsp + 12], r15d
+    mov esi, [r14 + MDB_list]
+    call rd_prefix
+    mov rdi, r12
+    lea rsi, [rip + .Ld_link]
+    call sb_push_cstr
+    mov esi, r15d
+    call rd_runs
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_arrow]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r15d
+    call md_link
+    mov rsi, rax
+    mov rdi, r12
+    call sb_push
+    cmp dword ptr [rsp], -1
+    je 8f
+    xor ecx, ecx                # where its first item is on screen
+81: cmp rcx, [rbx + MD_items + VEC_len]
+    jae 8f
+    imul rdx, rcx, MDI_SIZE
+    add rdx, [rbx + MD_items + VEC_ptr]
+    cmp dword ptr [rdx + MDI_kind], MDK_TEXT
+    jne 82f
+    cmp [rdx + MDI_link], r15d
+    je 83f
+82: inc rcx
+    jmp 81b
+83: mov [rsp + 24], rdx
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_at]
+    call sb_push_cstr
+    mov rdx, [rsp + 24]
+    mov esi, [rdx + MDI_w]
+    sar esi, 1
+    add esi, [rdx + MDI_x]
+    add esi, [rsp]
+    mov rdi, r12
+    call md_push_int
+    mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+    mov rdx, [rsp + 24]
+    mov esi, [rdx + MDI_h]
+    sar esi, 1
+    add esi, [rdx + MDI_y]
+    add esi, [rsp + 4]
+    mov rdi, r12
+    call md_push_int
+8:  mov rdi, r12
+    mov esi, 10
+    call sb_push_byte
+.Lrd_run_next:
+    inc dword ptr [rsp + 16]
+    jmp .Lrd_run
+.Lrd_next:
+    inc r13
+    jmp .Lrd_block
+.Lrd_done:
+    EPILOGUE
+
+# rd_prefix(list depth) using r14 = the block, r12 = the sb: "> " per quote level, "  " per list level
+rd_prefix:
+    push rbx
+    push r15
+    sub rsp, 8
+    mov r15d, esi
+    mov ebx, [r14 + MDB_quote]
+1:  test ebx, ebx
+    jz 2f
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_quote]
+    call sb_push_cstr
+    dec ebx
+    jmp 1b
+2:  test r15d, r15d
+    jz 3f
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_indent]
+    call sb_push_cstr
+    dec r15d
+    jmp 2b
+3:  add rsp, 8
+    pop r15
+    pop rbx
+    ret
+
+# rd_runs(link) using rbx = the document, r14 = the block, r12 = the sb: the text of its runs (-2 all,
+#   else those of that link), a hard break as a space
+rd_runs:
+    push rbx
+    push r13
+    push r15
+    mov r15d, esi
+    xor r13d, r13d
+1:  cmp r13d, [r14 + MDB_nrun]
+    jae 9f
+    mov eax, [r14 + MDB_run0]
+    add eax, r13d
+    imul rcx, rax, MDR_SIZE
+    add rcx, [rbx + MD_runs + VEC_ptr]
+    cmp r15d, -2
+    je 2f
+    cmp [rcx + MDR_link], r15d
+    jne 4f
+2:  test dword ptr [rcx + MDR_style], MS_BREAK
+    jz 3f
+    mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+    jmp 4f
+3:  mov rsi, [rbx + MD_text + SB_ptr]
+    mov eax, [rcx + MDR_off]
+    add rsi, rax
+    mov edx, [rcx + MDR_len]
+    mov rdi, r12
+    call sb_push
+4:  inc r13d
+    jmp 1b
+9:  pop r15
+    pop r13
+    pop rbx
+    ret
+
+# md_push_int(sb, n): n in decimal, a minus sign before a negative one
+FN md_push_int
+    push rbx
+    push r12
+    sub rsp, 8
+    mov rbx, rdi
+    movsxd r12, esi
+    test r12, r12
+    jns 1f
+    mov esi, '-'
+    call sb_push_byte
+    neg r12
+1:  mov rdi, rbx
+    mov rsi, r12
+    call sb_push_u64
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
 .section .rodata
 .Ld_blocks: .asciz "blocks="
 .Ld_height: .asciz " height="
@@ -5675,6 +6212,18 @@ FN md_dump
 .Ld_text: .asciz " text="
 .Ld_link: .asciz "link "
 .Ld_copy: .asciz "copy-action "
+.Lrd_list: .asciz "list "
+.Lrd_items: .asciz " items\n"
+.Lrd_para: .asciz "para "
+.Lrd_item: .asciz "item "
+.Lrd_heading: .asciz "heading:"
+.Lrd_codek: .asciz "code:"
+.Lrd_lines: .asciz " lines"
+.Lrd_tablek: .asciz "table "
+.Lrd_arrow: .asciz " -> "
+.Lrd_at: .asciz " at "
+.Lrd_quote: .asciz "> "
+.Lrd_indent: .asciz "  "
 .Lt_para: .asciz "para"
 .Lt_head: .asciz "head"
 .Lt_code: .asciz "code"

@@ -5,10 +5,21 @@ STRUCT
 F AM_role, 4
 F AM_h, 4
 F AM_w, 4
-F AM_pad, 4
+F AM_rev, 4             # its text's revision: agents_msg_changed counts the changes
 F AM_text, 8
 F AM_len, 8
 F AM_name, 8
+F AM_doc, 8             # a reply's Markdown (md_new), parsed when it first comes into view, or 0
+F AM_drev, 4            # the revision AM_doc was parsed from
+F AM_dpx, 4             # the text size AM_doc was given (md_set_size)
+F AM_hrev, 4            # what AM_h was measured for, beside AM_w: the revision, the text size,
+F AM_hpx, 4             #   g_face_gen and whether its document gave it (1) or its plain text (0)
+F AM_hgen, 4
+F AM_hdoc, 4
+F AM_dx, 4              # where it was drawn last (its text's left, its top on screen), in which
+F AM_dy, 4              #   frame of the conversation (th_serial)
+F AM_dser, 4
+F AM_pad2, 4
 ENDSTRUCT AM_SIZE
 
 .equ R_USER, 1
@@ -25,6 +36,7 @@ ENDSTRUCT AM_SIZE
 .equ ID_AG_TSCROLL, 0x5f03
 .equ ID_AG_FOLLOW, 0x5f04
 .equ ID_AG_MORE, 0x5f05
+.equ ID_AG_MD, 0x480000          # + (row & 255) * 4096: the links of the replies in view
 
 .equ ROUTINE_GAP, 2000          # ms from one routine discovery run to the next
 .equ INDEX_TIMEOUT, 60000       # ms a discovery run may take before it is stopped
@@ -36,6 +48,14 @@ pool: .zero VEC_SIZE            # owned sessions, including previously opened pa
 list_scroll: .long 0
 th_scroll: .long 0
 th_content: .long 0
+th_serial: .long 0              # frames of the conversation drawn (th_prepare)
+th_textw: .long 0               # the width its rows' text was laid out at last
+.p2align 3
+th_as: .quad 0                  # the session drawn (th_prepare): its replies' links name its checkout
+md_parses: .quad 0              # replies parsed (print-agent-row)
+pend_link: .quad 0              # a link clicked in a reply, followed after the frame (owned cstr), or 0
+pend_cwd: .quad 0               # and the checkout it was in (owned), or 0
+lk_buf: .zero 4096              # follow_file: the link's path
 last_poll: .quad 0
 label_due: .quad 0              # unix second when a label shown changes ("now" turns "1m ago", a live dot goes out)
 last_scan: .quad 0
@@ -752,12 +772,9 @@ session_clear_msgs:
     xor r12d, r12d
 1:  cmp r12, [rbx + AS_msgs + VEC_len]
     jae 2f
-    imul r13, r12, AM_SIZE
-    add r13, [rbx + AS_msgs + VEC_ptr]
-    mov rdi, [r13 + AM_text]
-    call mem_free
-    mov rdi, [r13 + AM_name]
-    call mem_free
+    imul rdi, r12, AM_SIZE
+    add rdi, [rbx + AS_msgs + VEC_ptr]
+    call msg_free
     inc r12
     jmp 1b
 2:  mov qword ptr [rbx + AS_msgs + VEC_len], 0
@@ -768,6 +785,34 @@ session_clear_msgs:
     mov qword ptr [rbx + AS_log_model], 0
     mov qword ptr [rbx + AS_shown_model], 0
     EPILOGUE
+
+# msg_free(msg): what a message owns: its text, its name and its document
+msg_free:
+    push rbx
+    mov rbx, rdi
+    mov rdi, [rbx + AM_text]
+    call mem_free
+    mov rdi, [rbx + AM_name]
+    call mem_free
+    mov rdi, [rbx + AM_doc]
+    call md_free
+    mov qword ptr [rbx + AM_text], 0
+    mov qword ptr [rbx + AM_name], 0
+    mov qword ptr [rbx + AM_doc], 0
+    pop rbx
+    ret
+
+# FN agents_msg_changed(AS*, index): the text of that message changed (it was set or added to in
+#   place): its height and its Markdown are measured and parsed again when next needed
+FN agents_msg_changed
+    cmp rsi, [rdi + AS_msgs + VEC_len]
+    jae 1f
+    imul rax, rsi, AM_SIZE
+    add rax, [rdi + AS_msgs + VEC_ptr]
+    inc dword ptr [rax + AM_rev]
+    mov dword ptr [rax + AM_w], -1
+    mov dword ptr [rip + g_dirty], 1
+1:  ret
 
 # agent_read_head(path, max) -> rax buf (NUL-terminated, mem_alloc), rdx len
 FN agent_read_head
@@ -3325,14 +3370,6 @@ FN agents_tool_summary
 FN agents_text_of
     jmp text_of
 
-# agents_msg_changed(AS*, index): a message's text changed in place: its row is measured again
-agents_msg_changed:
-    imul rsi, rsi, AM_SIZE
-    add rsi, [rdi + AS_msgs + VEC_ptr]
-    mov dword ptr [rsi + AM_w], -1
-    mov dword ptr [rip + g_dirty], 1
-    ret
-
 # msg_clean(dst, src, len) -> rax bytes written to dst (at most len): add_msg's rule: tabs and other
 #   controls are spaces, CR goes, an escape sequence shows nothing
 msg_clean:
@@ -3397,12 +3434,9 @@ FN agents_ext_truncate
 1:  mov r13, r12
 2:  cmp r13, [rbx + AS_msgs + VEC_len]
     jae 3f
-    imul r14, r13, AM_SIZE
-    add r14, [rbx + AS_msgs + VEC_ptr]
-    mov rdi, [r14 + AM_text]
-    call mem_free
-    mov rdi, [r14 + AM_name]
-    call mem_free
+    imul rdi, r13, AM_SIZE
+    add rdi, [rbx + AS_msgs + VEC_ptr]
+    call msg_free
     inc r13
     jmp 2b
 3:  mov [rbx + AS_msgs + VEC_len], r12
@@ -3843,17 +3877,45 @@ wrap:
 6:  mov eax, r15d
     EPILOGUE
 
-# msg_height(msg, width) -> px (cached)
+# msg_height(msg, width) -> px, cached for the width, its text's revision, the text size, the faces and
+#   whether its Markdown gave it. A reply parsed once is as tall as its Markdown at the width (parsed
+#   again first when its text changed: a growing reply, at most once a frame); before its first
+#   parse (th_prepare does it when it comes into view) its plain text wrapped stands in
 msg_height:
     PROLOGUE 96
     mov rbx, rdi
     mov r12d, esi
-    cmp [rbx + AM_w], r12d
+    xor r13d, r13d              # 1: its document gives the height
+    cmp dword ptr [rbx + AM_role], R_ASSIST
+    jne 11f
+    cmp qword ptr [rbx + AM_doc], 0
+    je 11f
+    mov r13d, 1
+    mov rdi, rbx
+    call msg_doc
+11: cmp [rbx + AM_w], r12d
+    jne 1f
+    mov eax, [rbx + AM_hrev]
+    cmp eax, [rbx + AM_rev]
+    jne 1f
+    call panel_px
+    cmp eax, [rbx + AM_hpx]
+    jne 1f
+    mov eax, [rip + g_face_gen]
+    cmp eax, [rbx + AM_hgen]
+    jne 1f
+    cmp r13d, [rbx + AM_hdoc]
     jne 1f
     mov eax, [rbx + AM_h]
     EPILOGUE
-1:  mov [rbx + AM_w], r12d
-    mov eax, [rbx + AM_role]
+1:  test r13d, r13d
+    jz 12f
+    mov rdi, [rbx + AM_doc]
+    mov esi, r12d
+    call md_layout
+    add eax, [rip + g_mt + 4*MI_40]
+    jmp 9f
+12: mov eax, [rbx + AM_role]
     cmp eax, R_TOOL
     jne 2f
     M eax, MI_32
@@ -3871,6 +3933,154 @@ msg_height:
     jmp 9f
 3:  add eax, [rip + g_mt + 4*MI_40]
 9:  mov [rbx + AM_h], eax
+    mov [rbx + AM_w], r12d
+    mov r14d, eax
+    mov eax, [rbx + AM_rev]
+    mov [rbx + AM_hrev], eax
+    call panel_px
+    mov [rbx + AM_hpx], eax
+    mov eax, [rip + g_face_gen] # after md_layout: it may have made the faces of its size
+    mov [rbx + AM_hgen], eax
+    mov [rbx + AM_hdoc], r13d
+    mov eax, r14d
+    EPILOGUE
+
+# panel_px() -> eax the size of the agents panel's text: the interface's
+panel_px:
+    mov eax, [rip + g_face_ui + FACE_px]
+    ret
+
+# msg_doc(msg) -> rax a reply's Markdown, parsed now when it has none or its text changed since, and
+#   at the panel's text size
+msg_doc:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rbx + AM_doc]
+    test r12, r12
+    jz 1f
+    mov eax, [rbx + AM_drev]
+    cmp eax, [rbx + AM_rev]
+    je 2f
+1:  mov rdi, r12
+    call md_free
+    mov rdi, [rbx + AM_text]
+    mov rsi, [rbx + AM_len]
+    call md_new
+    mov r12, rax
+    mov [rbx + AM_doc], rax
+    mov eax, [rbx + AM_rev]
+    mov [rbx + AM_drev], eax
+    mov dword ptr [rbx + AM_dpx], 0
+    mov rdi, r12
+    mov esi, 1
+    call md_set_compact
+    inc qword ptr [rip + md_parses]
+2:  call panel_px
+    cmp eax, [rbx + AM_dpx]
+    je 9f
+    mov [rbx + AM_dpx], eax
+    mov rdi, r12
+    mov esi, eax
+    call md_set_size
+9:  mov rax, r12
+    EPILOGUE
+
+# th_prepare(AS*, frame*, total) -> eax the total again: the replies in view this frame that were
+#   never parsed get their Markdown before anything is drawn (frame: thread_draw's, x [0], w [8], the
+#   area's y [20] and h [24], the text width [32]). A row that begins above the view moves the scroll
+#   by what it grew, so the rows after it stay where they were
+th_prepare:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov r14, rsi
+    mov r15d, edx
+    mov [rip + th_as], rbx
+    inc dword ptr [rip + th_serial]
+    mov eax, [r14 + 32]
+    mov [rip + th_textw], eax
+    mov dword ptr [rsp + 16], 4         # passes: what came into view by another's growing too
+.Ltp_pass:
+    # the scroll this frame shows: as thread_draw makes it below (the wheel, following, the bounds)
+    mov dword ptr [rsp + 20], 0
+    mov edi, [r14]
+    mov esi, [r14 + 20]
+    mov edx, [r14 + 8]
+    mov ecx, [r14 + 24]
+    call ui_in
+    test eax, eax
+    jz 1f
+    mov eax, [rip + g_scroll_y]
+    mov [rsp + 20], eax
+1:  mov eax, r15d
+    sub eax, [r14 + 24]
+    jns 2f
+    xor eax, eax
+2:  cmp dword ptr [rsp + 20], 0
+    jne 3f
+    cmp dword ptr [rip + th_follow], 0
+    jne 4f
+3:  mov ecx, [rip + th_scroll]
+    add ecx, [rsp + 20]
+    cmp ecx, eax
+    cmovl eax, ecx
+    test eax, eax
+    jns 4f
+    xor eax, eax
+4:  mov dword ptr [rsp + 4], 0  # parsed in this pass
+    mov r13d, [r14 + 20]
+    add r13d, [rip + g_mt + 4*MI_12]
+    sub r13d, eax
+    xor r12d, r12d
+.Ltp_row:
+    cmp r12, [rbx + AS_msgs + VEC_len]
+    jae .Ltp_end
+    mov eax, [r14 + 20]
+    add eax, [r14 + 24]
+    cmp r13d, eax
+    jge .Ltp_end
+    imul rdi, r12, AM_SIZE
+    add rdi, [rbx + AS_msgs + VEC_ptr]
+    mov [rsp + 8], rdi
+    mov esi, [r14 + 32]
+    call msg_height
+    mov [rsp], eax
+    add eax, r13d
+    cmp eax, [r14 + 20]
+    jl .Ltp_next                # above the view
+    mov rdi, [rsp + 8]
+    cmp dword ptr [rdi + AM_role], R_ASSIST
+    jne .Ltp_next
+    cmp qword ptr [rdi + AM_doc], 0
+    jne .Ltp_next
+    call msg_doc
+    inc dword ptr [rsp + 4]
+    mov rdi, [rsp + 8]
+    mov esi, [r14 + 32]
+    call msg_height
+    mov ecx, eax
+    sub ecx, [rsp]
+    mov [rsp], eax
+    add r15d, ecx
+    cmp r13d, [r14 + 20]
+    jge .Ltp_next
+    cmp dword ptr [rsp + 20], 0
+    jne 5f
+    cmp dword ptr [rip + th_follow], 0
+    jne .Ltp_next               # following: the end stays at the bottom
+5:  add [rip + th_scroll], ecx
+    sub r13d, ecx
+.Ltp_next:
+    add r13d, [rsp]
+    add r13d, [rip + g_mt + 4*MI_8]
+    inc r12
+    jmp .Ltp_row
+.Ltp_end:
+    cmp dword ptr [rsp + 4], 0
+    je .Ltp_done
+    dec dword ptr [rsp + 16]
+    jnz .Ltp_pass
+.Ltp_done:
+    mov eax, r15d
     EPILOGUE
 
 # wr_setup(WR*) using rbx = msg, r12d = width. Measuring (msg_height) and drawing (draw_msg) share it,
@@ -4385,6 +4595,11 @@ thread_draw:
     inc r12
     jmp 4b
 5:  add r13d, [rip + g_mt + 4*MI_32]
+    mov rdi, rbx                # replies coming into view: their Markdown, the rows kept in place
+    lea rsi, [rsp]
+    mov edx, r13d
+    call th_prepare
+    mov r13d, eax
     mov [rip + th_content], r13d
     # scrolling / follow
     mov edi, [rsp]
@@ -4530,6 +4745,7 @@ thread_draw:
     mov dword ptr [rip + th_follow], 1
     mov dword ptr [rip + g_dirty], 1
 .Ltd_ret:
+    call reply_follow           # a link clicked in a reply, now that nothing drawn is in use
     EPILOGUE
 
 # draw_msg(msg, y, h, frame*) ; frame: x at [0], w at [8], pad [28], text width [32]
@@ -4541,6 +4757,10 @@ draw_msg:
     mov r14, rcx                # frame
     mov r15d, [r14]
     add r15d, [r14 + 28]        # left
+    mov [rbx + AM_dx], r15d     # where it was drawn, for print-agent-row
+    mov [rbx + AM_dy], r12d
+    mov eax, [rip + th_serial]
+    mov [rbx + AM_dser], eax
     mov eax, [rbx + AM_role]
     cmp eax, R_TOOL
     je .Ldm_tool
@@ -4602,7 +4822,12 @@ draw_msg:
     push r10
     call ui_text_v_fit
     add rsp, 16
-3:  lea rdi, [rsp]
+3:  cmp dword ptr [rbx + AM_role], R_ASSIST
+    jne 31f
+    cmp qword ptr [rbx + AM_doc], 0
+    jne .Ldm_md
+    mov dword ptr [rip + g_dirty], 1    # th_prepare parses it next frame; its plain text till then
+31: lea rdi, [rsp]
     push r12
     push r12
     mov r12d, [r14 + 32]
@@ -4622,6 +4847,53 @@ draw_msg:
     mov [rsp + WR_bot], eax
     lea rdi, [rsp]
     call wrap
+    EPILOGUE
+.Ldm_md:
+    # a reply: its Markdown under the label, the part in view (as tall as msg_height measured it)
+    mov eax, r12d
+    add eax, [rip + g_mt + 4*MI_28]
+    mov ecx, r13d
+    sub ecx, [rip + g_mt + 4*MI_40]
+    add ecx, eax                # its bottom
+    mov edx, [rip + g_cv + CV_cy0]
+    cmp edx, eax
+    cmovl edx, eax              # the top drawn
+    mov r8d, [rip + g_cv + CV_cy1]
+    cmp r8d, ecx
+    cmovg r8d, ecx              # and the bottom
+    sub r8d, edx
+    jle .Ldm_md_done
+    mov r9d, edx
+    sub r9d, eax                # what is above the view
+    # its links' ids: a range per row, by its index
+    mov rcx, [rip + th_as]
+    mov rax, rbx
+    sub rax, [rcx + AS_msgs + VEC_ptr]
+    push rdx
+    push r8
+    push r9
+    xor edx, edx
+    mov ecx, AM_SIZE
+    div rcx
+    pop r9
+    pop r8
+    pop rdx
+    and eax, 255
+    shl eax, 12
+    add eax, ID_AG_MD
+    push rax
+    push rax
+    mov rdi, [rbx + AM_doc]
+    mov esi, r15d
+    mov ecx, [r14 + 32]
+    call md_draw
+    add rsp, 16
+    test eax, eax
+    js .Ldm_md_done
+    mov rdi, rbx
+    mov esi, eax
+    call reply_click
+.Ldm_md_done:
     EPILOGUE
 .Ldm_tool:
     M ecx, MI_16
@@ -4723,6 +4995,560 @@ draw_msg:
     call wrap
     EPILOGUE
 
+# reply_click(msg, link): a link of a reply was clicked. A code block's Copy and links with a scheme
+#   go as the Markdown preview follows them (http and https in the browser, others nowhere) at once;
+#   rhun:// links and files after the frame (reply_follow), as opening one may change what is drawn
+reply_click:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov rdi, [rbx + AM_doc]
+    mov esi, r12d
+    call md_is_copy
+    test eax, eax
+    jnz 5f
+    mov rdi, [rbx + AM_doc]
+    mov esi, r12d
+    call md_link
+    test rdx, rdx
+    jz 9f
+    cmp rdx, 4000
+    ja 9f
+    mov r13, rax
+    mov r14, rdx
+    mov rdi, r13
+    mov rsi, r14
+    call link_scheme
+    cmp eax, 2
+    je 5f
+    mov rdi, [rip + pend_link]  # a file or rhun://: kept for after the frame
+    call mem_free
+    mov rdi, [rip + pend_cwd]
+    call mem_free
+    mov qword ptr [rip + pend_cwd], 0
+    mov rdi, r13
+    mov rsi, r14
+    call mem_dup
+    mov [rip + pend_link], rax
+    mov rax, [rip + th_as]
+    test rax, rax
+    jz 4f
+    mov r13, [rax + AS_cwd]
+    test r13, r13
+    jz 4f
+    mov rdi, r13
+    call strlen
+    mov rdi, r13
+    mov rsi, rax
+    call mem_dup
+    mov [rip + pend_cwd], rax
+4:  mov dword ptr [rip + g_dirty], 1
+    jmp 9f
+5:  mov rdi, [rbx + AM_doc]
+    mov esi, r12d
+    call md_open_link
+9:  EPILOGUE
+
+# link_scheme(ptr, len) -> eax 0 none (a path), 1 rhun://, 2 another scheme: letters, digits, + . -
+#   from a letter, two at least, then ':' and something not a digit (PATH:12 is a path)
+link_scheme:
+    xor eax, eax
+    test rsi, rsi
+    jz 9f
+    movzx ecx, byte ptr [rdi]
+    or ecx, 0x20
+    sub ecx, 'a'
+    cmp ecx, 25
+    ja 9f
+    mov ecx, 1
+1:  cmp rcx, rsi
+    jae 9f
+    movzx edx, byte ptr [rdi + rcx]
+    cmp edx, ':'
+    je 3f
+    inc rcx
+    cmp edx, '+'
+    je 1b
+    cmp edx, '.'
+    je 1b
+    cmp edx, '-'
+    je 1b
+    lea r8d, [rdx - 48]
+    cmp r8d, 9
+    jbe 1b
+    or edx, 0x20
+    sub edx, 'a'
+    cmp edx, 25
+    jbe 1b
+    ret
+3:  cmp rcx, 2
+    jb 9f                       # one letter: a drive
+    lea rdx, [rcx + 1]
+    cmp rdx, rsi
+    jae 9f
+    movzx edx, byte ptr [rdi + rcx + 1]
+    sub edx, '0'
+    cmp edx, 9
+    jbe 9f
+    mov eax, 2
+    cmp rsi, 7
+    jb 9f
+    cmp dword ptr [rdi], 0x6e756872     # "rhun"
+    jne 9f
+    cmp word ptr [rdi + 4], 0x2f3a      # ":/"
+    jne 9f
+    cmp byte ptr [rdi + 6], '/'
+    jne 9f
+    mov eax, 1
+9:  ret
+
+# reply_follow(): the link reply_click kept, followed: rhun:// as rhun opens it, else a file
+reply_follow:
+    PROLOGUE
+    mov rbx, [rip + pend_link]
+    test rbx, rbx
+    jz 9f
+    mov r12, [rip + pend_cwd]
+    mov qword ptr [rip + pend_link], 0
+    mov qword ptr [rip + pend_cwd], 0
+    mov rdi, rbx
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    call link_scheme
+    cmp eax, 1
+    jne 1f
+    mov rdi, rbx
+    call app_open_path
+    jmp 2f
+1:  mov rdi, rbx
+    mov rsi, r12
+    call follow_file
+2:  mov rdi, rbx
+    call mem_free
+    mov rdi, r12
+    call mem_free
+9:  EPILOGUE
+
+# follow_file(target, cwd or 0): a reply's link to a file, opened in the editor at its line. The
+#   target is PATH, PATH:L, PATH:L-M, PATH:L:C, PATH#LL or PATH#LL-LM (file:// before it left out,
+#   %XX decoded), absolute or relative to the conversation's checkout, then to the project. Only
+#   the first line of a range is gone to. A toast when it names no file
+follow_file:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov r12, rsi
+    xor eax, eax                # "file://" left out
+    lea rcx, [rip + .Lfile_scheme]
+11: movzx edx, byte ptr [rcx + rax]
+    test edx, edx
+    jz 12f
+    cmp dl, [rbx + rax]
+    jne 13f
+    inc eax
+    jmp 11b
+13: xor eax, eax
+12: lea rsi, [rbx + rax]
+    lea rdi, [rip + lk_buf]
+    lea r8, [rdi + 4000]
+2:  movzx eax, byte ptr [rsi]
+    test eax, eax
+    jz 3f
+    cmp rdi, r8
+    jae .Lff_none
+    cmp eax, '%'
+    jne 25f
+    mov al, [rsi + 1]
+    call lk_hex
+    test eax, eax
+    js 24f
+    mov ecx, eax
+    shl ecx, 4
+    mov al, [rsi + 2]
+    call lk_hex
+    test eax, eax
+    js 24f
+    or eax, ecx
+    jz .Lff_none                # %00
+    add rsi, 2
+    jmp 25f
+24: mov eax, '%'
+25: mov [rdi], al
+    inc rdi
+    inc rsi
+    jmp 2b
+3:  mov byte ptr [rdi], 0
+    lea rax, [rip + lk_buf]
+    sub rdi, rax
+    mov r15, rdi                # its length
+    xor r13d, r13d              # the line
+    xor r14d, r14d              # the column
+    # "#L12" or "#L12-L20", any other fragment left out
+    lea rdi, [rip + lk_buf]
+    xor ecx, ecx
+4:  cmp rcx, r15
+    jae 5f
+    cmp byte ptr [rdi + rcx], '#'
+    je 41f
+    inc rcx
+    jmp 4b
+41: mov r15, rcx
+    mov byte ptr [rdi + rcx], 0
+    cmp byte ptr [rdi + rcx + 1], 'L'
+    jne .Lff_open
+    lea rdi, [rdi + rcx + 2]
+    mov esi, 12
+    call parse_u64
+    test rdx, rdx
+    jz .Lff_open
+    mov r13d, eax
+    jmp .Lff_open
+5:  # ":12", ":12-20" or ":12:5" at the end
+    mov rcx, r15
+51: cmp rcx, 1
+    jbe .Lff_open
+    dec rcx
+    cmp byte ptr [rdi + rcx], ':'
+    jne 51b
+    mov [rsp], rcx              # the colon
+    lea rdi, [rdi + rcx + 1]
+    mov rsi, r15
+    sub rsi, rcx
+    dec rsi
+    call parse_u64
+    test rdx, rdx
+    jz .Lff_open
+    mov [rsp + 8], eax          # the number
+    mov rcx, [rsp]
+    lea r8, [rcx + 1]
+    add r8, rdx                 # after its digits
+    mov dword ptr [rsp + 12], 0 # 1: a range follows
+    cmp r8, r15
+    je 52f
+    lea rax, [rip + lk_buf]
+    cmp byte ptr [rax + r8], '-'
+    jne .Lff_open
+    mov dword ptr [rsp + 12], 1
+    lea rdi, [rax + r8 + 1]
+    mov rsi, r15
+    sub rsi, r8
+    dec rsi
+    mov [rsp + 16], rsi
+    call parse_u64
+    test rdx, rdx
+    jz .Lff_open
+    cmp rdx, [rsp + 16]
+    jne .Lff_open
+52: mov rcx, [rsp]
+    lea rax, [rip + lk_buf]
+    mov byte ptr [rax + rcx], 0
+    mov r15, rcx
+    mov r13d, [rsp + 8]
+    cmp dword ptr [rsp + 12], 0
+    jne .Lff_open
+    # digits and a colon before it: ":LINE:COL"
+    mov rdx, rcx
+53: test rdx, rdx
+    jz .Lff_open
+    dec rdx
+    movzx r8d, byte ptr [rax + rdx]
+    cmp r8d, ':'
+    je 54f
+    sub r8d, '0'
+    cmp r8d, 9
+    jbe 53b
+    jmp .Lff_open
+54: lea r8, [rdx + 1]
+    cmp r8, rcx
+    je .Lff_open                # no digits
+    test rdx, rdx
+    jz .Lff_open
+    mov [rsp], rdx
+    lea rdi, [rax + rdx + 1]
+    mov rsi, rcx
+    sub rsi, rdx
+    dec rsi
+    call parse_u64
+    mov r14d, r13d
+    mov r13d, eax
+    mov rdx, [rsp]
+    lea rax, [rip + lk_buf]
+    mov byte ptr [rax + rdx], 0
+.Lff_open:
+    lea rdi, [rip + lk_buf]
+    cmp byte ptr [rdi], 0
+    je .Lff_none
+    PATH_ABSOLUTE rdi, 6f
+    test r12, r12               # relative: to the checkout, then the project
+    jz 61f
+    mov rdi, r12
+    lea rsi, [rip + lk_buf]
+    call path_join
+    mov rdi, rax
+    call lk_try
+    test eax, eax
+    jnz 9f
+61: mov rdi, [rip + g_project]
+    test rdi, rdi
+    jz .Lff_none
+    lea rsi, [rip + lk_buf]
+    call path_join
+    mov rdi, rax
+    call lk_try
+    test eax, eax
+    jnz 9f
+    jmp .Lff_none
+6:  lea rdi, [rip + lk_buf]
+    mov rsi, r15
+    call mem_dup
+    mov rdi, rax
+    call lk_try
+    test eax, eax
+    jnz 9f
+.Lff_none:
+    lea rdi, [rip + tmp]
+    call sb_clear
+    lea rdi, [rip + tmp]
+    lea rsi, [rip + .Lno_file]
+    call sb_push_cstr
+    lea rdi, [rip + tmp]
+    mov rsi, rbx
+    call sb_push_cstr
+    lea rdi, [rip + tmp]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + tmp + SB_ptr]
+    call app_toast
+    EPILOGUE
+9:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# lk_try(path, owned) using r13d = the line, r14d = the column: the file opened there, eax 1; 0 when
+#   the path names no file (a folder, nothing). Frees the path
+lk_try:
+    push rbx
+    push r15
+    sub rsp, 8
+    mov rbx, rdi
+    xor r15d, r15d
+    call vfs_stat
+    test eax, eax
+    jnz 8f
+    mov rdi, rbx
+    call vfs_is_dir
+    test eax, eax
+    jnz 8f
+    mov r15d, 1
+    mov rdi, rbx
+    call app_open_file
+    test rax, rax
+    js 8f
+    mov dword ptr [rip + g_focus], FOCUS_EDITOR
+    test r13d, r13d
+    jz 8f
+    mov edi, r13d
+    mov esi, r14d
+    test esi, esi
+    jnz 7f
+    mov esi, 1
+7:  call app_goto_line
+8:  mov rdi, rbx
+    call mem_free
+    mov eax, r15d
+    add rsp, 8
+    pop r15
+    pop rbx
+    ret
+
+# lk_hex: al -> eax its value as a hex digit, or -1 (touches nothing else)
+lk_hex:
+    movzx eax, al
+    cmp eax, '0'
+    jb 8f
+    cmp eax, '9'
+    jbe 1f
+    or eax, 0x20
+    cmp eax, 'a'
+    jb 8f
+    cmp eax, 'f'
+    ja 8f
+    sub eax, 87                 # 'a' less 10
+    ret
+1:  sub eax, '0'
+    ret
+8:  mov eax, -1
+    ret
+
+# FN agents_row_dump(sb, n): row n (from 1) of the open conversation as the panel drew it last, for
+#   tests: "row=N role=R height=H y=Y content=C parsed=0|1 parses=P" (y its top on screen in the last
+#   frame, -1 when it was not drawn), then a parsed reply's Markdown a line per block (md_row_dump,
+#   its links where they were drawn); "plain TEXT" for the other rows. It parses nothing
+FN agents_row_dump
+    PROLOGUE
+    mov r15, rdi
+    mov r12, rsi
+    mov rax, [rip + view]
+    test rax, rax
+    js 9f
+    cmp rax, [rip + sessions + VEC_len]
+    jae 9f
+    mov rcx, [rip + sessions + VEC_ptr]
+    mov r13, [rcx + rax*8]
+    dec r12
+    js 9f
+    cmp r12, [r13 + AS_msgs + VEC_len]
+    jae 9f
+    imul rbx, r12, AM_SIZE
+    add rbx, [r13 + AS_msgs + VEC_ptr]
+    mov rdi, r15
+    lea rsi, [rip + .Lrow_n]
+    call sb_push_cstr
+    lea rsi, [r12 + 1]
+    mov rdi, r15
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lrow_role]
+    call sb_push_cstr
+    mov eax, [rbx + AM_role]
+    lea rcx, [rip + role_names]
+    mov rsi, [rcx + rax*8]
+    mov rdi, r15
+    call sb_push_cstr
+    mov rdi, r15
+    lea rsi, [rip + .Lrow_height]
+    call sb_push_cstr
+    mov rdi, r15
+    mov esi, [rbx + AM_h]
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lrow_y]
+    call sb_push_cstr
+    mov esi, -1
+    mov eax, [rbx + AM_dser]
+    cmp eax, [rip + th_serial]
+    jne 11f
+    mov esi, [rbx + AM_dy]
+11: mov rdi, r15
+    call md_push_int
+    mov rdi, r15
+    lea rsi, [rip + .Lrow_content]
+    call sb_push_cstr
+    mov rdi, r15
+    mov esi, [rip + th_content]
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lrow_parsed]
+    call sb_push_cstr
+    xor r14d, r14d
+    cmp qword ptr [rbx + AM_doc], 0
+    je 1f
+    mov eax, [rbx + AM_drev]
+    cmp eax, [rbx + AM_rev]
+    jne 1f
+    mov r14d, 1
+1:  mov rdi, r15
+    mov esi, r14d
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lrow_parses]
+    call sb_push_cstr
+    mov rdi, r15
+    mov rsi, [rip + md_parses]
+    call sb_push_u64
+    mov rdi, r15
+    mov esi, 10
+    call sb_push_byte
+    cmp dword ptr [rbx + AM_role], R_ASSIST
+    jne 5f
+    test r14d, r14d
+    jz 9f
+    mov edx, -1                 # where it is on screen, when it was drawn in the last frame
+    mov ecx, -1
+    mov eax, [rbx + AM_dser]
+    cmp eax, [rip + th_serial]
+    jne 3f
+    mov edx, [rbx + AM_dx]
+    mov ecx, [rbx + AM_dy]
+    add ecx, [rip + g_mt + 4*MI_28]
+3:  mov rdi, [rbx + AM_doc]
+    mov rsi, r15
+    call md_row_dump
+    jmp 9f
+5:  mov rdi, r15
+    lea rsi, [rip + .Lrow_plain]
+    call sb_push_cstr
+    mov rsi, [rbx + AM_text]
+    mov rdx, [rbx + AM_len]
+    xor ecx, ecx
+6:  cmp rcx, rdx
+    jae 7f
+    cmp rcx, 60
+    jae 7f
+    cmp byte ptr [rsi + rcx], 10
+    je 7f
+    inc rcx
+    jmp 6b
+7:  mov rdi, r15
+    mov rdx, rcx
+    call sb_push
+    mov rdi, r15
+    mov esi, 10
+    call sb_push_byte
+9:  EPILOGUE
+
+# FN agents_test_append(ptr, len): TEXT ("\n" in it a line end) added to the last reply of the open
+#   conversation in place, as a streaming reply grows (agent-test-append)
+FN agents_test_append
+    PROLOGUE
+    mov r14, rdi
+    mov r15, rsi
+    mov rax, [rip + view]
+    test rax, rax
+    js 9f
+    cmp rax, [rip + sessions + VEC_len]
+    jae 9f
+    mov rcx, [rip + sessions + VEC_ptr]
+    mov r13, [rcx + rax*8]
+    mov r12, [r13 + AS_msgs + VEC_len]
+1:  test r12, r12
+    jz 9f
+    dec r12
+    imul rbx, r12, AM_SIZE
+    add rbx, [r13 + AS_msgs + VEC_ptr]
+    cmp dword ptr [rbx + AM_role], R_ASSIST
+    jne 1b
+    mov rdi, [rbx + AM_text]
+    mov rsi, [rbx + AM_len]
+    add rsi, r15
+    inc rsi
+    call mem_realloc
+    mov [rbx + AM_text], rax
+    mov rdi, rax
+    add rdi, [rbx + AM_len]
+    xor ecx, ecx
+2:  cmp rcx, r15
+    jae 4f
+    movzx eax, byte ptr [r14 + rcx]
+    inc rcx
+    cmp eax, '\\'
+    jne 3f
+    cmp rcx, r15
+    jae 3f
+    cmp byte ptr [r14 + rcx], 'n'
+    jne 3f
+    inc rcx
+    mov eax, 10
+3:  mov [rdi], al
+    inc rdi
+    jmp 2b
+4:  mov byte ptr [rdi], 0
+    sub rdi, [rbx + AM_text]
+    mov [rbx + AM_len], rdi
+    mov rdi, r13
+    mov rsi, r12
+    call agents_msg_changed
+9:  EPILOGUE
+
 .section .rodata
 .Lr0: .asciz "?"
 .Lr1: .asciz "user"
@@ -4764,6 +5590,16 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lnow: .asciz "just now"
 .Lago: .asciz " ago"
 .Lyou: .asciz "You"
+.Lno_file: .asciz "No such file: "
+.Lfile_scheme: .asciz "file://"
+.Lrow_n: .asciz "row="
+.Lrow_role: .asciz " role="
+.Lrow_height: .asciz " height="
+.Lrow_y: .asciz " y="
+.Lrow_content: .asciz " content="
+.Lrow_parsed: .asciz " parsed="
+.Lrow_parses: .asciz " parses="
+.Lrow_plain: .asciz "plain "
 .Lagent: .asciz "Agent"
 .Lempty: .asciz ""
 .Ltool: .asciz "tool"

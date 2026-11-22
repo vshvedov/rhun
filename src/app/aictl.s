@@ -466,7 +466,37 @@ c_tool_confirm:
 9:  xor eax, eax
     EPILOGUE
 
+# print-agent-row N: row N (from 1) of the open conversation as it is drawn (a reply's Markdown blocks)
+c_print_agent_row:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov rbx, rax
+    call ai_out
+    mov rdi, rax
+    mov rsi, rbx
+    call agents_row_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-test-append TEXT: TEXT ("\n" a line end) added in place to the open conversation's last reply,
+#   as a streaming reply grows (tests)
+c_agent_test_append:
+    PROLOGUE
+    call ai_set
+    call ai_arg_rest
+    mov rdi, rax
+    mov rsi, rdx
+    call agents_test_append
+    xor eax, eax
+    EPILOGUE
+
 .section .rodata
+.Lc_print_agent_row: .asciz "print-agent-row"
+.Lc_agent_test_append: .asciz "agent-test-append"
 .Lc_agents_source: .asciz "agents-source"
 .Lc_agent_new: .asciz "agent-new"
 .Lc_agent_prompt: .asciz "agent-prompt"
@@ -513,6 +543,7 @@ ai_ctl:
     .quad .Lc_agent_type, c_agent_type, .Lc_agent_release, c_agent_release
     .quad .Lc_wait_agent, c_wait_agent, .Lc_print_agent_live, c_print_agent_live
     .quad .Lc_agent_timing, c_agent_timing
+    .quad .Lc_print_agent_row, c_print_agent_row, .Lc_agent_test_append, c_agent_test_append
     .quad 0, 0
 live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_conn_kill_ms

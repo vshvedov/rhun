@@ -1391,6 +1391,10 @@ ENDSTRUCT WE_SIZE
 .macro M reg, idx
     mov \reg, [rip + g_mt + 4*(\idx)]
 .endm
+# PM: a metric inside the agents panel, in proportion to its own text size (agentfont.s)
+.macro PM reg, idx
+    mov \reg, [rip + g_pmt + 4*(\idx)]
+.endm
 
 # ui_btn result bits
 .equ UB_HOVER, 1
@@ -1412,6 +1416,7 @@ F TF_width, 4           # text area: available text width in pixels
 F TF_prefx, 4           # text area: preferred x for vertical motion, -1 = none
 F TF_pad, 4
 F TF_revision, 8        # content or destination lifecycle mutation
+F TF_face, 8            # text area: the face it measures and draws in, 0 the interface's
 ENDSTRUCT TF_SIZE
 
 # Owned destination snapshot and queued clipboard request. No document pointers retained.

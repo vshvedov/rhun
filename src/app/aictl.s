@@ -482,6 +482,16 @@ c_print_agent_row:
     xor eax, eax
     EPILOGUE
 
+# print-agents-metrics: the agents panel's text size and what follows from it (agentfont.s)
+c_print_agents_metrics:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agents_metrics_dump
+    xor eax, eax
+    EPILOGUE
+
 # agent-test-append TEXT: TEXT ("\n" a line end) added in place to the open conversation's last reply,
 #   as a streaming reply grows (tests)
 c_agent_test_append:
@@ -496,6 +506,7 @@ c_agent_test_append:
 
 .section .rodata
 .Lc_print_agent_row: .asciz "print-agent-row"
+.Lc_print_agents_metrics: .asciz "print-agents-metrics"
 .Lc_agent_test_append: .asciz "agent-test-append"
 .Lc_agents_source: .asciz "agents-source"
 .Lc_agent_new: .asciz "agent-new"
@@ -544,6 +555,7 @@ ai_ctl:
     .quad .Lc_wait_agent, c_wait_agent, .Lc_print_agent_live, c_print_agent_live
     .quad .Lc_agent_timing, c_agent_timing
     .quad .Lc_print_agent_row, c_print_agent_row, .Lc_agent_test_append, c_agent_test_append
+    .quad .Lc_print_agents_metrics, c_print_agents_metrics
     .quad 0, 0
 live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_conn_kill_ms

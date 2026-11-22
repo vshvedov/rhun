@@ -105,6 +105,8 @@ cfg_ext_updates: .long 0         # [updates] extensions: XM_INSTALL, XM_CHECK or
 cfg_claude_chat: .long 1
 cfg_claude_initial_mode: .long 0 # g_claude_mode_opts: 0 the CLI's own default
 cfg_agents_idle_stop: .long 10   # [agents] idle_stop_minutes: a conversation's process stops after them, 0 never
+.globl cfg_agents_font_size
+cfg_agents_font_size: .long 0   # [agents] font_size: the panel's text, 0 the interface's (agentfont.s)
 .p2align 3
 cfg_theme: .quad cfg_def_theme
 cfg_dark_theme: .quad cfg_def_theme
@@ -994,6 +996,7 @@ g_settings:
     SETTING .Ls_agents, grok, ST_BOOL, cfg_agents_grok, 0, 1, 1, 0, "Grok Build", "Show Grok Build sessions in the agents panel."
     SETTING .Ls_agents, opencode, ST_BOOL, cfg_agents_opencode, 0, 1, 1, 0, "OpenCode", "Show OpenCode sessions in the agents panel."
     SETTING .Ls_agents, idle_stop_minutes, ST_INT, cfg_agents_idle_stop, 0, 240, 5, 0, "Stop idle agents after", "Minutes without activity before a conversation's process is stopped. 0 never stops it."
+    SETTING .Ls_agents, font_size, ST_INT, cfg_agents_font_size, 0, 32, 1, 0, "Font size", "Text size of the agents panel. 0 follows the interface."
     # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
     SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
     SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."

@@ -57,6 +57,12 @@ INTS = {
     ('debug', 'console_lines'): (1000, 100000, 1000),
     ('agents', 'idle_stop_minutes'): (0, 240, 5),
 }
+# Steppers with steps of their own: (initial, direction, expected). The agents panel's size: 0
+# follows the interface (13 here), + from it goes past the interface's size, - from 8 back to it.
+STEPS = {
+    ('agents', 'font_size'): [(0, '+', 14), (8, '-', 0), (0, '-', 0), (32, '+', 32), (20, '-', 19),
+                              (20, '+', 21), (5, '+', 9)],
+}
 STRINGS = {
     ('ui', 'font'): 'missing font café.ttf', ('editor', 'font'): 'missing mono café.ttf',
     ('ui', 'file_icons'): 'someone/icons/missing',
@@ -170,7 +176,7 @@ class SettingsUI(unittest.TestCase):
 
     def test_inventory_requires_cases_for_every_setting(self):
         expected = {(s, k) for s, names in BOOLS.items() for k in names.split()}
-        expected |= set(INTS) | set(STRINGS) | set(CHOICES)
+        expected |= set(INTS) | set(STEPS) | set(STRINGS) | set(CHOICES)
         expected |= set(THEME_ROWS) | {('git', 'ai_setup'), ('updates', 'check_now'),
                                        ('updates', 'check_extensions')}
         self.assertEqual(expected, {(s, k) for s, k, _ in ROWS})
@@ -192,11 +198,12 @@ class SettingsUI(unittest.TestCase):
                                          'true' if initial == 'false' else 'false')
 
     def test_every_stepper_increases_decreases_and_clamps(self):
-        for (section, key), (minimum, maximum, step) in INTS.items():
-            for initial, direction, expected in [(minimum, '+', minimum + step),
-                                                  (maximum, '-', maximum - step),
-                                                  (minimum, '-', minimum),
-                                                  (maximum, '+', maximum)]:
+        cases = {setting: [(minimum, '+', minimum + step), (maximum, '-', maximum - step),
+                           (minimum, '-', minimum), (maximum, '+', maximum)]
+                 for setting, (minimum, maximum, step) in INTS.items()}
+        cases.update(STEPS)
+        for (section, key), steps in cases.items():
+            for initial, direction, expected in steps:
                 with self.subTest(setting=f'{section}.{key}', value=initial, direction=direction):
                     self.configure(section, key, initial)
                     # Scale changes geometry before the first click.

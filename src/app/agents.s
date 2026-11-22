@@ -3499,35 +3499,35 @@ ext_badge:
     mov [rsp + 4], eax
     mov rdi, r15
     call strlen
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov rsi, r15
     mov rdx, rax
     call text_width
     mov r14d, eax
-    add r14d, [rip + g_mt + 4*MI_14]
-    add r14d, [rip + g_mt + 4*MI_4]
-    add r14d, [rip + g_mt + 4*MI_12]
+    add r14d, [rip + g_pmt + 4*MI_14]
+    add r14d, [rip + g_pmt + 4*MI_4]
+    add r14d, [rip + g_pmt + 4*MI_12]
     mov edi, r12d
     mov esi, r13d
     mov edx, r14d
-    M ecx, MI_20
-    M r8d, MI_4
+    PM ecx, MI_20
+    PM r8d, MI_4
     mov r9d, [rsp + 4]
     call gfx_round_rect
     mov edi, r12d
-    add edi, [rip + g_mt + 4*MI_3]
+    add edi, [rip + g_pmt + 4*MI_3]
     mov esi, r13d
-    add esi, [rip + g_mt + 4*MI_3]
-    M edx, MI_14
+    add esi, [rip + g_pmt + 4*MI_3]
+    PM edx, MI_14
     mov rcx, rbx
     call badge
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov esi, r12d
-    add esi, [rip + g_mt + 4*MI_6]
-    add esi, [rip + g_mt + 4*MI_14]
-    add esi, [rip + g_mt + 4*MI_4]
+    add esi, [rip + g_pmt + 4*MI_6]
+    add esi, [rip + g_pmt + 4*MI_14]
+    add esi, [rip + g_pmt + 4*MI_4]
     mov edx, r13d
-    M ecx, MI_20
+    PM ecx, MI_20
     mov r8, r15
     COLOR r9d, T_FG
     call ui_text_c
@@ -3573,36 +3573,36 @@ agent_badge:
     mov [rsp + 8], eax
     mov rdi, r15
     call strlen
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov rsi, r15
     mov rdx, rax
     call text_width
     mov r14d, eax
-    add r14d, [rip + g_mt + 4*MI_14]
-    add r14d, [rip + g_mt + 4*MI_4]
-    add r14d, [rip + g_mt + 4*MI_12]
+    add r14d, [rip + g_pmt + 4*MI_14]
+    add r14d, [rip + g_pmt + 4*MI_4]
+    add r14d, [rip + g_pmt + 4*MI_12]
     mov edi, r12d
     mov esi, r13d
     mov edx, r14d
-    M ecx, MI_20
-    M r8d, MI_4
+    PM ecx, MI_20
+    PM r8d, MI_4
     mov r9d, [rsp + 4]
     call gfx_round_rect
     mov edi, [rsp]
     mov esi, r12d
-    add esi, [rip + g_mt + 4*MI_6]
+    add esi, [rip + g_pmt + 4*MI_6]
     mov edx, r13d
-    add edx, [rip + g_mt + 4*MI_3]
-    M ecx, MI_14
+    add edx, [rip + g_pmt + 4*MI_3]
+    PM ecx, MI_14
     mov r8d, [rsp + 8]
     call icon_draw
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov esi, r12d
-    add esi, [rip + g_mt + 4*MI_6]
-    add esi, [rip + g_mt + 4*MI_14]
-    add esi, [rip + g_mt + 4*MI_4]
+    add esi, [rip + g_pmt + 4*MI_6]
+    add esi, [rip + g_pmt + 4*MI_14]
+    add esi, [rip + g_pmt + 4*MI_4]
     mov edx, r13d
-    M ecx, MI_20
+    PM ecx, MI_20
     mov r8, r15
     mov r9d, [rsp + 8]
     call ui_text_c
@@ -3616,7 +3616,7 @@ worktree_badge:
     mov r12d, esi
     mov r13d, edx
     mov [rsp + 16], ecx
-    M eax, MI_40
+    PM eax, MI_40
     cmp ecx, eax
     jl 9f
     COLOR ebx, T_MUTED
@@ -3627,47 +3627,47 @@ worktree_badge:
     mov [rsp], eax
     mov rdi, r15
     call strlen
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov rsi, r15
     mov rdx, rax
     call text_width
     mov r14d, eax
-    add r14d, [rip + g_mt + 4*MI_14]
-    add r14d, [rip + g_mt + 4*MI_4]
-    add r14d, [rip + g_mt + 4*MI_12]
+    add r14d, [rip + g_pmt + 4*MI_14]
+    add r14d, [rip + g_pmt + 4*MI_4]
+    add r14d, [rip + g_pmt + 4*MI_12]
     cmp r14d, [rsp + 16]
     cmovg r14d, [rsp + 16]
     mov edi, r12d
     mov esi, r13d
     mov edx, r14d
-    M ecx, MI_20
-    M r8d, MI_4
+    PM ecx, MI_20
+    PM r8d, MI_4
     mov r9d, [rsp]
     call gfx_round_rect
     mov edi, IC_BRANCH
     mov esi, r12d
-    add esi, [rip + g_mt + 4*MI_6]
+    add esi, [rip + g_pmt + 4*MI_6]
     mov edx, r13d
-    add edx, [rip + g_mt + 4*MI_3]
-    M ecx, MI_14
+    add edx, [rip + g_pmt + 4*MI_3]
+    PM ecx, MI_14
     mov r8d, ebx
     call icon_draw
     mov rdi, r15
     call strlen
     mov r9, rax
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov esi, r12d
-    add esi, [rip + g_mt + 4*MI_6]
-    add esi, [rip + g_mt + 4*MI_14]
-    add esi, [rip + g_mt + 4*MI_4]
+    add esi, [rip + g_pmt + 4*MI_6]
+    add esi, [rip + g_pmt + 4*MI_14]
+    add esi, [rip + g_pmt + 4*MI_4]
     mov edx, r13d
-    M ecx, MI_20
+    PM ecx, MI_20
     mov r8, r15
     mov r10d, ebx
     mov r11d, r14d
-    sub r11d, [rip + g_mt + 4*MI_14]
-    sub r11d, [rip + g_mt + 4*MI_4]
-    sub r11d, [rip + g_mt + 4*MI_12]
+    sub r11d, [rip + g_pmt + 4*MI_14]
+    sub r11d, [rip + g_pmt + 4*MI_4]
+    sub r11d, [rip + g_pmt + 4*MI_12]
     push r11
     push r10
     call ui_text_v_fit
@@ -3913,12 +3913,12 @@ msg_height:
     mov rdi, [rbx + AM_doc]
     mov esi, r12d
     call md_layout
-    add eax, [rip + g_mt + 4*MI_40]
+    add eax, [rip + g_pmt + 4*MI_40]
     jmp 9f
 12: mov eax, [rbx + AM_role]
     cmp eax, R_TOOL
     jne 2f
-    M eax, MI_32
+    PM eax, MI_32
     jmp 9f
 2:  lea rdi, [rsp]
     call wr_setup
@@ -3929,9 +3929,9 @@ msg_height:
     mov ecx, [rbx + AM_role]
     cmp ecx, R_RESULT
     jb 3f                       # results, errors and notices are boxed
-    add eax, [rip + g_mt + 4*MI_20]
+    add eax, [rip + g_pmt + 4*MI_20]
     jmp 9f
-3:  add eax, [rip + g_mt + 4*MI_40]
+3:  add eax, [rip + g_pmt + 4*MI_40]
 9:  mov [rbx + AM_h], eax
     mov [rbx + AM_w], r12d
     mov r14d, eax
@@ -3945,9 +3945,10 @@ msg_height:
     mov eax, r14d
     EPILOGUE
 
-# panel_px() -> eax the size of the agents panel's text: the interface's
+# panel_px() -> eax the size of the agents panel's text, pixels (agentfont.s)
 panel_px:
-    mov eax, [rip + g_face_ui + FACE_px]
+    mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_px]
     ret
 
 # msg_doc(msg) -> rax a reply's Markdown, parsed now when it has none or its text changed since, and
@@ -4030,7 +4031,7 @@ th_prepare:
     xor eax, eax
 4:  mov dword ptr [rsp + 4], 0  # parsed in this pass
     mov r13d, [r14 + 20]
-    add r13d, [rip + g_mt + 4*MI_12]
+    add r13d, [rip + g_pmt + 4*MI_12]
     sub r13d, eax
     mov [rsp + 32], r13d
     # the anchor: the first row drawn last frame that is in view at this scroll
@@ -4058,7 +4059,7 @@ th_prepare:
     jl 6f
     mov [rsp + 24], r12
     jmp .Ltp_walk
-6:  add r13d, [rip + g_mt + 4*MI_8]
+6:  add r13d, [rip + g_pmt + 4*MI_8]
     inc r12
     jmp .Ltp_anchor
 .Ltp_walk:
@@ -4110,7 +4111,7 @@ th_prepare:
     sub r13d, ecx
 .Ltp_next:
     add r13d, [rsp]
-    add r13d, [rip + g_mt + 4*MI_8]
+    add r13d, [rip + g_pmt + 4*MI_8]
     inc r12
     jmp .Ltp_row
 .Ltp_end:
@@ -4130,23 +4131,32 @@ wr_setup:
     mov rax, [rbx + AM_len]
     mov [rdi + WR_len], rax
     mov [rdi + WR_w], r12d
-    lea rax, [rip + g_face_ui]
-    mov ecx, [rip + g_face_ui + FACE_lineh]
+    mov rax, [rip + ag_fui]
+    mov ecx, [rax + FACE_lineh]
     cmp dword ptr [rbx + AM_role], R_RESULT
     jb 1f                       # results, errors and notices are boxed
-    lea rax, [rip + g_face_small]
-    mov ecx, [rip + g_face_small + FACE_lineh]
+    mov rax, [rip + ag_fsmall]
+    mov ecx, [rax + FACE_lineh]
     mov edx, r12d               # a result's box insets its text
-    sub edx, [rip + g_mt + 4*MI_16]
+    sub edx, [rip + g_pmt + 4*MI_16]
     mov [rdi + WR_w], edx
 1:  mov [rdi + WR_face], rax
-    add ecx, [rip + g_mt + 4*MI_3]
+    add ecx, [rip + g_pmt + 4*MI_3]
     mov [rdi + WR_lh], ecx
     ret
 
 # agents_draw(x, y, w, h)
 FN agents_draw
     PROLOGUE 64
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    mov [rsp + 12], ecx
+    call agents_metrics         # the panel's own text size (agentfont.s)
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 12]
     mov qword ptr [rip + label_due], -1     # the labels drawn below say when they change
     mov [rsp], edi
     mov [rsp + 4], esi
@@ -4191,21 +4201,13 @@ list_draw:
     mov [rsp + 8], edx
     mov [rsp + 12], ecx
     # header
-    M r15d, MI_40
-    lea rdi, [rip + g_face_small]
-    mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_16]
-    mov edx, [rsp + 4]
-    mov ecx, r15d
-    lea r8, [rip + .Lheader]
-    COLOR r9d, T_MUTED
-    call ui_text_c
-    M r12d, MI_28
+    PM r15d, MI_40
+    PM r12d, MI_28
     mov edi, ID_AG_REFRESH
     mov esi, [rsp]
     add esi, [rsp + 8]
     sub esi, r12d
-    sub esi, [rip + g_mt + 4*MI_8]
+    sub esi, [rip + g_pmt + 4*MI_8]
     mov edx, r15d
     sub edx, r12d
     sar edx, 1
@@ -4213,28 +4215,50 @@ list_draw:
     mov ecx, r12d
     mov r8d, r12d
     mov r9d, IC_REFRESH
-    call ui_icon_btn
+    call ag_icon_btn
     test eax, UB_CLICK
     jz 1f
     call agents_scan
 1:  mov edi, [rsp]              # AI (D4): "+ TITLE" for extensions whose sessions take prompts
     add edi, [rsp + 8]
     sub edi, r12d
-    sub edi, [rip + g_mt + 4*MI_12]
+    sub edi, [rip + g_pmt + 4*MI_12]
     mov esi, r15d
     sub esi, r12d
     sar esi, 1
     add esi, [rsp + 4]
     mov edx, r12d
+    mov ecx, [rsp]
+    add ecx, [rip + g_pmt + 4*MI_16]
     call agentext_list_buttons
-    cmp qword ptr [rip + page_count], 0
-    jne 2f
-    lea rdi, [rip + g_face_small]
+    mov [rsp + 16], eax         # the label, where the buttons leave room for it
+    lea rdi, [rip + .Lheader]
+    call strlen
+    mov rdx, rax
+    mov rdi, [rip + ag_fsmall]
+    lea rsi, [rip + .Lheader]
+    call text_width
+    add eax, [rsp]
+    add eax, [rip + g_pmt + 4*MI_16]
+    add eax, [rip + g_pmt + 4*MI_8]
+    cmp eax, [rsp + 16]
+    jg 12f
+    mov rdi, [rip + ag_fsmall]
     mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_16]
+    add esi, [rip + g_pmt + 4*MI_16]
+    mov edx, [rsp + 4]
+    mov ecx, r15d
+    lea r8, [rip + .Lheader]
+    COLOR r9d, T_MUTED
+    call ui_text_c
+12: cmp qword ptr [rip + page_count], 0
+    jne 2f
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [rip + g_pmt + 4*MI_16]
     mov edx, [rsp + 4]
     add edx, r15d
-    M ecx, MI_24
+    PM ecx, MI_24
     lea r8, [rip + .Lnone]
     cmp dword ptr [rip + opencode_status], 1
     jne 112f
@@ -4261,7 +4285,7 @@ list_draw:
     mov [rsp + 16], eax         # list y
     mov eax, [rsp + 12]
     sub eax, r15d
-    sub eax, [rip + g_mt + 4*MI_40]
+    sub eax, [rip + g_pmt + 4*MI_40]
     mov [rsp + 20], eax         # list h
     mov edi, [rsp]
     mov esi, [rsp + 16]
@@ -4272,8 +4296,8 @@ list_draw:
     jz 3f
     mov eax, [rip + g_scroll_y]
     add [rip + list_scroll], eax
-3:  M ebx, MI_48
-    add ebx, [rip + g_mt + 4*MI_8]      # row h
+3:  PM ebx, MI_48
+    add ebx, [rip + g_pmt + 4*MI_8]      # row h
     mov rax, [rip + page_count]
     imul eax, ebx
     sub eax, [rsp + 20]
@@ -4315,25 +4339,25 @@ list_draw:
     mov [rsp + 24], eax
     test eax, UB_HOVER
     jz 4f
-    M eax, MI_6
+    PM eax, MI_6
     mov edi, [rsp]
     add edi, eax
     mov esi, r13d
-    add esi, [rip + g_mt + 4*MI_2]
+    add esi, [rip + g_pmt + 4*MI_2]
     mov edx, [rsp + 8]
     sub edx, eax
     sub edx, eax
     mov ecx, ebx
-    sub ecx, [rip + g_mt + 4*MI_4]
-    M r8d, MI_RADIUS
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    PM r8d, MI_RADIUS
     COLOR r9d, T_HOVER
     call gfx_round_rect
 4:  # status dot
-    M ecx, MI_8
+    PM ecx, MI_8
     mov edi, [rsp]
-    add edi, [rip + g_mt + 4*MI_16]
+    add edi, [rip + g_pmt + 4*MI_16]
     mov esi, r13d
-    add esi, [rip + g_mt + 4*MI_16]
+    add esi, [rip + g_pmt + 4*MI_16]
     mov edx, ecx
     mov r8d, ecx
     shr r8d, 1
@@ -4358,16 +4382,16 @@ list_draw:
     mov rdi, r8
     call strlen
     mov r9, rax
-    lea rdi, [rip + g_face_ui]
+    mov rdi, [rip + ag_fui]
     mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_32]
+    add esi, [rip + g_pmt + 4*MI_32]
     mov edx, r13d
-    add edx, [rip + g_mt + 4*MI_6]
-    M ecx, MI_24
+    add edx, [rip + g_pmt + 4*MI_6]
+    PM ecx, MI_24
     mov r8, [rsp + 32]
     COLOR r10d, T_FG
     mov r11d, [rsp + 8]
-    sub r11d, [rip + g_mt + 4*MI_48]
+    sub r11d, [rip + g_pmt + 4*MI_48]
     push r11
     push r10
     call ui_text_v_fit
@@ -4375,9 +4399,9 @@ list_draw:
     # meta line: provider badge, worktree badge, then time and activity
     mov edi, [r14 + AS_kind]
     mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_32]
+    add esi, [rip + g_pmt + 4*MI_32]
     mov edx, r13d
-    add edx, [rip + g_mt + 4*MI_28]
+    add edx, [rip + g_pmt + 4*MI_28]
     cmp edi, AS_KIND_EXT
     jne 61f
     mov rdi, r14                # an extension's session: its badge (AI, agentext.s)
@@ -4389,30 +4413,30 @@ list_draw:
     test rdi, rdi
     jz 7f
     mov esi, eax
-    add esi, [rip + g_mt + 4*MI_6]
+    add esi, [rip + g_pmt + 4*MI_6]
     mov edx, r13d
-    add edx, [rip + g_mt + 4*MI_28]
+    add edx, [rip + g_pmt + 4*MI_28]
     mov ecx, [rsp]
     add ecx, [rsp + 8]
     sub ecx, esi
-    sub ecx, [rip + g_mt + 4*MI_16]
+    sub ecx, [rip + g_pmt + 4*MI_16]
     mov [rsp + 48], esi
     call worktree_badge
     mov [rsp + 40], eax
     # A narrow panel can shorten the badge; hovering it reveals the complete name.
     mov edi, [rsp + 48]
     mov esi, r13d
-    add esi, [rip + g_mt + 4*MI_28]
+    add esi, [rip + g_pmt + 4*MI_28]
     mov edx, eax
     sub edx, edi
-    M ecx, MI_20
+    PM ecx, MI_20
     call ui_in
     test eax, eax
     jz 7f
     lea edi, [r12 + ID_AG_ROW]
     mov esi, [rsp + 48]
     mov edx, r13d
-    add edx, [rip + g_mt + 4*MI_48]
+    add edx, [rip + g_pmt + 4*MI_48]
     mov ecx, [rsp + 40]
     sub ecx, esi
     mov r8d, UB_HOVER
@@ -4459,14 +4483,14 @@ list_draw:
     lea rdi, [rip + tmp]
     lea rsi, [rip + .Llive]
     call sb_push_cstr
-8:  lea rdi, [rip + g_face_small]
+8:  mov rdi, [rip + ag_fsmall]
     mov rsi, [rip + tmp + SB_ptr]
     mov rdx, [rip + tmp + SB_len]
     call text_width
     mov ecx, [rsp]
     add ecx, [rsp + 8]
     sub ecx, [rsp + 40]
-    sub ecx, [rip + g_mt + 4*MI_16]
+    sub ecx, [rip + g_pmt + 4*MI_16]
     cmp eax, ecx
     jle 81f
     cmp dword ptr [rsp + 52], 0
@@ -4477,18 +4501,18 @@ list_draw:
     jmp 71b
 82: cmp qword ptr [r14 + AS_worktree], 0
     jne .Lld_meta_done          # keep the worktree name visible without partial age text
-81: lea rdi, [rip + g_face_small]
+81: mov rdi, [rip + ag_fsmall]
     mov esi, [rsp + 40]
     mov edx, r13d
-    add edx, [rip + g_mt + 4*MI_28]
-    M ecx, MI_20
+    add edx, [rip + g_pmt + 4*MI_28]
+    PM ecx, MI_20
     mov r8, [rip + tmp + SB_ptr]
     mov r9, [rip + tmp + SB_len]
     COLOR r10d, T_MUTED
     mov r11d, [rsp]
     add r11d, [rsp + 8]
     sub r11d, esi
-    sub r11d, [rip + g_mt + 4*MI_16]
+    sub r11d, [rip + g_pmt + 4*MI_16]
     push r11
     push r10
     call ui_text_v_fit
@@ -4509,7 +4533,7 @@ list_draw:
     mov edi, [rsp]
     mov esi, [rsp + 4]
     add esi, [rsp + 12]
-    sub esi, [rip + g_mt + 4*MI_40]
+    sub esi, [rip + g_pmt + 4*MI_40]
     mov edx, [rsp + 8]
     call page_footer
     EPILOGUE
@@ -4524,11 +4548,11 @@ thread_draw:
     mov rcx, [rip + sessions + VEC_ptr]
     mov rbx, [rcx + rax*8]      # session
     # header: back + title
-    M r15d, MI_40
-    M r12d, MI_28
+    PM r15d, MI_40
+    PM r12d, MI_28
     mov edi, ID_AG_BACK
     mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_8]
+    add esi, [rip + g_pmt + 4*MI_8]
     mov edx, r15d
     sub edx, r12d
     sar edx, 1
@@ -4536,7 +4560,7 @@ thread_draw:
     mov ecx, r12d
     mov r8d, r12d
     mov r9d, IC_BACK
-    call ui_icon_btn
+    call ag_icon_btn
     test eax, UB_CLICK
     jz 1f
     mov qword ptr [rip + view], -1
@@ -4551,15 +4575,15 @@ thread_draw:
     mov rdi, r8
     call strlen
     mov r9, rax
-    lea rdi, [rip + g_face_ui]
+    mov rdi, [rip + ag_fui]
     mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_40]
+    add esi, [rip + g_pmt + 4*MI_40]
     mov edx, [rsp + 4]
     mov ecx, r15d
     mov r8, [rsp + 16]
     COLOR r10d, T_FG
     mov r11d, [rsp + 8]
-    sub r11d, [rip + g_mt + 4*MI_64]
+    sub r11d, [rip + g_pmt + 4*MI_64]
     push r11
     push r10
     call ui_text_v_fit
@@ -4568,10 +4592,10 @@ thread_draw:
     call is_live
     test eax, eax
     jz 3f
-    M ecx, MI_8
+    PM ecx, MI_8
     mov edi, [rsp]
     add edi, [rsp + 8]
-    sub edi, [rip + g_mt + 4*MI_16]
+    sub edi, [rip + g_pmt + 4*MI_16]
     mov esi, r15d
     sub esi, ecx
     sar esi, 1
@@ -4586,7 +4610,7 @@ thread_draw:
     add esi, r15d
     dec esi
     mov edx, [rsp + 8]
-    M ecx, MI_1
+    PM ecx, MI_1
     COLOR r8d, T_BORDER
     call gfx_fill
     # message area
@@ -4606,19 +4630,30 @@ thread_draw:
 44: mov rdi, rbx                # AI (D4): its card and prompt box go under the messages
     mov esi, [rsp + 8]
     call agentext_bottom_h
+    mov [rsp + 160], eax
+    call agents_font_size
     mov ecx, [rsp + 24]
     shr ecx, 1
+    cmp eax, [rip + cfg_ui_font_size]
+    jle 45f
+    mov eax, [rsp + 24]         # two thirds with text larger than the interface's: a card shows more
+    add eax, eax
+    xor edx, edx
+    mov r8d, 3
+    div r8d
+    mov ecx, eax
+45: mov eax, [rsp + 160]
     cmp eax, ecx
     jbe 42f
     mov eax, ecx                # at most half the panel
 42: mov [rsp + 160], eax
     sub [rsp + 24], eax
-41: M eax, MI_16
+41: PM eax, MI_16
     mov [rsp + 28], eax         # pad
     mov eax, [rsp + 8]
     sub eax, [rsp + 28]
     sub eax, [rsp + 28]
-    sub eax, [rip + g_mt + 4*MI_24]
+    sub eax, [rip + g_pmt + 4*MI_24]
     mov [rsp + 32], eax         # text width
     # total height
     xor r13d, r13d
@@ -4630,10 +4665,10 @@ thread_draw:
     mov esi, [rsp + 32]
     call msg_height
     add r13d, eax
-    add r13d, [rip + g_mt + 4*MI_8]
+    add r13d, [rip + g_pmt + 4*MI_8]
     inc r12
     jmp 4b
-5:  add r13d, [rip + g_mt + 4*MI_32]
+5:  add r13d, [rip + g_pmt + 4*MI_32]
     mov rdi, rbx                # replies coming into view: their Markdown, the rows kept in place
     lea rsi, [rsp]
     mov edx, r13d
@@ -4675,18 +4710,18 @@ thread_draw:
     call gfx_clip_push
     cmp qword ptr [rbx + AS_msgs + VEC_len], 0
     jne 65f
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov esi, [rsp]
     add esi, [rsp + 28]
     mov edx, [rsp + 20]
-    add edx, [rip + g_mt + 4*MI_8]
-    M ecx, MI_24
+    add edx, [rip + g_pmt + 4*MI_8]
+    PM ecx, MI_24
     lea r8, [rip + .Lempty_thread]
     COLOR r9d, T_MUTED
     call ui_text_c
 65: # messages
     mov r13d, [rsp + 20]
-    add r13d, [rip + g_mt + 4*MI_12]
+    add r13d, [rip + g_pmt + 4*MI_12]
     sub r13d, [rip + th_scroll]
     xor r12d, r12d
 .Ltd_msg:
@@ -4713,7 +4748,7 @@ thread_draw:
     call draw_msg
 .Ltd_next:
     add r13d, r15d
-    add r13d, [rip + g_mt + 4*MI_8]
+    add r13d, [rip + g_pmt + 4*MI_8]
     inc r12
     jmp .Ltd_msg
 .Ltd_msgs_done:
@@ -4738,7 +4773,7 @@ thread_draw:
     mov edi, ID_AG_TSCROLL
     mov esi, [rsp + 16]
     add esi, [rsp + 16 + 8]
-    M eax, MI_12
+    PM eax, MI_12
     sub esi, eax
     mov edx, [rsp + 16 + 20]
     mov ecx, eax
@@ -4756,15 +4791,15 @@ thread_draw:
 7:  # jump-to-latest button when not following
     cmp dword ptr [rip + th_follow], 0
     jne .Ltd_ret
-    M r12d, MI_32
+    PM r12d, MI_32
     mov esi, [rsp]
     add esi, [rsp + 8]
     sub esi, r12d
-    sub esi, [rip + g_mt + 4*MI_20]
+    sub esi, [rip + g_pmt + 4*MI_20]
     mov edx, [rsp + 20]
     add edx, [rsp + 24]
     sub edx, r12d
-    sub edx, [rip + g_mt + 4*MI_16]
+    sub edx, [rip + g_pmt + 4*MI_16]
     mov [rsp + 40], esi
     mov [rsp + 44], edx
     mov edi, esi
@@ -4778,7 +4813,7 @@ thread_draw:
     mov ecx, r12d
     mov r8d, r12d
     mov r9d, IC_ARROW_DN
-    call ui_icon_btn
+    call ag_icon_btn
     test eax, UB_CLICK
     jz .Ltd_ret
     mov dword ptr [rip + th_follow], 1
@@ -4810,13 +4845,13 @@ draw_msg:
     jne 1f
     # user bubble
     mov edi, r15d
-    sub edi, [rip + g_mt + 4*MI_8]
+    sub edi, [rip + g_pmt + 4*MI_8]
     mov esi, r12d
     mov edx, [r14 + 32]
-    add edx, [rip + g_mt + 4*MI_16]
+    add edx, [rip + g_pmt + 4*MI_16]
     mov ecx, r13d
-    sub ecx, [rip + g_mt + 4*MI_4]
-    M r8d, MI_RADIUS
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    PM r8d, MI_RADIUS
     COLOR r9d, T_HOVER
     call gfx_round_rect
     lea r8, [rip + .Lyou]
@@ -4824,11 +4859,11 @@ draw_msg:
     jmp 2f
 1:  lea r8, [rip + .Lagent]
     COLOR r9d, T_ACCENT
-2:  lea rdi, [rip + g_face_small]
+2:  mov rdi, [rip + ag_fsmall]
     mov esi, r15d
     mov edx, r12d
-    add edx, [rip + g_mt + 4*MI_4]
-    M ecx, MI_20
+    add edx, [rip + g_pmt + 4*MI_4]
+    PM ecx, MI_20
     call ui_text_c
     # the model of the replies from here on, where it changed
     cmp dword ptr [rbx + AM_role], R_ASSIST
@@ -4845,18 +4880,18 @@ draw_msg:
     lea rdi, [rip + tmp]
     mov rsi, [rbx + AM_name]
     call sb_push_cstr
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov esi, [rsp + 96]
     mov edx, r12d
-    add edx, [rip + g_mt + 4*MI_4]
-    M ecx, MI_20
+    add edx, [rip + g_pmt + 4*MI_4]
+    PM ecx, MI_20
     mov r8, [rip + tmp + SB_ptr]
     mov r9, [rip + tmp + SB_len]
     COLOR r10d, T_MUTED
     mov r11d, [r14]
     add r11d, [r14 + 8]
     sub r11d, esi
-    sub r11d, [rip + g_mt + 4*MI_24]
+    sub r11d, [rip + g_pmt + 4*MI_24]
     push r11
     push r10
     call ui_text_v_fit
@@ -4875,7 +4910,7 @@ draw_msg:
     pop r12
     mov [rsp + WR_x], r15d
     mov eax, r12d
-    add eax, [rip + g_mt + 4*MI_28]
+    add eax, [rip + g_pmt + 4*MI_28]
     mov [rsp + WR_y], eax
     COLOR eax, T_FG
     mov [rsp + WR_color], eax
@@ -4890,9 +4925,9 @@ draw_msg:
 .Ldm_md:
     # a reply: its Markdown under the label, the part in view (as tall as msg_height measured it)
     mov eax, r12d
-    add eax, [rip + g_mt + 4*MI_28]
+    add eax, [rip + g_pmt + 4*MI_28]
     mov ecx, r13d
-    sub ecx, [rip + g_mt + 4*MI_40]
+    sub ecx, [rip + g_pmt + 4*MI_40]
     add ecx, eax                # its bottom
     mov edx, [rip + g_cv + CV_cy0]
     cmp edx, eax
@@ -4935,7 +4970,7 @@ draw_msg:
 .Ldm_md_done:
     EPILOGUE
 .Ldm_tool:
-    M ecx, MI_16
+    PM ecx, MI_16
     mov edi, IC_TERMINAL
     mov esi, r15d
     mov edx, r13d
@@ -4947,9 +4982,9 @@ draw_msg:
     mov r8, [rbx + AM_name]
     test r8, r8
     jz 3f
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov esi, r15d
-    add esi, [rip + g_mt + 4*MI_24]
+    add esi, [rip + g_pmt + 4*MI_24]
     mov edx, r12d
     mov ecx, r13d
     COLOR r9d, T_FG
@@ -4957,7 +4992,7 @@ draw_msg:
     mov [rsp + 96], eax
     jmp 4f
 3:  mov eax, r15d
-    add eax, [rip + g_mt + 4*MI_24]
+    add eax, [rip + g_pmt + 4*MI_24]
     mov [rsp + 96], eax
 4:  mov r9, [rbx + AM_len]
     test r9, r9
@@ -4972,9 +5007,9 @@ draw_msg:
     inc rcx
     jmp 41b
 42: mov r9, rcx
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov esi, [rsp + 96]
-    add esi, [rip + g_mt + 4*MI_8]
+    add esi, [rip + g_pmt + 4*MI_8]
     mov edx, r12d
     mov ecx, r13d
     mov r8, [rbx + AM_text]
@@ -4982,7 +5017,7 @@ draw_msg:
     mov r11d, [r14]
     add r11d, [r14 + 8]
     sub r11d, esi
-    sub r11d, [rip + g_mt + 4*MI_24]
+    sub r11d, [rip + g_pmt + 4*MI_24]
     push r11
     push r10
     call ui_text_v_fit
@@ -4993,15 +5028,15 @@ draw_msg:
     mov esi, r12d
     mov edx, [r14 + 32]
     mov ecx, r13d
-    sub ecx, [rip + g_mt + 4*MI_8]
-    M r8d, MI_4
+    sub ecx, [rip + g_pmt + 4*MI_8]
+    PM r8d, MI_4
     COLOR r9d, T_BG
     call gfx_round_rect
     mov edi, r15d
     mov esi, r12d
-    M edx, MI_2
+    PM edx, MI_2
     mov ecx, r13d
-    sub ecx, [rip + g_mt + 4*MI_8]
+    sub ecx, [rip + g_pmt + 4*MI_8]
     COLOR r8d, T_BORDER
     cmp dword ptr [rbx + AM_role], R_ERROR
     jne 1f
@@ -5018,10 +5053,10 @@ draw_msg:
     pop r12
     pop r12
     mov eax, r15d
-    add eax, [rip + g_mt + 4*MI_10]
+    add eax, [rip + g_pmt + 4*MI_10]
     mov [rsp + WR_x], eax
     mov eax, r12d
-    add eax, [rip + g_mt + 4*MI_6]
+    add eax, [rip + g_pmt + 4*MI_6]
     mov [rsp + WR_y], eax
     COLOR eax, T_MUTED
     mov [rsp + WR_color], eax
@@ -5508,7 +5543,7 @@ FN agents_row_dump
     jne 3f
     mov edx, [rbx + AM_dx]
     mov ecx, [rbx + AM_dy]
-    add ecx, [rip + g_mt + 4*MI_28]
+    add ecx, [rip + g_pmt + 4*MI_28]
 3:  mov rdi, [rbx + AM_doc]
     mov rsi, r15
     call md_row_dump
@@ -5733,9 +5768,9 @@ page_footer:
     mov [rsp], edi
     mov [rsp + 4], esi
     mov [rsp + 8], edx
-    M eax, MI_40
+    PM eax, MI_40
     mov [rsp + 12], eax
-    mov ecx, [rip + g_mt + 4*MI_1]
+    mov ecx, [rip + g_pmt + 4*MI_1]
     COLOR r8d, T_BORDER
     call gfx_fill
     lea rdi, [rip + tmp]
@@ -5750,7 +5785,7 @@ page_footer:
     mov rsi, [rip + total_count]
     call sb_push_u64
     mov eax, [rsp + 8]
-    sub eax, [rip + g_mt + 4*MI_16]
+    sub eax, [rip + g_pmt + 4*MI_16]
     mov [rsp + 16], eax
     mov rax, [rip + page_count]
     cmp rax, [rip + total_count]
@@ -5760,16 +5795,16 @@ page_footer:
     jnz 1f
     cmp dword ptr [rip + index_error], 0
     je 5f
-1:  M eax, MI_48
+1:  PM eax, MI_48
     add eax, eax
-    add eax, [rip + g_mt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_8]
     mov [rsp + 20], eax
     sub [rsp + 16], eax
     mov edi, ID_AG_MORE
     mov esi, [rsp]
     add esi, [rsp + 8]
     sub esi, eax
-    sub esi, [rip + g_mt + 4*MI_8]
+    sub esi, [rip + g_pmt + 4*MI_8]
     mov edx, [rsp + 4]
     mov ecx, eax
     mov r8d, [rsp + 12]
@@ -5786,11 +5821,11 @@ page_footer:
     call agents_scan
     jmp 3f
 2:  call agents_more
-3:  lea rdi, [rip + g_face_small]
+3:  mov rdi, [rip + ag_fsmall]
     mov esi, [rsp]
     add esi, [rsp + 8]
     sub esi, [rsp + 20]
-    sub esi, [rip + g_mt + 4*MI_8]
+    sub esi, [rip + g_pmt + 4*MI_8]
     mov edx, [rsp + 4]
     mov ecx, [rsp + 20]
     mov r8d, [rsp + 12]
@@ -5819,16 +5854,16 @@ page_footer:
     jne 52f
     lea rsi, [rip + .Loc_missing]
 52: call sb_push_cstr
-51: lea rdi, [rip + g_face_small]
+51: mov rdi, [rip + ag_fsmall]
     mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_16]
+    add esi, [rip + g_pmt + 4*MI_16]
     mov edx, [rsp + 4]
     mov ecx, [rsp + 12]
     mov r8, [rip + tmp + SB_ptr]
     mov r9, [rip + tmp + SB_len]
     COLOR eax, T_MUTED
     mov r10d, [rsp + 16]
-    sub r10d, [rip + g_mt + 4*MI_16]
+    sub r10d, [rip + g_pmt + 4*MI_16]
     push r10
     push rax
     call ui_text_v_fit

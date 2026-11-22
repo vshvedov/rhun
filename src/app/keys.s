@@ -2276,6 +2276,9 @@ g_commands:
     COMMAND email, "Email rhun", cmd_email, ""
     COMMAND feedback, "Send Feedback or Report a Bug", cmd_feedback, ""
     COMMAND focus_agents, "Focus Agents Panel", cmd_focus_agents, ""
+    COMMAND agents_font_increase, "Agents: Increase Font Size", cmd_agents_font_inc, ""
+    COMMAND agents_font_decrease, "Agents: Decrease Font Size", cmd_agents_font_dec, ""
+    COMMAND agents_font_reset, "Agents: Reset Font Size", cmd_agents_font_reset, ""
     COMMAND open_file, "Open File", cmd_open_file, "ctrl+o"
     COMMAND open_folder, "Open Folder", cmd_open_folder, "ctrl+shift+o"
     COMMAND add_workspace_folder, "Add Folder to Workspace", cmd_add_workspace_folder, ""   # resources: workspace.s

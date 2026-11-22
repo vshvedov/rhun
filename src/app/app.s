@@ -6566,10 +6566,15 @@ FN cmd_zoom_reset
     xor esi, esi
     jmp zoom_focused
 
-# zoom_focused(dir): zoom only the focused terminal, otherwise the editor or image.
+# zoom_focused(dir): zoom only the focused terminal or agents panel (its list, its conversation or its
+# prompt box: agentfont.s), otherwise the editor or image.
 zoom_focused:
     cmp dword ptr [rip + g_focus], FOCUS_TERMINAL
     je .Lzoom_term
+    cmp dword ptr [rip + g_focus], FOCUS_AGENTS
+    je .Lzoom_agents
+    cmp dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
+    je .Lzoom_agents
     call image_zoom
     jnz .Lzoom_done
     lea rdi, [rip + cfg_font_size]
@@ -6593,6 +6598,9 @@ zoom_focused:
     mov dword ptr [rip + g_dirty], 1
 .Lzoom_done:
     ret
+.Lzoom_agents:
+    mov edi, esi
+    jmp agents_font_zoom
 
 # image_zoom(dir) -> ZF clear when an image tab took the zoom command (1 in, -1 out, 0 fit)
 image_zoom:

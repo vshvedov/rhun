@@ -2560,11 +2560,11 @@ card_h:
     dec rdx
     call opt_row
     inc eax                     # rows
-    mov ecx, [rip + g_mt + 4*MI_32]
-    add ecx, [rip + g_mt + 4*MI_6]
+    mov ecx, [rip + g_pmt + 4*MI_32]
+    add ecx, [rip + g_pmt + 4*MI_6]
     imul eax, ecx
-    add eax, [rip + g_mt + 4*MI_40]
-    add eax, [rip + g_mt + 4*MI_12]
+    add eax, [rip + g_pmt + 4*MI_40]
+    add eax, [rip + g_pmt + 4*MI_12]
 9:  EPILOGUE
 
 # opt_row(AXK*, w, i) -> eax the row (from 0) option i wraps to in a card w wide
@@ -2573,8 +2573,8 @@ opt_row:
     mov rbx, rdi
     mov [rsp], rdx
     mov r12d, esi
-    sub r12d, [rip + g_mt + 4*MI_24]
-    sub r12d, [rip + g_mt + 4*MI_24]
+    sub r12d, [rip + g_pmt + 4*MI_24]
+    sub r12d, [rip + g_pmt + 4*MI_24]
     xor r13d, r13d              # row
     xor r14d, r14d              # x in the row
     xor r15d, r15d
@@ -2595,7 +2595,7 @@ opt_row:
     inc r13d
     xor r14d, r14d
 2:  add r14d, eax
-    add r14d, [rip + g_mt + 4*MI_6]
+    add r14d, [rip + g_pmt + 4*MI_6]
     jmp 1b
 3:  mov eax, r13d
     EPILOGUE
@@ -2608,13 +2608,13 @@ opt_w:
     mov rbx, [rax + rsi*8]
     mov rdi, rbx
     call strlen
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov rsi, rbx
     mov rdx, rax
     call text_width
-    add eax, [rip + g_mt + 4*MI_32]
-    add eax, [rip + g_mt + 4*MI_8]
-    mov ecx, [rip + g_mt + 4*MI_64]   # long options are cut, also to the card's width
+    add eax, [rip + g_pmt + 4*MI_32]
+    add eax, [rip + g_pmt + 4*MI_8]
+    mov ecx, [rip + g_pmt + 4*MI_64]   # long options are cut, also to the card's width
     imul ecx, ecx, 6
     cmp ecx, r12d
     cmovg ecx, r12d
@@ -2669,36 +2669,56 @@ mode_w:
     call mode_label
     test rax, rax
     jz 9f
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov rsi, [rip + mode_sb + SB_ptr]
     mov rdx, [rip + mode_sb + SB_len]
     call text_width
-    add eax, [rip + g_mt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_8]
 9:  EPILOGUE
 
-# input_h(w, AS* or 0) -> eax the prompt row's height: the box grows to 5 lines
+# input_h(w, AS* or 0) -> eax the prompt row's height: the box grows to 5 lines (in the panel's face;
+#   fewer for a large one, as many as 5 of the interface's would take, at least 2)
 input_h:
     PROLOGUE
+    mov rax, [rip + ag_fui]
+    mov [rip + in_tf + TF_face], rax
     mov ebx, edi
     mov rdi, rsi
     call mode_w
     mov esi, ebx
     sub esi, eax
-    sub esi, [rip + g_mt + 4*MI_64]
-    sub esi, [rip + g_mt + 4*MI_40]
+    sub esi, [rip + g_pmt + 4*MI_64]
+    sub esi, [rip + g_pmt + 4*MI_40]
     lea rdi, [rip + in_tf]
     call ta_layout
     mov ebx, eax
     test ebx, ebx
     jnz 1f
     mov ebx, 1
-1:  cmp ebx, 5
+1:  call agents_font_size
+    mov ecx, eax
+    mov eax, [rip + cfg_ui_font_size]
+    imul eax, eax, 5
+    xor edx, edx
+    div ecx
+    mov ecx, 5
+    cmp eax, ecx
+    cmova eax, ecx
+    mov ecx, 2
+    cmp eax, ecx
+    cmovb eax, ecx
+    cmp ebx, eax
     jbe 2f
-    mov ebx, 5
-2:  call ta_line_h
+    mov ebx, eax
+2:  lea rdi, [rip + in_tf]
+    call ta_line_h_of
     imul eax, ebx
-    add eax, [rip + g_mt + 4*MI_12]
-    add eax, [rip + g_mt + 4*MI_20]
+    PM ecx, MI_12               # the text area's own padding is the interface's: never less
+    cmp ecx, [rip + g_mt + 4*MI_12]
+    jge 3f
+    mov ecx, [rip + g_mt + 4*MI_12]
+3:  add eax, ecx
+    add eax, [rip + g_pmt + 4*MI_20]
     EPILOGUE
 
 # FN agentext_bottom_draw(AS* or 0 for a new session, x, y, w, h): the card, then the prompt box with
@@ -2722,7 +2742,7 @@ FN agentext_bottom_draw
 1:  mov edi, [rsp]
     mov esi, [rsp + 4]
     mov edx, [rsp + 8]
-    M ecx, MI_1
+    PM ecx, MI_1
     COLOR r8d, T_BORDER
     call gfx_fill
     mov eax, [rsp + 4]
@@ -2774,7 +2794,7 @@ FN agentext_bottom_draw
     mov rsi, rbx
     call input_h
     mov [rsp + 24], eax
-    M eax, MI_12
+    PM eax, MI_12
     mov ecx, [rsp]
     add ecx, eax
     mov [rsp + 28], ecx         # box x
@@ -2783,15 +2803,15 @@ FN agentext_bottom_draw
     mov [rsp + 48], eax
     mov ecx, [rsp + 8]
     sub ecx, eax
-    sub ecx, [rip + g_mt + 4*MI_64]
-    sub ecx, [rip + g_mt + 4*MI_40]
+    sub ecx, [rip + g_pmt + 4*MI_64]
+    sub ecx, [rip + g_pmt + 4*MI_40]
     mov [rsp + 32], ecx         # box w
     mov dword ptr [rip + in_tf + TF_id], ID_AI_CARD + 34
     mov edx, [rsp + 16]
-    add edx, [rip + g_mt + 4*MI_10]
+    add edx, [rip + g_pmt + 4*MI_10]
     mov [rsp + 36], edx         # box y
     mov r8d, [rsp + 24]
-    sub r8d, [rip + g_mt + 4*MI_20]
+    sub r8d, [rip + g_pmt + 4*MI_20]
     mov [rsp + 40], r8d         # box h
     lea rax, [rip + .Lph_reply]
     test rbx, rbx
@@ -2816,12 +2836,12 @@ FN agentext_bottom_draw
     je 51f
     mov rdi, rbx
     call mode_label
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov esi, [rsp + 28]
     add esi, [rsp + 32]
-    add esi, [rip + g_mt + 4*MI_8]
+    add esi, [rip + g_pmt + 4*MI_8]
     mov edx, [rsp + 36]
-    M ecx, MI_32
+    PM ecx, MI_32
     mov r8, [rip + mode_sb + SB_ptr]
     mov r9, [rip + mode_sb + SB_len]
     COLOR eax, T_MUTED
@@ -2843,10 +2863,10 @@ FN agentext_bottom_draw
 6:  mov [rsp + 44], edi
     mov esi, [rsp + 28]
     add esi, [rsp + 32]
-    add esi, [rip + g_mt + 4*MI_8]
+    add esi, [rip + g_pmt + 4*MI_8]
     mov edx, [rsp + 36]
-    M ecx, MI_64
-    M r8d, MI_32
+    PM ecx, MI_64
+    PM r8d, MI_32
     mov r13d, esi
     call ui_btn
     mov r14d, eax
@@ -2861,9 +2881,9 @@ FN agentext_bottom_draw
     COLOR eax, T_HOVER
 7:  mov edi, r13d
     mov esi, [rsp + 36]
-    M edx, MI_64
-    M ecx, MI_32
-    M r8d, MI_RADIUS
+    PM edx, MI_64
+    PM ecx, MI_32
+    PM r8d, MI_RADIUS
     push rax
     push rax
     call gfx_frame
@@ -2872,11 +2892,11 @@ FN agentext_bottom_draw
     cmp dword ptr [rsp + 44], ID_AI_CARD + 33
     jne 71f
     COLOR eax, T_FG
-71: lea rdi, [rip + g_face_ui]
+71: mov rdi, [rip + ag_fui]
     mov esi, r13d
     mov edx, [rsp + 36]
-    M ecx, MI_64
-    M r8d, MI_32
+    PM ecx, MI_64
+    PM r8d, MI_32
     mov r9, r12
     push rax
     push rax
@@ -2901,17 +2921,17 @@ card_draw:
     mov [rsp + 4], edx
     mov [rsp + 8], ecx
     mov [rsp + 12], r8d
-    M eax, MI_12
+    PM eax, MI_12
     mov edi, [rsp]
     add edi, eax
     mov esi, [rsp + 4]
-    add esi, [rip + g_mt + 4*MI_6]
+    add esi, [rip + g_pmt + 4*MI_6]
     mov edx, [rsp + 8]
     sub edx, eax
     sub edx, eax
     mov ecx, [rsp + 12]
-    sub ecx, [rip + g_mt + 4*MI_8]
-    M r8d, MI_RADIUS
+    sub ecx, [rip + g_pmt + 4*MI_8]
+    PM r8d, MI_RADIUS
     COLOR r9d, T_ACCENT
     COLOR eax, T_PANEL
     push rax
@@ -2921,26 +2941,26 @@ card_draw:
     mov rdi, [rbx + AXK_prompt]
     call strlen
     mov r9, rax
-    lea rdi, [rip + g_face_ui]
+    mov rdi, [rip + ag_fui]
     mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_24]
+    add esi, [rip + g_pmt + 4*MI_24]
     mov edx, [rsp + 4]
-    add edx, [rip + g_mt + 4*MI_10]
-    M ecx, MI_24
+    add edx, [rip + g_pmt + 4*MI_10]
+    PM ecx, MI_24
     mov r8, [rbx + AXK_prompt]
     COLOR r10d, T_FG
     mov r11d, [rsp + 8]
-    sub r11d, [rip + g_mt + 4*MI_48]
+    sub r11d, [rip + g_pmt + 4*MI_48]
     push r11
     push r10
     call ui_text_v_fit
     add rsp, 16
     # the options, wrapping; scrolled by rows so the selected one shows in a card that is cut
     mov eax, [rsp + 12]
-    sub eax, [rip + g_mt + 4*MI_40]
-    sub eax, [rip + g_mt + 4*MI_12]
-    mov ecx, [rip + g_mt + 4*MI_32]
-    add ecx, [rip + g_mt + 4*MI_6]
+    sub eax, [rip + g_pmt + 4*MI_40]
+    sub eax, [rip + g_pmt + 4*MI_12]
+    mov ecx, [rip + g_pmt + 4*MI_32]
+    add ecx, [rip + g_pmt + 4*MI_6]
     mov [rsp + 32], ecx                # a row's height
     cdq
     idiv ecx
@@ -2958,19 +2978,19 @@ card_draw:
     xor eax, eax
 6:  imul eax, [rsp + 32]
     mov r13d, [rsp + 4]
-    add r13d, [rip + g_mt + 4*MI_40]   # y
+    add r13d, [rip + g_pmt + 4*MI_40]   # y
     mov ecx, r13d
     mov [rsp + 36], ecx                # the options' top
     sub r13d, eax
     mov eax, [rsp + 4]
     add eax, [rsp + 12]
-    sub eax, [rip + g_mt + 4*MI_8]
+    sub eax, [rip + g_pmt + 4*MI_8]
     mov [rsp + 40], eax                # their bottom
     mov r12d, [rsp]
-    add r12d, [rip + g_mt + 4*MI_24]   # x
+    add r12d, [rip + g_pmt + 4*MI_24]   # x
     mov eax, [rsp]
     add eax, [rsp + 8]
-    sub eax, [rip + g_mt + 4*MI_24]
+    sub eax, [rip + g_pmt + 4*MI_24]
     mov [rsp + 16], eax                # right
     xor r14d, r14d
 .Lcd_opt:
@@ -2980,38 +3000,38 @@ card_draw:
     mov rsi, r14
     mov edx, [rsp + 16]
     sub edx, [rsp]
-    sub edx, [rip + g_mt + 4*MI_24]
+    sub edx, [rip + g_pmt + 4*MI_24]
     call opt_w
     mov [rsp + 20], eax
     mov ecx, [rsp]
-    add ecx, [rip + g_mt + 4*MI_24]
+    add ecx, [rip + g_pmt + 4*MI_24]
     cmp r12d, ecx
     je 1f
     lea ecx, [r12 + rax]
     cmp ecx, [rsp + 16]
     jle 1f
     mov r12d, [rsp]
-    add r12d, [rip + g_mt + 4*MI_24]
-    add r13d, [rip + g_mt + 4*MI_32]
-    add r13d, [rip + g_mt + 4*MI_6]
+    add r12d, [rip + g_pmt + 4*MI_24]
+    add r13d, [rip + g_pmt + 4*MI_32]
+    add r13d, [rip + g_pmt + 4*MI_6]
 1:  cmp r13d, [rsp + 36]
     jl 4f                              # scrolled away
     mov eax, r13d
-    add eax, [rip + g_mt + 4*MI_32]
+    add eax, [rip + g_pmt + 4*MI_32]
     cmp eax, [rsp + 40]
     jg 4f                              # past the cut
     lea edi, [r14 + ID_AI_CARD]
     mov esi, r12d
     mov edx, r13d
     mov ecx, [rsp + 20]
-    M r8d, MI_32
+    PM r8d, MI_32
     call ui_btn
     mov [rsp + 24], eax
     mov edi, r12d
     mov esi, r13d
     mov edx, [rsp + 20]
-    M ecx, MI_32
-    M r8d, MI_RADIUS
+    PM ecx, MI_32
+    PM r8d, MI_RADIUS
     COLOR r9d, T_BORDER
     cmp qword ptr [rbx + AXK_kb], 0
     je 21f
@@ -3031,11 +3051,11 @@ card_draw:
     jae 3f
     lea eax, [r14 + '1']
     mov [rip + num], al
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov esi, r12d
-    add esi, [rip + g_mt + 4*MI_10]
+    add esi, [rip + g_pmt + 4*MI_10]
     mov edx, r13d
-    M ecx, MI_32
+    PM ecx, MI_32
     lea r8, [rip + num]
     mov r9d, 1
     COLOR eax, T_MUTED
@@ -3052,16 +3072,16 @@ card_draw:
     mov r9, rax
     pop r8
     pop r8
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov esi, r12d
-    add esi, [rip + g_mt + 4*MI_24]
-    add esi, [rip + g_mt + 4*MI_4]
+    add esi, [rip + g_pmt + 4*MI_24]
+    add esi, [rip + g_pmt + 4*MI_4]
     mov edx, r13d
-    M ecx, MI_32
+    PM ecx, MI_32
     COLOR eax, T_FG
     mov r10d, [rsp + 20]
-    sub r10d, [rip + g_mt + 4*MI_24]
-    sub r10d, [rip + g_mt + 4*MI_12]
+    sub r10d, [rip + g_pmt + 4*MI_24]
+    sub r10d, [rip + g_pmt + 4*MI_12]
     push r10
     push rax
     call ui_text_v_fit
@@ -3073,7 +3093,7 @@ card_draw:
     call agentext_pick
     jmp 9f
 4:  add r12d, [rsp + 20]
-    add r12d, [rip + g_mt + 4*MI_6]
+    add r12d, [rip + g_pmt + 4*MI_6]
     inc r14
     jmp .Lcd_opt
 9:  EPILOGUE
@@ -3085,11 +3105,11 @@ FN agentext_new_draw
     mov [rsp + 4], esi
     mov [rsp + 8], edx
     mov [rsp + 12], ecx
-    M r12d, MI_28
-    M r15d, MI_40
+    PM r12d, MI_28
+    PM r15d, MI_40
     mov edi, ID_AI_CARD + 35
     mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_8]
+    add esi, [rip + g_pmt + 4*MI_8]
     mov edx, r15d
     sub edx, r12d
     sar edx, 1
@@ -3097,7 +3117,7 @@ FN agentext_new_draw
     mov ecx, r12d
     mov r8d, r12d
     mov r9d, IC_BACK
-    call ui_icon_btn
+    call ag_icon_btn
     test eax, UB_CLICK
     jz 1f
     call agentext_new_leave
@@ -3123,16 +3143,16 @@ FN agentext_new_draw
     lea rdi, [rip + tmp]
     lea rsi, [rip + .Lnew_tail]
     call sb_push_cstr
-    lea rdi, [rip + g_face_ui]
+    mov rdi, [rip + ag_fui]
     mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_40]
+    add esi, [rip + g_pmt + 4*MI_40]
     mov edx, [rsp + 4]
     mov ecx, r15d
     mov r8, [rip + tmp + SB_ptr]
     mov r9, [rip + tmp + SB_len]
     COLOR r10d, T_FG
     mov r11d, [rsp + 8]
-    sub r11d, [rip + g_mt + 4*MI_64]
+    sub r11d, [rip + g_pmt + 4*MI_64]
     push r11
     push r10
     call ui_text_v_fit
@@ -3142,16 +3162,16 @@ FN agentext_new_draw
     add esi, r15d
     dec esi
     mov edx, [rsp + 8]
-    M ecx, MI_1
+    PM ecx, MI_1
     COLOR r8d, T_BORDER
     call gfx_fill
-    lea rdi, [rip + g_face_small]   # what happens next
+    mov rdi, [rip + ag_fsmall]   # what happens next
     mov esi, [rsp]
-    add esi, [rip + g_mt + 4*MI_16]
+    add esi, [rip + g_pmt + 4*MI_16]
     mov edx, [rsp + 4]
     add edx, r15d
-    add edx, [rip + g_mt + 4*MI_8]
-    M ecx, MI_24
+    add edx, [rip + g_pmt + 4*MI_8]
+    PM ecx, MI_24
     lea r8, [rip + .Lnew_hint]
     COLOR r9d, T_MUTED
     call ui_text_c
@@ -3168,14 +3188,15 @@ FN agentext_new_draw
     call agentext_bottom_draw
 9:  EPILOGUE
 
-# FN agentext_list_buttons(right, y, h) -> eax the left edge: "+ TITLE" for each running extension
-#   that takes prompts, right to left, then "+ Claude Code" when its driver is available; a click starts
-#   a new session of it
+# FN agentext_list_buttons(right, y, h, left) -> eax the left edge: "+ TITLE" for each running extension
+#   that takes prompts, right to left, then "+ Claude Code" when its driver is available (those that
+#   would cross left are left out); a click starts a new session of it
 FN agentext_list_buttons
     PROLOGUE 32
     mov r13d, edi
     mov [rsp], esi
     mov [rsp + 4], edx
+    mov [rsp + 8], ecx
     xor r12d, r12d
 1:  cmp r12, [rip + g_exts + VEC_len]
     jae 9f
@@ -3193,13 +3214,14 @@ FN agentext_list_buttons
     mov edx, r13d
     mov ecx, [rsp]
     mov r8d, [rsp + 4]
+    mov r9d, [rsp + 8]
     call plus_btn
     mov r13d, eax
     test edx, edx
     jz 3f
     mov rdi, rbx
     call agentext_new
-3:  sub r13d, [rip + g_mt + 4*MI_4]
+3:  sub r13d, [rip + g_pmt + 4*MI_4]
     jmp 1b
 9:  mov edi, AG_CLAUDE          # the built-in driver, leftmost
     call agent_drv_for_kind
@@ -3210,9 +3232,10 @@ FN agentext_list_buttons
     mov edx, r13d
     mov ecx, [rsp]
     mov r8d, [rsp + 4]
+    mov r9d, [rsp + 8]
     call plus_btn
     mov r13d, eax
-    sub r13d, [rip + g_mt + 4*MI_4]
+    sub r13d, [rip + g_pmt + 4*MI_4]
     test edx, edx
     jz 10f
     mov edi, AG_CLAUDE
@@ -3220,8 +3243,8 @@ FN agentext_list_buttons
 10: mov eax, r13d
     EPILOGUE
 
-# plus_btn(id, title cstr, right, y, h) -> eax its left edge, edx 1 when it was clicked: "+ TITLE"
-#   ending at right
+# plus_btn(id, title cstr, right, y, h, left) -> eax its left edge, edx 1 when it was clicked: "+ TITLE"
+#   ending at right; nothing (right and 0) when it would begin left of left
 plus_btn:
     PROLOGUE 16
     mov [rsp], edi
@@ -3229,6 +3252,7 @@ plus_btn:
     mov r13d, edx
     mov [rsp + 4], ecx
     mov [rsp + 8], r8d
+    mov [rsp + 12], r9d
     lea rdi, [rip + tmp]
     call sb_clear
     lea rdi, [rip + tmp]
@@ -3237,13 +3261,20 @@ plus_btn:
     lea rdi, [rip + tmp]
     mov rsi, rbx
     call sb_push_cstr
-    lea rdi, [rip + g_face_small]
+    mov rdi, [rip + ag_fsmall]
     mov rsi, [rip + tmp + SB_ptr]
     mov rdx, [rip + tmp + SB_len]
     call text_width
-    add eax, [rip + g_mt + 4*MI_16]
+    add eax, [rip + g_pmt + 4*MI_16]
     mov r14d, eax
-    sub r13d, eax
+    mov ecx, r13d
+    sub ecx, eax
+    cmp ecx, [rsp + 12]
+    jge 1f
+    mov eax, r13d               # no room
+    xor edx, edx
+    EPILOGUE
+1:  mov r13d, ecx
     mov edi, [rsp]
     mov esi, r13d
     mov edx, [rsp + 4]
@@ -3257,12 +3288,12 @@ plus_btn:
     mov esi, [rsp + 4]
     mov edx, r14d
     mov ecx, [rsp + 8]
-    M r8d, MI_RADIUS
+    PM r8d, MI_RADIUS
     COLOR r9d, T_HOVER
     call gfx_round_rect
-2:  lea rdi, [rip + g_face_small]
+2:  mov rdi, [rip + ag_fsmall]
     mov esi, r13d
-    add esi, [rip + g_mt + 4*MI_8]
+    add esi, [rip + g_pmt + 4*MI_8]
     mov edx, [rsp + 4]
     mov ecx, [rsp + 8]
     mov r8, [rip + tmp + SB_ptr]

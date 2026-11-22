@@ -1132,7 +1132,18 @@ FN settings_draw
     jz 5f
     mov rax, [rbx + SET_ptr]
     mov ecx, [rax]
-    sub ecx, [rbx + SET_step]
+    lea rdx, [rip + cfg_agents_font_size]
+    cmp rax, rdx
+    jne 40f
+    test ecx, ecx               # the agents panel's size: 0 is its least, 8 steps down to it
+    jle 5f
+    mov edi, ecx
+    mov esi, -1
+    call agents_font_step
+    mov ecx, eax
+    mov rax, [rbx + SET_ptr]
+    jmp 41f
+40: sub ecx, [rbx + SET_step]
     cmp ecx, [rbx + SET_min]
     jge 41f
     mov ecx, [rbx + SET_min]
@@ -1151,7 +1162,16 @@ FN settings_draw
     jz .Lsd_next
     mov rax, [rbx + SET_ptr]
     mov ecx, [rax]
-    add ecx, [rbx + SET_step]
+    lea rdx, [rip + cfg_agents_font_size]
+    cmp rax, rdx
+    jne 50f
+    mov edi, ecx                # the agents panel's size: 0 steps up to 8 or past the interface's
+    mov esi, 1
+    call agents_font_step
+    mov ecx, eax
+    mov rax, [rbx + SET_ptr]
+    jmp 51f
+50: add ecx, [rbx + SET_step]
     cmp ecx, [rbx + SET_max]
     jle 51f
     mov ecx, [rbx + SET_max]

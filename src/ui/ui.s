@@ -43,6 +43,8 @@ g_face_huge: .zero FACE_SIZE
 last_scale: .long 0
 last_code_px: .long 0
 last_ui_px: .long 0
+.globl g_ui_faces_gen
+g_ui_faces_gen: .long 0         # moves on each time the interface's faces are made (agentfont.s)
 .globl g_font_code, g_font_ui, g_font_term
 g_font_code: .quad 0
 g_font_ui: .quad 0
@@ -89,6 +91,7 @@ FN ui_update_metrics
     cmp ebx, [rip + last_ui_px]
     je 3f
     mov [rip + last_ui_px], ebx
+    inc dword ptr [rip + g_ui_faces_gen]
     lea rdi, [rip + g_face_ui]
     mov rsi, [rip + g_font_ui]
     mov edx, ebx
@@ -1609,7 +1612,7 @@ FN ta_lines
     call ln_end
     mov r15, rax                # logical line end
 .Ltl_row:
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r12 + r14]
     mov rdx, r15
     sub rdx, r14
@@ -1722,6 +1725,24 @@ FN ta_line_h
     add eax, [rip + g_mt + 4*MI_3]
     ret
 
+# ta_line_h_of(tf) -> eax height of a line of that text area, in its face (TF_face)
+FN ta_line_h_of
+    push rbx
+    mov rbx, rdi
+    call ta_face
+    mov eax, [rdi + FACE_lineh]
+    add eax, [rip + g_mt + 4*MI_3]
+    pop rbx
+    ret
+
+# ta_face() using rbx = tf -> rdi the face it measures and draws in (only rdi and the flags change)
+ta_face:
+    mov rdi, [rbx + TF_face]
+    test rdi, rdi
+    jnz 1f
+    lea rdi, [rip + g_face_ui]
+1:  ret
+
 # ta_insert(tf, ptr, len): replaces the selection; CR LF and CR become line breaks, tabs spaces
 FN ta_insert
     PROLOGUE
@@ -1811,7 +1832,7 @@ FN ta_key
     mov [rsp + 16], rax
     cmp dword ptr [rbx + TF_prefx], -1
     jne 51f
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r15 + rax]
     mov rdx, [rbx + TF_cur]
     sub rdx, rax
@@ -1835,7 +1856,7 @@ FN ta_key
     mov rdi, [rsp + 24]
     call ta_row_bounds
     mov [rsp + 16], rax
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r15 + rax]
     mov rdx, [rsp + 8]
     sub rdx, rax
@@ -1883,7 +1904,8 @@ FN ui_textarea
     call ta_layout
     mov [rsp + 80], eax         # total visual rows
     mov dword ptr [rbx + TF_scroll], 0
-    call ta_line_h
+    mov rdi, rbx
+    call ta_line_h_of
     mov [rsp + 32], eax         # line h
     M eax, MI_10
     add eax, [rsp]
@@ -1952,7 +1974,7 @@ FN ui_textarea
     add ecx, [rbx + TF_scroll]
     mov eax, 0
     js 42f
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r14 + r12]
     mov rdx, r13
     sub rdx, r12
@@ -1969,7 +1991,7 @@ FN ui_textarea
     mov [rsp + 72], eax
     mov rdi, rax
     call ta_row_bounds
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r14 + rax]
     mov rdx, [rbx + TF_cur]
     sub rdx, rax
@@ -2010,7 +2032,7 @@ FN ui_textarea
     mov r8, [rsp + 24]
     test r8, r8
     jz .Lta_caret
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     mov esi, [rsp + 36]
     mov edx, [rsp + 40]
     mov ecx, [rsp + 32]
@@ -2047,7 +2069,7 @@ FN ui_textarea
     ja 8f
     cmp rax, r12
     cmovb rax, r12
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r14 + r12]
     mov rdx, rax
     sub rdx, r12
@@ -2056,7 +2078,7 @@ FN ui_textarea
     mov rdx, [rsp + 64]
     cmp rdx, r13
     cmova rdx, r13
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r14 + r12]
     sub rdx, r12
     call text_width
@@ -2066,7 +2088,8 @@ FN ui_textarea
     jae 71f
     cmp byte ptr [r14 + r13], 10
     jne 71f
-    add eax, [rip + g_face_ui + FACE_cellw]
+    call ta_face
+    add eax, [rdi + FACE_cellw]
 71: sub eax, [rsp + 88]
     jle 8f
     mov edx, eax
@@ -2079,7 +2102,7 @@ FN ui_textarea
 8:  mov r9, r13
     sub r9, r12
     jz 81f
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     mov esi, [rsp + 36]
     mov edx, [rsp + 76]
     mov ecx, [rsp + 32]

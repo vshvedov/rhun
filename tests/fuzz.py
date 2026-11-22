@@ -11,7 +11,8 @@ CMDS = ('quick_open command_palette new_file save_as close_tab reopen_closed_tab
         'indent outdent toggle_comment newline_below newline_above find replace find_next find_prev '
         'find_in_files goto_line settings select_theme select_language toggle_sidebar toggle_agents '
         'focus_explorer focus_agents new_folder rename_file zoom_in zoom_out zoom_reset toggle_word_wrap '
-        'toggle_whitespace toggle_line_numbers toggle_vim').split()
+        'toggle_whitespace toggle_line_numbers toggle_vim agents_font_increase agents_font_decrease '
+        'agents_font_reset').split()
 KEYS = ('Return BackSpace Delete Tab shift+Tab Escape Up Down Left Right Home End Page_Up Page_Down '
         'ctrl+Left ctrl+Right shift+Down shift+Right shift+End ctrl+shift+Left alt+Up alt+Down ctrl+z '
         'ctrl+shift+z ctrl+d ctrl+slash ctrl+a ctrl+c ctrl+v ctrl+x ctrl+Home ctrl+End F1 ctrl+Tab ctrl+p '

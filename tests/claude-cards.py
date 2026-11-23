@@ -1770,6 +1770,14 @@ class ReviewRulesTest(CardCase):
         self.assertGreater(allow, answered)
         self.assertEqual([(a['plan'], a['behavior']) for a in self.answers()], [(2, 'allow')])
 
+    def test_a_dialog_past_the_limit_is_told_rhun_is_busy(self):
+        # Smaller: a dialog of a declared kind while AQ_MAX requests wait gets the busy error, not "not supported"
+        self.ask('manydialog')
+        error = self.until(lambda: [a for a in self.answers() if a.get('behavior') == 'error'], 'the error')[0]
+        self.assertEqual(error['message'], 'too many requests are waiting in rhun')
+        self.command('agent-stop')
+        self.command('wait-agent ready 10000')
+
     def test_plan_without_a_process_starts_it_and_shows_the_plan(self):
         # /plan in plan mode after the idle stop: the program starts again (nothing is sent) and the plan the
         # conversation has shows in a tab, as with a running program (the extension always has one)
@@ -1785,6 +1793,13 @@ class ReviewRulesTest(CardCase):
         self.assertEqual(len(self.starts()), 2)
         self.assertEqual(self.prompts(), ['plan'])
         self.assertNotIn('info Already in plan mode. No plan written yet.', self.thread())
+
+    def test_a_help_url_with_a_percent_escape_is_not_shown(self):
+        # Smaller: help_url_ok refuses a percent-escape in the host
+        self.ask('dialog-auto percent')
+        self.assertEqual(self.card()[1], ['detail A paragraph.', 'button 1 Continue', 'button 2 Stop'])
+        self.keys('2')
+        self.until_answered()
 
 
 if __name__ == '__main__':

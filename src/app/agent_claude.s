@@ -2150,6 +2150,9 @@ h_request:
     call claude_dialog
     cmp rax, 1
     je 9f                       # answered at once
+    lea r15, [rip + .Lr_toomany]
+    cmp rax, 2
+    je 3f                       # AQ_MAX wait: rhun is busy, as for a tool's request
     test rax, rax
     jz 2f
     mov r14, rax
@@ -2162,12 +2165,13 @@ h_request:
     mov rdi, rbx                # nothing else waits: its card shows
     call req_show
 9:  EPILOGUE
-2:  mov rdi, r12
+2:  lea r15, [rip + .Lv_unsupported]
+3:  mov rdi, r12
     lea rsi, [rip + .Lk_request_id]
     call json_get
     mov rdi, rbx
     mov rsi, rax
-    lea rdx, [rip + .Lv_unsupported]
+    mov rdx, r15
     call err_reply
     EPILOGUE
 

@@ -659,6 +659,8 @@ pretty:
     xor r14d, r14d
 2:  cmp r14d, r13d
     jae 3f
+    cmp dword ptr [rip + jcut], 0
+    jne 9f                      # past the cut: nothing more (claude_card_build cuts there)
     test r14d, r14d
     jz 21f
     lea rdi, [rip + jsb]
@@ -679,7 +681,7 @@ pretty:
 4:  lea rdi, [rip + jsb]
     mov esi, ']'
     call sb_push_byte
-    EPILOGUE
+9:  EPILOGUE
 .Lpj_obj:
     mov rdi, rbx
     call json_npairs
@@ -692,6 +694,8 @@ pretty:
     xor r14d, r14d
 5:  cmp r14d, r13d
     jae 6f
+    cmp dword ptr [rip + jcut], 0
+    jne 9b
     test r14d, r14d
     jz 51f
     lea rdi, [rip + jsb]
@@ -3219,8 +3223,8 @@ FN claude_dialog_kinds
 9:  EPILOGUE
 
 # FN claude_dialog(AL*, record, request jv) -> rax the request (AQK_DIALOG, its card made) to wait; 1 when it was
-#   answered at once (a payload its reader refuses); 0 when it is not request_user_dialog of a declared kind,
-#   or AQ_MAX wait already
+#   answered at once (a payload its reader refuses); 2 when AQ_MAX wait already (the caller answers that rhun
+#   is busy); 0 when it is not request_user_dialog of a declared kind
 FN claude_dialog
     PROLOGUE
     mov rbx, rdi
@@ -3249,7 +3253,7 @@ FN claude_dialog
     add r15, 16
     jmp 1b
 2:  cmp qword ptr [rbx + AL_reqs + VEC_len], AQ_MAX
-    jae 8f
+    jae 7f                      # AQ_MAX wait already: rhun is busy (the caller's error says so)
     mov edi, AQ_SIZE
     call mem_alloc
     mov r14, rax
@@ -3295,6 +3299,8 @@ FN claude_dialog
     mov rdi, r14                # not in AL_reqs: a close the write caused did not free it
     call agent_aq_free
     mov eax, 1
+    EPILOGUE
+7:  mov eax, 2
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
@@ -3614,6 +3620,8 @@ help_url_ok:
 63: cmp edx, ecx
     jae 64f
     movzx eax, byte ptr [rsi + rdx]
+    cmp eax, '%'                # a percent-escape: new URL() would read another host
+    je 8f
     cmp eax, 'A'
     jb 631f
     cmp eax, 'Z'

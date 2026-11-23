@@ -2003,21 +2003,9 @@ FN agentext_send
     mov rdx, r13
     call agentext_ext_send
     jmp 5f
-1:  mov rdi, [rip + new_kind]
-    test rdi, rdi
-    jz 2f
-    mov qword ptr [rip + keep_box], 1   # a new conversation of a built-in driver opens with the text
-    call agent_new
-    mov qword ptr [rip + keep_box], 0
-    test rax, rax
-    jz 8f
-    mov rbx, rax
-    lea rdi, [rip + in_tf]      # opening it may have moved the text
-    call tf_text
-    mov r12, rax
-    mov r13, rdx
-    jmp 3f
-2:  call agents_open_driven     # else the session the panel shows
+1:  cmp qword ptr [rip + new_kind], 0
+    jne 4f                      # a built-in driver's draft: checked first, its conversation made last
+    call agents_open_driven     # else the session the panel shows
     test rax, rax
     jz 9f
     mov rbx, rax
@@ -2029,17 +2017,30 @@ FN agentext_send
     inc qword ptr [rip + in_gen]
     mov rdi, rbx
     call composer_adopt
-4:  mov rdi, rbx                # the composer's checks: invisible characters, the limit (a notice band)
+4:  mov rdi, rbx                # the composer's checks: invisible characters, the limit (a notice)
     call composer_send_ok
     test eax, eax
     jz 9f
-    mov rdi, rbx                # a command the driver's own table runs (agentpop.s): it ran
-    mov rsi, r12
+    mov rdi, rbx                # a command the driver's own table runs (agentpop.s): it ran, the box
+    mov rsi, r12                #   emptied and settled before it acted (agentext_slash_begin)
     mov rdx, r13
     call agentpop_slash
     test eax, eax
-    jnz 6f
-    mov rdi, rbx
+    jnz 10f
+    test rbx, rbx               # a draft that sends: its conversation now (it opens with the text)
+    jnz 41f
+    mov rdi, [rip + new_kind]
+    mov qword ptr [rip + keep_box], 1
+    call agent_new
+    mov qword ptr [rip + keep_box], 0
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    lea rdi, [rip + in_tf]      # opening it may have moved the text
+    call tf_text
+    mov r12, rax
+    mov r13, rdx
+41: mov rdi, rbx
     mov rsi, r12
     mov rdx, r13
     call agent_send
@@ -2061,11 +2062,24 @@ FN agentext_send
     call tf_clear
     mov rdi, rbx                # (0: an extension's new session)
     call composer_sent
-    mov dword ptr [rip + g_dirty], 1
+10: mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 8:  lea rdi, [rip + .Lnew_failed]
     call app_toast
 9:  EPILOGUE
+
+# FN agentext_slash_begin(AS* or 0 for a draft): a command of the driver's table is about to act on the
+#   box's text: the box empties and is that conversation's (or the draft's) before the command opens
+#   another draft, a picker or a conversation (agentpop_slash)
+FN agentext_slash_begin
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rip + in_tf]
+    call tf_clear
+    mov rdi, rbx
+    call composer_sent
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
 
 # FN agentext_ext_send(AS* or 0 for a new session of new_ext, ptr, len) -> eax SEND_OK when the
 #   agent-prompt went (its text is kept until the answer), else SEND_FAILED: the extension driver's send

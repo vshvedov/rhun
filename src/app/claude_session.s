@@ -1479,6 +1479,8 @@ FN claude_set_model
     call agentcfg_set
     mov rdi, r13
     call agentcfg_save
+    test rbx, rbx               # a draft's pick (AL* 0): the project's choice only
+    jz .Lsmo_yes
     mov rdi, rbx
     call live_up
     test eax, eax
@@ -1525,8 +1527,11 @@ FN claude_set_effort
     jz .Lse_no
     cmp rax, 15
     ja .Lse_no
+    xor edi, edi                # (a draft's: AL* 0)
+    test rbx, rbx
+    jz 1f
     mov rdi, [rbx + AL_as]
-    call cur_model
+1:  call cur_model
     test rax, rax
     jz .Lse_no
     mov rdi, rax
@@ -1541,6 +1546,8 @@ FN claude_set_effort
     call agentcfg_set
     mov rdi, r13
     call agentcfg_save
+    test rbx, rbx
+    jz .Lse_yes
     mov rdi, rbx
     call live_up
     test eax, eax
@@ -1599,6 +1606,9 @@ FN claude_set_ultra
     setnz r12b
     call record
     mov r13, rax
+    xor r14d, r14d              # (a draft's: AL* 0, nothing runs)
+    test rbx, rbx
+    jz 1f
     mov rdi, rbx
     call live_up
     mov r14d, eax
@@ -1646,8 +1656,11 @@ FN claude_set_thinking
     setnz r12b
     call record
     mov r13, rax
+    xor edi, edi                # (a draft's: AL* 0)
+    test rbx, rbx
+    jz 2f
     mov rdi, [rbx + AL_as]
-    call cur_model
+2:  call cur_model
     test rax, rax
     jz .Lst_no
     test dword ptr [rax + AMO_flags], AMOF_THINKOFF
@@ -1658,6 +1671,8 @@ FN claude_set_thinking
     call agentcfg_set
     mov rdi, r13
     call agentcfg_save
+    test rbx, rbx
+    jz 1f
     mov rdi, rbx
     mov esi, r12d
     call ev_thinking
@@ -2003,8 +2018,11 @@ effort_step:
     lea rsi, [rsp]
     call claude_set_effort
     EPILOGUE
-1:  mov rdi, [rbx + AL_as]
-    call cur_model
+1:  xor edi, edi                # (a draft's: AL* 0)
+    test rbx, rbx
+    jz 11f
+    mov rdi, [rbx + AL_as]
+11: call cur_model
     test rax, rax
     jz 9f
     mov r14, rax
@@ -2013,8 +2031,11 @@ effort_step:
     jz 9f
     mov edi, AG_CLAUDE
     call agentcfg_get
+    xor edi, edi
+    test rbx, rbx
+    jz 12f
     mov rdi, [rbx + AL_as]
-    mov rsi, rax
+12: mov rsi, rax
     mov rdx, r14
     call agentcfg_effort
     mov ecx, -1                 # its index, -1 none
@@ -2248,13 +2269,14 @@ FN claude_action
     je .Lca_settings
     cmp r12d, ACT_HELP
     je .Lca_help
+    cmp r12d, ACT_EFFORT        # the effort row: a step, a round, or a level's id (a draft's: AL* 0)
+    je 10f
     test rbx, rbx
     jz .Lca_no
     cmp r12d, ACT_FAST
     je .Lca_fast
-    cmp r12d, ACT_EFFORT        # the effort row: a step, a round, or a level's id
-    jne 11f
-    mov rdi, rbx
+    jmp 11f
+10: mov rdi, rbx
     mov rsi, r13
     mov rdx, r14
     call effort_step

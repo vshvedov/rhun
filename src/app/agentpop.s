@@ -66,6 +66,7 @@ ENDSTRUCT PR_SIZE
 pop_tf: .zero TF_SIZE           # the button menu's filter field
 pop_q: .zero SB_SIZE            # the filter as typed (the typed menu: the token, its "/" too)
 psb: .zero SB_SIZE
+slash_arg: .zero SB_SIZE        # a typed command's text after its name (agentpop_slash)
 cands: .zero VEC_SIZE           # PR: every row that may show, before the filter
 rows: .zero VEC_SIZE            # PR: what shows, sections among them
 keys: .zero VEC_SIZE            # qwords: the order (a candidate's index in the low 16 bits)
@@ -1695,13 +1696,13 @@ enter:
     mov r12, [rbx + PR_arg]
     call live_of_owner
     mov r13, rax
+    mov r14, rdx
     call agentpop_close
-    test r13, r13
+    test r14, r14
     jz .Le_taken
-    mov rax, [r13 + AL_drv]
-    mov rdi, r13
+    mov rdi, r13                # (0: a draft's, the project's choice)
     mov rsi, [r12 + AMO_value]
-    call [rax + DRV_set_model]
+    call [r14 + DRV_set_model]
 .Le_taken:
     mov dword ptr [rip + g_dirty], 1
     mov eax, 1
@@ -1711,36 +1712,42 @@ enter:
     EPILOGUE
 
 # level(how cstr): the effort level one step up ("+"), down ("-"), round ("~"), or the level of that id: the
-#   driver's part (DRV_action ACT_EFFORT)
+#   driver's part (DRV_action ACT_EFFORT; a draft's: the project's choice, AL* 0)
 level:
     PROLOGUE
     mov r12, rdi
     call live_of_owner
-    test rax, rax
-    jz 9f
     mov r13, rax
+    test rdx, rdx
+    jz 9f
+    mov r14, rdx
     mov rdi, r12
     call strlen
     mov rcx, rax
     mov rdi, r13
-    mov rax, [r13 + AL_drv]
     mov esi, ACT_EFFORT
     mov rdx, r12
-    call [rax + DRV_action]
+    call [r14 + DRV_action]
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
-# live_of_owner() -> rax the owner's live record (made; a draft becomes its conversation first), or 0
+# live_of_owner() -> rax the owner's live record (made), or 0 for a draft (its picks are the project's
+#   choices: no conversation is made for them); rdx the driver (DRV*), 0 none
 live_of_owner:
     PROLOGUE
     mov rdi, [rip + pop_owner]
     test rdi, rdi
     jnz 1f
-    call agentext_draft_own
+    mov edi, [rip + pop_dkind]
+    call agent_drv_for_kind
+    mov rdx, rax
+    xor eax, eax
+    EPILOGUE
+1:  call agent_live
+    xor edx, edx
     test rax, rax
     jz 9f
-    mov rdi, rax
-1:  call agent_live
+    mov rdx, [rax + AL_drv]
 9:  EPILOGUE
 
 # box_text() -> rax ptr, rdx len, rbx the box (TF*)
@@ -1939,19 +1946,28 @@ FN agentpop_pick
 
 # ---- a command's action ----
 
-# FN agentpop_slash(AS*, ptr, len) -> eax 1 when the text's first word "/NAME" is one of the driver's own
-#   commands (ACMF_LOCAL) with a target: it ran with the rest of the text (else 0: the text goes as it is)
+# FN agentpop_slash(AS* or 0 for the box's draft, ptr, len) -> eax 1 when the text's first word "/NAME" is
+#   one of the driver's own commands (ACMF_LOCAL) with a target: it ran with the rest of the text (copied:
+#   the box empties first, agentext_slash_begin), else 0: the text goes as it is
 FN agentpop_slash
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
-    xor eax, eax
     test rbx, rbx
-    jz 9f
-    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
+    jnz 0f
+    call agentext_box_owner     # a draft: its driver's kind
+    test rax, rax
+    jnz 8f
+    test edx, edx
+    jz 8f
+    mov [rsp], edx
+    jmp 12f
+0:  cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
     je 8f
-    cmp r13, 2
+    mov eax, [rbx + AS_kind]
+    mov [rsp], eax
+12: cmp r13, 2
     jb 8f
     cmp byte ptr [r12], '/'
     jne 8f
@@ -1964,7 +1980,7 @@ FN agentpop_slash
     jmp 1b
 2:  cmp r14, 1
     je 8f
-    mov edi, [rbx + AS_kind]
+    mov edi, [rsp]
     call agentcfg_get
     mov r15, rax
     mov rdi, rax
@@ -1994,17 +2010,29 @@ FN agentpop_slash
     ja 5f
     dec r13
     jmp 4b
-5:  mov rdi, rbx
-    mov esi, [rbx + AS_kind]
+5:  lea rdi, [rip + slash_arg]  # the rest, kept: the box empties before the command acts
+    call sb_clear
+    lea rdi, [rip + slash_arg]
+    lea rsi, [r12 + r14]
+    mov rdx, r13
+    sub rdx, r14
+    call sb_push
+    lea rdi, [rip + slash_arg]
+    xor esi, esi
+    call sb_push_byte
+    dec qword ptr [rip + slash_arg + SB_len]
+    mov rdi, rbx
+    call agentext_slash_begin
+    mov rdi, rbx
+    mov esi, [rsp]
     mov edx, r15d
-    lea rcx, [r12 + r14]
-    mov r8, r13
-    sub r8, r14
+    mov rcx, [rip + slash_arg + SB_ptr]
+    mov r8, [rip + slash_arg + SB_len]
     call agentpop_run
     mov eax, 1
     EPILOGUE
 8:  xor eax, eax
-9:  EPILOGUE
+    EPILOGUE
 
 # FN agentpop_run(AS* or 0 for a draft, kind, act ACT_*, arg ptr, len): a command's action. Clear and New
 #   open a new draft of the kind; Model and Modes their pickers; Copy a reply into the clipboard; Help and
@@ -2035,6 +2063,12 @@ FN agentpop_run
     je .Lr_noconv
     test rbx, rbx
     jnz 1f
+    cmp r13d, ACT_THINKING      # a draft's switches: the project's choices, no conversation made
+    je .Lr_draft_switch
+    cmp r13d, ACT_ULTRA
+    je .Lr_draft_switch
+    cmp r13d, ACT_EFFORT
+    je .Lr_noconv
     call agentext_draft_own
     mov rbx, rax
     test rax, rax
@@ -2100,6 +2134,32 @@ FN agentpop_run
     mov rdx, r15
     call copy_reply
     EPILOGUE
+.Lr_draft_switch:
+    mov edi, r12d
+    call agentcfg_get
+    mov rcx, rax
+    xor esi, esi                # no "on" or "off": the project's state flipped
+    cmp r13d, ACT_THINKING
+    jne 1f
+    cmp dword ptr [rcx + AGC_think], 0
+    sete sil
+    jmp 2f
+1:  cmp dword ptr [rcx + AGC_ultra], 1
+    setne sil
+2:  call switch_arg
+    mov [rsp + 8], esi
+    mov edi, r12d
+    call agent_drv_for_kind
+    test rax, rax
+    jz 9b
+    xor edi, edi
+    mov esi, [rsp + 8]
+    cmp r13d, ACT_THINKING
+    jne 3f
+    call [rax + DRV_set_thinking]
+    jmp 9b
+3:  call [rax + DRV_set_ultra]
+    jmp 9b
 .Lr_noconv:
     mov edi, r12d
     call agent_drv_for_kind

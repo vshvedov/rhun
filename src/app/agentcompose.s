@@ -224,13 +224,22 @@ note_drop:
 1:  add rsp, 8
     ret
 
-# note_show(): the notice in nsb on the band of the box's conversation, about the box's text as it is now
+# note_show(): the notice in nsb on the band of the box's conversation, about the box's text as it is now;
+#   a draft has no band yet (its conversation is made when it sends): a toast says it
 note_show:
     PROLOGUE
     call note_drop
     call agentext_box_owner
     test rax, rax
-    jz 9f
+    jnz 1f
+    lea rdi, [rip + nsb]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + nsb + SB_ptr]
+    call app_toast
+    dec qword ptr [rip + nsb + SB_len]
+    jmp 9f
+1:
     mov rbx, rax
     mov rdi, rax
     call agent_live
@@ -1106,9 +1115,24 @@ FN composer_send_ok
     PROLOGUE
     mov rbx, rdi
     mov r15d, 1
-    call driven
+    test rbx, rbx
+    jnz 0f
+    call agentext_box_owner     # a draft: its driver's
+    test rax, rax
+    jnz 9f
+    test edx, edx
+    jz 9f
+    mov edi, edx
+    call agent_drv_for_kind
     test rax, rax
     jz 9f
+    test dword ptr [rax + DRV_caps], DRVC_SESSION   # (an extension's session: not the composer's)
+    jnz 9f
+    jmp 11f
+0:  call driven
+    test rax, rax
+    jz 9f
+11:
     call box
     mov rdi, rax
     call tf_text

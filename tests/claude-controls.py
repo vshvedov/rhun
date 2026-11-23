@@ -486,6 +486,363 @@ class QueueTest(CfgCase):
         self.assertEqual(self.initialize(), [{'promptSuggestions': False, 'supportedDialogKinds': []}])
 
 
+SECTIONS = ['Context', 'Model', 'Customize', 'Settings', 'Support', 'Slash Commands']
+
+
+class MenuCase(chat.DrivenCase):
+    """print-agent-menu read back: the popup's head, its sections, its rows."""
+
+    def menu(self):
+        return self.command('print-agent-menu')
+
+    def head(self):
+        first = self.menu().splitlines()[0]
+        return dict(word.split('=', 1) for word in first.split(' '))
+
+    def sections(self):
+        return [line[len('section '):] for line in self.menu().splitlines() if line.startswith('section ')]
+
+    def rows(self):
+        """Each row as (section, label, description, trail, flags)."""
+        out, section = [], None
+        for line in self.menu().splitlines():
+            if line.startswith('section '):
+                section = line[len('section '):]
+            elif line.startswith('row '):
+                label, desc, trail, flags = line.split(' ', 2)[2].split('\t')
+                out.append((section, label, desc, trail, flags))
+        return out
+
+    def labels(self):
+        return [r[1] for r in self.rows()]
+
+    def box(self):
+        return re.match(r'input=(.*?) focus=', self.command('print-agent-input')).group(1)
+
+    def ready(self, prompt='hello'):
+        """A conversation whose program has told its lists (initialize's answer)."""
+        self.start()
+        self.chat(prompt)
+        self.until(lambda: 'compact' in self.command('print-agent-cfg'), 'the lists')
+
+
+class MenuTest(MenuCase):
+    def test_typing_a_slash_opens_the_menu(self):
+        self.ready()
+        self.assertTrue(self.menu().startswith('popup=none'))
+        self.command('agent-type /')
+        head = self.head()
+        self.assertEqual((head['popup'], head['filter'], head['sel']), ('menu', '/', '0'))
+        self.assertEqual(head['owner'], self.sid())
+        self.assertEqual(self.sections(), SECTIONS)
+        rows = self.rows()
+        self.assertIn(('Context', 'Clear conversation', 'Start a new conversation', '-', '-'), rows)
+        self.assertNotIn('New conversation', self.labels())          # filter-only
+        self.assertIn(('Model', 'Switch model…', 'Change the AI model', 'Default (recommended)', '-'), rows)
+        self.assertIn(('Model', 'Effort (High)', 'Set how hard the model tries', '-', 'levels=high'), rows)
+        self.assertNotIn('Thinking', self.labels())                  # no model lets it be switched off
+        self.assertNotIn('Toggle fast mode', self.labels())          # sdk_opt_in_required
+        self.assertIn(('Slash Commands', '/compact', 'Clear history but keep a summary', '-', '-'), rows)
+        self.assertIn(('Slash Commands', '/copy', 'Copy the last response to clipboard (/copy 2 for the one before)',
+                       '[N]', '-'), rows)
+        self.assertIn(('Slash Commands', '/plan', 'Turn on plan mode or view the plan', '[open|<description>]', '-'),
+                      rows)
+        slash = [r[1] for r in rows if r[0] == 'Slash Commands']
+        self.assertEqual(slash, ['/compact', '/context', '/usage', '/plan', '/copy'])
+        self.assertNotIn('/clear', slash)                            # a target of its own: not listed twice
+        self.assertIn('foot v2.1.330', self.menu())
+        self.assertEqual([r for r in self.records() if r.get('stdin') and '"/' in r['stdin']], [])
+
+    def test_the_filter_ranks_exact_then_prefix(self):
+        self.ready()
+        self.command('agent-type /co')
+        self.assertEqual(self.head()['sel'], '1')                    # the first row matches what is typed
+        rows = self.rows()
+        self.assertEqual(rows[0][0], 'Slash Commands')               # the section of the best rows comes first
+        self.assertEqual(sorted(r[1] for r in rows[:3]), ['/compact', '/context', '/copy'])
+        self.assertIn('Clear conversation', self.labels())           # a word of it starts with "co"
+        self.command('key BackSpace')
+        self.command('key BackSpace')
+        self.command('agent-type copy')
+        self.assertEqual(self.head()['filter'], '/copy')
+        self.assertEqual(self.labels()[0], '/copy')                  # an exact name first of all
+        self.command('key BackSpace')
+        self.command('key BackSpace')
+        self.command('key BackSpace')
+        self.command('key BackSpace')
+        self.command('agent-type cost')                              # an alias is a name
+        self.assertEqual(self.labels()[0], '/usage')
+
+    def test_button_mode_hides_slash_commands(self):
+        self.ready()
+        self.command('agent-menu')
+        head = self.head()
+        self.assertEqual((head['popup'], head['filter'], head['sel']), ('menu', '', '0'))
+        self.assertEqual(self.sections(), SECTIONS[:-1])
+        self.assertIn('focus=1', self.command('print-agent-input'))
+        self.command('agent-type co')                                # the filter has the keys, not the box
+        self.assertEqual(self.head()['filter'], 'co')
+        self.assertEqual(self.box(), '')
+        self.assertNotIn('Slash Commands', self.sections())
+        self.assertEqual(self.head()['sel'], '1')
+        self.command('key Escape')
+        self.assertTrue(self.menu().startswith('popup=none'))
+        self.command('agent-menu /co')
+        self.assertIn('Slash Commands', self.sections())
+        self.command('key Escape')
+        self.assertIn('focus=1', self.command('print-agent-input'))  # the box has the keys again
+
+    def test_tab_completes_and_the_hint_shows(self):
+        self.ready()
+        self.command('agent-type /comp')
+        self.command('key Tab')
+        self.assertEqual(self.box(), '/compact ')
+        menu = self.menu()
+        self.assertTrue(menu.startswith('popup=none'), menu)
+        self.assertNotIn('hint ', menu)                              # compact has no argument hint
+        self.command('key BackSpace')
+        for _ in range(len('/compact')):
+            self.command('key BackSpace')
+        self.command('agent-type /cop')
+        self.command('key Tab')
+        self.assertEqual(self.box(), '/copy ')
+        hint = re.search(r'^hint (.*) at (\d+) (\d+)$', self.menu(), re.M)
+        self.assertIsNotNone(hint, self.menu())
+        self.assertEqual(hint.group(1), '[N]')
+        x, y = int(hint.group(2)), int(hint.group(3))
+        self.assertGreater(x, 922 - 100)                             # after the text, in the panel (x 922+)
+        self.command('agent-type 2')
+        self.assertNotIn('hint ', self.menu())                       # something typed after the space
+        self.assertEqual(self.prompts(), ['hello'])
+
+    def test_enter_on_a_whole_command_sends_it(self):
+        self.ready()
+        self.command('agent-type /compact')
+        self.assertEqual(self.labels()[0], '/compact')
+        self.command('key Return')
+        self.until(lambda: '/compact' in self.prompts(), 'the command is sent')
+        self.assertEqual(self.prompts(), ['hello', '/compact'])
+        self.assertEqual(self.box(), '')
+        self.assertTrue(self.menu().startswith('popup=none'))
+
+    def test_a_path_is_not_a_command(self):
+        self.ready()
+        self.command('agent-type /usr/bin')
+        self.assertTrue(self.menu().startswith('popup=none'))
+        self.command('key Return')
+        self.until(lambda: '/usr/bin' in self.prompts(), 'the path is sent')
+
+    def test_no_matching_commands_lets_enter_send(self):
+        self.ready()
+        self.command('agent-type /zzz')
+        self.assertIn('\nempty No matching commands\n', self.menu())
+        self.assertEqual(self.head()['sel'], '0')
+        self.command('key Return')
+        self.until(lambda: '/zzz' in self.prompts(), 'sent as text')
+
+    def test_clear_conversation_opens_a_new_draft(self):
+        self.ready()
+        sid = self.sid()
+        self.command('agent-type /clear')
+        self.assertEqual(self.labels()[0], 'Clear conversation')
+        self.command('key Return')
+        self.assertIn(' new=claude ', self.command('print-agent-input'))
+        self.assertEqual(self.box(), '')
+        self.assertEqual(self.prompts(), ['hello'])
+        # through the driver's table too, as Enter sends it (agent-prompt goes by no popup)
+        self.command('agent-prompt again')
+        self.command('wait-agent ready')
+        self.command('agent-prompt /clear')
+        self.assertIn(' new=claude ', self.command('print-agent-input'))
+        self.assertEqual(self.prompts(), ['hello', 'again'])
+        listed = self.until(lambda: (lambda r: r if len(r) == 2 else None)(self.listed()), 'both stay listed')
+        self.assertEqual(len(listed), 2)
+        self.assertTrue(sid)
+
+    def test_typed_dialog_command_goes_to_the_cli(self):
+        # the CLI answers /status itself (finding 22): rhun sends it as text
+        self.ready()
+        self.command('agent-prompt /status')
+        self.command('wait-agent ready')
+        self.until(lambda: '/status' in self.prompts(), 'sent')
+        self.until(lambda: any("/status isn't available in this environment." in row for row in self.thread()),
+                   "the CLI's answer")
+
+    def toast(self):
+        return self.command('print-toast').strip()
+
+    def test_copy_takes_the_last_reply(self):
+        self.start()
+        self.chat('hello')
+        self.command('agent-prompt /copy')
+        self.assertEqual(self.toast(), 'toast=Copied to clipboard (9 characters, 1 line)')
+        self.assertEqual(self.prompts(), ['hello'])
+        self.command('agent-prompt /copy 9')
+        self.assertEqual(self.toast(), 'toast=Only 1 assistant message available to copy')
+        self.command('agent-prompt /copy two')
+        self.assertEqual(self.toast(), 'toast=Usage: /copy [N] where N is 1 (latest), 2, 3, … Got: two')
+        self.command('agent-prompt again')
+        self.command('wait-agent ready')
+        self.command('agent-prompt /copy 2')
+        self.assertEqual(self.toast(), 'toast=Copied to clipboard (9 characters, 1 line)')
+        self.assertEqual(self.prompts(), ['hello', 'again'])
+
+    def test_menu_starts_nothing(self):
+        self.ready()
+        self.quit()
+        self.start()
+        rows = self.listed()
+        self.assertEqual(len(rows), 1, rows)
+        self.command('print-agents 1')
+        self.command('agent-menu /')
+        self.assertIn('/compact', self.labels())                     # from the project's record
+        self.assertIn('read=1', self.command('print-agent-cfg'))
+        self.assertEqual(re.findall(r'\b\d+\b', self.command('print-uproc')), [])
+        self.assertEqual(len(self.starts()), 1)
+        self.assertIn(' pid=0 ', self.command('print-agent-live'))
+
+    def test_menu_closes_when_the_conversation_changes(self):
+        self.ready()
+        self.command('agent-type /')
+        self.assertEqual(self.head()['popup'], 'menu')
+        self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        self.assertTrue(self.menu().startswith('popup=none'))
+        self.command('print-agents 1')
+        self.command('agent-menu')
+        self.assertEqual(self.head()['popup'], 'menu')
+        self.command('agent-new claude')                             # the box is another's
+        self.assertTrue(self.menu().startswith('popup=none'))
+
+    def test_menu_fits_every_size(self):
+        self.ready()
+        for opener in ('agent-menu', 'agent-type /'):
+            self.command(opener)
+            lines = self.command('print-agent-menu fit').splitlines()
+            self.assertEqual(len(lines), 25 * 34)
+            for line in lines:
+                r = {k: int(v) for k, v in (f.split('=') for f in line.split())}
+                what = opener + ' ' + line
+                self.assertGreaterEqual(r['x'], 0, what)
+                self.assertLessEqual(r['x'] + r['pw'], r['w'], what)
+                self.assertGreaterEqual(r['left'], r['x'], what)
+                self.assertLessEqual(r['right'], r['x'] + r['pw'], what)
+                self.assertGreater(r['label'], 0, what)
+                self.assertGreater(r['h'], 0, what)
+            self.command('key Escape')
+
+    def test_escape_closes_the_menu_first(self):
+        self.start()
+        self.chat('slow', wait='working')
+        self.command('agent-type /')
+        self.assertEqual(self.head()['popup'], 'menu')
+        self.command('key Escape')
+        self.assertTrue(self.menu().startswith('popup=none'))
+        self.assertTrue(self.command('print-agent-live').startswith('state=working '))
+        interrupts = [m for m in self.stdin() if m.get('request', {}).get('subtype') == 'interrupt']
+        self.assertEqual(interrupts, [])
+        self.assertEqual(self.box(), '/')
+        self.assertTrue(self.menu().startswith('popup=none'))        # not again while the text is the same
+        self.command('key Escape')                                   # then Escape is phase 1's: Stop
+        self.until(lambda: [m for m in self.stdin() if m.get('request', {}).get('subtype') == 'interrupt'],
+                   'the interrupt')
+
+    def test_a_drafts_slash_belongs_to_its_new_conversation(self):
+        self.ready()
+        self.command('agent-new claude')
+        self.command('agent-type /co')                               # the draft becomes a conversation
+        head = self.head()
+        self.assertEqual(head['popup'], 'menu')
+        self.assertNotEqual(head['owner'], '-')
+        self.assertEqual(self.labels()[0][:3], '/co')
+
+    def test_model_command_opens_the_picker(self):
+        self.ready()
+        self.command('agent-prompt /model')
+        head = self.head()
+        self.assertEqual(head['popup'], 'models')
+        self.assertEqual([r[1:3] for r in self.rows()], [('Default (recommended)', 'Opus 5.5'), ('Sonnet', 'Sonnet 5')])
+        self.assertEqual(self.prompts(), ['hello'])                  # nothing went to the program
+        self.assertEqual(self.box(), '')
+        self.command('key Escape')
+        self.assertTrue(self.menu().startswith('popup=none'))
+
+    def test_reply_links_ask_before_opening(self):
+        opened = self.work / 'opened'
+        opener = self.work / 'opener.sh'
+        opener.write_text(f'#!/bin/sh\necho "$1" >> {opened}\n', encoding='utf-8')
+        opener.chmod(0o755)
+        self.start(env={'RHUN_OPEN_URL': str(opener)})
+        self.chat('see [the docs](https://example.com/docs)')
+        n = len(self.thread())
+        where = None
+        for line in self.command(f'print-agent-row {n}').splitlines():
+            match = re.match(r'link (.*) -> (.*) at (-?\d+) (-?\d+)$', line)
+            if match:
+                where = (int(match.group(3)), int(match.group(4)))
+        self.assertIsNotNone(where)
+        self.command('click %d %d' % where)
+        self.command('wait 50')
+        palette = self.command('print-palette').splitlines()
+        self.assertEqual(palette[0], 'choose=Claude Code wants to open example.com in your browser: '
+                                     'https://example.com/docs')
+        self.assertEqual([line[2:] for line in palette if line.startswith(('  ', '> '))],
+                         ['Open', 'Copy Link', 'Cancel'])
+        self.command('wait 200')
+        self.assertFalse(opened.exists())                            # nothing opens until Open
+        self.command('key Escape')
+        self.command('wait 200')
+        self.assertFalse(opened.exists())
+        self.command('click %d %d' % where)
+        self.command('wait 50')
+        self.command('key Return')                                   # Open
+        self.until(lambda: opened.exists() and opened.read_text(encoding='utf-8').strip(), 'opened')
+        self.assertEqual(opened.read_text(encoding='utf-8'), 'https://example.com/docs\n')
+
+
+class BandTest(MenuCase):
+    def bands(self):
+        return [line for line in self.command('print-agent-bands').splitlines() if line.startswith('band ')]
+
+    def room(self):
+        """The room bands_h gives the bands, and the room drawing them took: the same."""
+        match = re.search(r'^room=(\d+) drawn=(\d+)$', self.command('print-agent-bands'), re.M)
+        self.assertIsNotNone(match)
+        self.assertEqual(match.group(1), match.group(2))
+        return int(match.group(1))
+
+    def test_bands_skeleton(self):
+        self.start()
+        self.chat('hello')
+        self.assertEqual(self.bands(), [])
+        self.command('agent-test-band error Something broke')
+        bands = self.bands()
+        self.assertEqual(len(bands), 1, bands)
+        match = re.match(r'band error lines=1 close=(\d+),(\d+) Something broke$', bands[0])
+        self.assertIsNotNone(match, bands)
+        self.room()
+        self.command('move %s %s' % match.groups())
+        self.command('wait 700')
+        self.assertIn('Dismiss error', self.command('print-tip'))
+        self.command('click %s %s' % match.groups())
+        self.assertEqual(self.bands(), [])
+        self.command('agent-test-band error Something broke')         # the same text: it stays away
+        self.assertEqual(self.bands(), [])
+        self.command('agent-test-band error Something else broke')
+        self.assertEqual(len(self.bands()), 1)
+        self.command('agent-test-band error')                         # no text: it goes
+        self.assertEqual(self.bands(), [])
+        # a long text wraps at words, at most 4 lines; every kind stacks; the box keeps its room
+        self.command('agent-test-band notice ' + ' '.join(['word%d' % i for i in range(200)]))
+        self.command('agent-test-band settings Settings file failed to parse')
+        bands = self.bands()
+        self.assertEqual([b.split(' ')[1] for b in bands], ['settings', 'notice'])
+        self.assertIn(' lines=4 ', bands[1])
+        self.assertIn(' lines=1 ', bands[0])
+        self.assertGreater(self.room(), 0)                            # the room for 5 lines is all drawn
+        self.assertIn('box=1', self.command('print-agent-input'))
+        self.assertEqual(self.thread()[-1], chat.REPLY + 'ok: hello')
+
+
 class SeamWordsTest(unittest.TestCase):
     """Nothing above the seam knows Claude (decision 2): phase 1's names stay where phase 1 put them."""
 

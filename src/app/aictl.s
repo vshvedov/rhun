@@ -215,7 +215,7 @@ c_agent_prompt:
     call ai_arg_rest
     mov rbx, rax
     mov r12, rdx
-    call agentext_field
+    call agentext_box
     mov rdi, rax
     mov rsi, rbx
     mov rdx, r12
@@ -231,18 +231,30 @@ c_agent_prompt:
     mov rax, -1
     EPILOGUE
 
-# agent-type TEXT: TEXT typed into the prompt box, not sent (the session's program starts)
+# agent-type TEXT: TEXT typed into the prompt box, not sent (the session's program starts); while the command
+#   menu's filter has the keys, into the filter
 c_agent_type:
     PROLOGUE
     call ai_set
     call has_target
     test eax, eax
     jz 8f
+    call agentpop_field         # the command menu's filter while it has the keys (agentpop.s)
+    mov rbx, rax
     call ai_arg_rest
     mov rdi, rax
     mov rsi, rdx
-    call agentext_paste
+    test rbx, rbx
+    jz 1f
+    mov rdx, rsi
+    mov rsi, rdi
+    mov rdi, rbx
+    call ta_insert
+    xor eax, eax
+    EPILOGUE
+1:  call agentext_paste
     call agentext_typed
+    call agentext_box_changed   # the typed command menu follows it (agentpop.s)
     xor eax, eax
     EPILOGUE
 8:  mov edi, 1
@@ -777,11 +789,154 @@ c_agent_cfg_set:
 8:  mov rax, -1
     EPILOGUE
 
+# ---- the command menu and the bands (agentpop.s, agentfoot.s) ----
+
+# agent-menu [TEXT]: the command menu as its button opens it, TEXT typed into its filter; error without a box
+#   of a built-in driver
+c_agent_menu:
+    PROLOGUE
+    call ai_set
+    mov edi, APP_MENU
+    xor esi, esi
+    xor edx, edx
+    call agentpop_open
+    test eax, eax
+    jz 8f
+    call ai_arg_rest
+    mov rbx, rax
+    mov r12, rdx
+1:  test r12, r12               # from its first character
+    jz 9f
+    cmp byte ptr [rbx], ' '
+    jne 2f
+    inc rbx
+    dec r12
+    jmp 1b
+2:  call agentpop_field
+    test rax, rax
+    jz 9f
+    mov rdi, rax
+    mov rsi, rbx
+    mov rdx, r12
+    call ta_insert
+9:  xor eax, eax
+    EPILOGUE
+8:  mov edi, 1
+    call no_chat
+    mov rax, -1
+    EPILOGUE
+
+# agent-menu-pick N: row N (from 1) of the open popup as Enter takes it; error when it has none
+c_agent_menu_pick:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov rdi, rax
+    call agentpop_pick
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# print-agent-menu [fit]: the open popup (agentpop_dump); fit: its layout at every size and width
+c_print_agent_menu:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov rbx, rdx
+    call ai_out
+    mov rdi, rax
+    test rbx, rbx
+    jnz 1f
+    call agentpop_dump
+    xor eax, eax
+    EPILOGUE
+1:  call agentpop_fit_dump
+    xor eax, eax
+    EPILOGUE
+
+# print-agent-bands: the open conversation's bands (bands_dump)
+c_print_agent_bands:
+    PROLOGUE
+    call ai_set
+    call agents_open_driven
+    mov rbx, rax
+    call ai_out
+    mov rdi, rax
+    mov rsi, rbx
+    call bands_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-test-band KIND TEXT: a band on the open conversation, as its driver would show it (tests; KIND error,
+#   settings, auth, rate, notice; no TEXT takes it away)
+c_agent_test_band:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov r12, rax
+    mov r13, rdx
+    xor ebx, ebx
+1:  cmp ebx, BK_COUNT
+    jae 8f
+    lea rax, [rip + band_words]
+    mov rdx, [rax + rbx*8]
+    mov rdi, r12
+    mov rsi, r13
+    call str_eq_cstr
+    test eax, eax
+    jnz 2f
+    inc ebx
+    jmp 1b
+2:  call agents_open_driven
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    call agent_live
+    test rax, rax
+    jz 8f
+    mov r14, rax
+    call ai_arg_rest
+    mov r12, rax
+    mov r13, rdx
+3:  test r13, r13
+    jz 4f
+    cmp byte ptr [r12], ' '
+    jne 5f
+    inc r12
+    dec r13
+    jmp 3b
+4:  xor r12d, r12d
+5:  mov rdi, r14
+    mov esi, ebx
+    mov rdx, r12
+    mov rcx, r13
+    call ev_band
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
 .section .rodata
 .Lc_print_agent_row: .asciz "print-agent-row"
 .Lc_print_agent_cfg: .asciz "print-agent-cfg"
 .Lc_agent_models: .asciz "agent-models"
 .Lc_agent_cfg_set: .asciz "agent-cfg-set"
+.Lc_agent_menu: .asciz "agent-menu"
+.Lc_agent_menu_pick: .asciz "agent-menu-pick"
+.Lc_print_agent_menu: .asciz "print-agent-menu"
+.Lc_print_agent_bands: .asciz "print-agent-bands"
+.Lc_agent_test_band: .asciz "agent-test-band"
+.Lb_error: .asciz "error"
+.Lb_settings: .asciz "settings"
+.Lb_auth: .asciz "auth"
+.Lb_rate: .asciz "rate"
+.Lb_notice: .asciz "notice"
 .Lf_model: .asciz "model"
 .Lf_effort: .asciz "effort"
 .Lf_dest: .asciz "dest"
@@ -854,6 +1009,10 @@ ai_ctl:
     .quad .Lc_print_holder, c_print_holder
     .quad .Lc_print_agent_cfg, c_print_agent_cfg, .Lc_agent_models, c_agent_models
     .quad .Lc_agent_cfg_set, c_agent_cfg_set
+    # the command menu and the bands (agentpop.s, agentfoot.s)
+    .quad .Lc_agent_menu, c_agent_menu, .Lc_agent_menu_pick, c_agent_menu_pick
+    .quad .Lc_print_agent_menu, c_print_agent_menu, .Lc_print_agent_bands, c_print_agent_bands
+    .quad .Lc_agent_test_band, c_agent_test_band
     .quad 0, 0
 cfg_fields:                     # agent-cfg-set's words: the word, the AGF_*, whether it is an int
     .quad .Lf_model
@@ -870,6 +1029,7 @@ cfg_fields:                     # agent-cfg-set's words: the word, the AGF_*, wh
     .long AGF_THINK, 1
     .quad 0, 0
 holder_names: .quad .Lh_none, .Lh_other, .Lh_unknown
+band_words: .quad .Lb_error, .Lb_settings, .Lb_auth, .Lb_rate, .Lb_notice
 live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_conn_kill_ms
     .quad .Lt_eof, g_conn_eof_ms, .Lt_hold, g_drv_hold_ms, .Lt_guard, g_conn_max

@@ -15,7 +15,10 @@
 #   claude_replay(AL*, record)              a user record with isReplay: a held message started
 #   claude_start_mode(AL*) -> rax cstr|0    a start's --permission-mode, through the bypass gate
 #   claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra,
-#     claude_set_thinking, claude_action: the driver table's entries for the later tasks (0 until then)
+#     claude_set_thinking: the driver table's entries for the later tasks (0 until then)
+#   claude_menu(AS* or 0, APM** out) -> eax n   the command menu's actions (agentpop.s), each with its rule
+#   claude_action(AL* or 0, act, ptr, len) -> eax 1 done   the driver's part of a local command: /plan,
+#     fast mode (/fast as a prompt), Settings at Claude Code's rows, the help docs (asked before they open)
 #
 # The JSON values passed in are the parse arena's: everything kept is copied (agentcfg copies), and
 # nothing here parses.
@@ -23,10 +26,12 @@
 
 .equ ERRORS_MAX, 50             # settings errors looked at
 .equ R_INFO_ROW, 6              # agents.s's info row (R_INFO)
+.equ R_INFO, 6                  # agents.s's info row
 
 .bss
 .p2align 3
 asb: .zero SB_SIZE              # a command's aliases, joined
+effort_sfx: .zero 48            # the Effort row's "(Level)"
 bsb: .zero SB_SIZE              # the settings band's text
 
 .text
@@ -852,9 +857,327 @@ FN claude_set_ultra
 FN claude_set_thinking
     xor eax, eax
     ret
-FN claude_action
-    xor eax, eax
+
+# ---- the command menu (agentpop.s) and local commands ----
+
+# FN claude_menu(AS* or 0, APM** out) -> eax n: the command menu's actions (menu_tbl)
+FN claude_menu
+    lea rax, [rip + menu_tbl]
+    mov [rsi], rax
+    lea rax, [rip + menu_end]
+    lea rcx, [rip + menu_tbl]
+    sub rax, rcx
+    xor edx, edx
+    mov ecx, APM_SIZE
+    div ecx
     ret
+
+# cur_model(AS* or 0) -> rax the model the menu names (AMO*): the project's choice, else the one in effect,
+#   else the first listed; 0 without a list
+cur_model:
+    PROLOGUE
+    mov rbx, rdi
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov r12, rax
+    lea r13, [r12 + AGC_model]
+    cmp byte ptr [r13], 0
+    jne 1f
+    xor r13d, r13d
+    test rbx, rbx
+    jz 2f
+    mov rax, [rbx + AS_live]
+    test rax, rax
+    jz 2f
+    lea r13, [rax + AL_model]
+    cmp byte ptr [r13], 0
+    je 2f
+1:  mov rdi, r13
+    call strlen
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, rax
+    call agentcfg_find_model
+    test rax, rax
+    jnz 9f
+2:  xor eax, eax
+    cmp qword ptr [r12 + AGC_models + VEC_len], 0
+    je 9f
+    mov rax, [r12 + AGC_models + VEC_ptr]
+    mov rax, [rax]
+9:  EPILOGUE
+
+# shows_model(AS* or 0, kind) -> eax 1, rdx the current model's name (its label, else the value in effect)
+shows_model:
+    PROLOGUE
+    mov rbx, rdi
+    call cur_model
+    xor edx, edx
+    test rax, rax
+    jz 1f
+    mov rdx, [rax + AMO_label]
+    jmp 9f
+1:  test rbx, rbx
+    jz 9f
+    mov rax, [rbx + AS_live]
+    test rax, rax
+    jz 9f
+    cmp byte ptr [rax + AL_model], 0
+    je 9f
+    lea rdx, [rax + AL_model]
+9:  xor ecx, ecx
+    xor r8d, r8d
+    mov eax, 1
+    EPILOGUE
+
+# shows_thinking(AS* or 0, kind) -> eax 1 when the model lets thinking be switched off (supportsThinkingOff),
+#   ecx APRF_ON while it is on
+shows_thinking:
+    PROLOGUE
+    mov rbx, rdi
+    call cur_model
+    xor r12d, r12d
+    test rax, rax
+    jz 9f
+    test dword ptr [rax + AMO_flags], AMOF_THINKOFF
+    jz 9f
+    mov r12d, 1
+    mov ecx, APRF_ON            # on unless the conversation or the project has it off
+    test rbx, rbx
+    jz 1f
+    mov rax, [rbx + AS_live]
+    test rax, rax
+    jz 1f
+    cmp dword ptr [rax + AL_think], 0
+    jne 8f
+    xor ecx, ecx
+    jmp 8f
+1:  mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov ecx, APRF_ON
+    cmp dword ptr [rax + AGC_think], 0
+    jne 8f
+    xor ecx, ecx
+    jmp 8f
+9:  xor ecx, ecx
+8:  xor edx, edx
+    xor r8d, r8d
+    mov eax, r12d
+    EPILOGUE
+
+# shows_effort(AS* or 0, kind) -> eax 1 when the model has effort levels; rdx "(Level)" of the level in
+#   effect (the conversation's, else the project's) or 0, r8 its id
+shows_effort:
+    PROLOGUE
+    mov rbx, rdi
+    call cur_model
+    xor r12d, r12d
+    xor r13d, r13d              # the suffix
+    xor r14d, r14d              # the id
+    test rax, rax
+    jz 9f
+    cmp qword ptr [rax + AMO_levels + VEC_len], 0
+    je 9f
+    mov r15, rax
+    mov r12d, 1
+    test rbx, rbx
+    jz 1f
+    mov rax, [rbx + AS_live]
+    test rax, rax
+    jz 1f
+    lea r14, [rax + AL_effort]
+    cmp byte ptr [r14], 0
+    jne 2f
+1:  mov edi, AG_CLAUDE
+    call agentcfg_get
+    lea r14, [rax + AGC_effort]
+    cmp byte ptr [r14], 0
+    jne 2f
+    xor r14d, r14d
+    jmp 9f
+2:  xor ebx, ebx                # its label among the model's levels, else the usual words
+3:  cmp rbx, [r15 + AMO_levels + VEC_len]
+    jae 4f
+    imul rax, rbx, AEL_SIZE
+    add rax, [r15 + AMO_levels + VEC_ptr]
+    inc rbx
+    mov r13, [rax + AEL_label]
+    mov rdi, [rax + AEL_id]
+    mov rsi, r14
+    call strcmp_eq
+    test eax, eax
+    jnz 5f
+    jmp 3b
+4:  mov rdi, r14
+    call effort_label
+    mov r13, rax
+5:  lea rdi, [rip + effort_sfx]
+    mov byte ptr [rdi], '('
+    inc rdi
+    xor ecx, ecx
+6:  movzx eax, byte ptr [r13 + rcx]
+    test eax, eax
+    jz 7f
+    cmp ecx, 40
+    jae 7f
+    mov [rdi + rcx], al
+    inc ecx
+    jmp 6b
+7:  mov byte ptr [rdi + rcx], ')'
+    mov byte ptr [rdi + rcx + 1], 0
+    lea r13, [rip + effort_sfx]
+9:  mov rdx, r13
+    mov r8, r14
+    xor ecx, ecx
+    mov eax, r12d
+    EPILOGUE
+
+# shows_ultra(AS* or 0, kind) -> eax 1 when the conversation's program offers Ultracode, ecx APRF_ON while on
+shows_ultra:
+    xor eax, eax
+    xor ecx, ecx
+    xor edx, edx
+    xor r8d, r8d
+    test rdi, rdi
+    jz 9f
+    mov rdi, [rdi + AS_live]
+    test rdi, rdi
+    jz 9f
+    mov esi, [rdi + AL_ultra]
+    test esi, esi
+    js 9f
+    mov eax, 1
+    cmp esi, 1
+    jne 9f
+    mov ecx, APRF_ON
+9:  ret
+
+# shows_fast(AS* or 0, kind) -> eax 1 when the model has fast mode and the program does not say an SDK must
+#   opt in first (fast_mode_disabled_reason sdk_opt_in_required, as 2.1.330 reports: then it is left out)
+shows_fast:
+    PROLOGUE
+    call cur_model
+    xor ebx, ebx
+    test rax, rax
+    jz 9f
+    test dword ptr [rax + AMO_flags], AMOF_FAST
+    jz 9f
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    lea rdi, [rax + AGC_fastwhy]
+    lea rsi, [rip + .Lv_opt_in]
+    call strcmp_eq
+    test eax, eax
+    jnz 9f
+    mov ebx, 1
+9:  mov eax, ebx
+    xor ecx, ecx
+    xor edx, edx
+    xor r8d, r8d
+    EPILOGUE
+
+# FN claude_action(AL* or 0, act, ptr, len) -> eax 1 when it was done: ACT_PLAN (/plan [TEXT]: plan mode,
+#   then TEXT as a prompt; already in it: the extension's info row), ACT_FAST (/fast as a prompt),
+#   ACT_SETTINGS (Settings at Claude Code's rows), ACT_HELP (the extension's help docs, open_help in
+#   extension.js @3355805, asked before they open); anything else 0
+FN claude_action
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rdx
+    mov r14, rcx
+    cmp r12d, ACT_SETTINGS
+    je .Lca_settings
+    cmp r12d, ACT_HELP
+    je .Lca_help
+    test rbx, rbx
+    jz .Lca_no
+    cmp r12d, ACT_FAST
+    je .Lca_fast
+    cmp r12d, ACT_PLAN
+    jne .Lca_no
+    lea rdi, [rbx + AL_mode]    # /plan
+    lea rsi, [rip + .Lv_plan]
+    call strcmp_eq
+    test eax, eax
+    jz 1f
+    lea rdx, [rip + .Lp_already]
+    jmp .Lca_note
+1:  mov rdi, rbx
+    lea rsi, [rip + .Lv_plan]
+    call claude_set_mode
+    test eax, eax
+    jnz 2f
+    lea rdx, [rip + .Lp_couldnt]    # "Couldn't switch to plan mode[; not sent: TEXT]"
+    test r14, r14
+    jz .Lca_note
+    lea rdi, [rip + bsb]
+    call sb_clear
+    lea rdi, [rip + bsb]
+    lea rsi, [rip + .Lp_couldnt]
+    call sb_push_cstr
+    lea rdi, [rip + bsb]
+    lea rsi, [rip + .Lp_not_sent]
+    call sb_push_cstr
+    lea rdi, [rip + bsb]
+    mov rsi, r13
+    mov rdx, r14
+    call sb_push
+    mov rdi, rbx
+    mov esi, R_INFO
+    mov rdx, [rip + bsb + SB_ptr]
+    mov rcx, [rip + bsb + SB_len]
+    call ev_note
+    jmp .Lca_yes
+2:  test r14, r14               # a description goes as a prompt ("open" and "share" do not)
+    jz .Lca_yes
+    mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Lv_open]
+    call str_eq_cstr
+    test eax, eax
+    jnz .Lca_yes
+    mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Lv_share]
+    call str_eq_cstr
+    test eax, eax
+    jnz .Lca_yes
+    mov rdi, [rbx + AL_as]
+    mov rsi, r13
+    mov rdx, r14
+    call agent_send
+    jmp .Lca_yes
+.Lca_note:
+    mov rdi, rdx
+    call strlen
+    mov rcx, rax
+    mov rdx, rdi
+    mov rdi, rbx
+    mov esi, R_INFO
+    call ev_note
+    jmp .Lca_yes
+.Lca_fast:
+    mov rdi, [rbx + AL_as]
+    lea rsi, [rip + .Lv_fast_cmd]
+    mov edx, 5
+    call agent_send
+    jmp .Lca_yes
+.Lca_settings:
+    lea rdi, [rip + .Lv_section]
+    mov esi, 7
+    call settings_open_search
+    jmp .Lca_yes
+.Lca_help:
+    lea rdi, [rip + .Lv_who]
+    lea rsi, [rip + .Lv_help_url]
+    call links_ask_open
+.Lca_yes:
+    mov eax, 1
+    EPILOGUE
+.Lca_no:
+    xor eax, eax
+    EPILOGUE
 
 .section .rodata
 .p2align 3
@@ -864,6 +1187,61 @@ effort_labels:
     .quad .Le_low_id, .Le_low, .Le_medium_id, .Le_medium, .Le_high_id, .Le_high
     .quad .Le_xhigh_id, .Le_xhigh, .Le_max_id, .Le_max, 0, 0
 # the local slash table (ext-webview-ui.md 1.24, 1.25): name, description, argument hint, act
+# the command menu's actions (ext-webview-ui.md 1.24): section, act, label, description, kind, flags, rule
+menu_tbl:
+    .long APS_CONTEXT, ACT_CLEAR
+    .quad .Lm_clear, .Lm_clear_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CONTEXT, ACT_NEW
+    .quad .Lm_new, .Lm_new_d
+    .long APK_ROW, APRF_FILTERONLY
+    .quad 0
+    .long APS_MODEL, ACT_MODEL
+    .quad .Lm_model, .Ld_model
+    .long APK_ROW, 0
+    .quad shows_model
+    .long APS_MODEL, ACT_MODES
+    .quad .Lm_modes, .Lm_modes_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_MODEL, ACT_THINKING
+    .quad .Lm_think, .Lm_think_d
+    .long APK_SWITCH, 0
+    .quad shows_thinking
+    .long APS_MODEL, ACT_EFFORT
+    .quad .Lm_effort, .Lm_effort_d
+    .long APK_LEVELS, 0
+    .quad shows_effort
+    .long APS_MODEL, ACT_ULTRA
+    .quad .Lm_ultra, .Lm_ultra_d
+    .long APK_SWITCH, 0
+    .quad shows_ultra
+    .long APS_MODEL, ACT_FAST
+    .quad .Lm_fast, .Lm_fast_d
+    .long APK_ROW, 0
+    .quad shows_fast
+    .long APS_CUSTOMIZE, ACT_TERMINAL
+    .quad .Lm_term, .Lm_term_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_SETTINGS, ACT_SETTINGS
+    .quad .Lm_settings, .Lm_settings_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_SETTINGS, ACT_SIGNIN
+    .quad .Lm_signin, .Ld_login
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_SETTINGS, ACT_SIGNOUT
+    .quad .Lm_signout, .Ld_logout
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_SUPPORT, ACT_HELP
+    .quad .Lm_help, .Lm_help_d
+    .long APK_ROW, 0
+    .quad 0
+menu_end:
 local_cmds:
     .quad .Ln_clear, .Ld_clear, .Lempty, ACT_CLEAR
     .quad .Ln_model, .Ld_model, .Lempty, ACT_MODEL
@@ -887,6 +1265,40 @@ local_cmds:
 .Ld_login: .asciz "Log in with a different account"
 .Ln_logout: .asciz "logout"
 .Ld_logout: .asciz "Sign out of Claude on this computer"
+.Lm_clear: .asciz "Clear conversation"
+.Lm_clear_d: .asciz "Start a new conversation"
+.Lm_new: .asciz "New conversation"
+.Lm_new_d: .asciz "Open a new conversation in a new tab or the sidebar"
+.Lm_model: .asciz "Switch model\342\200\246"
+.Lm_modes: .asciz "Switch mode\342\200\246"
+.Lm_modes_d: .asciz "Change the permission mode"
+.Lm_think: .asciz "Thinking"
+.Lm_think_d: .asciz "Toggle extended thinking mode"
+.Lm_effort: .asciz "Effort"
+.Lm_effort_d: .asciz "Set how hard the model tries"
+.Lm_ultra: .asciz "Ultracode"
+.Lm_ultra_d: .asciz "Run dynamic workflows on every task (this session only)"
+.Lm_fast: .asciz "Toggle fast mode"
+.Lm_fast_d: .asciz "Toggle fast mode for faster responses"
+.Lm_term: .asciz "Open Claude in Terminal"
+.Lm_term_d: .asciz "Open a new Claude instance in the Terminal"
+.Lm_settings: .asciz "General config\342\200\246"
+.Lm_settings_d: .asciz "Open Claude Code's settings"
+.Lm_signin: .asciz "Switch account"
+.Lm_signout: .asciz "Sign out"
+.Lm_help: .asciz "View help docs"
+.Lm_help_d: .asciz "Open help documentation"
+.Lp_already: .asciz "Already in plan mode. No plan written yet."
+.Lp_couldnt: .asciz "Couldn't switch to plan mode"
+.Lp_not_sent: .asciz "; not sent: "
+.Lv_plan: .asciz "plan"
+.Lv_open: .asciz "open"
+.Lv_share: .asciz "share"
+.Lv_fast_cmd: .asciz "/fast"
+.Lv_opt_in: .asciz "sdk_opt_in_required"
+.Lv_section: .asciz "claude."
+.Lv_who: .asciz "Claude Code"
+.Lv_help_url: .asciz "https://code.claude.com/docs/en/vs-code"
 .Le_low_id: .asciz "low"
 .Le_medium_id: .asciz "medium"
 .Le_high_id: .asciz "high"

@@ -457,30 +457,13 @@ h_res_open_url:
     call mem_free
     EPILOGUE
 2:  mov [rip + pr_body], r12
-    # "Title wants to open host in your browser: URL"
-    lea rdi, [rip + res_url_label]
-    call sb_clear
+    # "Title wants to open host in your browser: URL" (links.s, as a reply's link asks)
     mov rdi, rbx
     call ext_title
     lea rdi, [rip + res_url_label]
     mov rsi, rax
-    call sb_push_cstr
-    lea rdi, [rip + res_url_label]
-    lea rsi, [rip + .Lres_wants]
-    call sb_push_cstr
-    mov rdi, r12
-    lea rsi, [rip + res_url_host]
-    mov edx, 200
-    call links_host
-    lea rdi, [rip + res_url_label]
-    lea rsi, [rip + res_url_host]
-    call sb_push_cstr
-    lea rdi, [rip + res_url_label]
-    lea rsi, [rip + .Lres_in_browser]
-    call sb_push_cstr
-    lea rdi, [rip + res_url_label]
-    mov rsi, r12
-    call sb_push_cstr
+    mov rdx, r12
+    call links_ask_label
     mov rdi, [rip + res_url_label + SB_ptr]
     mov rsi, [rip + res_url_label + SB_len]
     call set_label
@@ -1032,7 +1015,6 @@ h_res_setting_get:
 .p2align 3
 res_url_label: .zero SB_SIZE
 res_folders: .zero SB_SIZE
-res_url_host: .zero 208
 .section .rodata
 .Lres_v_open_url: .asciz "open-url"
 .Lres_v_external_uri: .asciz "external-uri"
@@ -1040,8 +1022,6 @@ res_url_host: .zero 208
 .Lres_ev_link: .asciz "0 link "
 .Lres_opened: .asciz "opened"
 .Lres_copied: .asciz "copied"
-.Lres_wants: .asciz " wants to open "
-.Lres_in_browser: .asciz " in your browser: "
 .Lres_i_open: .asciz "Open"
 .Lres_i_copy: .asciz "Copy Link"
 .Lres_i_cancel: .asciz "Cancel"

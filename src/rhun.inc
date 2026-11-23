@@ -2983,7 +2983,7 @@ F AL_effort, 16         # cstr: the effort level in effect, or empty
 F AL_ultra, 4           # Ultracode: -1 not offered (or not known), 0 off, 1 on
 F AL_think, 4           # thinking: 1 on
 F AL_fast, 4            # FS_*
-F AL_pad3, 4
+F AL_bandoff, 4         # a bit per band kind the user dismissed with its x (its text stays in AL_bands)
 F AL_held, VEC_SIZE     # AH: messages written and not started yet, the oldest first
 F AL_suggest, 8         # owned cstr: the prompt the agent suggests next, or 0
 F AL_usage, AGU_SIZE    # the context and cache numbers
@@ -3074,6 +3074,7 @@ F DRV_set_ultra, 8      # (AL*, esi on) -> eax 1 asked
 F DRV_set_thinking, 8   # (AL*, esi on) -> eax 1 asked
 F DRV_reply, 8          # (AL*, AQ*, CD*) -> eax 1 written: a rich card's answer (the card holds the choice)
 F DRV_action, 8         # (AL*, esi ACT_*, rdx arg ptr, rcx len) -> eax 1 done: its part of a local command
+F DRV_menu, 8           # (AS* or 0, APM** out) -> eax n: the command menu's actions (agentpop.s), 0 none
 ENDSTRUCT DRV_SIZE
 # AMD: a permission mode (a driver's static table)
 STRUCT
@@ -3211,7 +3212,7 @@ F APR_label, 8
 F APR_desc, 8
 F APR_trail, 8
 F APR_act, 4
-F APR_pad, 4
+F APR_sec, 4            # APS_*: its section
 F APR_arg, 8            # ACM*, AMO*, AMD*
 ENDSTRUCT APR_SIZE
 .equ APK_SECTION, 1
@@ -3224,6 +3225,28 @@ ENDSTRUCT APR_SIZE
 .equ APRF_CHECK, 2
 .equ APRF_ON, 4
 .equ APRF_FILTERONLY, 8
+.equ APRF_SLASH, 16             # a slash command's row (APR_arg: its ACM*)
+# APM: an action of the command menu (a driver's static table, DRV_menu)
+STRUCT
+F APM_sec, 4            # APS_*
+F APM_act, 4            # ACT_*
+F APM_label, 8          # cstr
+F APM_desc, 8           # cstr
+F APM_kind, 4           # APK_ROW, APK_SWITCH, APK_LEVELS
+F APM_flags, 4          # APRF_FILTERONLY
+F APM_shows, 8          # (AS* or 0, driver kind) -> eax 1 shown, rdx its trail (a levels row: the
+                        #   label's "(Level)") or 0, ecx APRF_ON (a switch that is on), r8 a levels
+                        #   row's level id or 0; 0: always shown, nothing trailing
+ENDSTRUCT APM_SIZE
+.equ APS_CONTEXT, 1             # the command menu's sections, in their order
+.equ APS_MODEL, 2
+.equ APS_CUSTOMIZE, 3
+.equ APS_SETTINGS, 4
+.equ APS_SUPPORT, 5
+.equ APS_SLASH, 6
+.equ APS_COUNT, 7
+.equ ID_AGPOP, 0x8800           # the panel's popup: + its row (0 .. 0x3fe), + 0x3ff its filter field
+.equ ID_AGBAND, 0x8c00          # the bands above the box: + BK_* their x
 
 # ---- rich cards of driven sessions (src/app/agentcard.s) ----
 STRUCT

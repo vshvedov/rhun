@@ -18,6 +18,7 @@
 .equ PM_REMOTE, 40              # remote hosts: a pick list that also takes typed text (remoteui.s)
 .equ PM_TASKS, 76               # tasks and terminals: Run Task and the other task commands (tasks.s)
 .equ PM_WSLIST, 88              # wsedit: a workspace edit's question (wsconfirm.s)
+.equ PM_LINKS, 89               # a URL from an agent's reply: Open, Copy Link, Cancel (links.s)
 .equ PM_WSYM, 92                # language features: Go to Symbol in Project (wsym.s)
 .equ PM_DPICK, 80               # debugger: a launch's ${pick:} or ${process} (debugask.s)
 .equ PM_ICONS, 64               # contributions: Select File Icon Theme (iconth.s)
@@ -1403,6 +1404,17 @@ FN palette_wslist_open
     pop rbx
     ret
 
+# palette_links_open(label cstr): an empty pick list asking before a URL opens (links_ask_open); rows follow
+# with palette_choose_add, then palette_choose_ready; choosing row n calls links_chose(n)
+FN palette_links_open
+    push rbx
+    mov rbx, rdi
+    mov edi, PM_LINKS
+    call palette_open
+    mov [rip + pal_label], rbx
+    pop rbx
+    ret
+
 # palette_results_open(label cstr), palette_results_add(ptr, len, detail cstr or 0, n),
 # palette_results_ready(), palette_results_close(): a list of langfeat's results; choosing item n
 # calls langfeat_chosen(n). The strings stay langfeat's until it closes the list
@@ -2461,6 +2473,8 @@ FN palette_print
     je 13f
     cmp dword ptr [rip + pal_mode], PM_WSLIST
     je 13f
+    cmp dword ptr [rip + pal_mode], PM_LINKS
+    je 13f
     cmp dword ptr [rip + pal_mode], PM_REOPEN   # custom editors
     je 13f
     cmp dword ptr [rip + pal_mode], PM_DPICK      # debugger
@@ -3154,7 +3168,15 @@ palette_accept:
     call dview_dpick_chosen
     mov dword ptr [rip + g_dirty], 1
     jmp .Lpa_ret
-35: cmp ebx, PM_CHOOSE
+35: cmp ebx, PM_LINKS            # a reply's URL: the user's answer (links.s)
+    jne 36f
+    mov dword ptr [rip + pal_mode], PM_NONE
+    call pal_return_focus
+    mov rdi, [r12 + IT_data]
+    call links_chose
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lpa_ret
+36: cmp ebx, PM_CHOOSE
     jne .Lpa_close
     # the extension's pick: the item's number, with the palette closed first (the reply may
     # open another prompt)

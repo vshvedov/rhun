@@ -43,9 +43,9 @@
 #     again), ev_config(al) (its lists changed: the project's record is saved, agentcfg.s),
 #     ev_model(al, ptr, len), ev_effort(al, ptr, len) (what is in effect), ev_ultra(al, available, on),
 #     ev_thinking(al, on), ev_fast(al, FS_*, reason ptr, len) (kept in the project's record too),
-#     ev_band(al, BK_*, ptr, len) (a band above the box; ptr 0 takes it away), ev_started(al, uuid ptr,
-#     len) (a held message started: its row joins), ev_dropped(al, uuid ptr, len) (a held message will not
-#     run: back to its own conversation's box)
+#     ev_band(al, BK_*, ptr, len) (a band above the box; ptr 0 takes it away; dismissed, it stays away until
+#     its text changes), ev_started(al, uuid ptr, len) (a held message started: its row joins),
+#     ev_dropped(al, uuid ptr, len) (a held message will not run: back to its own conversation's box)
 #   A driver's table also has its lists and controls (DRV_modes, DRV_set_*, DRV_reply, DRV_action): the
 #   extension driver's answer 0
 #
@@ -239,6 +239,8 @@ FN agent_state_set
 live_free:
     PROLOGUE
     mov rbx, rdi
+    mov rdi, [rbx + AL_as]      # a popup opened for its session closes (agentpop.s)
+    call agentpop_gone
     lea rdi, [rbx + AL_cn]
     call conn_close
     mov rdi, rbx
@@ -299,6 +301,8 @@ aq_free:
     mov rbx, rdi
     test rbx, rbx
     jz 9f
+    mov rdi, rbx                # a popup opened for it closes (agentpop.s)
+    call agentpop_gone
     mov rdi, [rbx + AQ_id]
     call mem_free
     mov rdi, [rbx + AQ_tool]
@@ -2004,6 +2008,7 @@ FN ev_config
     call live_cfg
     mov rdi, rax
     call agentcfg_save
+    call agentpop_changed       # an open popup's rows are made again
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
@@ -2095,7 +2100,8 @@ FN ev_fast
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
-# FN ev_band(al, kind BK_*, ptr, len): the band of that kind above the box shows the text (ptr 0: it goes)
+# FN ev_band(al, kind BK_*, ptr, len): the band of that kind above the box shows the text (ptr 0: it goes);
+#   the text a band the user dismissed had (AL_bandoff, agentfoot.s) keeps it away, another shows it
 FN ev_band
     PROLOGUE
     mov rbx, rdi
@@ -2104,8 +2110,28 @@ FN ev_band
     mov r14, rcx
     cmp r12d, BK_COUNT
     jae 9f
-    mov rdi, [rbx + AL_bands + r12*8]
+    mov r15, [rbx + AL_bands + r12*8]
+    test r13, r13               # the same text again: a band the user dismissed stays away
+    jz 2f
+    test r15, r15
+    jz 2f
+    mov rdi, r15
+    call strlen
+    cmp rax, r14
+    jne 2f
+    mov rdi, r15
+    mov rsi, r13
+    mov rdx, r14
+    call memeq
+    test eax, eax
+    jnz 9f
+2:  mov rdi, r15
     call mem_free
+    mov ecx, r12d               # a new text shows, even if the old one was dismissed
+    mov eax, 1
+    shl eax, cl
+    not eax
+    and [rbx + AL_bandoff], eax
     xor eax, eax
     test r13, r13
     jz 1f
@@ -2477,6 +2503,7 @@ live_end:
 #   uproc_quit_end's). Quitting, and the project changing (agents_set_project)
 FN agent_drv_shutdown
     PROLOGUE
+    call agentpop_close         # a popup reads those records: it closes first (agentpop.s)
     call agentcfg_flush         # each driver's lists and choices to their project's file (agentcfg.s)
     call claude_auth_end        # the sign-in question, if it runs
     mov dword ptr [rip + trust_answered], 0     # another project is asked again
@@ -2842,6 +2869,7 @@ ext_drv:
     .quad .Lext_name, ext_start, agentext_ext_send, agentext_stop, ext_answer, ext_release, ext_held
     .quad ext_auth, ext_release
     .quad ext_none, ext_none, ext_none, ext_none, ext_none, ext_none, ext_none, ext_none
+    .quad ext_none              # DRV_menu: no command menu (agentpop.s)
 kind_names: .quad .Lk_claude, .Lk_codex, .Lk_grok, .Lk_opencode
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 state_names: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed

@@ -1167,7 +1167,7 @@ FN claude_auth_end
 
 # cl_terminal(AL*, what): claude in rhun's terminal prompt (it runs when the user presses Enter there): the
 #   configured program ("~/" expanded as the start does; the wrapper is not used there) or "claude",
-#   found on the terminal's PATH, with "auth login" for what 1. Before it, what the terminal's claude needs
+#   found on the terminal's PATH, with "auth login" for what 1, "auth logout" for what 2. Before it, what the terminal's claude needs
 #   to use the same profile as this conversation's program (claude_term_env: its CLAUDE_CONFIG_DIR, else
 #   an env.HOME pair's HOME, when the terminal's differs); never anything else (values may be keys, and
 #   the line ends up in the shell's history). For the shell rhun's terminal starts: a POSIX shell,
@@ -1217,8 +1217,11 @@ cl_terminal:
     call sh_word
     test r12d, r12d
     jz 3f
-    lea rdi, [rip + psb]
     lea rsi, [rip + .Lw_login]
+    cmp r12d, 2                 # 2: its sign-out
+    jne 31f
+    lea rsi, [rip + .Lw_logout]
+31: lea rdi, [rip + psb]
     call sb_push_cstr
 3:  mov rdi, [rip + psb + SB_ptr]
     mov rsi, [rip + psb + SB_len]
@@ -3089,6 +3092,7 @@ claude_drv:
     .quad .Lname, cl_start, cl_send, cl_stop, cl_answer, cl_release, cl_held, cl_auth, cl_terminal
     .quad claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra
     .quad claude_set_thinking, claude_reply, claude_action
+    .quad claude_menu
 cl_types:
     .quad .Lv_stream_event, h_stream, .Lv_assistant, h_assistant, .Lv_system, h_system
     .quad .Lv_result, h_result, .Lv_control_request, h_request, .Lv_control_response, h_response
@@ -3128,6 +3132,7 @@ cl_flags:
 .Lw_claude: .asciz "claude"
 .Lw_projects: .ascii "projects"
 .Lw_login: .asciz " auth login"
+.Lw_logout: .asciz " auth logout"
 .Lsh_plain: .asciz "/._-+~:,@"
 # PowerShell, Windows' terminal shell: "," would make an array and "@" splat; "~" and "+" are kept out too
 .Lsh_plain_ps: .asciz "/._-:\\"

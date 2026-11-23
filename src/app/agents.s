@@ -58,6 +58,7 @@ th_as: .quad 0                  # the session drawn (th_prepare): its replies' l
 md_parses: .quad 0              # replies parsed (print-agent-row)
 pend_link: .quad 0              # a link clicked in a reply, followed after the frame (owned cstr), or 0
 pend_cwd: .quad 0               # and the checkout it was in (owned), or 0
+pend_who: .quad 0               # a web link's: who asks to open it (links_ask_open), or 0
 lk_buf: .zero 4096              # follow_file: the link's path
 last_poll: .quad 0
 label_due: .quad 0              # unix second when a label shown changes ("now" turns "1m ago", a live dot goes out)
@@ -3108,13 +3109,29 @@ FN agents_key
     mov r12d, edi
     mov r13d, esi
     mov r14d, edx
-    call agentext_new_active    # AI (D4): a new session's draft hides the conversation and its card
+    call agentpop_kind          # an open popup of the box's (agentpop.s) takes its keys first
+    test eax, eax
+    jz 0f
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, r14d
+    call agentpop_key
+    test eax, eax
+    jnz 5f
+0:  call agentext_new_active    # AI (D4): a new session's draft hides the conversation and its card
     test rax, rax
     jnz 4f
     call agents_open_driven     # 1 to 9 pick an option of the open session's card
     test rax, rax
     jz 4f
     mov rbx, rax
+    mov rdi, rbx                # a rich card first (agentcard.s)
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    call agentcard_key
+    test eax, eax
+    jnz 5f
     test r14d, MOD_CTRL | MOD_ALT | MOD_SUPER
     jnz 4f
     mov rdi, rbx
@@ -3503,6 +3520,38 @@ pin_live:
     mov [rax], r12
     jmp 1b
 9:  EPILOGUE
+
+# FN agents_reply_nth(AS*, n) -> rax ptr, rdx len of its n-th last reply (1 the latest; 0, or past them: rax
+#   0), ecx how many it has (the last 20 at most): the rows of the agent's text (role R_ASSIST, not empty)
+FN agents_reply_nth
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d
+    xor r14d, r14d
+    xor r15d, r15d
+    mov rcx, [rbx + AS_msgs + VEC_len]
+1:  test rcx, rcx
+    jz 9f
+    cmp r13d, 20
+    jae 9f
+    dec rcx
+    imul rax, rcx, AM_SIZE
+    add rax, [rbx + AS_msgs + VEC_ptr]
+    cmp dword ptr [rax + AM_role], R_ASSIST
+    jne 1b
+    cmp qword ptr [rax + AM_len], 0
+    je 1b
+    inc r13d
+    cmp r13, r12
+    jne 1b
+    mov r14, [rax + AM_text]
+    mov r15, [rax + AM_len]
+    jmp 1b
+9:  mov rax, r14
+    mov rdx, r15
+    mov ecx, r13d
+    EPILOGUE
 
 # FN agents_msg_add(AS*, role, ptr, len, name cstr or 0) -> rax the new message's index, or -1 when
 #   nothing was added: a row of a session rhun drives (an empty one stays: streamed text fills it)
@@ -5043,6 +5092,7 @@ thread_draw:
     call th_prepare
     mov r13d, eax
     mov [rip + th_content], r13d
+    call agentpop_shield        # the pointer over the popup is the popup's (drawn last, .Ltd_pop)
     # scrolling / follow
     mov edi, [rsp]
     mov esi, [rsp + 20]
@@ -5148,7 +5198,7 @@ thread_draw:
     mov ecx, [rsp + 8]
     call agentext_bottom_draw
     cmp qword ptr [rip + view], 0
-    jl .Ltd_ret
+    jl .Ltd_pop
 43:
     # scrollbar
     mov eax, [rsp + 24]
@@ -5175,7 +5225,7 @@ thread_draw:
     mov dword ptr [rip + th_follow], 1
 7:  # jump-to-latest button when not following
     cmp dword ptr [rip + th_follow], 0
-    jne .Ltd_ret
+    jne .Ltd_pop
     PM r12d, MI_32
     mov esi, [rsp]
     add esi, [rsp + 8]
@@ -5200,9 +5250,17 @@ thread_draw:
     mov r9d, IC_ARROW_DN
     call ag_icon_btn
     test eax, UB_CLICK
-    jz .Ltd_ret
+    jz .Ltd_pop
     mov dword ptr [rip + th_follow], 1
     mov dword ptr [rip + g_dirty], 1
+.Ltd_pop:
+    call agentpop_unshield      # the box's popup over the thread's bottom (agentpop.s: half of it, mostly)
+    mov edi, [rsp]
+    mov esi, [rsp + 20]
+    add esi, [rsp + 24]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 24]
+    call agentpop_draw
 .Ltd_ret:
     call reply_follow           # a link clicked in a reply, now that nothing drawn is in use
     EPILOGUE
@@ -5460,10 +5518,10 @@ draw_msg:
     call wrap
     EPILOGUE
 
-# reply_click(msg, link): a link of a reply was clicked. A code block's Copy and links with a scheme
-#   go as the Markdown preview follows them (http and https in the browser, others nowhere) at once;
-#   rhun:// links, files and file: URIs after the frame (reply_follow), as opening one may change what
-#   is drawn
+# reply_click(msg, link): a link of a reply was clicked. A code block's Copy at once; an http or https
+#   link asks before it opens (links_ask_open, after the frame, named by the conversation's driver);
+#   other schemes as the Markdown preview follows them (nowhere); rhun:// links, files and file: URIs
+#   after the frame (reply_follow), as opening one may change what is drawn
 reply_click:
     PROLOGUE
     mov rbx, rdi
@@ -5485,9 +5543,23 @@ reply_click:
     mov rdi, r13
     mov rsi, r14
     call link_scheme
+    mov qword ptr [rip + pend_who], 0
     cmp eax, 2
-    je 5f
-    mov rdi, [rip + pend_link]  # a file or rhun://: kept for after the frame
+    jne 3f
+    mov rdi, r13                # a web link: the chooser, after the frame
+    mov rsi, r14
+    call links_url_ok
+    test eax, eax
+    jz 5f
+    lea rax, [rip + .Lthis_reply]
+    mov [rip + pend_who], rax
+    mov rdi, [rip + th_as]
+    call agent_drv_of
+    test rax, rax
+    jz 3f
+    mov rax, [rax + DRV_name]
+    mov [rip + pend_who], rax
+3:  mov rdi, [rip + pend_link]  # a file or rhun://: kept for after the frame
     call mem_free
     mov rdi, [rip + pend_cwd]
     call mem_free
@@ -5587,7 +5659,14 @@ reply_follow:
     mov r12, [rip + pend_cwd]
     mov qword ptr [rip + pend_link], 0
     mov qword ptr [rip + pend_cwd], 0
-    mov rdi, rbx
+    mov rdi, [rip + pend_who]   # a web link: asked before it opens (links.s)
+    test rdi, rdi
+    jz 0f
+    mov qword ptr [rip + pend_who], 0
+    mov rsi, rbx
+    call links_ask_open
+    jmp 2f
+0:  mov rdi, rbx
     call strlen
     mov r13, rax
     mov rdi, rbx
@@ -6142,6 +6221,7 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Loc_failed: .asciz "OpenCode: check CLI and data access"
 .Lnoproj: .asciz "Open a folder to see its agent sessions"
 .Luntitled: .asciz "Untitled session"
+.Lthis_reply: .asciz "This reply"
 .Lempty_thread: .asciz "Nothing here yet"
 .Lclaude_name: .asciz "Claude"
 .Lcodex_name: .asciz "Codex"

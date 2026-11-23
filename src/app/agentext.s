@@ -2028,7 +2028,13 @@ FN agentext_send
     je 4f
     mov [rip + in_as], rbx
     inc qword ptr [rip + in_gen]
-4:  mov rdi, rbx
+4:  mov rdi, rbx                # a command the driver's own table runs (agentpop.s): it ran
+    mov rsi, r12
+    mov rdx, r13
+    call agentpop_slash
+    test eax, eax
+    jnz 6f
+    mov rdi, rbx
     mov rsi, r12
     mov rdx, r13
     call agent_send
@@ -2354,6 +2360,8 @@ draft_begin:
     PROLOGUE
     mov qword ptr [rip + in_as], 0
     inc qword ptr [rip + in_gen]
+    xor edi, edi
+    call composer_owner
     lea rdi, [rip + in_tf]
     call tf_clear
     mov dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
@@ -2417,6 +2425,8 @@ FN agentext_opened
     je 9f
     mov [rip + in_as], rbx
     inc qword ptr [rip + in_gen]
+    mov rdi, rbx
+    call composer_owner
     cmp qword ptr [rip + keep_box], 0
     jne 9f                      # the session its own first prompt started: the text stays
     lea rdi, [rip + in_tf]
@@ -2470,10 +2480,75 @@ FN agentext_new_leave
 
 # ---- keys ----
 
-# FN agentext_field() -> TF*: the prompt box (paste, the focused field)
+# FN agentext_field() -> TF*: the focused field: the command menu's filter while it has the keys, else the
+#   prompt box (paste, input methods)
 FN agentext_field
+    push rbx
+    call agentpop_field
+    pop rbx
+    test rax, rax
+    jnz 1f
+    lea rax, [rip + in_tf]
+1:  ret
+
+# FN agentext_box() -> TF*: the prompt box
+FN agentext_box
     lea rax, [rip + in_tf]
     ret
+
+# FN agentext_box_owner() -> rax the session the box writes to now (0: a built-in driver's new conversation
+#   being written), edx that driver's kind (0: no box of a built-in driver: an extension's, or none)
+FN agentext_box_owner
+    xor eax, eax
+    xor edx, edx
+    cmp qword ptr [rip + new_ext], 0
+    jne 9f
+    mov rdx, [rip + new_kind]
+    test rdx, rdx
+    jnz 9f
+    push rbx
+    call agents_open_driven
+    pop rbx
+    xor edx, edx
+    test rax, rax
+    jz 9f
+    mov edx, [rax + AS_kind]
+    cmp edx, AS_KIND_EXT
+    jne 9f
+    xor edx, edx
+9:  ret
+
+# FN agentext_draft_own() -> rax the conversation a built-in driver's draft becomes now (agent_new, the box's
+#   text kept with it), or 0 (no draft, or it could not start)
+FN agentext_draft_own
+    PROLOGUE
+    xor eax, eax
+    mov rdi, [rip + new_kind]
+    test rdi, rdi
+    jz 9f
+    mov qword ptr [rip + keep_box], 1
+    call agent_new
+    mov qword ptr [rip + keep_box], 0
+9:  EPILOGUE
+
+# FN agentext_box_changed(): the box's text or its caret changed (a key, a paste, a click): a driven box's
+#   record is read (a writer's action), and the typed command menu follows it (agentpop.s)
+FN agentext_box_changed
+    PROLOGUE
+    call agentext_box_owner
+    test edx, edx
+    jz 1f
+    mov edi, edx
+    call agentcfg_get
+    mov rdi, rax
+    call agentcfg_need
+1:  lea rdi, [rip + in_tf]
+    call tf_text
+    mov rdi, rax
+    mov rsi, rdx
+    mov rdx, [rip + in_tf + TF_cur]
+    call agentpop_typed
+    EPILOGUE
 
 # FN agentext_typed(): text was typed into the box: the session it belongs to hears of it (agent_typing:
 #   a driven session's program starts). A built-in driver's draft becomes its conversation at the first
@@ -2527,7 +2602,13 @@ FN agentext_input_key
     jne 6f
     mov dword ptr [rip + g_focus], FOCUS_EDITOR   # the panel was hidden: the editor has the keys
     jmp 9f
-6:  cmp qword ptr [rip + new_ext], 0
+6:  mov edi, r12d               # the composer first: an open popup takes its keys (Escape closes it
+    mov esi, r13d               #   before Escape means anything else)
+    mov edx, r14d
+    call composer_key
+    test eax, eax
+    jnz 8f
+    cmp qword ptr [rip + new_ext], 0
     jne 0f
     cmp qword ptr [rip + new_kind], 0
     jne 0f
@@ -2566,6 +2647,7 @@ FN agentext_input_key
     jz 9f
     mov rdi, r15
     call box_typed
+    call agentext_box_changed
 8:  mov dword ptr [rip + g_dirty], 1
     mov eax, 1
     EPILOGUE
@@ -2593,12 +2675,21 @@ box_typed:
 9:  EPILOGUE
 
 # FN agentext_box_paste(ptr, len): a paste into the box (app_on_paste): as typing, it may start the
-#   session's program
+#   session's program; while the command menu's filter has the keys, into the filter
 FN agentext_box_paste
     PROLOGUE
     mov r12, rdi
     mov r13, rsi
-    lea rdi, [rip + in_tf]
+    call agentpop_field
+    test rax, rax
+    jz 1f
+    mov rdi, rax
+    mov rsi, r12
+    mov rdx, r13
+    call ta_insert
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+1:  lea rdi, [rip + in_tf]
     call tf_text
     mov rbx, rdx
     mov rdi, r12
@@ -2606,6 +2697,7 @@ FN agentext_box_paste
     call agentext_paste
     mov rdi, rbx
     call box_typed
+    call agentext_box_changed
     EPILOGUE
 
 # FN agentext_drivers_changed(): a driver went away (the settings changed): a new conversation being begun
@@ -2831,14 +2923,19 @@ opt_w:
     cmovg eax, ecx
     EPILOGUE
 
-# FN agentext_bottom_h(AS*, w) -> eax the height under a session's messages: its card and, when it has
-#   a driver, the prompt box
+# FN agentext_bottom_h(AS*, w) -> eax the height under a session's messages, top to bottom: its bands
+#   (agentfoot.s), its card (a rich one, agentcard.s, else the simple one) and, when it has a driver, the
+#   prompt box and its footer
 FN agentext_bottom_h
     PROLOGUE
     mov rbx, rdi
     mov r12d, esi
-    call card_h
+    call bands_h
     mov r13d, eax
+    mov rdi, rbx
+    mov esi, r12d
+    call any_card_h
+    add r13d, eax
     mov rdi, rbx
     call agent_drv_of
     test rax, rax
@@ -2849,11 +2946,81 @@ FN agentext_bottom_h
     jz 1f
     add r13d, [rip + g_pmt + 4*MI_32]
     jmp 1f
-2:  mov edi, r12d
-    mov rsi, rbx
-    call input_h
+2:  mov rdi, rbx
+    mov esi, r12d
+    call box_keep
     add r13d, eax
 1:  mov eax, r13d
+    EPILOGUE
+
+# box_keep(AS*, w) -> eax the room the prompt box and its footer keep (the bands and the card are cut
+#   first); 0 without a driver
+box_keep:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    call agent_drv_of
+    xor r13d, r13d
+    test rax, rax
+    jz 9f
+    mov edi, r12d
+    mov rsi, rbx
+    call input_h
+    mov r13d, eax
+    mov rdi, rbx
+    mov esi, r12d
+    call foot_h
+    add r13d, eax
+9:  mov eax, r13d
+    EPILOGUE
+
+# box_focused() -> eax 1 when the box is drawn with the keys: it has them, and no popup's field takes them
+box_focused:
+    xor eax, eax
+    cmp dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
+    jne 1f
+    push rbx
+    call agentpop_field
+    pop rbx
+    test rax, rax
+    sete al
+    movzx eax, al
+1:  ret
+
+# any_card_h(AS*, w) -> eax the session's card's height: its rich card's (agentcard.s), else the simple one's
+any_card_h:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    call agentcard_of
+    mov rdi, rbx
+    mov esi, r12d
+    test rax, rax
+    jz 1f
+    call agentcard_h
+    EPILOGUE
+1:  call card_h
+    EPILOGUE
+
+# any_card_draw(AS*, x, y, w, h): its rich card, else the simple one
+any_card_draw:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov r14d, ecx
+    mov r15d, r8d
+    call agentcard_of
+    mov rdi, rbx
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    mov r8d, r15d
+    test rax, rax
+    jz 1f
+    call agentcard_draw
+    EPILOGUE
+1:  call card_draw
     EPILOGUE
 
 # mode_label(AS* or 0) -> rax "mode: X" in mode_sb, or 0: the permission mode a driven session reports
@@ -3186,6 +3353,8 @@ FN agentext_bottom_draw
     jz 1f
     mov [rip + in_as], rbx
     inc qword ptr [rip + in_gen]
+    mov rdi, rbx
+    call composer_owner
     lea rdi, [rip + in_tf]
     call tf_clear
     mov rdi, rbx
@@ -3200,28 +3369,46 @@ FN agentext_bottom_draw
     mov [rsp + 16], eax         # y cursor
     test rbx, rbx
     jz 3f
-    mov rdi, rbx
+    mov rdi, rbx                # the box and its footer keep their room; the bands, then the card are cut
     mov esi, [rsp + 8]
-    call card_h
+    call box_keep
+    mov ecx, [rsp + 12]
+    sub ecx, eax
+    mov [rsp + 20], ecx         # what the bands and the card may take
+    mov rdi, rbx                # the bands
+    mov esi, [rsp + 8]
+    call bands_h
+    cmp eax, [rsp + 20]
+    jle 13f
+    mov eax, [rsp + 20]
+13: test eax, eax
+    jle 14f
+    mov [rsp + 44], eax
+    mov edi, [rsp]
+    mov esi, [rsp + 16]
+    mov edx, [rsp + 8]
+    mov ecx, eax
+    call gfx_clip_push
+    mov rdi, rbx
+    mov esi, [rsp]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 8]
+    call bands_draw
+    call gfx_clip_pop
+    mov eax, [rsp + 44]
+    add [rsp + 16], eax
+    sub [rsp + 20], eax
+14: mov rdi, rbx                # the card
+    mov esi, [rsp + 8]
+    call any_card_h
     test eax, eax
     jz 2f
-    mov [rsp + 20], eax
-    mov rdi, rbx                # the box keeps its room; a card that does not fit is cut
-    call agent_drv_of
-    xor ecx, ecx
-    test rax, rax
-    jz 11f
-    mov edi, [rsp + 8]
-    mov rsi, rbx
-    call input_h
-    mov ecx, eax
-11: mov eax, [rsp + 12]
-    sub eax, ecx
     cmp eax, [rsp + 20]
-    jge 12f
-    mov [rsp + 20], eax
-12: cmp dword ptr [rsp + 20], 0
+    jle 12f
+    mov eax, [rsp + 20]
+12: test eax, eax
     jle 2f
+    mov [rsp + 20], eax
     mov edi, [rsp]
     mov esi, [rsp + 16]
     mov edx, [rsp + 8]
@@ -3232,7 +3419,7 @@ FN agentext_bottom_draw
     mov edx, [rsp + 16]
     mov ecx, [rsp + 8]
     mov r8d, [rsp + 20]
-    call card_draw
+    call any_card_draw
     call gfx_clip_pop
     mov eax, [rsp + 20]
     add [rsp + 16], eax
@@ -3311,15 +3498,36 @@ FN agentext_bottom_draw
     mov edx, [rsp + 16 + 36]
     mov ecx, [rsp + 16 + 32]
     mov r8d, [rsp + 16 + 40]
-    xor r9d, r9d
-    cmp dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
-    sete r9b
+    call box_focused
+    mov r9d, eax
+    lea rdi, [rip + in_tf]
+    mov esi, [rsp + 16 + 28]
+    mov edx, [rsp + 16 + 36]
+    mov ecx, [rsp + 16 + 32]
+    mov r8d, [rsp + 16 + 40]
     call ui_textarea
     add rsp, 16
-    test eax, UB_PRESS
+    test eax, UB_PRESS | UB_HELD
     jz 5f
+    test eax, UB_PRESS
+    jz 52f
     mov dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
-5:  cmp dword ptr [rsp + 48], 0 # a small muted "mode: X" left of Send
+52: call agentext_box_changed   # the caret moved: the typed command menu follows it
+5:  call agentext_box_owner     # a command's argument hint after "/NAME " (agentcompose.s)
+    lea rdi, [rip + in_tf]
+    mov esi, edx
+    mov edx, [rsp + 28]
+    mov ecx, [rsp + 36]
+    mov r8d, [rsp + 32]
+    mov r9d, [rsp + 40]
+    call composer_hint_draw
+    mov rdi, rbx                # the footer under the box
+    mov esi, [rsp]
+    mov edx, [rsp + 16]
+    add edx, [rsp + 24]
+    mov ecx, [rsp + 8]
+    call foot_draw
+    cmp dword ptr [rsp + 48], 0 # a small muted "mode: X" left of Send
     je 51f
     mov rdi, rbx
     call mode_label
@@ -3722,6 +3930,7 @@ FN agentext_new_draw
     mov edi, [rsp + 8]
     xor esi, esi
     call input_h
+    mov [rsp + 16], eax
     mov r8d, eax                # the box at the bottom
     xor edi, edi                # no session yet
     mov esi, [rsp]
@@ -3730,6 +3939,17 @@ FN agentext_new_draw
     sub edx, eax
     mov ecx, [rsp + 8]
     call agentext_bottom_draw
+    cmp qword ptr [rip + new_kind], 0
+    je 9f
+    mov edi, [rsp]              # the command menu over the space above the box (agentpop.s)
+    mov esi, [rsp + 4]
+    add esi, [rsp + 12]
+    sub esi, [rsp + 16]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 12]
+    sub ecx, [rsp + 16]
+    sub ecx, [rip + g_pmt + 4*MI_40]
+    call agentpop_draw
 9:  EPILOGUE
 
 # FN agentext_list_buttons(right, y, h, left) -> eax the left edge: "+ TITLE" for each running extension

@@ -51,6 +51,21 @@ FN settings_reset
     lea rdi, [rip + set_search]
     jmp tf_clear
 
+# FN settings_open_search(ptr, len): Settings in front, its search field holding the text (the rows that
+#   match it shown: a section's config name, "claude." say)
+FN settings_open_search
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    call cmd_settings
+    lea rdi, [rip + set_search]
+    mov rsi, r12
+    mov rdx, r13
+    call tf_set
+    mov dword ptr [rip + set_scroll], 0
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
 # settings_take_find() -> eax 1 when the settings tab is in front: Find goes to its search field, the
 #   query selected so typing replaces it
 FN settings_take_find

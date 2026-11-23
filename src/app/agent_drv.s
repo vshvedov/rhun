@@ -1071,6 +1071,8 @@ FN agent_stop
 1:  mov r12, [rbx + AS_live]
     test r12, r12
     jz 9f
+    cmp dword ptr [r12 + AL_state], ALS_STARTING
+    je 3f
     cmp dword ptr [r12 + AL_state], ALS_WORKING
     je 2f
     cmp dword ptr [r12 + AL_state], ALS_WAITING
@@ -1078,10 +1080,31 @@ FN agent_stop
 2:  mov rdi, r12
     mov rax, [r12 + AL_drv]
     call [rax + DRV_stop]
+    jmp 9f
+3:  mov rdi, r12                # a start under way: given up
+    call start_cancel
 9:  EPILOGUE
 
-# FN agent_stop_running(AS*) -> eax 1 when a turn of a session rhun drives runs (WORKING, WAITING): Stop
-#   went (Escape's meaning then; a second Stop in the same turn does nothing), 0 otherwise
+# start_cancel(AL*): Stop while a start is under way (STARTING: waiting for the login environment, the
+#   sign-in state, another holder to let go, a place under the cap, or the handshake): no start follows.
+#   The prompts that waited go back in the box (their rows go), a program already started ends with the
+#   stop sequence (an end rhun asked for: no error row), the state is OFF; the next Send starts anew
+start_cancel:
+    PROLOGUE
+    mov rbx, rdi
+    and dword ptr [rbx + AL_flags], ~(ALF_ENVWAIT | ALF_CAPWAIT | ALF_HOLDWAIT | ALF_AUTHWAIT | ALF_HOLDOK | ALF_RESTART)
+    mov rdi, rbx
+    call start_abandon
+    mov rdi, rbx
+    call release                # when it runs: ALF_ENDING, the input ends (ev_ready ignores its answer)
+    mov rdi, rbx
+    mov esi, ALS_OFF
+    call agent_state_set
+    EPILOGUE
+
+# FN agent_stop_running(AS*) -> eax 1 when a turn of a session rhun drives runs or is about to (STARTING,
+#   WORKING, WAITING): Stop went (Escape's meaning then; a second Stop in the same turn does nothing), 0
+#   otherwise
 FN agent_stop_running
     xor eax, eax
     test rdi, rdi
@@ -1089,6 +1112,8 @@ FN agent_stop_running
     mov rcx, [rdi + AS_live]
     test rcx, rcx
     jz 1f
+    cmp dword ptr [rcx + AL_state], ALS_STARTING
+    je 2f
     cmp dword ptr [rcx + AL_state], ALS_WORKING
     je 2f
     cmp dword ptr [rcx + AL_state], ALS_WAITING
@@ -1365,6 +1390,8 @@ FN ev_note
 FN ev_ready
     PROLOGUE
     mov rbx, rdi
+    test dword ptr [rbx + AL_flags], ALF_ENDING
+    jnz 9f                      # a start given up (start_cancel): it is ending, nothing goes
     mov esi, ALS_READY
     cmp qword ptr [rbx + AL_queue + VEC_len], 0
     je 1f

@@ -1227,6 +1227,66 @@ class LifeTest(DrivenCase):
         self.assertTrue(self.command('print-agent-input').startswith('input= focus=0 '))
         self.assertTrue(self.live().startswith('state=ready pid=1 '), self.live())
 
+    def given_up(self, stop, prompt='hello', starts=0):
+        """stop() while the start is under way: OFF, no error row, the prompt back in the box, nothing sent;
+        then a Send starts normally (starts: the stream starts there were before it)."""
+        stop()
+        self.assertTrue(self.live().startswith('state=off '), self.live())
+        self.assertIn(' queued=0 ', self.live())
+        self.assertTrue(self.command('print-agent-input').startswith(f'input={prompt} '))
+        self.assertEqual([row for row in self.thread() if row.startswith(('user', 'error'))], [])
+        time.sleep(2.5)                             # what the start waited for comes, or passes
+        self.assertTrue(self.live().startswith('state=off '), self.live())
+        self.assertEqual(self.prompts(), [])
+        self.assertEqual(len(self.starts()), starts)
+        for record in self.starts():
+            self.gone(record['pid'])
+        self.command('agent-prompt again')
+        self.command('wait-agent ready 15000')
+        self.assertEqual(self.prompts(), ['again'])
+        self.assertEqual(self.thread()[-2:], ['user again', REPLY + 'ok: again'])
+
+    def test_stop_gives_up_a_start(self):
+        # the handshake is slow: Stop (and Escape) end the process that is starting, the prompt waits no more
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '2000'})
+        self.chat('hello', None)
+        self.until(lambda: self.starts(), 'the process starts')
+        self.given_up(lambda: self.command('agent-stop'), starts=1)
+
+    def test_a_start_given_up_keeps_what_was_typed_since(self):
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '2000'})
+        self.chat('hello', None)
+        self.command('agent-type more')
+        self.command('agent-stop')
+        self.assertEqual(self.command('print-agent-input').split(' focus=')[0], 'input=hello\n\nmore')
+
+    def test_escape_gives_up_a_start(self):
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '2000'})
+        self.chat('hello', None)
+        self.until(lambda: self.starts(), 'the process starts')
+        self.command('cmd focus_agents')
+        self.given_up(lambda: self.command('key Escape'), starts=1)
+
+    def test_stop_while_the_login_environment_is_asked_for(self):
+        shell = self.work / 'slow-shell'
+        shell.write_text('#!/bin/sh\nsleep 2\nfor last; do :; done\nexec /bin/sh -c "$last"\n', encoding='utf-8')
+        shell.chmod(0o755)
+        del self.env['TERM']
+        self.env['SHELL'] = str(shell)
+        self.start()
+        self.chat('hello', None)
+        self.assertTrue(self.live().startswith('state=starting pid=0 '), self.live())
+        self.given_up(lambda: self.command('agent-stop'))
+
+    def test_stop_while_the_cap_waits(self):
+        self.start(env={'FAKE_CLAUDE_EOF_MS': '1500'})
+        self.command('agent-timing guard=1')
+        self.chat('first')
+        self.fake_log.unlink()
+        self.chat('hello', None)                    # the first one is released for it: the start waits
+        self.assertTrue(self.live().startswith('state=starting pid=0 '), self.live())
+        self.given_up(lambda: self.command('agent-stop'))
+
     def test_reading_starts_nothing(self):
         for sid in ('s1', 's2', 's3'):
             self.seed(sid)
@@ -1639,6 +1699,19 @@ class HolderTest(DrivenCase):
         self.assertEqual(self.thread(), old + ['user hello'])
         self.command('agent-prompt more')           # waits too, with the first
         self.assertIn(' queued=2 ', self.live())
+
+    def test_stop_while_it_is_held_elsewhere(self):
+        path, record, old = self.held(3000)
+        self.assertTrue(self.live().startswith('state=starting pid=0 '), self.live())
+        self.command('agent-stop')
+        self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
+        self.assertIn(' queued=0 ', self.live())
+        self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
+        self.assertEqual(self.thread(), old)
+        time.sleep(3.5)                             # the wait would have ended: no card, no start
+        self.assertIsNone(self.card())
+        self.assertEqual(self.starts(), [])
+        self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
 
     def test_released_in_time_starts(self):
         path, record, old = self.held(3000)

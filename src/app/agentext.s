@@ -2130,7 +2130,8 @@ FN agentext_ext_send
     EPILOGUE
 
 # FN agentext_restore(AS*, ptr, len): text that did not go goes back in the box when the box is that
-#   session's and empty (a driver's start failed with prompts waiting)
+#   session's (a driver's start failed or was stopped with prompts waiting): before what the box holds
+#   now, a blank line between, so neither is lost
 FN agentext_restore
     PROLOGUE
     mov rbx, rdi
@@ -2141,8 +2142,25 @@ FN agentext_restore
     lea rdi, [rip + in_tf]
     call tf_text
     test rdx, rdx
-    jnz 9f
-    lea rdi, [rip + in_tf]
+    jz 1f
+    mov r14, rax
+    mov r15, rdx
+    lea rdi, [rip + tmp]
+    call sb_clear
+    lea rdi, [rip + tmp]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    lea rdi, [rip + tmp]
+    lea rsi, [rip + .Lrestore_gap]
+    call sb_push_cstr
+    lea rdi, [rip + tmp]
+    mov rsi, r14
+    mov rdx, r15
+    call sb_push
+    mov r12, [rip + tmp + SB_ptr]
+    mov r13, [rip + tmp + SB_len]
+1:  lea rdi, [rip + in_tf]
     mov rsi, r12
     mov rdx, r13
     call tf_set
@@ -3884,6 +3902,7 @@ FN agentext_prompts_gone
 .Lph_reply: .asciz "Reply to the agent (Enter sends, Shift+Enter a new line)"
 .Lph_new: .asciz "What should the agent do? (Enter starts the session)"
 .Lb_send: .asciz "Send"
+.Lrestore_gap: .asciz "\n\n"
 .Lbd_size: .asciz "size="
 .Lbd_w: .asciz " w="
 .Lbd_x: .asciz " x="

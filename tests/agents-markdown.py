@@ -370,5 +370,75 @@ class AgentsMarkdown(unittest.TestCase):
         for n in shown:
             self.assertEqual(self.row(n)[0]['y'], rows[n]['y'], n)
 
+    # ---- the rest of a reply's Markdown (phase 3, task 3) ----
+
+    def reply_blocks(self, reply):
+        self.session('s1', [('user', 'go'), ('assistant', reply)])
+        self.start()
+        self.open('s1')
+        return self.blocks(2)
+
+    def test_footnotes(self):
+        reply = ('A claim[^src] and another[^2], again[^src]; [^nope] stays.\n\n'
+                 '[^2]: The second, cited second.\n[^src]: The source, cited first.\n[^idle]: Never cited.')
+        self.assertEqual(self.reply_blocks(reply), [
+            'para A claim^1 and another^2, again^1; [^nope] stays.',
+            'link ^1 -> #^src',
+            'link ^2 -> #^2',
+            'link ^1 -> #^src',
+            'footnotes',
+            'footnote 1 The source, cited first.',
+            'footnote 2 The second, cited second.',
+        ])
+
+    def test_insight_lines(self):
+        rule = '─' * 49
+        reply = (f'Done.\n\n`★ Insight {rule[:37]}`\n- the first point\n- the second point\n`{rule}`\n\n'
+                 f'`★ Insight {rule[:37]}`\nOne more point.\n`{rule}`')
+        self.assertEqual(self.reply_blocks(reply), [
+            'para Done.',
+            'para <insight ★ Insight>',
+            'list 2 items',
+            '  item the first point',
+            '  item the second point <rule>',
+            'para <insight ★ Insight> One more point. <rule>',
+        ])
+
+    def test_display_math_is_shown_as_source(self):
+        reply = 'The energy:\n\n$$\nE = mc^2\n\\nabla \\cdot E = 0\n$$\n\nand $x$ inline.'
+        self.assertEqual(self.reply_blocks(reply), ['para The energy:', 'code: 2 lines', 'para and $x$ inline.'])
+
+    def test_dollar_amounts_stay_text(self):
+        self.assertEqual(self.reply_blocks('It costs $5 and $10, or $$ more.'),
+                         ['para It costs $5 and $10, or $$ more.'])
+
+    def chip_tip(self):
+        """the reply's image chip hovered: (its line, the tooltip shown)"""
+        line = [line for line in self.row(2)[1] if line.startswith('image ')][0]
+        match = re.search(r' at (-?\d+) (-?\d+)$', line)
+        self.assertIsNotNone(match, line)
+        self.command('move %s %s' % match.groups())
+        self.command('wait 700')
+        return line, self.command('print-tip').strip(), match.groups()
+
+    def test_remote_image_is_blocked(self):
+        self.assertEqual(self.reply_blocks('See ![a chart](https://example.com/chart.png) here.'), [
+            'para See [Image] here.',
+            'image [Image] -> https://example.com/chart.png',
+        ])
+        _, tip, (x, y) = self.chip_tip()
+        self.assertEqual(tip, 'tip=Image blocked: https://example.com/chart.png')
+        before = self.command('print-state')
+        self.command('click %s %s' % (x, y))                 # a chip opens nothing
+        self.command('wait 50')
+        self.assertEqual(self.command('print-state'), before)
+        self.assertEqual(self.command('print-toast').strip(), 'toast=')
+
+    def test_data_image_is_a_chip(self):
+        data = 'data:image/png;base64,iVBORw0KGgo='
+        self.assertEqual(self.reply_blocks('![a dot](%s)' % data), ['para [Image]', 'image [Image] -> ' + data])
+        _, tip, _ = self.chip_tip()
+        self.assertNotIn('blocked', tip)
+
 if __name__ == '__main__':
     unittest.main()

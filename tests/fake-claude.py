@@ -29,7 +29,9 @@ STREAM = ['--output-format', 'stream-json', '--verbose', '--input-format', 'stre
           '--max-thinking-tokens=31999']
 HELP = ROOT / 'tests/data/claude/help-2.1.330.txt'
 # accepted by 2.1.330 (every recording passes them), not in --help
-HIDDEN = {'--permission-prompt-tool', '--max-thinking-tokens'}
+HIDDEN = {'--permission-prompt-tool', '--max-thinking-tokens', '--thinking'}
+# phase 2's line: the pinned one with every user message and every answer echoed back (findings 17, 18)
+REPLAY = [*STREAM, '--replay-user-messages']
 
 
 def documented(flag, text):
@@ -93,13 +95,30 @@ class Fake:
             if test(self.take(record)):
                 return record
 
-    def initialize(self):
-        self.send({'type': 'control_request', 'request_id': 'r1', 'request': {'subtype': 'initialize', 'hooks': None}})
+    def initialize(self, suggestions=None):
+        """suggestions True or False: phase 2's initialize (promptSuggestions and the two dialog kinds)."""
+        request = {'subtype': 'initialize', 'hooks': None}
+        if suggestions is not None:
+            request.update(promptSuggestions=suggestions,
+                           supportedDialogKinds=['fable_overage_consent_prompt', 'auto_mode_server_fallback'])
+        self.send({'type': 'control_request', 'request_id': 'r1', 'request': request})
         return self.until(lambda r: r.get('type') == 'control_response')['response']['response']
 
-    def prompt(self, text):
-        self.send({'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]},
-                   'parent_tool_use_id': None, 'session_id': ''})
+    def prompt(self, text, uid=None):
+        message = {'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': text}]},
+                   'parent_tool_use_id': None, 'session_id': ''}
+        if uid:
+            message['uuid'] = uid
+        self.send(message)
+
+    def request(self, rid, subtype, **fields):
+        """A control request; its control_response (the whole record)."""
+        self.send({'type': 'control_request', 'request_id': rid, 'request': dict({'subtype': subtype}, **fields)})
+        return self.until(lambda r: r.get('type') == 'control_response' and r['response'].get('request_id') == rid)
+
+    def since(self, index):
+        """The records kept from index on."""
+        return self.records[index:]
 
     def answer(self, request, response):
         self.send({'type': 'control_response', 'response': {'subtype': 'success', 'request_id': request['request_id'],
@@ -175,13 +194,16 @@ class Base(unittest.TestCase):
         # every record any test made the fake write keeps the recordings' field order (keys.txt)
         self.assertEqual(faults, [], 'records whose field order no recording has')
 
-    def fake(self, *args, **env):
-        fake = Fake(self.home, self.project, *args, env=env)
+    def fake(self, *args, base=None, **env):
+        fake = Fake(self.home, self.project, *args, env=env, base=base)
         self.fakes.append(fake)
         return fake
 
-    def expect(self, name, fake):
-        self.assertEqual(claude_shapes.shapes(fake.records), (SHAPES / (name + '.txt')).read_text().split(), name)
+    def expect(self, name, fake, records=None):
+        """The fake's records (or those given: an excerpt, as the shape files 12 to 17 are) have the shapes of
+        the recording."""
+        self.assertEqual(claude_shapes.shapes(fake.records if records is None else records),
+                         (SHAPES / (name + '.txt')).read_text().split(), name)
 
     def transcript(self, sid):
         return self.home / '.claude/projects' / re.sub(r'[^A-Za-z0-9]', '-', str(self.project)) / (sid + '.jsonl')
@@ -370,7 +392,10 @@ class Shapes(Base):
         # spec 11 drift: the fake reads no flag the recorded CLI does not have
         text = HELP.read_text(encoding='utf-8')
         flags = [a for a in STREAM if a.startswith('-')] + ['-p', '--permission-mode', '--model', '--resume',
-                                                             '--fork-session', '--session-id']
+                                                             '--fork-session', '--session-id',
+                                                             '--replay-user-messages',
+                                                             '--allow-dangerously-skip-permissions',
+                                                             '--thinking=disabled', '--effort']
         self.assertEqual([f for f in flags if not documented(f, text)], [])
         self.assertTrue(documented('--setting-sources=user', text))
         self.assertFalse(documented('--no-such-flag', text))
@@ -781,6 +806,332 @@ class Scenarios(Base):
     def test_a_session_id_must_be_a_uuid(self):
         fake = self.fake('--session-id', 'not-a-uuid')
         self.assertEqual(fake.process.wait(10), 1)
+
+
+UUID_A, UUID_B = '1a1a1a1a-0000-4000-8000-00000000000a', '2b2b2b2b-0000-4000-8000-00000000000b'
+UUID_C, UUID_D = '3c3c3c3c-0000-4000-8000-00000000000c', '4d4d4d4d-0000-4000-8000-00000000000d'
+
+
+def is_lifecycle(uid, state):
+    return lambda r: r.get('type') == 'command_lifecycle' and r['command_uuid'] == uid and r['state'] == state
+
+
+def states(fake, uid):
+    return [r['state'] for r in fake.records if r.get('type') == 'command_lifecycle' and r['command_uuid'] == uid]
+
+
+def unrecorded(fake, *names):
+    """Leaves the lines holding a member no recording has (a knob's) out of tearDown's field-order check."""
+    fake.raw = [line for line in fake.raw if not any('"%s"' % name in line for name in names)]
+
+
+class Phase2(Base):
+    """What phase 2 drives (README.txt findings 10 on): messages during a turn, the settings requests, the
+    permission suggestions of Edit and WebFetch, bypass, the CLI's own commands, the knobs."""
+
+    def test_12_13_held_messages_and_an_interrupt(self):
+        fake = self.fake(base=REPLAY)
+        fake.initialize(suggestions=True)
+        fake.prompt('held think', UUID_A)
+        fake.until(is_delta)
+        fake.prompt('two', UUID_B)
+        fake.until(is_lifecycle(UUID_B, 'completed'), 30)
+        self.expect('12-held', fake)
+        fake.until(lambda r: r.get('type') == 'prompt_suggestion')     # (the recording had none just here)
+        start = len(fake.records)
+        fake.prompt('held', UUID_C)
+        fake.until(is_delta)
+        fake.prompt('four', UUID_D)
+        fake.until(is_lifecycle(UUID_D, 'queued'))
+        fake.until(is_delta)
+        answer = fake.request('r2', 'interrupt')['response']['response']
+        self.assertEqual(answer, {'still_queued': [UUID_D]}, 'the held message stays queued (13)')
+        fake.until(lambda r: r.get('type') == 'prompt_suggestion', 30)
+        self.expect('13-held-interrupt', fake, fake.since(start))
+        self.assertEqual((states(fake, UUID_C), states(fake, UUID_D)),
+                         (['queued', 'started', 'cancelled'], ['queued', 'started', 'completed']))
+        self.assertEqual(fake.finish(), 1)
+
+    def test_14_held_without_replay(self):
+        fake = self.fake()
+        fake.initialize(suggestions=False)
+        fake.prompt('held', UUID_A)
+        fake.until(is_delta)
+        fake.prompt('two', UUID_B)
+        fake.until(is_lifecycle(UUID_B, 'completed'), 30)
+        self.assertEqual(fake.finish(), 0)
+        self.expect('14-held-noreplay', fake)
+        self.assertFalse([r for r in fake.records if r.get('isReplay')], 'a replay without the flag')
+        self.assertFalse([r for r in fake.records if r.get('type') == 'prompt_suggestion'], 'a suggestion when off')
+
+    def test_replay_and_lifecycle_of_a_held_message(self):
+        log = self.home / 'fake.log'
+        fake = self.fake(base=REPLAY, FAKE_CLAUDE_LOG=str(log), FAKE_CLAUDE_REFUSE_HELD='1')
+        fake.initialize(suggestions=True)
+        fake.prompt('held', UUID_A)
+        fake.until(is_delta)
+        fake.prompt('refused one', UUID_B)          # the knob: the next held message is refused
+        fake.prompt('three', UUID_C)
+        fake.until(is_lifecycle(UUID_C, 'completed'), 30)
+        echoes = [r for r in fake.records if r.get('isReplay')]
+        self.assertEqual([(r['uuid'], r['message']['content'][0]['text']) for r in echoes],
+                         [(UUID_A, 'held'), (UUID_C, 'three')], 'each message comes back with its uuid, as it starts')
+        results = [r for r in fake.records if r.get('type') == 'result']
+        self.assertEqual([r['user_message_uuid'] for r in results], [UUID_A, UUID_C])
+        self.assertEqual((states(fake, UUID_A), states(fake, UUID_B), states(fake, UUID_C)),
+                         (['queued', 'started', 'completed'], ['refused'], ['queued', 'started', 'completed']))
+        order = [r.get('type') + '/' + str(r.get('subtype') or r.get('state') or '') for r in fake.records
+                 if r.get('type') in ('command_lifecycle', 'system', 'user', 'result') and
+                 r.get('subtype') not in ('status', 'commands_changed')]
+        a_start = order.index('command_lifecycle/started')
+        self.assertEqual(order[a_start:a_start + 3], ['command_lifecycle/started', 'system/init', 'user/'],
+                         'started, system/init (every turn), then the replay')
+        fake.prompt('plain without a uuid')
+        reply = fake.until(lambda r: r.get('isReplay'))
+        self.assertNotIn(reply['uuid'], (UUID_A, UUID_B, UUID_C), 'a message without a uuid gets the CLI\'s own')
+        self.assertIsNone(fake.until(is_type('result')).get('user_message_uuid'))
+        self.assertEqual(fake.finish(), 0)
+        self.assertIn({'refused': UUID_B, 'pid': fake.process.pid}, logged(log))
+        self.assertFalse([r for r in fake.records if r.get('isReplay') and r['uuid'] == UUID_B], 'the refused one ran')
+
+    def test_15_permission_with_replay_and_saved_rules(self):
+        fake = self.fake('--permission-mode=default', base=REPLAY)
+        fake.initialize(suggestions=True)
+        fake.prompt('tool touch a.txt')
+        request = fake.until(is_type('control_request', 'can_use_tool'))
+        rules = [dict(s, destination='localSettings') for s in request['request']['permission_suggestions']
+                 if s['type'] == 'addRules']
+        answer = {'behavior': 'allow', 'updatedInput': request['request']['input'], 'updatedPermissions': rules}
+        fake.answer(request, answer)
+        echo = fake.until(is_type('control_response'))
+        self.assertEqual(echo['response']['response'], answer, 'the answer comes back as it was sent (18)')
+        fake.until(is_type('result'))
+        self.expect('15-permission-replay', fake)
+        local = json.loads((self.project / '.claude/settings.local.json').read_text())
+        self.assertEqual(local, {'permissions': {'allow': ['Bash(touch a.txt)']}})
+        start = len(fake.records)
+        fake.prompt('tool touch a.txt')
+        fake.until(is_type('result'))
+        self.assertFalse([r for r in fake.since(start) if is_type('control_request')(r)], 'the saved rule asked again')
+        fake.prompt('tool touch b.txt')                 # allowed with another command: that one runs
+        request = fake.until(is_type('control_request', 'can_use_tool'))
+        fake.answer(request, {'behavior': 'allow', 'updatedInput': dict(request['request']['input'], command='touch c.txt')})
+        fake.until(is_type('result'))
+        fake.finish()
+        self.assertEqual(sorted(p.name for p in self.project.glob('*.txt')), ['a.txt', 'c.txt'])
+
+    def test_16_edit_and_its_mode_suggestion(self):
+        (self.project / 'notes.txt').write_text('hello\n')
+        fake = self.fake('--permission-mode=default', base=REPLAY)
+        fake.initialize(suggestions=True)
+        fake.prompt('edit notes.txt')
+        request = fake.until(is_type('control_request', 'can_use_tool'))
+        self.assertEqual(request['request']['permission_suggestions'],
+                         [{'type': 'setMode', 'mode': 'acceptEdits', 'destination': 'session'}])
+        self.assertEqual((request['request']['description'], list(request['request']['input'])),
+                         ('notes.txt', ['file_path', 'old_string', 'new_string', 'replace_all']))
+        fake.answer(request, {'behavior': 'allow', 'updatedInput': request['request']['input'],
+                              'updatedPermissions': request['request']['permission_suggestions']})
+        fake.until(lambda r: r.get('type') == 'prompt_suggestion')
+        start = next(i for i, r in enumerate(fake.records) if is_type('stream_event')(r) and
+                     r['event']['type'] == 'message_start')
+        self.expect('16-edit', fake, fake.since(start))
+        self.assertIn({'type': 'system', 'subtype': 'status', 'status': None, 'permissionMode': 'acceptEdits'},
+                      [{k: r.get(k) for k in ('type', 'subtype', 'status', 'permissionMode')} for r in fake.records
+                       if is_type('system', 'status')(r) and 'permissionMode' in r])
+        mark = len(fake.records)
+        fake.prompt('edit notes.txt')
+        fake.until(is_type('result'))
+        self.assertFalse([r for r in fake.since(mark) if is_type('control_request')(r)], 'acceptEdits asked again')
+        fake.finish()
+        self.assertEqual((self.project / 'notes.txt').read_text(), 'hello (edited) (edited)\n')
+        self.assertFalse((self.project / '.claude').exists(), 'a session update wrote a file')
+
+    def test_suggestions_of_edit_and_fetch(self):
+        fake = self.fake('--permission-mode=default')
+        fake.initialize()
+        fake.prompt('fetch https://example.com/page')
+        request = fake.until(is_type('control_request', 'can_use_tool'))
+        self.assertEqual(request['request']['tool_name'], 'WebFetch')
+        self.assertEqual(request['request']['permission_suggestions'], [
+            {'type': 'addRules', 'destination': 'localSettings',
+             'rules': [{'toolName': 'WebFetch', 'ruleContent': 'domain:example.com'}], 'behavior': 'allow'}])
+        fake.answer(request, {'behavior': 'allow', 'updatedInput': request['request']['input'], 'updatedPermissions': [
+            dict(request['request']['permission_suggestions'][0], destination='session')]})
+        self.assertEqual(fake.until(is_type('result'))['result'], 'Example Domain')
+        mark = len(fake.records)
+        fake.prompt('fetch https://example.com/other')
+        fake.until(is_type('result'))
+        self.assertFalse([r for r in fake.since(mark) if is_type('control_request')(r)], 'the session rule asked again')
+        fake.prompt('edit missing.txt')
+        request = fake.until(is_type('control_request', 'can_use_tool'))
+        self.assertEqual(request['request']['tool_name'], 'Edit')
+        fake.answer(request, {'behavior': 'deny', 'message': 'no', 'interrupt': True})
+        self.assertEqual(fake.until(is_type('result'))['terminal_reason'], 'aborted_tools')
+        fake.finish()
+        self.assertFalse((self.project / '.claude').exists(), 'a session rule was written to a file')
+
+    def test_17_the_clis_own_commands(self):
+        fake = self.fake(base=REPLAY)
+        fake.initialize(suggestions=False)
+        fake.prompt('hello')
+        fake.until(is_type('result'))
+        start = len(fake.records)
+        answers = {}
+        for command in ('/context', '/cost', '/status', '/compact'):
+            fake.prompt(command)
+            record = fake.until(is_type('result'))
+            answers[command] = (record['result'], record.get('local_command'), 'terminal_reason' in record)
+        fake.finish()
+        self.expect('17-slash', fake, fake.since(start))
+        self.assertEqual(answers['/status'], ("/status isn't available in this environment.", None, False))
+        self.assertEqual(answers['/compact'], ('', 'compact', False))
+        self.assertTrue(answers['/context'][0].startswith('## Context Usage'))
+        self.assertEqual(answers['/cost'][1], 'cost')
+        statuses = [r.get('status') for r in fake.since(start) if is_type('system', 'status')(r)]
+        self.assertEqual(statuses, ['compacting', None], 'a local command sends no requesting status')
+        commands = [c['name'] for c in fake.records[0]['response']['response']['commands']]
+        self.assertEqual(commands, ['compact', 'context', 'usage'])
+
+    def test_get_settings_and_flag_settings(self):
+        log = self.home / 'fake.log'
+        (self.home / '.claude').mkdir()
+        (self.home / '.claude/settings.json').write_text('{"effortLevel": "xhigh"}')
+        fake = self.fake(FAKE_CLAUDE_LOG=str(log))
+        fake.initialize()
+        settings = fake.request('r2', 'get_settings')['response']['response']
+        self.assertEqual(list(settings), ['effective', 'sources', 'served_settings_state', 'applied'])
+        self.assertEqual((settings['applied']['model'], settings['applied']['effort'],
+                          settings['applied']['ultracodeAvailable']), ('claude-opus-5-5', 'xhigh', False))
+        self.assertEqual([s['source'] for s in settings['sources']], ['userSettings'])
+        empty = fake.request('r3', 'apply_flag_settings', settings={'model': 'sonnet'})['response']
+        self.assertEqual(empty, {'subtype': 'success', 'request_id': 'r3'}, 'no response member (11)')
+        settings = fake.request('r4', 'get_settings')['response']['response']
+        self.assertEqual((settings['applied']['model'], settings['applied']['effort'], settings['effective']['model']),
+                         ('claude-sonnet-5', 'xhigh', 'sonnet'))
+        self.assertEqual([s['source'] for s in settings['sources']], ['userSettings', 'flagSettings'])
+        fake.request('r5', 'apply_flag_settings', settings={'effortLevel': 'low'})
+        self.assertEqual(fake.request('r6', 'get_settings')['response']['response']['applied']['effort'], 'low')
+        refused = fake.request('r7', 'update_settings', source='localSettings', settings={'model': 'opus'})['response']
+        self.assertEqual((refused['subtype'], refused['error']), ('error', 'update_settings keys not allowed: model'))
+        self.assertEqual(fake.request('r8', 'update_settings', source='projectSettings',
+                                      settings={'outputStyle': 'x'})['response']['error'],
+                         'update_settings: unsupported source projectSettings')
+        fake.request('r9', 'update_settings', source='localSettings', settings={'outputStyle': 'default'})
+        self.assertEqual(json.loads((self.project / '.claude/settings.local.json').read_text()),
+                         {'outputStyle': 'default'})
+        self.assertEqual(fake.request('r10', 'set_max_thinking_tokens', max_thinking_tokens=0)['response'],
+                         {'subtype': 'success', 'request_id': 'r10'})
+        fake.prompt('hello')
+        message = fake.until(is_type('assistant'))
+        self.assertEqual(message['message']['model'], 'claude-sonnet-5', 'the flag model answers')
+        fake.until(is_type('result'))
+        self.assertEqual(fake.request('r11', 'get_plan')['response']['response'], {'exists': False})
+        fake.prompt('plan')
+        fake.until(is_type('control_request', 'can_use_tool'))
+        plan = fake.request('r12', 'get_plan')['response']['response']
+        self.assertEqual((plan['exists'], plan['content'].startswith('# Plan'), list(plan)),
+                         (True, True, ['exists', 'content', 'path']))
+        fake.finish()
+        self.assertEqual(json.loads((self.home / '.claude/settings.json').read_text()), {'effortLevel': 'xhigh'},
+                         'apply_flag_settings wrote the user\'s settings')
+        self.assertIn({'thinking': {'max_thinking_tokens': 0, 'thinking_display': None}, 'pid': fake.process.pid},
+                      logged(log))
+        # a new process: nothing of the flags is left; userSettings' effortLevel goes to the model's own
+        fake = self.fake('--model=sonnet', '--effort=max')
+        fake.initialize()
+        self.assertEqual([fake.request('r2', 'get_settings')['response']['response']['applied'][k]
+                          for k in ('model', 'effort')], ['claude-sonnet-5', 'max'])
+        fake.finish()
+        fake = self.fake(FAKE_CLAUDE_SETTINGS_ERROR='Unexpected token', FAKE_CLAUDE_MODELS='ultra')
+        fake.initialize()
+        settings = fake.request('r2', 'get_settings')['response']['response']
+        self.assertEqual(([e['message'] for e in settings['errors']], settings['applied']['ultracodeAvailable']),
+                         (['Unexpected token'], True))
+        self.assertEqual(fake.request('r3', 'update_settings', source='userSettings',
+                                      settings={'effortLevel': 'high'})['response']['response'], {})
+        fake.finish()
+        unrecorded(fake, 'errors')
+        self.assertEqual(json.loads((self.home / '.claude/settings.json').read_text()),
+                         {'effortLevel': 'xhigh', 'modelSettings': {'claude-opus-5-5': {'effortLevel': 'high'}}},
+                         'update_settings userSettings effortLevel is per model (12)')
+
+    def test_bypass_at_a_start_and_by_request(self):
+        # 10: a start takes bypassPermissions without --allow-dangerously-skip-permissions; set_permission_mode
+        # takes it only in a process started with that flag or in bypass
+        fake = self.fake('--permission-mode=bypassPermissions')
+        self.assertEqual(fake.initialize()['current_permission_mode'], 'bypassPermissions')
+        for rid, mode in (('r2', 'default'), ('r3', 'bypassPermissions')):
+            self.assertEqual(fake.request(rid, 'set_permission_mode', mode=mode)['response']['response'], {'mode': mode})
+        fake.finish()
+        fake = self.fake('--permission-mode=default')
+        fake.initialize()
+        refused = fake.request('r2', 'set_permission_mode', mode='bypassPermissions')['response']
+        self.assertEqual((refused['subtype'], refused['error']), (
+            'error', 'Cannot set permission mode to bypassPermissions because the session was not launched with '
+                     '--dangerously-skip-permissions'))
+        mark = len(fake.records)
+        fake.request('r3', 'set_permission_mode', mode='default')       # unchanged: no status line
+        fake.request('r4', 'set_permission_mode', mode='acceptEdits')
+        fake.until(is_type('system', 'status'))
+        self.assertEqual([r.get('permissionMode') for r in fake.since(mark) if is_type('system', 'status')(r)],
+                         ['acceptEdits'])
+        fake.finish()
+        fake = self.fake('--permission-mode=default', '--allow-dangerously-skip-permissions')
+        fake.initialize()
+        self.assertEqual(fake.request('r2', 'set_permission_mode', mode='bypassPermissions')['response']['response'],
+                         {'mode': 'bypassPermissions'})
+        self.assertEqual(fake.until(is_type('system', 'status'))['permissionMode'], 'bypassPermissions')
+        fake.finish()
+
+    def test_phase2_flags_and_the_initialize_log(self):
+        log = self.home / 'fake.log'
+        args = [*STREAM[:-1], '--thinking=disabled', '--replay-user-messages', '--allow-dangerously-skip-permissions',
+                '--model', 'sonnet', '--effort=low']
+        fake = self.fake(base=args, FAKE_CLAUDE_LOG=str(log))
+        fake.initialize(suggestions=True)
+        fake.finish()
+        lines = logged(log)
+        self.assertEqual(lines[0]['switches'], {'replay': True, 'allow_bypass': True, 'thinking': 'disabled',
+                                                'model': 'sonnet', 'effort': 'low'})
+        self.assertIn({'initialize': {'promptSuggestions': True, 'supportedDialogKinds': [
+            'fable_overage_consent_prompt', 'auto_mode_server_fallback']}, 'pid': fake.process.pid}, lines)
+        environment = dict(os.environ, HOME=str(self.home))
+        for refused in ([*STREAM, '--thinking=disabled'],                   # both thinking flags
+                        [*STREAM[:-1], '--thinking=enabled'],
+                        [*STREAM, '--effort=huge']):
+            out = subprocess.run([sys.executable, str(FAKE), *refused], capture_output=True, text=True,
+                                 env=environment, timeout=20, stdin=subprocess.DEVNULL)
+            self.assertEqual(out.returncode, 2, refused)
+
+    def test_knobs(self):
+        fake = self.fake(FAKE_CLAUDE_MODELS='effort,nothink,auto,fast,unavailable', FAKE_CLAUDE_AUTH_CONFLICT='1',
+                         FAKE_CLAUDE_CONTEXT='600000', FAKE_CLAUDE_RATE='warning')
+        response = fake.initialize()
+        first = response['models'][0]
+        self.assertEqual((first['supportedEffortLevels'], first['supportsThinkingOff'], first['supportsAutoMode'],
+                          first['supportsFastMode']), (['low', 'medium', 'high', 'xhigh', 'max'], True, True, True))
+        self.assertEqual([m['value'] for m in response['unavailable_models']], ['haiku'])
+        self.assertIn('auth_conflict', response)
+        fake.prompt('hello')
+        rate = fake.until(is_type('rate_limit_event'))['rate_limit_info']
+        result = fake.until(is_type('result'))
+        used = result['usage']
+        self.assertEqual(sum(used[k] for k in ('input_tokens', 'cache_creation_input_tokens',
+                                               'cache_read_input_tokens', 'output_tokens')), 600000)
+        self.assertEqual((rate['status'], rate['unifiedWindows']['five_hour']['utilization']), ('allowed_warning', 0.85))
+        fake.prompt('usage')
+        result = fake.until(is_type('result'))
+        self.assertEqual(result['usage']['cache_creation'], {'ephemeral_1h_input_tokens': 2000,
+                                                             'ephemeral_5m_input_tokens': 0})
+        self.assertEqual(list(result['modelUsage'].values())[0]['cacheCreationEphemeral1hInputTokens'], 2000)
+        fake.finish()
+        unrecorded(fake, 'unavailable_models', 'auth_conflict')
+        fake = self.fake(FAKE_CLAUDE_RATE='rejected')
+        fake.initialize()
+        fake.prompt('hello')
+        self.assertEqual(fake.until(is_type('rate_limit_event'))['rate_limit_info']['status'], 'rejected')
+        fake.finish()
 
 
 def logged(path):

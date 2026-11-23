@@ -6,10 +6,25 @@ the name from FILE; profile reads it from <config>/fake-auth, ok without it), FA
 started (default at once).
 Stream mode takes the command line rhun passes (tests/data/claude-shapes/README.txt):
   --output-format stream-json --verbose --input-format stream-json --include-partial-messages
-  --permission-prompt-tool=stdio --setting-sources=SOURCES --max-thinking-tokens=N
+  --permission-prompt-tool=stdio --setting-sources=SOURCES --max-thinking-tokens=N | --thinking=disabled
   [--session-id=UUID | --resume=ID | --resume=SRC --fork-session --session-id=UUID] [--permission-mode=MODE]
+  [--replay-user-messages] [--allow-dangerously-skip-permissions] [--model=VALUE] [--effort=LEVEL]
 every flag as `--flag=value` or `--flag value`, `-p` allowed but not needed; a missing one or a flag it does
-not know is refused (status 2, logged as "refused"). --setting-sources (user, project, local) picks the
+not know is refused (status 2, logged as "refused"). Phase 2 (README.txt findings 10 on): bypassPermissions
+is taken at a start with or without --allow-dangerously-skip-permissions, by set_permission_mode only with
+it or after a bypass start; the mode's status line only when the mode changes. With --replay-user-messages
+each user message comes back as its turn starts and each control_response rhun writes comes back as
+sent. A user message with a "uuid" gets command_lifecycle queued/started/completed (cancelled: an
+interrupt ended its turn); one written during a turn waits for its own turn (system/init comes with every
+turn) and interrupt answers {"still_queued": [the waiting uuids]}, which then run. It answers get_settings
+(effective, sources, applied from the settings files the sources let in, --model/--effort and
+apply_flag_settings), apply_flag_settings (this process only), update_settings (localSettings: outputStyle;
+userSettings: effortLevel into modelSettings.<model>; anything else refused as the CLI words it),
+set_max_thinking_tokens, get_plan; initialize's promptSuggestions (true: prompt_suggestion "Run the tests"
+after a turn that ended by itself with nothing waiting) and supportedDialogKinds are logged. An allow's
+updatedPermissions are applied: rules into their destination's file or the session (a later call they
+match runs without asking), a setMode changes the mode; a Bash allow runs updatedInput's command.
+Commands it answers itself, as the CLI does: /context, /cost, /usage, /status, /compact. --setting-sources (user, project, local) picks the
 settings files whose permissions.defaultMode it reads: <config>/settings.json, <cwd>/.claude/settings.json,
 <cwd>/.claude/settings.local.json (later ones win; --permission-mode wins over all, FAKE_CLAUDE_MODE is
 the default when none sets it). It speaks the control protocol with the records, fields and order of the
@@ -34,12 +49,19 @@ interrupt mark, not the prompt);
 FAKE_CLAUDE_USER_LATE_MS (a turn's user line reaches the transcript only when a SIGTERM stops the process,
 that long after the signal: a prompt recorded as it is stopped; or, nobody stopping it, after
 FAKE_CLAUDE_USER_LATE_WAIT_MS, default 10000, and the turn goes on);
+FAKE_CLAUDE_MODELS (comma-separated: effort, nothink, auto, fast, unavailable, ultra; see model_list);
+FAKE_CLAUDE_CONTEXT (N: a turn's usage adds up to N tokens); FAKE_CLAUDE_RATE (warning, rejected: a
+rate_limit_event before each result); FAKE_CLAUDE_SETTINGS_ERROR (TEXT: get_settings has one error);
+FAKE_CLAUDE_AUTH_CONFLICT (initialize has auth_conflict); FAKE_CLAUDE_REFUSE_HELD (the first message written
+with a uuid while another waits or runs is refused: lifecycle refused, never run, logged {"refused": UUID});
 FAKE_CLAUDE_ECHO_ENV (comma-separated names whose values the log's start record shows, besides
 CLAUDE_CODE_ENTRYPOINT, CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, MCP_CONNECTION_NONBLOCKING, TRACEPARENT and
 TRACESTATE);
 FAKE_CLAUDE_LOG (a file of JSON lines, each with the fake's pid: {"start": "auth"|"stream"|"refused",
 "argv", "cwd", "env": {NAME: value or null for the names above}, "names": [every CLAUDE* and ANTHROPIC*
-name it got], "sources": [the --setting-sources]} per start, {"stdin": LINE} per line read, {"answer": ...} per answer to a single
+name it got], "sources": [the --setting-sources], "switches": {replay, allow_bypass, thinking, model, effort}} per
+start, {"initialize": {promptSuggestions, supportedDialogKinds}}, {"thinking": {...}} per set_max_thinking_tokens,
+{"stdin": LINE} per line read, {"answer": ...} per answer to a single
 request, {"questions_kept": ...}, {"many": [...]} and {"unhandled": [...]} from those scenarios, {"error": TRACEBACK} when a
 record or answer of a shape it cannot read failed, {"exit": N} at the end).
 
@@ -123,8 +145,9 @@ if ARGS[:2] == ['auth', 'status']:
 
 
 VALUED = {'--output-format', '--input-format', '--permission-prompt-tool', '--setting-sources',
-          '--max-thinking-tokens', '--resume', '--session-id', '--permission-mode', '--model'}
-SWITCHES = {'-p', '--print', '--verbose', '--include-partial-messages', '--fork-session'}
+          '--max-thinking-tokens', '--resume', '--session-id', '--permission-mode', '--model', '--effort', '--thinking'}
+SWITCHES = {'-p', '--print', '--verbose', '--include-partial-messages', '--fork-session', '--replay-user-messages',
+            '--allow-dangerously-skip-permissions'}
 SOURCES = ('user', 'project', 'local')
 
 
@@ -151,14 +174,21 @@ def parse(args):
     return flags
 
 
+EFFORTS = ('low', 'medium', 'high', 'xhigh', 'max')
+
+
 def pinned(flags):
-    """The command line rhun pins (README.txt) is all there."""
+    """The command line rhun pins (README.txt) is all there: the thinking level as --max-thinking-tokens=N or
+    --thinking=disabled (one of them), an --effort a level the CLI knows."""
     sources = flags.get('--setting-sources', '').split(',')
+    thinking = [re.fullmatch(r'\d+', flags.get('--max-thinking-tokens', '')) is not None,
+                flags.get('--thinking') == 'disabled']
     return flags.get('--output-format') == 'stream-json' and flags.get('--input-format') == 'stream-json' \
         and flags.get('--verbose') is True and flags.get('--include-partial-messages') is True \
         and flags.get('--permission-prompt-tool') == 'stdio' \
         and all(s in SOURCES for s in sources) and len(set(sources)) == len(sources) \
-        and re.fullmatch(r'\d+', flags.get('--max-thinking-tokens', '')) is not None
+        and thinking.count(True) == 1 and ('--thinking' not in flags or thinking[1]) \
+        and flags.get('--effort', 'low') in EFFORTS
 
 
 FLAGS = parse(ARGS)
@@ -204,7 +234,16 @@ EXIT_STATUS = [0]
 CLOSED = threading.Event()          # stdin reached EOF: nobody answers requests any more
 CRASH = threading.Event()           # a lost stdout ends the process like a crash (the record stays)
 RECORD = os.path.join(config_dir(), 'sessions', '%d.json' % os.getpid())
-log(start='stream', argv=ARGS, cwd=CWD, env=env_shown(), names=claude_env(), sources=SOURCES_GIVEN)
+REPLAY = '--replay-user-messages' in FLAGS          # user messages (finding 17) and answers (finding 18) come back
+# bypassPermissions: taken at a start with or without --allow-dangerously-skip-permissions; by
+# set_permission_mode only in a process started with the flag or in bypass (finding 10)
+BYPASS_OK = '--allow-dangerously-skip-permissions' in FLAGS or MODE == 'bypassPermissions'
+THINKING = [0 if option('--thinking') == 'disabled' else int(option('--max-thinking-tokens'))]
+SWITCHED = {'replay': REPLAY, 'allow_bypass': '--allow-dangerously-skip-permissions' in FLAGS,
+            'thinking': option('--thinking') or option('--max-thinking-tokens'), 'model': option('--model'),
+            'effort': option('--effort')}
+log(start='stream', argv=ARGS, cwd=CWD, env=env_shown(), names=claude_env(), sources=SOURCES_GIVEN,
+    switches=SWITCHED)
 
 
 def leave(status):
@@ -238,9 +277,159 @@ def emit(record):
             leave(1)
 
 
-def usage():
-    return {'input_tokens': 6, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 120,
-            'output_tokens': 12}
+def usage(cache=None):
+    """A turn's usage. FAKE_CLAUDE_CONTEXT=N: the four token counts add up to N (the context in use).
+    cache: (written, read) for the `usage` scenario, with the 1-hour and 5-minute split the CLI reports."""
+    used = int(ENV.get('FAKE_CLAUDE_CONTEXT', '0') or 0)
+    record = {'input_tokens': 6, 'cache_creation_input_tokens': 0,
+              'cache_read_input_tokens': max(0, used - 18) if used else 120, 'output_tokens': 12}
+    if cache:
+        record.update(cache_creation_input_tokens=cache[0], cache_read_input_tokens=cache[1],
+                      cache_creation={'ephemeral_1h_input_tokens': cache[0], 'ephemeral_5m_input_tokens': 0})
+    return record
+
+
+# The models initialize lists (2.1.330's records: tests/data/claude-shapes/README.txt finding 19), shaped by
+# FAKE_CLAUDE_MODELS, a comma-separated list of: effort (the default model gets the five levels low..max),
+# nothink (supportsThinkingOff), auto (supportsAutoMode), fast (supportsFastMode), unavailable (an
+# unavailable_models entry), ultra (get_settings.applied.ultracodeAvailable: no model carries the flag).
+MODEL_KNOBS = set(filter(None, ENV.get('FAKE_CLAUDE_MODELS', '').split(',')))
+
+
+def model_list():
+    models = [{'value': 'default', 'resolvedModel': 'claude-opus-5-5', 'displayName': 'Default (recommended)',
+               'description': 'Opus 5.5', 'supportsEffort': True},
+              {'value': 'sonnet', 'resolvedModel': 'claude-sonnet-5', 'displayName': 'Sonnet',
+               'description': 'Sonnet 5', 'supportsEffort': True}]
+    first = models[0]
+    if 'effort' in MODEL_KNOBS:
+        first['supportedEffortLevels'] = list(EFFORTS)
+    if 'fast' in MODEL_KNOBS:
+        first['supportsFastMode'] = True
+    if 'auto' in MODEL_KNOBS:
+        first['supportsAutoMode'] = True
+    if 'nothink' in MODEL_KNOBS:
+        first['supportsThinkingOff'] = True
+    return models
+
+
+def unavailable_models():
+    """Unrecorded (the account had none): the models entries' shape, under the schema's name."""
+    return [{'value': 'haiku', 'resolvedModel': 'claude-haiku-5-5', 'displayName': 'Haiku',
+             'description': 'Not on your plan'}] if 'unavailable' in MODEL_KNOBS else []
+
+
+DEFAULT_EFFORT = {'claude-opus-5-5': 'high', 'claude-sonnet-5': 'medium'}   # applied.effort with nothing set
+FLAG_SETTINGS = {}                  # apply_flag_settings: this process only (the flagSettings source)
+
+
+def resolve(value):
+    for model in model_list() + unavailable_models():
+        if value in (model['value'], model['resolvedModel']):
+            return model['resolvedModel']
+    return value
+
+
+def settings_files():
+    """(source, path) of the settings files --setting-sources lets in, in merge order."""
+    files = {'user': ('userSettings', os.path.join(config_dir(), 'settings.json')),
+             'project': ('projectSettings', os.path.join(CWD, '.claude', 'settings.json')),
+             'local': ('localSettings', os.path.join(CWD, '.claude', 'settings.local.json'))}
+    return [files[s] for s in SOURCES if s in SOURCES_GIVEN]
+
+
+def read_settings(path):
+    try:
+        with open(path, encoding='utf-8') as stream:
+            value = json.load(stream)
+        return value if isinstance(value, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def settings_sources():
+    out = [{'source': source, 'settings': read_settings(path)} for source, path in settings_files()]
+    out = [s for s in out if s['settings'] is not None]
+    if FLAG_SETTINGS:
+        out.append({'source': 'flagSettings', 'settings': dict(FLAG_SETTINGS)})
+    return out
+
+
+def effective():
+    merged = {}
+    for source in settings_sources():
+        for key, value in source['settings'].items():
+            if isinstance(value, dict) and isinstance(merged.get(key), dict):
+                merged[key] = dict(merged[key], **value)
+            else:
+                merged[key] = value
+    return merged
+
+
+def current_model():
+    """The resolved model this process uses: apply_flag_settings, --model, the settings' model, default."""
+    value = FLAG_SETTINGS.get('model') or option('--model') or effective().get('model') or 'default'
+    return resolve(value)
+
+
+def current_effort():
+    """applied.effort: apply_flag_settings, --effort, the model's own (modelSettings, where update_settings
+    userSettings writes it), the top-level effortLevel, the model's default (finding 11)."""
+    settings = effective()
+    model = current_model()
+    per_model = (settings.get('modelSettings') or {}).get(model) or {}
+    return FLAG_SETTINGS.get('effortLevel') or option('--effort') or per_model.get('effortLevel') \
+        or settings.get('effortLevel') or DEFAULT_EFFORT.get(model, 'high')
+
+
+def applied():
+    ultra = 'ultra' in MODEL_KNOBS
+    return {'model': current_model(), 'effort': current_effort(), 'advisor': None,
+            'ultracode': bool(ultra and FLAG_SETTINGS.get('ultracode')),
+            'ultracodeRequested': bool(ultra and FLAG_SETTINGS.get('ultracode')), 'ultracodeAvailable': ultra,
+            'ultrathinkAvailable': False}
+
+
+def get_settings():
+    """get_settings' answer (finding 11): errors only when there are some (FAKE_CLAUDE_SETTINGS_ERROR: one,
+    {path, message} as the CLI's schema names them; the text is unrecorded)."""
+    answer = {'effective': effective(), 'sources': settings_sources(), 'served_settings_state': 'ineligible',
+              'applied': applied()}
+    if ENV.get('FAKE_CLAUDE_SETTINGS_ERROR'):
+        answer['errors'] = [{'path': os.path.join(CWD, '.claude', 'settings.json'),
+                             'message': ENV['FAKE_CLAUDE_SETTINGS_ERROR']}]
+    return answer
+
+
+# update_settings (finding 12): the keys each source takes, as far as recorded; any other key is refused
+UPDATABLE = {'localSettings': {'outputStyle'}, 'userSettings': {'effortLevel'}}
+
+
+def update_settings(source, settings):
+    """None when done, else the CLI's error text. userSettings' effortLevel goes to modelSettings.<model>."""
+    if source not in UPDATABLE:
+        return 'update_settings: unsupported source %s' % source
+    refused = [key for key in settings if key not in UPDATABLE[source]]
+    if refused:
+        return 'update_settings keys not allowed: %s' % ', '.join(refused)
+    path = dict((s, p) for s, p in [('userSettings', os.path.join(config_dir(), 'settings.json')),
+                                    ('localSettings', os.path.join(CWD, '.claude', 'settings.local.json'))])[source]
+    current = read_settings(path) or {}
+    for key, value in settings.items():
+        if source == 'userSettings' and key == 'effortLevel':
+            current.setdefault('modelSettings', {}).setdefault(current_model(), {})['effortLevel'] = value
+        else:
+            current[key] = value
+    write_settings(path, current)
+    return None
+
+
+def write_settings(path, value):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path + '.tmp', 'w', encoding='utf-8') as stream:
+        json.dump(value, stream, indent=2)
+        stream.write('\n')
+    os.replace(path + '.tmp', path)
 
 
 def now_iso():
@@ -353,7 +542,6 @@ INTERRUPT = threading.Event()       # the turn running was interrupted
 ACKED = threading.Event()           # the interrupt's control_response went out
 DEAF = threading.Event()            # this turn ignores interrupts
 RACING = []                         # the message id of a turn that ends as the interrupt arrives
-INIT_SENT = [False]
 
 
 # Every record below keeps the field order of the recordings (tests/data/claude-shapes/keys.txt; the
@@ -382,7 +570,7 @@ def thinking_tokens(estimate, delta):
 def message_start():
     mid = 'msg_fake' + uuid.uuid4().hex[:16]
     stream_event({'type': 'message_start', 'message': {
-        'model': 'claude-opus-5-5', 'id': mid, 'type': 'message', 'role': 'assistant', 'content': [],
+        'model': current_model(), 'id': mid, 'type': 'message', 'role': 'assistant', 'content': [],
         'stop_reason': None, 'usage': usage()}}, ttft_ms=5, thinking_display='updates')
     return mid
 
@@ -396,11 +584,11 @@ def assistant(mid, block, save=True, **extra):
     """The consolidated record of one block (C3): same message id, one block, no index. save=False: not in
     the transcript (yet)."""
     emit(dict({'type': 'assistant', 'message': {
-        'model': 'claude-opus-5-5', 'id': mid, 'type': 'message', 'role': 'assistant', 'content': [block],
+        'model': current_model(), 'id': mid, 'type': 'message', 'role': 'assistant', 'content': [block],
         'stop_reason': None, 'usage': usage()}, 'parent_tool_use_id': None, 'session_id': SID,
         'uuid': str(uuid.uuid4())}, **extra))
     if save and block['type'] != 'thinking':
-        transcript({'type': 'assistant', 'message': {'id': mid, 'role': 'assistant', 'model': 'claude-opus-5-5',
+        transcript({'type': 'assistant', 'message': {'id': mid, 'role': 'assistant', 'model': current_model(),
                                                      'content': [block]}})
 
 
@@ -474,17 +662,73 @@ def user(block, **extra):
     transcript({'type': 'user', 'message': {'role': 'user', 'content': [block]}})
 
 
-def tool_result(tid, content, is_error=False, interactive=False):
+def tool_result(tid, content, is_error=False, interactive=False, plain=False):
     """The tool's result as the recordings order it: a failure (02 deny, 06 rejection) type, content,
     is_error, tool_use_id; AskUserQuestion and ExitPlanMode (03, 04) type, content, tool_use_id; Bash
-    (02, 10) tool_use_id, type, content, is_error."""
+    (02, 10) tool_use_id, type, content, is_error; Edit and WebFetch (plain: shape 16-edit) tool_use_id, type, content."""
     if is_error:
         block = {'type': 'tool_result', 'content': content, 'is_error': True, 'tool_use_id': tid}
     elif interactive:
         block = {'type': 'tool_result', 'content': content, 'tool_use_id': tid}
+    elif plain:
+        block = {'tool_use_id': tid, 'type': 'tool_result', 'content': content}
     else:
         block = {'tool_use_id': tid, 'type': 'tool_result', 'content': content, 'is_error': False}
     user(block)
+
+
+SESSION_RULES = []                  # allow rules saved with destination "session" (this process only)
+
+
+def rule_allows(tool, content):
+    """An allow rule lets the call run without asking: Tool, Tool(content) or Tool(prefix:*), from the
+    session or the permissions.allow of a settings file the sources let in (finding 15)."""
+    rules = list(SESSION_RULES)
+    for source in settings_sources():
+        allow = (source['settings'].get('permissions') or {}).get('allow') or []
+        rules += [rule for rule in allow if isinstance(rule, str)]
+    for rule in rules:
+        if rule == tool:
+            return True
+        if rule.startswith(tool + '(') and rule.endswith(')'):
+            inner = rule[len(tool) + 1:-1]
+            if inner == content or (inner.endswith(':*') and content.startswith(inner[:-2])):
+                return True
+    return False
+
+
+RULE_FILES = {'localSettings': lambda: os.path.join(CWD, '.claude', 'settings.local.json'),
+              'projectSettings': lambda: os.path.join(CWD, '.claude', 'settings.json'),
+              'userSettings': lambda: os.path.join(config_dir(), 'settings.json')}
+
+
+def apply_updates(answer):
+    """An allow's updatedPermissions as the CLI applies them (findings 15, 16): addRules into the destination's file
+    (permissions.allow "Tool(content)"), or the session's; a setMode changes the mode (its status line
+    follows); bypassPermissions only where set_permission_mode would take it; addDirectories: nothing."""
+    global MODE
+    for update in answer.get('updatedPermissions') or []:
+        if not isinstance(update, dict):
+            continue
+        dest = update.get('destination')
+        if update.get('type') == 'addRules' and update.get('behavior') == 'allow':
+            texts = ['%s(%s)' % (r.get('toolName'), r['ruleContent']) if r.get('ruleContent') else r.get('toolName')
+                     for r in update.get('rules') or []]
+            if dest in ('session', 'cliArg'):
+                SESSION_RULES.extend(texts)
+            elif dest in RULE_FILES:
+                path = RULE_FILES[dest]()
+                current = read_settings(path) or {}
+                allow = current.setdefault('permissions', {}).setdefault('allow', [])
+                allow += [t for t in texts if t not in allow]
+                write_settings(path, current)
+        elif update.get('type') == 'setMode':
+            mode = update.get('mode')
+            if mode == 'bypassPermissions' and not BYPASS_OK:
+                continue
+            if mode and mode != MODE:
+                MODE = mode
+                status(None, MODE)
 
 
 REJECTED = ("The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a "
@@ -527,21 +771,52 @@ def can_use_tool(name, tool_input, tid, suggestions=None):
 DENIALS = []                        # this turn's denied tool calls (02's result.permission_denials)
 
 
-def result(final='', subtype='success', errors=None, stop='end_turn', terminal='completed', spent=True):
+TURN_UUID = [None]                  # the uuid of the user message whose turn runs (None: it had none)
+
+
+def model_usage(cache=None):
+    entry = {'inputTokens': 6, 'outputTokens': 12, 'contextWindow': 1000000, 'maxOutputTokens': 128000}
+    if cache:
+        entry = {'inputTokens': 6, 'outputTokens': 12, 'cacheReadInputTokens': cache[1],
+                 'cacheCreationInputTokens': cache[0], 'contextWindow': 1000000, 'maxOutputTokens': 128000,
+                 'cacheCreationEphemeral5mInputTokens': 0, 'cacheCreationEphemeral1hInputTokens': cache[0]}
+    return {current_model() + '[1m]': entry}
+
+
+def result(final='', subtype='success', errors=None, stop='end_turn', terminal='completed', spent=True, cache=None):
     """A turn's result, in the recordings' field order (type comes late). spent=False: no model call
-    finished (total_cost_usd 0, modelUsage {}: `unsaved`); 2.1.330's interrupted turns (05, 06) did spend."""
+    finished (total_cost_usd 0, modelUsage {}: `unsaved`); 2.1.330's interrupted turns (05, 06) did spend.
+    The turn's message uuid is user_message_uuid (finding 17): before type in an error, after uuid in a success."""
     record = {'duration_api_ms': 10, 'stop_reason': stop, 'session_id': SID, 'total_cost_usd': 0.0 if spent else 0,
-              'usage': usage(),
-              'modelUsage': {'claude-opus-5-5[1m]': {'inputTokens': 6, 'outputTokens': 12, 'contextWindow': 1000000,
-                                                     'maxOutputTokens': 128000}} if spent else {},
-              'permission_denials': list(DENIALS), 'terminal_reason': terminal, 'is_error': subtype != 'success',
-              'num_turns': 1, 'subtype': subtype}
+              'usage': usage(cache), 'modelUsage': model_usage(cache) if spent else {},
+              'permission_denials': list(DENIALS), 'terminal_reason': terminal, 'fast_mode_state': 'off',
+              'is_error': subtype != 'success', 'num_turns': 1, 'subtype': subtype}
     if errors is None:
         record['result'] = final
     else:
         record['errors'] = errors
+        if TURN_UUID[0]:
+            record['user_message_uuid'] = TURN_UUID[0]
     record.update(type='result', duration_ms=20, uuid=str(uuid.uuid4()))
+    if errors is None and TURN_UUID[0]:
+        record['user_message_uuid'] = TURN_UUID[0]
+    if ENV.get('FAKE_CLAUDE_RATE'):
+        rate_limit(ENV['FAKE_CLAUDE_RATE'])
     emit(record)
+
+
+def rate_limit(kind):
+    """A rate_limit_event before the result (as the recordings place it, finding 20). kind: warning (85 % of
+    the five-hour window used), rejected (all of it), else allowed. The recorded event of 2.1.330 had
+    status, resetsAt, rateLimitType, overage fields and unifiedWindows; utilization at the top is the
+    schema's (ext-host-protocol 2.6), unrecorded."""
+    resets = int(time.time()) + 3600
+    status_, used = {'warning': ('allowed_warning', 0.85), 'rejected': ('rejected', 1.0)}.get(kind, ('allowed', 0.2))
+    emit({'type': 'rate_limit_event', 'rate_limit_info': {
+        'status': status_, 'resetsAt': resets, 'rateLimitType': 'five_hour', 'utilization': used,
+        'isUsingOverage': False,
+        'unifiedWindows': {'five_hour': {'utilization': used, 'resetsAt': resets, 'status': status_}}},
+        'uuid': str(uuid.uuid4()), 'session_id': SID})
 
 
 CUT = []                            # (message id, block index) of the text block an interrupt cut
@@ -590,11 +865,16 @@ def bash(command, ask=True, extra=None, rules=None):
     tool_input = dict({'command': command, 'description': 'Run ' + command}, **(extra or {}))
     tid = tool_use(mid, 0, 'Bash', tool_input)
     message_end('tool_use')
-    emit({'type': 'rate_limit_event', 'rate_limit_info': {'status': 'allowed', 'rateLimitType': 'five_hour'},
-          'uuid': str(uuid.uuid4()), 'session_id': SID})
+    if not ENV.get('FAKE_CLAUDE_RATE'):     # with the knob, result() sends its own
+        emit({'type': 'rate_limit_event', 'rate_limit_info': {'status': 'allowed', 'rateLimitType': 'five_hour'},
+              'uuid': str(uuid.uuid4()), 'session_id': SID})
+    if ask and (rule_allows('Bash', command) or MODE == 'bypassPermissions'):
+        ask = False                 # a saved rule lets it run (finding 15: the same command again did not ask)
     answer = can_use_tool('Bash', tool_input, tid, rules or suggestions(command)) if ask else {'behavior': 'allow'}
     if answer is not None and ask:
         log(answer=answer)
+        if answer.get('behavior') == 'allow':
+            apply_updates(answer)
     bash_result(tid, tool_input, answer)
     # withdrawn, or a deny that interrupts: the turn ends there (the real 2.1.330, given rhun's No: the
     # rejected tool_result, "[Request interrupted by user for tool use]", result aborted_tools)
@@ -609,8 +889,11 @@ def bash_result(tid, tool_input, answer):
     if answer is None:
         tool_result(tid, REJECTED, True)
     elif answer.get('behavior') == 'allow':
-        if tool_input['command'].startswith('touch '):
-            open(os.path.join(CWD, tool_input['command'][6:].strip()), 'a').close()
+        # the command that runs is the answer's (finding 15: an edited command ran in place of the asked one)
+        ran = answer.get('updatedInput') if isinstance(answer.get('updatedInput'), dict) else tool_input
+        command = ran.get('command') if isinstance(ran.get('command'), str) else tool_input['command']
+        if command.startswith('touch '):
+            open(os.path.join(CWD, command[6:].strip()), 'a').close()
         tool_result(tid, '(Bash completed with no output)')
     else:
         DENIALS.append({'tool_name': 'Bash', 'tool_use_id': tid, 'tool_input': tool_input})
@@ -811,8 +1094,9 @@ def s_plan(prompt):
     """04-plan-mode's ExitPlanMode; the final text names the mode it ends in"""
     global MODE
     plan = '# Plan\n\n1. Add the file\n2. Test it'
-    tid, answer = interactive('ExitPlanMode', {'plan': plan, 'planFilePath': os.path.join(config_dir(), 'plans',
-                                                                                          'fake.md')})
+    path = os.path.join(config_dir(), 'plans', 'fake.md')
+    PLAN[0] = {'content': plan, 'path': path}     # get_plan's answer from here on (finding 24)
+    tid, answer = interactive('ExitPlanMode', {'plan': plan, 'planFilePath': path})
     if answer is None:
         return
     if answer.get('behavior') != 'allow':
@@ -908,7 +1192,7 @@ def s_racing(prompt):
             racing_end(mid)
     time.sleep(1)
     transcript({'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': prompt}]}})
-    transcript({'type': 'assistant', 'message': {'id': mid, 'role': 'assistant', 'model': 'claude-opus-5-5',
+    transcript({'type': 'assistant', 'message': {'id': mid, 'role': 'assistant', 'model': current_model(),
                                                  'content': [{'type': 'text', 'text': 'almost'}]}})
 
 
@@ -1162,6 +1446,201 @@ def s_unknown(prompt):
 NOT_JSON = 'fake claude: a line that is not JSON'
 
 
+def s_held(prompt):
+    """held [think]: a 2 s turn, a text in 20 pieces (shapes 13 and 14; "think": a thinking block first, as shape 12's): a
+    message written meanwhile is held"""
+    mid = message_start()
+    index = 0
+    if prompt.split()[1:2] == ['think']:
+        thinking(mid, 0, estimates=False)
+        index = 1
+    if text(mid, index, ['%d\n' % i for i in range(1, 21)], 0.1):
+        message_end()
+        result('counted')
+    else:
+        cut_off()
+
+
+def s_usage(prompt):
+    """a reply whose usage reports a prompt cache: 2000 tokens written for an hour, 30000 read (the split the
+    CLI reports under usage.cache_creation and modelUsage, finding 21)"""
+    mid = message_start()
+    if text(mid, 0, ['cached']):
+        message_end()
+        result('cached', cache=(2000, 30000))
+    else:
+        cut_off()
+
+
+def s_edit(prompt):
+    """edit FILE: one Edit call (finding 16, shape 16-edit): the file's first line gets " (edited)"; it asks with the only
+    suggestion 16 had (setMode acceptEdits, session) unless the mode or a rule lets edits run"""
+    words = prompt.split(None, 1)
+    path = os.path.join(CWD, words[1].strip() if len(words) > 1 else 'notes.txt')
+    try:
+        with open(path, encoding='utf-8') as stream:
+            first = stream.read().split('\n', 1)[0]
+    except OSError:
+        first = ''
+    tool_input = {'file_path': path, 'old_string': first, 'new_string': first + ' (edited)', 'replace_all': False}
+    mid = message_start()
+    tid = tool_use(mid, 0, 'Edit', tool_input)
+    message_end('tool_use')
+    if MODE in ('acceptEdits', 'bypassPermissions') or rule_allows('Edit', path):
+        answer = {'behavior': 'allow'}
+    else:
+        rid = request_id()
+        request = {'subtype': 'can_use_tool', 'tool_name': 'Edit', 'display_name': 'Edit', 'input': tool_input,
+                   'description': os.path.basename(path),
+                   'permission_suggestions': [{'type': 'setMode', 'mode': 'acceptEdits', 'destination': 'session'}],
+                   'tool_use_id': tid}
+        answer = ask_request(rid, request)
+        if answer is None:
+            tool_result(tid, REJECTED, True)
+            cut_off(tool_turn=True)
+            return
+        log(answer=answer)
+    if answer.get('behavior') == 'allow':
+        apply_updates(answer)
+        edit = answer.get('updatedInput') if isinstance(answer.get('updatedInput'), dict) else tool_input
+        try:
+            with open(path, encoding='utf-8') as stream:
+                content = stream.read()
+            with open(path, 'w', encoding='utf-8') as stream:
+                stream.write(content.replace(edit.get('old_string', first), edit.get('new_string', ''), 1))
+        except OSError:
+            pass
+        tool_result(tid, 'The file %s has been updated successfully.' % path, plain=True)
+        final('edited')
+        return
+    DENIALS.append({'tool_name': 'Edit', 'tool_use_id': tid, 'tool_input': tool_input})
+    tool_result(tid, answer.get('message', ''), True)
+    if answer.get('interrupt') is True:
+        cut_off(tool_turn=True)
+    else:
+        final('not edited')
+
+
+def s_fetch(prompt):
+    """fetch URL: one WebFetch call (unrecorded directly: 2.1.330 asked for it from a subagent, whose request
+    also had agent_id); its suggestion is the recorded one, a domain rule for localSettings in the field
+    order the CLI sent (type, destination, rules, behavior). Nothing is fetched: the result is made up"""
+    words = prompt.split(None, 1)
+    url = words[1].strip() if len(words) > 1 else 'https://example.com'
+    domain = re.sub(r'^[a-z]+://', '', url).split('/')[0]
+    tool_input = {'url': url, 'prompt': 'Report the title'}
+    mid = message_start()
+    tid = tool_use(mid, 0, 'WebFetch', tool_input)
+    message_end('tool_use')
+    if rule_allows('WebFetch', 'domain:' + domain):
+        answer = {'behavior': 'allow'}
+    else:
+        request = {'subtype': 'can_use_tool', 'tool_name': 'WebFetch', 'display_name': 'WebFetch', 'input': tool_input,
+                   'description': url,
+                   'permission_suggestions': [{'type': 'addRules', 'destination': 'localSettings', 'rules': [
+                       {'toolName': 'WebFetch', 'ruleContent': 'domain:' + domain}], 'behavior': 'allow'}],
+                   'tool_use_id': tid}
+        answer = ask_request(request_id(), request)
+        if answer is None:
+            tool_result(tid, REJECTED, True)
+            cut_off(tool_turn=True)
+            return
+        log(answer=answer)
+    if answer.get('behavior') == 'allow':
+        apply_updates(answer)
+        tool_result(tid, 'Fetched %s (HTTP 200 OK, text/html, 172 characters).\nExample Domain' % url, plain=True)
+        final('Example Domain')
+        return
+    DENIALS.append({'tool_name': 'WebFetch', 'tool_use_id': tid, 'tool_input': tool_input})
+    tool_result(tid, answer.get('message', ''), True)
+    if answer.get('interrupt') is True:
+        cut_off(tool_turn=True)
+    else:
+        final('not fetched')
+
+
+def ask_request(rid, request):
+    """Sends a can_use_tool request and waits for its answer (None: withdrawn or stdin closed)."""
+    with COND:
+        PENDING[rid] = None
+        emit({'type': 'control_request', 'request_id': rid, 'request': request})
+        while rid in PENDING and PENDING[rid] is None and not withdrawn():
+            COND.wait(0.05)
+        answer = PENDING.pop(rid, None)
+    if answer is None and not CLOSED.is_set():
+        ACKED.wait(5)
+    return answer
+
+
+def synthetic(command, text_, extra=None, local=None):
+    """What a command the CLI runs itself answers (finding 22, shape 17-slash): a <synthetic> assistant text, then a result without
+    a terminal_reason and with local_command (the command's name; /status, which it does not run here, has
+    none)."""
+    emit(dict({'type': 'assistant', 'message': {
+        'id': str(uuid.uuid4()), 'container': None, 'model': '<synthetic>', 'role': 'assistant',
+        'stop_reason': 'end_turn', 'stop_sequence': None, 'type': 'message',
+        'usage': {'input_tokens': 0, 'output_tokens': 0, 'cache_creation_input_tokens': 0,
+                  'cache_read_input_tokens': 0}, 'content': [{'type': 'text', 'text': text_}],
+        'context_management': None},
+        'parent_tool_use_id': None, 'local_command_source': '<local-command-stdout>%s</local-command-stdout>' % text_,
+        'session_id': SID, 'uuid': str(uuid.uuid4()), 'timestamp': now_iso()}, **(extra or {})))
+    local_result(text_, local)
+
+
+def local_result(text_, local):
+    record = {'is_error': False, 'duration_api_ms': 0, 'num_turns': 0, 'stop_reason': None, 'session_id': SID,
+              'total_cost_usd': 0, 'usage': {'input_tokens': 0, 'cache_creation_input_tokens': 0,
+                                             'cache_read_input_tokens': 0, 'output_tokens': 0},
+              'modelUsage': {}, 'permission_denials': [], 'fast_mode_state': 'off', 'subtype': 'success',
+              'result': text_}
+    if local:
+        record['local_command'] = local
+    record.update(type='result', duration_ms=1, uuid=str(uuid.uuid4()))
+    emit(record)
+
+
+def c_context(prompt):
+    used = int(ENV.get('FAKE_CLAUDE_CONTEXT', '0') or 0) or 45600
+    synthetic('context', '## Context Usage\n\n**Model:** %s  \n**Tokens:** %.1fk / 1m (%d%%)' % (
+        current_model(), used / 1000, used * 100 // 1000000), local='context')
+
+
+def c_usage(prompt):
+    synthetic('cost', 'You are currently using your subscription to power your Claude Code usage\n\n'
+              'Current week (all models): 74% used', local=prompt.split()[0][1:])
+
+
+def c_status(prompt):
+    synthetic('status', "/status isn't available in this environment.")
+
+
+def c_compact(prompt):
+    """/compact as finding 22 has it: compacting, the result, system/init, the boundary, the summary as a synthetic user line
+    (string content), the "Compacted" output echoed as a replay (with --replay-user-messages), the result"""
+    emit({'type': 'system', 'subtype': 'status', 'status': 'compacting', 'session_id': SID, 'uuid': str(uuid.uuid4())})
+    time.sleep(0.2)
+    emit({'type': 'system', 'subtype': 'status', 'status': None, 'compact_result': 'success', 'session_id': SID,
+          'uuid': str(uuid.uuid4())})
+    system_init()
+    emit({'type': 'system', 'subtype': 'compact_boundary', 'session_id': SID, 'uuid': str(uuid.uuid4()),
+          'compact_metadata': {'trigger': 'manual', 'pre_tokens': 45783, 'post_tokens': 14115}})
+    emit({'type': 'user', 'message': {'role': 'user', 'content': 'This session is being continued from a previous '
+                                      'conversation that ran out of context. Summary: nothing yet.'},
+          'session_id': SID, 'parent_tool_use_id': None, 'uuid': str(uuid.uuid4()), 'timestamp': now_iso(),
+          'isReplay': False, 'isSynthetic': True})
+    if REPLAY:
+        emit({'type': 'user', 'message': {'role': 'user', 'content': '<local-command-stdout>Compacted </local-command-stdout>'},
+              'session_id': SID, 'parent_tool_use_id': None, 'uuid': str(uuid.uuid4()), 'timestamp': now_iso(),
+              'isReplay': True})
+    local_result('', 'compact')
+
+
+# commands the CLI answers itself (finding 22): no requesting status, no replay of the prompt; all but /compact
+# send system/init first, as every turn does
+LOCAL_COMMANDS = {'/context': c_context, '/cost': c_usage, '/usage': c_usage, '/status': c_status,
+                  '/compact': c_compact}
+
+
 SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pending, 'ask': s_ask,
              'ask2': s_ask2, 'plan': s_plan, 'slow': s_slow, 'think': s_think, 'deaf': s_deaf,
              'racing': s_racing, 'subagent': s_subagent, 'exit': s_exit, 'big': s_big, 'error': s_error,
@@ -1169,11 +1648,18 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'replay': s_replay, 'mcp': s_mcp, 'noid': s_noid, 'askx': s_askx, 'deep': s_deep,
              'withdraw': s_withdraw, 'unsaved': s_unsaved, 'unknown': s_unknown, 'unhandled': s_unhandled,
              'mute': s_mute, 'orphan': s_orphan, 'autherr': s_autherr, 'long': s_long, 'gone': s_gone,
-             'stream': s_stream}
+             'stream': s_stream, 'held': s_held, 'usage': s_usage, 'edit': s_edit, 'fetch': s_fetch}
 
 
-COMMANDS = [{'name': 'compact', 'description': 'Clear history but keep a summary', 'argumentHint': ''}]
+# three of 2.1.330's commands, as its initialize lists them (finding 22; the real list has every built-in,
+# skill and plugin command)
+COMMANDS = [{'name': 'compact', 'description': 'Clear history but keep a summary', 'argumentHint': ''},
+            {'name': 'context', 'description': 'Show current context usage', 'argumentHint': ''},
+            {'name': 'usage', 'description': "Show session cost, plan usage, and what's contributing to your limits",
+             'argumentHint': '', 'aliases': ['cost', 'stats']}]
 COMMANDS_SENT = [False]
+SUGGEST = [False]                   # initialize's promptSuggestions
+PLAN = [None]                       # get_plan's plan: {content, path} once `plan` asked
 
 
 def init_response():
@@ -1181,16 +1667,16 @@ def init_response():
                       'subscriptionType': 'Claude Max', 'apiProvider': 'firstParty'},
                'bedrock': {'subscriptionType': 'Claude Max', 'apiProvider': 'bedrock'},
                'none': None}[ENV.get('FAKE_CLAUDE_ACCOUNT', 'ok')]
-    response = {'commands': COMMANDS,
-                'agents': [], 'output_style': 'default', 'available_output_styles': ['default'],
-                'models': [{'value': 'default', 'resolvedModel': 'claude-opus-5-5',
-                            'displayName': 'Default (recommended)', 'description': 'Opus 5.5', 'supportsEffort': True},
-                           {'value': 'sonnet', 'resolvedModel': 'claude-sonnet-5', 'displayName': 'Sonnet',
-                            'description': 'Sonnet 5', 'supportsEffort': True}]}
+    response = {'commands': COMMANDS, 'agents': [], 'output_style': 'default', 'available_output_styles': ['default'],
+                'models': model_list()}
+    if unavailable_models():                    # unrecorded member (the schema's, after models)
+        response['unavailable_models'] = unavailable_models()
     if account:
         response['account'] = account
+    if ENV.get('FAKE_CLAUDE_AUTH_CONFLICT'):    # unrecorded member (the schema's, after account)
+        response['auth_conflict'] = {'token_source': 'claude.ai', 'api_key_source': 'ANTHROPIC_API_KEY'}
     response.update(pid=os.getpid(), claude_code_version='2.1.330', current_permission_mode=MODE,
-                    session_state='idle', capabilities=['ui_surface_v1'])
+                    fast_mode_state='off', session_state='idle', capabilities=['ui_surface_v1'])
     return response
 
 
@@ -1198,11 +1684,31 @@ def respond(rid, response):
     emit({'type': 'control_response', 'response': {'subtype': 'success', 'request_id': rid, 'response': response}})
 
 
+def respond_empty(rid):
+    """The success without a response member that apply_flag_settings, set_max_thinking_tokens and set_model
+    get (finding 11)."""
+    emit({'type': 'control_response', 'response': {'subtype': 'success', 'request_id': rid}})
+
+
+def respond_error(rid, text_):
+    emit({'type': 'control_response', 'response': {'subtype': 'error', 'request_id': rid, 'error': text_}})
+
+
 def prompt_text(message):
     """The text of a user message."""
     content = message.get('message', {}).get('content')
     return content if isinstance(content, str) else ''.join(
-        block.get('text', '') for block in content or [] if block.get('type') == 'text')
+        block.get('text', '') for block in content or [] if isinstance(block, dict) and block.get('type') == 'text')
+
+
+def lifecycle(uid, state):
+    """command_lifecycle (finding 17): a message written with a uuid is queued at once, started when its turn
+    starts, completed, or cancelled when an interrupt ended its turn; without a uuid, none."""
+    emit({'type': 'command_lifecycle', 'command_uuid': uid, 'state': state, 'uuid': str(uuid.uuid4()),
+          'session_id': SID})
+
+
+REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already
 
 
 def handle(message):
@@ -1213,6 +1719,9 @@ def handle(message):
         sub = request.get('subtype')
         if sub == 'initialize':
             time.sleep(int(ENV.get('FAKE_CLAUDE_INIT_MS', '0')) / 1000)
+            SUGGEST[0] = request.get('promptSuggestions') is True
+            log(initialize={'promptSuggestions': request.get('promptSuggestions'),
+                            'supportedDialogKinds': request.get('supportedDialogKinds')})
             respond(rid, init_response())
             if not COMMANDS_SENT[0]:        # 2.1.330 follows the answer with the full command list
                 COMMANDS_SENT[0] = True
@@ -1222,8 +1731,14 @@ def handle(message):
             with COND:
                 if DEAF.is_set():
                     return
+                held = [entry['uuid'] for entry in QUEUE if entry['uuid']]
+                if request.get('cancel_queued') is True:    # unrecorded: rhun never sends it
+                    for entry in [e for e in QUEUE if e['uuid']]:
+                        QUEUE.remove(entry)
+                        lifecycle(entry['uuid'], 'cancelled')
+                    held = []
                 if not BUSY[0] and not QUEUE:       # nothing to interrupt
-                    respond(rid, {'still_queued': []})
+                    respond(rid, {'still_queued': held})
                     return
                 INTERRUPT.set()
                 withdrawn = [key for key, value in PENDING.items() if value is None]
@@ -1234,19 +1749,54 @@ def handle(message):
                     racing_end(RACING.pop())
                 for key in withdrawn:
                     emit({'type': 'control_cancel_request', 'request_id': key})
-                respond(rid, {'still_queued': []})
+                # finding 17: the held messages stay queued and run after the interrupted turn
+                respond(rid, {'still_queued': held})
                 ACKED.set()
         elif sub == 'set_permission_mode':
-            MODE = 'default' if request.get('mode') == 'manual' else request.get('mode', MODE)
+            mode = 'default' if request.get('mode') == 'manual' else request.get('mode', MODE)
+            if mode == 'bypassPermissions' and not BYPASS_OK:
+                respond_error(rid, 'Cannot set permission mode to bypassPermissions because the session was not '
+                              'launched with --dangerously-skip-permissions')
+                return
+            old, MODE = MODE, mode
             respond(rid, {'mode': MODE})    # the answer, then the mode's status line (2.1.330)
-            status(None, MODE)
+            if MODE != old:                 # none when the mode does not change (finding 10)
+                status(None, MODE)
+                if 'bypassPermissions' in (old, MODE):
+                    emit({'type': 'system', 'subtype': 'commands_changed', 'commands': COMMANDS,
+                          'uuid': str(uuid.uuid4()), 'session_id': SID})
         elif sub == 'set_model':
-            emit({'type': 'control_response', 'response': {'subtype': 'success', 'request_id': rid}})
+            respond_empty(rid)
+        elif sub == 'get_settings':
+            respond(rid, get_settings())
+        elif sub == 'apply_flag_settings':
+            settings = request.get('settings') if isinstance(request.get('settings'), dict) else {}
+            for key, value in settings.items():
+                if value is None:
+                    FLAG_SETTINGS.pop(key, None)
+                else:
+                    FLAG_SETTINGS[key] = value
+            respond_empty(rid)
+        elif sub == 'update_settings':
+            settings = request.get('settings') if isinstance(request.get('settings'), dict) else {}
+            error = update_settings(request.get('source'), settings)
+            if error:
+                respond_error(rid, error)
+            else:
+                respond(rid, {})
+        elif sub == 'set_max_thinking_tokens':
+            THINKING[0] = request.get('max_thinking_tokens')
+            log(thinking={'max_thinking_tokens': request.get('max_thinking_tokens'),
+                          'thinking_display': request.get('thinking_display')})
+            respond_empty(rid)
+        elif sub == 'get_plan':
+            respond(rid, dict(exists=True, **PLAN[0]) if PLAN[0] else {'exists': False})
         else:
-            emit({'type': 'control_response', 'response': {
-                'subtype': 'error', 'request_id': rid, 'error': 'Unsupported control request subtype: %s' % sub}})
+            respond_error(rid, 'Unsupported control request subtype: %s' % sub)
     elif kind == 'control_response':
         response = message.get('response', {})
+        if REPLAY:                          # 18: with --replay-user-messages every answer comes back as sent
+            emit(message)
         with COND:
             rid = response.get('request_id')
             if rid in PENDING and PENDING[rid] is None:   # a late answer to a withdrawn id is ignored (C10)
@@ -1254,34 +1804,60 @@ def handle(message):
                     else {'behavior': 'error', 'message': response.get('error', '')}
                 COND.notify_all()
     elif kind == 'user':
-        prompt = prompt_text(message)
+        uid = message.get('uuid') if isinstance(message.get('uuid'), str) else None
+        content = message.get('message', {}).get('content')
+        entry = {'text': prompt_text(message), 'uuid': uid, 'content': content}
         with COND:
-            QUEUE.append(prompt)
+            if uid and ENV.get('FAKE_CLAUDE_REFUSE_HELD') and (BUSY[0] or QUEUE) and not REFUSED[0]:
+                REFUSED[0] = True           # unrecorded: the state exists in the schema, no run produced it
+                log(refused=uid)
+                lifecycle(uid, 'refused')
+                return
+            QUEUE.append(entry)
+            if uid:
+                lifecycle(uid, 'queued')
             COND.notify_all()
 
 
-def turn(prompt):
-    """One prompt's turn: its records, its transcript lines."""
+def system_init():
+    """system/init: sent at the start of every turn (2.1.330, finding 17), not only the first (C4)."""
+    emit({'type': 'system', 'subtype': 'init', 'cwd': CWD, 'session_id': SID,
+          'tools': ['Task', 'AskUserQuestion', 'Bash', 'ExitPlanMode'], 'mcp_servers': [],
+          'model': current_model() + '[1m]', 'permissionMode': MODE, 'slash_commands': ['compact', 'context', 'usage'],
+          'apiKeySource': ENV.get('FAKE_CLAUDE_KEYSRC', 'none'), 'claude_code_version': '2.1.330',
+          'output_style': 'default', 'capabilities': ['interrupt_receipt_v1', 'msg_lifecycle_v1'],
+          'uuid': str(uuid.uuid4()), 'fast_mode_state': 'off', 'ultrathink_available': False})
+
+
+def turn(entry):
+    """One message's turn: its records, its transcript lines. A command the CLI answers itself (LOCAL_COMMANDS)
+    has no requesting status and no replay."""
+    prompt = entry['text']
+    words = prompt.split()
+    local = LOCAL_COMMANDS.get(words[0]) if words else None
+    if local:
+        if local is not c_compact:
+            system_init()
+        local(prompt)
+        return False
     if ENV.get('FAKE_CLAUDE_USER_LATE_MS'):    # pending from before system/init: a stop finds it
         LATE_USER.append({'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': prompt}]}})
-    if not INIT_SENT[0]:                 # C4: system/init comes with the first prompt
-        INIT_SENT[0] = True
-        emit({'type': 'system', 'subtype': 'init', 'cwd': CWD, 'session_id': SID,
-              'tools': ['Task', 'AskUserQuestion', 'Bash', 'ExitPlanMode'], 'mcp_servers': [],
-              'model': 'claude-opus-5-5[1m]', 'permissionMode': MODE, 'slash_commands': ['compact'],
-              'apiKeySource': ENV.get('FAKE_CLAUDE_KEYSRC', 'none'), 'claude_code_version': '2.1.330',
-              'output_style': 'default', 'capabilities': ['interrupt_receipt_v1'], 'uuid': str(uuid.uuid4())})
+    system_init()
     if LATE_USER:                    # wait for the stop rather than write to a reader that is gone
         CLOSED.wait(int(ENV.get('FAKE_CLAUDE_USER_LATE_WAIT_MS', '10000')) / 1000)
     status('requesting')
+    if REPLAY:                       # finding 17: the message comes back, with its uuid (the CLI's own without one)
+        emit({'type': 'user', 'message': {'role': 'user', 'content': entry['content']}, 'session_id': SID,
+              'parent_tool_use_id': None, 'uuid': entry['uuid'] or str(uuid.uuid4()), 'timestamp': now_iso(),
+              'isReplay': True})
     del DENIALS[:]
-    words = prompt.split()
     scenario = SCENARIOS.get(ENV.get('FAKE_CLAUDE_SCENARIO') or (words[0].lower() if words else ''), s_plain)
     if LATE_USER:                    # nobody stopped it (10 s at most): the line goes in now
         transcript(LATE_USER.pop())
     elif scenario not in (s_unsaved, s_racing):     # (they save it later, if at all)
         transcript({'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': prompt}]}})
     scenario(prompt)
+    return True
 
 
 def worker():
@@ -1289,10 +1865,14 @@ def worker():
         with COND:
             while not QUEUE:
                 COND.wait()
-            prompt = QUEUE.pop(0)
+            entry = QUEUE.pop(0)
             BUSY[0] = True
+            TURN_UUID[0] = entry['uuid']
+        if entry['uuid']:
+            lifecycle(entry['uuid'], 'started')
+        model_turn = False
         try:
-            turn(prompt)
+            model_turn = turn(entry)
         except Exception as error:          # a bug, or an answer of a shape the fake cannot read
             log(error=traceback.format_exc())
             traceback.print_exc()
@@ -1300,7 +1880,15 @@ def worker():
                    errors=['fake claude: %s: %s' % (type(error).__name__, error)])
         finally:
             with COND:                       # an interrupt belongs to the turn it came in
+                cut = INTERRUPT.is_set() and not DEAF.is_set()
+                if entry['uuid']:
+                    lifecycle(entry['uuid'], 'cancelled' if cut else 'completed')
+                # a suggestion after a turn that ended by itself with nothing queued (finding 19; the real CLI sends one after some turns only)
+                if SUGGEST[0] and model_turn and not cut and not QUEUE:
+                    emit({'type': 'prompt_suggestion', 'suggestion': 'Run the tests', 'uuid': str(uuid.uuid4()),
+                          'session_id': SID})
                 BUSY[0] = False
+                TURN_UUID[0] = None
                 del CUT[:]
                 INTERRUPT.clear()
                 ACKED.clear()

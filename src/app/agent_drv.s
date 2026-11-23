@@ -421,10 +421,13 @@ FN agent_send
     jmp 9f
 3:  mov rdi, r15                # not running: started first, the prompt waits for ready
     call agent_start
-    test eax, eax
-    jnz .Las_queue
+    mov ecx, eax
     mov eax, SEND_FAILED
-    jmp 9f
+    test ecx, ecx
+    jz 9f
+    cmp dword ptr [r15 + AL_state], ALS_FAILED  # the start's first write broke the connection: its
+    je 9f                                       #   close reported the failure already (ev_failed)
+    jmp .Las_queue
 .Las_queue:
     mov eax, SEND_FULL
     cmp qword ptr [r15 + AL_queue + VEC_len], AL_QUEUE_MAX
@@ -446,18 +449,23 @@ FN agent_send
     mov rdi, r15                # a notice of rhun's goes with the next prompt
     call own_drop
     call user_row
+    mov rdi, r15                # WORKING before the write: a connection that breaks under it is a turn
+    mov esi, ALS_WORKING        #   that failed (the driver's close reports it, FAILED)
+    call agent_state_set
     mov rdi, r15
     mov rsi, r12
     mov rdx, r13
     mov rax, [r15 + AL_drv]
     call [rax + DRV_send]
     test eax, eax
-    mov eax, SEND_FAILED
-    jz 9f
-    mov rdi, r15
-    mov esi, ALS_WORKING
-    call agent_state_set
     mov eax, SEND_OK
+    jnz 9f
+    cmp dword ptr [r15 + AL_state], ALS_WORKING
+    jne 8f                      # it broke: FAILED already
+    mov rdi, r15                # refused, nothing went: ready again
+    mov esi, ALS_READY
+    call agent_state_set
+8:  mov eax, SEND_FAILED
 9:  EPILOGUE
 
 # user_row(): agent_send's prompt (rbx AS, r12 ptr, r13 len) as the user's row, shown at once
@@ -1341,17 +1349,22 @@ FN ev_note
     xor r8d, r8d
     jmp agents_msg_add
 
-# FN ev_ready(al): the handshake is done: the prompts that waited go, the oldest first
+# FN ev_ready(al): the handshake is done: the prompts that waited go, the oldest first. They go WORKING: a
+#   connection that breaks under a write is a turn that failed, and its close (the driver's: ev_failed,
+#   ev_closed) has put the prompts back in the box and freed them before the write returns
 FN ev_ready
     PROLOGUE
     mov rbx, rdi
-    mov rdi, rbx
     mov esi, ALS_READY
+    cmp qword ptr [rbx + AL_queue + VEC_len], 0
+    je 1f
+    mov esi, ALS_WORKING
+1:  mov rdi, rbx
     call agent_state_set
     xor r12d, r12d
     xor r13d, r13d              # one went
-1:  cmp r12, [rbx + AL_queue + VEC_len]
-    jae 2f
+2:  cmp r12, [rbx + AL_queue + VEC_len]
+    jae 3f
     mov rax, [rbx + AL_queue + VEC_ptr]
     mov r14, [rax + r12*8]
     inc r12
@@ -1363,16 +1376,21 @@ FN ev_ready
     mov rax, [rbx + AL_drv]
     call [rax + DRV_send]
     or r13d, eax
-    jmp 1b
-2:  mov rdi, rbx
+    cmp dword ptr [rbx + AL_state], ALS_WORKING
+    jne 9f                      # it broke: the queue is gone (ev_failed), the state set
+    jmp 2b
+3:  mov rdi, rbx
     call queue_free
     test r13d, r13d
-    jz 9f
-    call time_ms
-    mov [rbx + AL_used], rax
-    mov rdi, rbx
-    mov esi, ALS_WORKING
+    jnz 4f
+    cmp dword ptr [rbx + AL_state], ALS_WORKING
+    jne 9f
+    mov rdi, rbx                # every one refused: nothing runs
+    mov esi, ALS_READY
     call agent_state_set
+    jmp 9f
+4:  call time_ms
+    mov [rbx + AL_used], rax
 9:  EPILOGUE
 
 # FN ev_text(al, key ptr, key len, ptr, len, replace) -> rax the row's index (-1 none): reply text of a
@@ -1486,7 +1504,8 @@ FN ev_request
 9:  EPILOGUE
 
 # FN ev_request_gone(al, AQ*): answered or withdrawn: its card goes (when it shows), it leaves AL_reqs
-#   (the others keep their order) and is freed
+#   (the others keep their order) and is freed. One that is not in AL_reqs is not touched: a write's close
+#   (ev_closed) may have freed it already
 FN ev_request_gone
     PROLOGUE
     mov rbx, rdi
@@ -1509,14 +1528,14 @@ FN ev_request_gone
     dec rdx
     mov [rbx + AL_reqs + VEC_len], rdx
 4:  cmp rcx, rdx
-    jae 5f
+    jae 6f
     mov r8, [rax + rcx*8 + 8]
     mov [rax + rcx*8], r8
     inc rcx
     jmp 4b
-5:  mov rdi, r12
+6:  mov rdi, r12
     call aq_free
-    mov dword ptr [rip + g_dirty], 1
+5:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
 # reqs_drop(AL*) -> eax how many requests waited: they go unanswered, with the card

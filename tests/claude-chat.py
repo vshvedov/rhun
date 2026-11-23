@@ -956,6 +956,61 @@ class RequestTest(DrivenCase):
         self.assertEqual(self.logged('many'), [['allow'] * 32 + ['error']])
         self.assertIsNone(self.card())
 
+    def test_an_answer_nobody_reads(self):
+        # the process closed its stdin while the card is up (and runs on). Where rhun has not seen that yet
+        # (macOS: no POLLERR on the pipe) the answer's write breaks the connection: the request is freed
+        # in that write's close, a failure; where it has (Linux) the write is refused and the card stays
+        self.start()
+        self.chat('gone', 'waiting')
+        self.assertEqual(self.card(), 'card=Allow this bash command? touch gone.txt options=Yes|No')
+        time.sleep(0.3)                             # the fake closes its stdin as it reads the prompt
+        self.command('agent-card 1')
+        live = self.live()
+        self.assertIsNone(self.process.poll(), live)
+        if live.startswith('state=failed '):
+            self.assertIn(' requests=0 ', live)
+            self.assertIn('report=The connection to Claude Code broke.', live)
+            self.assertIsNone(self.card())
+            self.assertEqual(self.thread()[-2:], [UNANSWERED, 'error The connection to Claude Code broke.'])
+        else:
+            self.assertTrue(live.startswith('state=waiting '), live)
+            self.assertIn(' requests=1 ', live)
+            self.assertEqual(self.card(), 'card=Allow this bash command? touch gone.txt options=Yes|No')
+        self.assertEqual(self.answers(), [])
+        self.command('agent-prompt hello')          # rhun goes on
+        self.assertIsNone(self.process.poll())
+
+    def test_a_prompt_nobody_reads(self):
+        # the same for a prompt: a break under its write is a failed turn, not a turn that never ends
+        self.start()
+        self.chat('gone reply')
+        time.sleep(0.3)
+        self.command('agent-prompt hello')
+        live = self.live()
+        if live.startswith('state=failed '):
+            self.assertIn('report=The connection to Claude Code broke.', live)
+            self.assertEqual(self.thread()[-1], 'error The connection to Claude Code broke.')
+            self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
+        else:
+            self.assertTrue(live.startswith('state=ready '), live)
+        self.assertEqual(self.prompts(), ['gone reply'])
+
+    def test_a_refused_answer_keeps_the_card(self):
+        self.start()
+        self.chat('tool', 'waiting')
+        self.command('agent-timing queue=1')        # the connection's queue takes nothing more
+        self.command('agent-card 1')
+        self.assertIn('state=waiting ', self.live())
+        self.assertIn(' requests=1 ', self.live())
+        self.assertEqual(self.card(), 'card=Allow this bash command? touch approved.txt options=Yes|No')
+        self.assertEqual(self.answers(), [])
+        self.command(f'agent-timing queue={16 << 20}')
+        self.command('agent-card 1')                # now it goes
+        self.command('wait-agent ready')
+        self.assertIsNone(self.card())
+        self.assertEqual([a['behavior'] for a in self.answers()], ['allow'])
+        self.assertTrue((self.project / 'approved.txt').exists())
+
     def test_a_card_goes_when_the_process_ends(self):
         self.start()
         self.chat('tool', 'waiting')

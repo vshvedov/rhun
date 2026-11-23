@@ -218,8 +218,8 @@ cl_start:
     call jw_key
     lea rdi, [rip + cw]
     call jw_null
-    mov rdi, rbx
-    call req_end
+    mov rdi, rbx                # a child gone already breaks the connection here: its close reports the
+    call req_end                #   failed start (cl_close: ev_failed, ev_closed), the state says so
     mov eax, 1
     EPILOGUE
 .Lcs_fail:
@@ -407,7 +407,8 @@ out_take:
 9:  ret
 
 # cl_send(AL*, ptr, len) -> eax 1 written: {"type":"user","message":{"role":"user","content":[{"type":
-#   "text","text":T}]},"parent_tool_use_id":null,"session_id":""}
+#   "text","text":T}]},"parent_tool_use_id":null,"session_id":""}. 0 when the connection refused it, or
+#   broke under the write (its close reported that: the state is not the caller's any more)
 cl_send:
     PROLOGUE
     mov rbx, rdi
@@ -477,7 +478,11 @@ cl_send:
     call cl_write
     test eax, eax
     jz 9f
+    xor eax, eax                # the write broke the connection (its close ran, cl_close): not sent
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
     inc qword ptr [rbx + AL_turns]
+    mov eax, 1
 9:  EPILOGUE
 
 # cl_stop(AL*): Stop: {"type":"control_request","request_id":"rN","request":{"subtype":"interrupt"}}, once
@@ -1658,7 +1663,7 @@ h_can_use:
     lea rdx, [rip + .Lr_noecho]
     xor ecx, ecx
     call reply_deny
-    mov rdi, r14
+    mov rdi, r14                # not in AL_reqs yet: a close the write caused did not free it
     call agent_aq_free
     EPILOGUE
 3:  mov rdi, [r14 + AQ_tool]
@@ -1808,6 +1813,11 @@ req_show:
     lea rdx, [rip + .Lr_noshow]
     xor ecx, ecx
     call reply_deny
+    mov rdi, rbx                # the deny's write may have closed the connection: every request is
+    mov rsi, r12                #   gone then (ev_closed), the state set
+    call req_kept
+    test eax, eax
+    jz 9f
     mov rdi, rbx
     mov rsi, r12
     call ev_request_gone
@@ -1889,7 +1899,9 @@ show_question:
 #   allows with the input unchanged, No denies with the extension's words and interrupts. A plan: Yes
 #   asks for the default mode first (plan mode stays on otherwise), then allows; No keeps planning. A
 #   question: the pick is kept and the next question's card shows; after the last one the answers go.
-#   Then the next request's card shows
+#   Then the next request's card shows. An answer the connection refuses (its queue is full, its input
+#   ended) is not sent: the card shows again, with a toast. Writing can break the connection: its close
+#   (cl_close -> ev_closed) frees every request, the card with them, before the write returns
 cl_answer:
     PROLOGUE
     mov rbx, rdi
@@ -1923,6 +1935,13 @@ cl_answer:
     jnz 3f
     mov rdi, rbx
     call set_mode_default
+    test eax, eax
+    jz .Lca_keep                # refused: nothing went
+    mov rdi, rbx                # the request is gone when the write closed the connection
+    mov rsi, r12
+    call req_kept
+    test eax, eax
+    jz .Lca_gone
     jmp 1b
 3:  mov rdi, rbx
     mov rsi, r12
@@ -1945,13 +1964,48 @@ cl_answer:
 4:  mov rdi, rbx
     mov rsi, r12
     call reply_answers
-8:  mov rdi, rbx
+    test eax, eax
+    jnz 8f
+    dec qword ptr [r12 + AQ_n]  # refused: the last pick is taken back, its question shows again
+    dec qword ptr [r12 + AQ_picks + SB_len]
+    jmp .Lca_keep
+8:  test eax, eax
+    jz .Lca_keep
+    mov rdi, rbx                # written; when the write closed the connection, the request and its
+    mov rsi, r12                #   card went with it (ev_closed): r12 is freed, nothing more to do
+    call req_kept
+    test eax, eax
+    jz .Lca_gone
+    mov rdi, rbx
     mov rsi, r12
     call ev_request_gone
     mov rdi, rbx
     call req_show
+.Lca_gone:
     mov eax, 1
 9:  EPILOGUE
+.Lca_keep:                      # nothing was sent: the card again (agent_answer took it down)
+    mov rdi, rbx
+    call req_show
+    lea rdi, [rip + .Lr_unsent]
+    call app_toast
+    mov eax, 1
+    EPILOGUE
+
+# req_kept(AL*, AQ*) -> eax 1 when the request is still in AL_reqs. A write that breaks the connection
+#   runs its close (cl_close -> ev_closed), which frees every request; nothing adds one meanwhile (only a
+#   line from claude does, and a write reads none), so a request that is not there is freed
+req_kept:
+    mov rcx, [rdi + AL_reqs + VEC_len]
+    mov rdx, [rdi + AL_reqs + VEC_ptr]
+1:  xor eax, eax
+    test rcx, rcx
+    jz 9f
+    dec rcx
+    cmp [rdx + rcx*8], rsi
+    jne 1b
+    mov eax, 1
+9:  ret
 
 # set_mode_default(AL*): {"type":"control_request","request_id":"rN","request":{"subtype":
 #   "set_permission_mode","mode":"default"}} (its answer is not waited for: system/status reports the mode)
@@ -2583,6 +2637,7 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lr_keep_planning: .asciz "User chose to stay in plan mode and continue planning"
 .Lr_noecho: .asciz "rhun cannot pass this input back unchanged"
 .Lr_noshow: .asciz "rhun cannot show this request"
+.Lr_unsent: .asciz "Claude Code is not taking input now: the answer was not sent."
 .Lr_toomany: .asciz "too many requests are waiting in rhun"
 .Lwithdrawn: .asciz "Withdrawn by Claude"
 .Lprojects: .asciz "/projects"

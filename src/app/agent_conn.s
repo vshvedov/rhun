@@ -38,12 +38,13 @@ probe: .zero 8                  # a pollfd for on_in's check
 
 .data
 .p2align 2
-.globl g_conn_term_ms, g_conn_kill_ms, g_conn_stall_ms, g_conn_eof_ms, g_conn_max
+.globl g_conn_term_ms, g_conn_kill_ms, g_conn_stall_ms, g_conn_eof_ms, g_conn_max, g_conn_queue_max
 g_conn_term_ms: .long CN_TERM_MS
 g_conn_kill_ms: .long CN_KILL_MS
 g_conn_stall_ms: .long CN_STALL_MS
 g_conn_eof_ms: .long CN_EOF_MS
 g_conn_max: .long CN_MAX
+g_conn_queue_max: .long CN_QUEUE_MAX    # agent-timing queue= lowers it (tests)
 
 .text
 
@@ -541,7 +542,7 @@ on_in:
 9:  EPILOGUE
 
 # conn_write(conn, ptr, len) -> eax 1, or 0 when the connection is not up, its input has ended or the
-#   queue would pass CN_QUEUE_MAX. What the pipe cannot take now waits in CN_wbuf, behind anything
+#   queue would pass g_conn_queue_max (CN_QUEUE_MAX). Nothing is called then. What the pipe cannot take now waits in CN_wbuf, behind anything
 #   already waiting, and goes out on POLLOUT. A write error breaks the connection (CN_E_WRITE, on_close
 #   before this returns 1).
 FN conn_write
@@ -557,7 +558,8 @@ FN conn_write
     sub rax, [rbx + CN_wpos]
     mov r14, rax                # bytes waiting
     add rax, r13
-    cmp rax, CN_QUEUE_MAX
+    mov ecx, [rip + g_conn_queue_max]
+    cmp rax, rcx
     ja 8f
     test r13, r13
     jz 7f

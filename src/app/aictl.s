@@ -417,7 +417,8 @@ state_named:
 8:  mov eax, -1
     EPILOGUE
 
-# agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N]: shorter times for tests
+# agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES]: shorter times
+#   (and a smaller cap, a smaller input queue) for tests
 c_agent_timing:
     PROLOGUE
     call ai_set
@@ -599,6 +600,7 @@ c_agent_test_append:
 .Lt_eof: .asciz "eof"
 .Lt_hold: .asciz "hold"
 .Lt_guard: .asciz "guard"
+.Lt_queue: .asciz "queue"
 .Lc_print_tools: .asciz "print-tools"
 .Lc_print_holder: .asciz "print-holder"
 .Lr_chat_off: .asciz "Chat with Claude Code is off (Settings > Claude Code)."
@@ -635,4 +637,5 @@ ai_ctl:
 holder_names: .quad .Lh_none, .Lh_other, .Lh_unknown
 live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_conn_kill_ms
-    .quad .Lt_eof, g_conn_eof_ms, .Lt_hold, g_drv_hold_ms, .Lt_guard, g_conn_max, 0, 0
+    .quad .Lt_eof, g_conn_eof_ms, .Lt_hold, g_drv_hold_ms, .Lt_guard, g_conn_max
+    .quad .Lt_queue, g_conn_queue_max, 0, 0

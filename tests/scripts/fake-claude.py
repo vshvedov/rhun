@@ -43,7 +43,8 @@ record or answer of a shape it cannot read failed, {"exit": N} at the end).
 
 It never runs the real CLI or touches the network. When its stdin closes it finishes the turn that
 runs (a request still waiting is withdrawn, as nobody is left to answer it) and exits; only `deaf`,
-an agent that does not stop, runs on (30 s at most) until it is killed. It exits too when its stdout
+an agent that does not stop, runs on (30 s at most) until it is killed; `gone` closes its stdin itself as it
+reads that prompt and runs on (FAKE_CLAUDE_LINGER_MS, default 30 s). It exits too when its stdout
 is gone. Unrecorded choices (EOF with a request waiting, SIGTERM and the record) are listed in the
 fixtures notes under "Not recorded"."""
 import json
@@ -971,6 +972,17 @@ def s_mute(prompt):
     crash(1)
 
 
+def s_gone(prompt):
+    """a permission request, while the process has closed its stdin (the main loop does that when it reads
+    this prompt) and runs on for FAKE_CLAUDE_LINGER_MS (default 30 s) before it exits: rhun's answer finds
+    no reader (unrecorded: the CLI closes its stdin only as it exits); "gone reply": a plain reply instead,
+    so the next prompt finds no reader"""
+    if prompt.split()[1:2] == ['reply']:
+        final('ok: ' + prompt)
+    else:
+        bash('touch gone.txt')
+
+
 def s_orphan(prompt):
     """a permission request the turn's result overtakes, never withdrawn (unrecorded: the CLI withdraws first,
     06): it waits a second for no answer, then the turn ends"""
@@ -1109,7 +1121,7 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'wait': s_wait, 'many': s_many, 'ran': s_ran, 'fails': s_fails, 'early': s_early,
              'replay': s_replay, 'mcp': s_mcp, 'noid': s_noid, 'askx': s_askx, 'deep': s_deep,
              'withdraw': s_withdraw, 'unsaved': s_unsaved, 'unknown': s_unknown, 'unhandled': s_unhandled,
-             'mute': s_mute, 'orphan': s_orphan, 'autherr': s_autherr, 'long': s_long}
+             'mute': s_mute, 'orphan': s_orphan, 'autherr': s_autherr, 'long': s_long, 'gone': s_gone}
 
 
 COMMANDS = [{'name': 'compact', 'description': 'Clear history but keep a summary', 'argumentHint': ''}]
@@ -1136,6 +1148,13 @@ def init_response():
 
 def respond(rid, response):
     emit({'type': 'control_response', 'response': {'subtype': 'success', 'request_id': rid, 'response': response}})
+
+
+def prompt_text(message):
+    """The text of a user message."""
+    content = message.get('message', {}).get('content')
+    return content if isinstance(content, str) else ''.join(
+        block.get('text', '') for block in content or [] if block.get('type') == 'text')
 
 
 def handle(message):
@@ -1187,9 +1206,7 @@ def handle(message):
                     else {'behavior': 'error', 'message': response.get('error', '')}
                 COND.notify_all()
     elif kind == 'user':
-        content = message.get('message', {}).get('content')
-        prompt = content if isinstance(content, str) else ''.join(
-            block.get('text', '') for block in content or [] if block.get('type') == 'text')
+        prompt = prompt_text(message)
         with COND:
             QUEUE.append(prompt)
             COND.notify_all()
@@ -1260,6 +1277,10 @@ for raw in sys.stdin:
     except Exception:                        # a record of a shape the fake does not know
         log(error=traceback.format_exc())
         traceback.print_exc()
+    if message.get('type') == 'user' and prompt_text(message).split()[:1] == ['gone']:
+        os.close(sys.stdin.fileno())         # `gone`: nobody reads what rhun writes from here on
+        time.sleep(int(ENV.get('FAKE_CLAUDE_LINGER_MS', '30000')) / 1000)
+        break
 with COND:                                   # at EOF the turn running finishes first
     CLOSED.set()                             # (a request still waiting is withdrawn)
     COND.notify_all()

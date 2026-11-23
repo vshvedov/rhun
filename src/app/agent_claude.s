@@ -176,7 +176,8 @@ cl_start:
     mov [r13 + 16], rax
     add r13, 16
 51: mov qword ptr [r13 + 8], 0
-    call claude_env
+    mov rdi, rbx
+    call start_env
     mov [rsp + 160], rax
     lea rax, [rip + cl_line]
     mov [rbx + AL_cn + CN_on_line], rax
@@ -245,6 +246,47 @@ cl_start:
     call sb_push_cstr
     xor eax, eax
     EPILOGUE
+
+# start_env(AL*) -> rax envp for its program (mem_free it): claude_env's. Its first start keeps the Claude
+#   folder in AL_cdir; when the configuration names another one by a later start, the program is given
+#   AL_cdir (CLAUDE_CONFIG_DIR), where its conversation lives. While the record lives, its transcript,
+#   the search by id and the holder check use AL_cdir too (pin)
+start_env:
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rip + psb]
+    call sb_clear
+    lea rdi, [rip + psb]
+    call claude_dir
+    test eax, eax
+    jz 8f
+    mov rdi, [rbx + AL_cdir]
+    test rdi, rdi
+    jnz 1f
+    mov rdi, [rip + psb + SB_ptr]
+    mov rsi, [rip + psb + SB_len]
+    call mem_dup
+    mov [rbx + AL_cdir], rax
+    jmp 8f
+1:  mov rsi, [rip + psb + SB_ptr]
+    call strcmp_eq
+    test eax, eax
+    jnz 8f
+    mov rdi, [rbx + AL_cdir]
+    call claude_env_dir
+    EPILOGUE
+8:  call claude_env
+    EPILOGUE
+
+# pin(AL*): claude_dir gives the folder its program was started with (none yet: the configuration's)
+pin:
+    mov rdi, [rdi + AL_cdir]
+    jmp claude_dir_pin
+
+# unpin(): claude_dir follows the configuration again
+unpin:
+    xor edi, edi
+    jmp claude_dir_pin
 
 # resume_sid(AL*) -> eax 1 with AL_sid the conversation's id: its transcript's name without ".jsonl"
 #   (Claude Code names the file after the id); 0 when that is empty or longer than an id
@@ -527,8 +569,13 @@ cl_held:
     mov eax, HOLDER_NONE
     test ecx, ecx
     jz 9f                       # no id: the start says so
+    mov rdi, rbx                # in the folder it lives in
+    call pin
     lea rdi, [rbx + AL_sid]
     call holder_claude
+    mov ebx, eax
+    call unpin
+    mov eax, ebx
 9:  EPILOGUE
 
 # ---- the sign-in state: `claude auth status --json`, once a window, in the background ----
@@ -1344,13 +1391,16 @@ set_path:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    call pin                    # its program's folder
     lea rdi, [rip + psb]
     call sb_clear
     lea rdi, [rip + psb]
     mov rsi, r12
     lea rdx, [rbx + AL_sid]
     call claude_transcript
-    test eax, eax
+    mov r13d, eax
+    call unpin
+    test r13d, r13d
     jz 9f
     mov rdi, rbx
     mov rsi, [rip + psb + SB_ptr]
@@ -1473,11 +1523,15 @@ find_file:
     call file_missing
     test eax, eax
     jz 8f
-1:  lea rdi, [rip + dsb]
+1:  lea rdi, [rip + dsb]        # in its program's folder
     call sb_clear
+    mov rdi, rbx
+    call pin
     lea rdi, [rip + dsb]
     call claude_dir
-    test eax, eax
+    mov r13d, eax
+    call unpin
+    test r13d, r13d
     jz 9f
     lea rdi, [rip + dsb]
     lea rsi, [rip + .Lprojects]

@@ -2945,6 +2945,7 @@ F AL_rowkey, 80         # cstr: the item key of AL_row (ev_text), empty when no 
 F AL_own, 8             # AQ*: rhun's own card on the session (held, trust, sign-in, a failed start), or 0
 F AL_hold_at, 8         # time_ms the holder is read again (ALF_HOLDWAIT)
 F AL_fork, 40           # cstr: a copy's source conversation (ALF_FORK)
+F AL_cdir, 8            # owned cstr: the Claude folder its program was first started with, or 0
 ENDSTRUCT AL_SIZE
 .equ TE_DONE, 0                 # ev_turn_end's reasons
 .equ TE_ERROR, 1

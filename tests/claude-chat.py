@@ -557,6 +557,36 @@ class ChatTest(DrivenCase):
         self.assertRegex(self.live(), r' new=0\b')     # its file was found where claude wrote it
         self.assertEqual(self.thread(), ['user hello', REPLY + 'ok: hello'])
 
+    def test_a_conversation_stays_in_the_folder_its_program_started_with(self):
+        # typing starts claude with env.CLAUDE_CONFIG_DIR = A; the config then names B: the conversation
+        # still lives in A: its file is found there, and after a release it is resumed there
+        a, b = self.work / 'A', self.work / 'B'
+        self.env['FAKE_CLAUDE_ECHO_ENV'] = 'CLAUDE_CONFIG_DIR'
+        self.start(self.claude_section(f'env.CLAUDE_CONFIG_DIR = {a}\n'))
+        self.command('agent-new claude')
+        self.command('agent-type h')
+        self.until(lambda: self.starts(), 'the process starts')
+        self.config.write_text(self.BASE + self.claude_section(f'env.CLAUDE_CONFIG_DIR = {b}\n'), encoding='utf-8')
+        sid = self.sid()
+        self.until(lambda: self.command(f'print-claude-path {self.project} {sid}').startswith(str(b)),
+                   'the reload', 10)
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready')
+        transcript = a / 'projects' / slug(self.project) / (sid + '.jsonl')
+        self.assertTrue(transcript.exists())
+        self.assertRegex(self.live(), r' new=0\b')
+        self.command('agent-release')
+        self.command('wait-agent off')
+        self.until_gone()
+        self.command('agent-prompt again')
+        self.command('wait-agent ready')
+        starts = self.starts()
+        self.assertEqual(len(starts), 2, starts)
+        self.assertEqual(starts[1]['argv'][-1], '--resume=' + sid)
+        self.assertEqual(starts[1]['env']['CLAUDE_CONFIG_DIR'], str(a))
+        self.assertFalse(b.exists() and list(b.glob('projects/*/*.jsonl')))
+        self.assertEqual(self.thread()[-2:], ['user again', 'agent ok: again'])
+
     def test_text_streams_into_one_row(self):
         self.start()
         self.chat('slow', 'working')

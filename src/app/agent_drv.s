@@ -247,6 +247,8 @@ live_free:
     call vec_free
     lea rdi, [rbx + AL_report]
     call sb_free
+    mov rdi, [rbx + AL_cdir]
+    call mem_free
     mov rax, [rbx + AL_as]
     mov qword ptr [rax + AS_live], 0
     mov dword ptr [rax + AS_state], AGS_IDLE

@@ -26,6 +26,9 @@
 #                   CLAUDE_CONFIG_DIR (not empty), "$HOME/.claude"; 0 without any. The environment is
 #                   the one claude gets (uproc_env_get): the login shell's once known, rhun's own until
 #                   then. The one source for the driver, the holder check and discovery
+#   claude_dir_pin(cstr or 0)  claude_dir gives that folder until it is called with 0: a conversation's
+#                   own (the one its program was started with: agent_claude.s keeps it)
+#   claude_env_dir(dir) -> rax claude_env() with CLAUDE_CONFIG_DIR=dir over everything
 #   claude_dir_moved() -> eax 1 once, when the login environment has become known and gives another
 #                   folder than the one discovery last ran with: discovery runs again (agents_tick)
 #   claude_slug(sb, path) -> rax bytes appended: the folder name Claude Code gives a working directory
@@ -56,6 +59,10 @@ idx_pair: .zero SB_SIZE         # "CLAUDE_CONFIG_DIR=" and it, for the worker
 idx_set: .zero 16               # the worker's sets: idx_pair's text, 0
 dir_now: .zero SB_SIZE          # claude_dir_moved's
 dir_checked: .long 0            # claude_dir_moved looked once the login environment was known
+.p2align 3
+dir_pin: .quad 0                # claude_dir_pin's folder, or 0
+pin_pair: .zero SB_SIZE         # claude_env_dir's "CLAUDE_CONFIG_DIR=..."
+pin_forced: .zero 8 * 4         # forced's entries, then pin_pair's text, 0
 rpath: .zero 4096 + 16          # a resolved working directory
 
 .text
@@ -326,6 +333,45 @@ FN claude_env
     mov rax, r12
     EPILOGUE
 
+# FN claude_dir_pin(cstr or 0): claude_dir gives that folder until it is called with 0
+FN claude_dir_pin
+    mov [rip + dir_pin], rdi
+    ret
+
+# FN claude_env_dir(dir cstr) -> rax envp: claude_env's, with CLAUDE_CONFIG_DIR=dir whatever the pairs and
+#   the login environment say (a conversation goes on in the folder it lives in)
+FN claude_env_dir
+    PROLOGUE
+    mov r12, rdi
+    lea rdi, [rip + pin_pair]
+    call sb_clear
+    lea rdi, [rip + pin_pair]
+    lea rsi, [rip + .Lconfig_dir_eq]
+    mov edx, CONFIG_DIR_LEN
+    call sb_push
+    lea rdi, [rip + pin_pair]
+    mov rsi, r12
+    call sb_push_cstr
+    lea rcx, [rip + pin_forced]
+    lea rax, [rip + .Lf_entry]
+    mov [rcx], rax
+    lea rax, [rip + .Lf_mcp]
+    mov [rcx + 8], rax
+    mov rax, [rip + pin_pair + SB_ptr]
+    mov [rcx + 16], rax
+    mov qword ptr [rcx + 24], 0
+    call pairs_list
+    mov rbx, rax
+    mov rdi, rax
+    lea rsi, [rip + pin_forced]
+    lea rdx, [rip + unsets]
+    call uproc_env_make
+    mov r12, rax
+    mov rdi, rbx
+    call mem_free
+    mov rax, r12
+    EPILOGUE
+
 # claude_exe() -> rax argv prefix, edx count (see the top of the file)
 FN claude_exe
     PROLOGUE 16
@@ -537,7 +583,13 @@ FN claude_mode_alias
 FN claude_dir
     PROLOGUE
     mov rbx, rdi
-    call config_dir_pair
+    mov rsi, [rip + dir_pin]
+    test rsi, rsi
+    jz 0f
+    call sb_push_cstr           # a conversation's own folder (claude_dir_pin)
+    mov eax, 1
+    EPILOGUE
+0:  call config_dir_pair
     test rax, rax
     jz 1f
     lea r12, [rax + CONFIG_DIR_LEN]

@@ -2934,6 +2934,29 @@ class ReviewProtocolTest(ModelCase):
         self.assertTrue(self.command('print-agent-input').startswith('input= '))
         self.assertNotIn('A queued message was not sent.', self.command('print-toast'))
 
+    def test_a_prompt_ending_with_the_cli_marker_counts_as_the_box_does(self):
+        # 3.3: agent_send counts as the box does (UTF-16 units, the CLI's own truncation marker not counted)
+        self.start()
+        self.chat('hello')
+        marker = '[Message truncated - exceeded 50,000 character limit]'
+        self.command('key ' + chat.MOD + '+n')         # pasted into the box from a new file (two line feeds)
+        self.command('type ' + 'a' * 50000)
+        self.command('key Return')
+        self.command('key Return')
+        self.command('type ' + marker)
+        self.command('key ' + chat.MOD + '+a')
+        self.command('key ' + chat.MOD + '+c')
+        self.command('key ' + chat.MOD + '+w')
+        self.command('key Escape')
+        self.command('cmd focus_agents')
+        self.command('key Tab')
+        self.command('key ' + chat.MOD + '+v')
+        self.assertTrue(self.command('print-agent-input').startswith('input=aaa'))
+        self.command('key Return')
+        self.until(lambda: len(self.prompts()) == 2, 'sent')
+        self.assertEqual(self.prompts()[-1], 'a' * 50000 + '\n\n' + marker)
+        self.assertNotIn('50,000', self.command('print-toast'))
+
 
 if __name__ == '__main__':
     unittest.main()

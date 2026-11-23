@@ -86,7 +86,8 @@
 .equ R_INFO, 6
 .equ ENV_TICK_MS, 50            # a start waiting for the login environment looks again this often
 .equ HOLD_MS, 10000             # how long a start waits for another holder of the conversation
-.equ SEND_CHARS, 50000        # a prompt's characters at most (the extension's limit)
+.equ SEND_CHARS, 50000        # a prompt's characters at most (the extension's limit), in UTF-16 units
+.equ MARKER_UNITS, 55           # .Lmarker's UTF-16 units
 .equ ROWKEY_MAX, 80             # AL_rowkey's size
 .equ RS_QUEUE, 1                # queue_restore's: the prompts that waited for a start
 .equ RS_HELD, 2                 #   the messages held
@@ -568,19 +569,11 @@ FN agent_send
     mov rdx, r13
     call [r14 + DRV_send]
     jmp 9f
-2:  xor ecx, ecx                # at most SEND_CHARS characters (the extension's limit)
-    xor edx, edx
-21: cmp rcx, r13
-    jae 22f
-    movzx eax, byte ptr [r12 + rcx]
-    inc rcx
-    and eax, 0xc0
-    cmp eax, 0x80
-    je 21b
-    inc rdx
-    jmp 21b
-22: cmp rdx, SEND_CHARS
-    jbe 23f
+2:  mov rdi, r12                # at most SEND_CHARS characters, counted as the box counts them (the
+    mov rsi, r13                #   extension's limit: UTF-16 units, the CLI's own marker not counted)
+    call agent_over
+    test rax, rax
+    jz 23f
     lea rdi, [rip + .Lprompt_long]
     call app_toast
     mov eax, SEND_FAILED
@@ -706,6 +699,52 @@ FN agent_send
     mov rdi, rbx
     call agents_sent
     mov eax, r14d
+9:  EPILOGUE
+
+# FN agent_units(ptr, len) -> rax its UTF-16 units: a character above U+FFFF (a four-byte one) counts 2, as
+#   the extension's length does
+FN agent_units
+    xor eax, eax
+    xor ecx, ecx
+1:  cmp rcx, rsi
+    jae 9f
+    movzx edx, byte ptr [rdi + rcx]
+    inc rcx
+    mov r8d, edx
+    and r8d, 0xc0
+    cmp r8d, 0x80
+    je 1b
+    inc rax
+    cmp edx, 0xf0
+    jb 1b
+    inc rax
+    jmp 1b
+9:  ret
+
+# FN agent_over(ptr, len) -> rax the UTF-16 units past SEND_CHARS (0 within it); a text ending with the
+#   CLI's own truncation marker does not count it. The box (agentcompose.s) and agent_send both count so
+FN agent_over
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    call agent_units
+    mov rbx, rax
+    lea rdi, [rip + .Lmarker]
+    call strlen
+    cmp r13, rax
+    jb 1f
+    mov rdx, rax
+    lea rdi, [r12 + r13]
+    sub rdi, rax
+    lea rsi, [rip + .Lmarker]
+    call memeq
+    test eax, eax
+    jz 1f
+    sub rbx, MARKER_UNITS
+1:  xor eax, eax
+    sub rbx, SEND_CHARS
+    jle 9f
+    mov rax, rbx
 9:  EPILOGUE
 
 # held_add(AL*, uuid cstr, ptr, len): a message written during a turn joins AL_held (its text copied)
@@ -3100,6 +3139,7 @@ opts_failed: .quad .Lo_terminal
 .Lurandom: .asciz "/dev/urandom"
 .Lhex: .ascii "0123456789abcdef"
 .Lprompt_long: .asciz "The prompt is longer than 50,000 characters."
+.Lmarker: .asciz "\n\n[Message truncated - exceeded 50,000 character limit]"
 .Ltoo_many: .asciz "Sixteen messages are already waiting."
 .Lheld_back: .asciz "A queued message was not sent."
 .Lturn_failed: .asciz "The turn failed."

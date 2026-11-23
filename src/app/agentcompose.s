@@ -51,7 +51,6 @@
 
 .equ HIST_MAX, 100              # prompts the recall goes back through (the extension's)
 .equ SEND_UNITS, 50000        # a prompt's UTF-16 units at most (the extension's limit)
-.equ MARKER_UNITS, 55           # "\n\n[Message truncated - exceeded 50,000 character limit]"
 .equ PAINT_MAX, 32              # painted ranges at most
 .equ KINDS_MAX, 8               # new conversations' drafts, by AS_kind
 .equ SUGGEST_MAX, 1000          # a suggestion's bytes at most
@@ -95,24 +94,10 @@ hist_i: .long -1                # the prompt recalled (0 the newest), -1 none
 box:
     jmp agentext_box
 
-# units(ptr, len) -> rax its UTF-16 units: a character above U+FFFF (a four-byte one) counts 2
+# units(ptr, len) -> rax its UTF-16 units: a character above U+FFFF (a four-byte one) counts 2 (agent_drv.s
+#   counts for agent_send too)
 units:
-    xor eax, eax
-    xor ecx, ecx
-1:  cmp rcx, rsi
-    jae 9f
-    movzx edx, byte ptr [rdi + rcx]
-    inc rcx
-    mov r8d, edx
-    and r8d, 0xc0
-    cmp r8d, 0x80
-    je 1b
-    inc rax
-    cmp edx, 0xf0
-    jb 1b
-    inc rax
-    jmp 1b
-9:  ret
+    jmp agent_units
 
 # trim(ptr, len) -> rax ptr, rdx len without the blanks (ASCII white space and controls) at both ends
 trim:
@@ -990,30 +975,9 @@ FN composer_check
     EPILOGUE
 
 # over(ptr, len) -> rax the UTF-16 units past SEND_UNITS (0 within it); a text ending with the CLI's own
-#   truncation marker does not count it
+#   truncation marker does not count it (agent_over: agent_send counts the same)
 over:
-    PROLOGUE
-    mov r12, rdi
-    mov r13, rsi
-    call units
-    mov rbx, rax
-    lea rdi, [rip + .Lmarker]
-    call strlen
-    cmp r13, rax
-    jb 1f
-    mov rdx, rax
-    lea rdi, [r12 + r13]
-    sub rdi, rax
-    lea rsi, [rip + .Lmarker]
-    call memeq
-    test eax, eax
-    jz 1f
-    sub rbx, MARKER_UNITS
-1:  xor eax, eax
-    sub rbx, SEND_UNITS
-    jle 9f
-    mov rax, rbx
-9:  EPILOGUE
+    jmp agent_over
 
 # push_count(n): n into nsb, with thousands separators from 100,000 on (the bundle's toLocaleString)
 push_count:
@@ -1750,7 +1714,6 @@ FN composer_hint_dump
 .Lnl: .ascii "\n"
 .Lgap: .asciz "\n\n"
 .Lph_queue: .asciz "Queue another message\xe2\x80\xa6"
-.Lmarker: .asciz "\n\n[Message truncated - exceeded 50,000 character limit]"
 .Lo_prompt: .asciz "Your prompt"
 .Lo_paste: .asciz "That paste"
 .Lo_is: .asciz " is "

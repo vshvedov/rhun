@@ -91,32 +91,37 @@ so you can go on with it in either place.
 
 **+ Claude Code** in the panel's header opens a new conversation, "New Claude Code session": write
 the first prompt in the box, which says "Start a conversation", and press Enter. To continue an
-existing conversation, open it from the list and write in the box under it, "Message Claude Code".
-Enter sends and Shift+Enter starts a new line; in the panel, Enter or Tab goes to the box and Escape
-leaves it. The reply streams in as Claude writes it. A tool call shows as a row once Claude has
-written it, and its output as a result row; thinking and the work of subagents are not shown. The permission mode Claude Code reports shows as `mode: NAME`
-beside Send.
+existing conversation, open it from the list and write in the box under it. In the panel, Enter or
+Tab goes to the box and Escape leaves it. The reply streams in as Claude writes it. A tool call
+shows as a row once Claude has written it, and its output as a result row; thinking and the work
+of subagents are not shown. Under the box a row holds the permission mode, the model and the
+command menu (see [Modes, model and the command menu](#modes-model-and-the-command-menu)).
 
 The process starts when you type or paste the first character in a conversation's box, so it is
 usually ready by the time you send; reading conversations starts nothing. It runs in the
-conversation's folder (a worktree's conversation in that worktree, a new one in the project). Up
-to four prompts sent while it starts wait for it; a fifth stays in the box with "Four
-prompts are already waiting to be sent." While the process starts and while Claude works, **Stop**
-takes the place of **Send**, and a prompt sent while Claude works, or while a card waits for you,
-stays in the box with "Claude is still working. Stop it or wait for the reply." A prompt is at most
-50,000 characters. **Stop**, or Escape while the panel or its box has the focus, interrupts the
-turn, a card that waits included, and an "Interrupted" row marks it. During a start they give the
-start up, whatever it waits for: the prompts that waited go back into the box, before anything
-typed since, a process already started is ended without an error row, and the next Send starts
-anew. **Back** leaves the conversation without stopping it: the turn goes on, and the conversation
-shows it when you open it again.
+conversation's folder (a worktree's conversation in that worktree, a new one in the project).
+Up to four prompts sent while it starts show after the conversation, muted and marked "queued",
+and go to Claude once it is ready; a fifth stays in the box with "Four prompts are already waiting
+to be sent." While Claude works or a card waits for you, Send still sends: the message goes to Claude
+Code at once and shows as queued until Claude starts it, in a turn of its own after the one that
+runs. At most 16 wait; one more stays in the box with "Sixteen messages are already waiting." A
+queued message that does not run (Claude Code refuses or drops it, or ends first) goes back into
+its own conversation's box with "A queued message was not sent." While the process starts and
+while Claude works, **Stop** takes the place of **Send**. **Stop**, or Escape while the panel or
+its box has the focus (once an open menu is closed), interrupts the turn, a card that waits
+included, and an "Interrupted" row marks it; queued messages stay and run next. During a start
+they give the start up, whatever it waits for: the prompts that waited go back into the box,
+before anything typed since, a process already started is ended without an error row, and the
+next Send starts anew. **Back** leaves the conversation without stopping it: the turn goes on, and
+the conversation shows it when you open it again.
 
 After **Stop idle agents after** (`idle_stop_minutes`) without a turn, a card or typing, the
 process is stopped; the next prompt starts it again and goes on with the same conversation. A
 prompt sent while the process is still ending, after the idle stop or the limit below, waits as one
 sent during a start does, and the process starts again once the old one is gone. A new
 conversation you leave before sending anything (Back, another conversation opened, another new one
-begun or the panel closed) is dropped, with its process. At most 32 processes run at once: one more
+begun or the panel closed) is dropped, with its process; its text is kept for the next new one.
+At most 32 processes run at once: one more
 ends the idle one used longest ago, and when none is idle the prompt stays in the box under an error
 row, "Too many agents are running. Stop one and send again." Quitting rhun, opening another folder,
 turning the chat off or switching off **Claude Code** in Settings > Agents (`[agents] claude`, which
@@ -140,29 +145,179 @@ yet".
 | Key | Action |
 | --- | --- |
 | Enter, Tab | In the panel: go to the prompt box |
-| Enter, Shift+Enter | In the box: send, new line |
-| Escape | Stop the turn while one runs, or give up a start; otherwise leave the box, then the conversation |
-| 1 to 9; arrows and Enter | Pick an option of the card (while the panel, not the box, has the focus) |
+| Enter | In the box: send (a new line with **Ctrl+Enter sends**) |
+| Shift+Enter, Ctrl+J | In the box: a new line |
+| Ctrl+Enter (Cmd+Enter on macOS) | In the box: send |
+| Up, Down | In the box, with the caret at its start or its end: the previous or next prompt |
+| Tab | In an empty box: take the suggested prompt; in the command menu: complete the command |
+| Shift+Tab | In the box: the next permission mode |
+| Escape | Close the menu or picker; else stop the turn while one runs, or give up a start; otherwise leave the box, then the conversation |
+| 1, 2, 3; Enter; Up, Down | On a card that has the keys: pick a button; press the focused one; move between its parts |
+| Left, Right | On a permission card: change where a rule is saved; on a question card: the next or previous question |
+| Space | On a question card: pick or tick the focused answer |
+| 1 to 9; arrows and Enter | Pick an option of rhun's own cards, such as Sign In (while the panel, not the box, has the focus) |
 | Ctrl+Plus, Ctrl+Minus, Ctrl+0 | The panel's text size, while the panel or its box has the focus |
+
+### Writing prompts
+
+Enter sends and Shift+Enter or Ctrl+J starts a new line; Ctrl+Enter (Cmd+Enter on macOS) sends
+too. With **Ctrl+Enter sends** (`[agents] ctrl_enter_sends`) Enter starts a new line instead. Up
+with the caret at the start of the box recalls your previous prompt in this conversation, newest
+first (the last 100, queued ones included); Down with the caret at the end goes forward, and past
+the newest gives back what you had typed. Each conversation keeps the text you leave in its box
+until you come back to it. The box says "Ask Claude to edit…" until your first Send in the window,
+then "Message Claude Code", and "Queue another message…" while Claude works. After a reply Claude
+may suggest your next prompt (**Prompt suggestions**, `[claude] prompt_suggestions`): it shows in
+the empty box, and Tab takes it. When Claude Code says the session can think harder on request,
+the word "ultrathink" is drawn in rainbow colours in the box.
+
+A prompt is at most 50,000 characters, counted as Claude Code counts them (a character outside the
+Basic Multilingual Plane, such as most emoji, counts two). A longer one is not sent: a band above
+the box says "Your prompt is N characters over the limit of 50000 · shorten it to send". Invisible
+characters that can hide instructions (zero-width spaces, direction marks, tag characters and the
+like; joiners and variation selectors stay between non-ASCII characters, so emoji keep them) are
+taken out when you paste ("Removed N invisible characters from the pasted text") and before a prompt
+is sent: then nothing goes, the box keeps the cleaned text, and the band says "Removed N invisible
+characters · review and press Enter to send"; press it again to send. A paste that would go over
+the limit is not added. With **Scroll to the end on send** (`[agents] scroll_on_send`, on by
+default) sending moves the conversation to its end.
+
+Bands above the box tell what Claude Code reports: an error, a settings file it could not read
+("Settings file failed to parse: FILE — MSG. Permission rules and other settings from this file
+are not in effect."), two sign-ins it could use, or a usage limit ("You've used 85% of your 5-hour
+limit · resets at 3:45 PM", "You've hit your weekly limit · resets Tue, Nov 24 at 3:45 PM"), with
+**Get more usage** for a Pro or Max plan. Each band's × hides it until its text changes.
+
+Web links that come from Claude Code (in replies, bands and cards) ask before they open: "Claude
+Code wants to open HOST in your browser: URL" with **Open**, **Copy Link** and **Cancel**.
+
+### Modes, model and the command menu
+
+The row under the box holds the permission mode, the model, then at the right the context
+indicator, the prompt cache's clock, the fast-mode mark and **/**, the command menu. In a narrow
+panel the mode's name is cut, the clock goes, and then the model takes a row of its own.
+
+The mode button names the conversation's permission mode, and the box's frame takes its colour. A
+click opens the list: **Manual** (`default`, Claude asks before each edit), **Edit automatically**
+(`acceptEdits`), **Plan** (`plan`, Claude explores and presents a plan before editing), **Auto**
+(`auto`, Claude approves what passes a safety check; offered when the model supports it and your
+settings allow it), **Bypass permissions** (`bypassPermissions`, offered only with **Allow bypass
+permissions**, `[claude] allow_bypass_permissions`), and **Don't ask** (`dontAsk`) while it is the
+mode in force. Shift+Tab in the box goes to the next one, round. A mode picked while no process runs
+starts nothing and is used at the next start; when Claude Code refuses a mode, a message says why
+("Failed to set mode: …"). Each conversation keeps its mode for its next start. While **Permission
+mode** (`initial_mode`) is **Claude Code's setting**, the last of Manual, Edit automatically and
+Auto you picked is also the mode new conversations in the project start in. A conversation that
+would start in Bypass permissions without the setting starts in Manual, with "Bypass permissions is
+off in Settings > Claude Code."
+
+The model button names the model, its effort level and "Ultracode" when that is on. A click opens
+"Select a model": a row for each model Claude Code offers (those your plan does not include are
+greyed), then **Effort**, the model's levels on a track (click or drag it, click its name to step
+round, or Left and Right), and **Ultracode** when Claude Code offers it. The mode list ends with
+the effort row too. A new model shows as a row "Switched to NAME". These choices belong to rhun's
+conversations in this project: the open conversation's Claude Code changes at once, the others
+take them at their next start, and a conversation in another project starts without them. They
+do not change `claude` in a terminal, and rhun never writes them into Claude Code's own settings
+or defaults.
+
+The command menu opens from **/** or when you type `/` at the start of a word in the box, and what
+you type filters it. Its sections are Context, Model, Customize, Settings, Support and Slash
+Commands (from **/**, Slash Commands shows once the filter starts with `/`); its last line is
+Claude Code's version. Up and Down choose, Enter runs, Tab completes a command to `/NAME `, Escape
+or a click outside closes it. With "No matching commands" Enter sends what you typed, and a path
+such as `/usr/bin` opens no menu. After `/NAME ` the command's arguments show in grey until you
+type them.
+
+| Entry | What it does |
+| --- | --- |
+| Clear conversation, `/clear` | Opens a new conversation; the old one stays in the list |
+| New conversation | The same (listed only when you filter for it) |
+| Switch model…, `/model` | Opens the model list |
+| Switch mode… | Opens the mode list |
+| Thinking | Turns extended thinking off or on, for a model that allows it off (no current model does) |
+| Effort, Ultracode | As in the model list |
+| Toggle fast mode | Sends `/fast`, for a model with fast mode when Claude Code allows it (it normally does not); a spark shows while it is on, and rhun never turns it off by itself |
+| Open Claude in Terminal | Opens rhun's terminal prompt with `claude` |
+| General config… | Opens Settings > Claude Code |
+| Switch account, `/login`; Sign out, `/logout` | Opens rhun's terminal prompt with `claude auth login` or `claude auth logout` |
+| View help docs | Asks before opening Claude Code's documentation |
+| `/plan [open\|TEXT]` | Switches to Plan mode, and sends TEXT as a prompt; in Plan mode `/plan open` shows the plan Claude wrote in a tab |
+| `/copy [N]` | Copies Claude's last reply, or the Nth last, to the clipboard |
+| Every other command | Goes to Claude Code as typed, as the list of its commands shows them |
+
+When less than half of the context is left, a small pie shows how much ("40% of context remaining
+until auto-compact."); a click sends `/compact`, queued while Claude works. The clock shows how
+many minutes the prompt cache stays warm ("Prompt cache warm, about 52 min left."), and is dimmed
+once it has likely expired or after a compaction.
+
+rhun keeps these choices (the model, effort, Ultracode and thinking, the mode you last picked,
+each conversation's mode, where you last saved a rule) and the lists of models and commands Claude
+Code last gave, so that the lists work before it starts, in a file per project in its state folder
+(`$XDG_STATE_HOME/rhun`, beside the project's session). Nothing about your account is kept. A
+window without a folder keeps them until it closes.
 
 ### Permissions, questions and plans
 
 When Claude Code asks before using a tool, a card shows under the conversation with the question
-for that tool and the buttons **Yes** and **No**: "Allow this bash command?" and the command's
-first line, "Make this edit to FILE?" (Edit and MultiEdit), "Allow write to FILE?", "Allow reading
-from FILE?", "Allow fetching this url?" and the URL, and for any other tool "Do you want to proceed
-with TOOL?". The buttons of a card show their keys, 1 to 9. Yes lets the tool run with its input
-unchanged; No refuses it and interrupts the turn, which ends with an "Interrupted" row, and Claude
-waits for you to say how to go on. One card shows at a time, the oldest first, and the others wait
-behind it (32 at most; Claude gets an error for one more). A request Claude withdraws goes, with a
-"Withdrawn by Claude" row. If the process ends while a card is up, the card goes and a row says
-"Claude Code ended before the request was answered."
+for that tool: "Allow this bash command?" with the command, which you can edit before saying yes,
+and Claude's description of it; the same for PowerShell; "Make this edit to FILE?" (Edit and
+MultiEdit), "Allow write to FILE?", "Allow reading from FILE?", "Allow fetching this url?",
+"Allow searching for this query?", "Allow network connection to this host?", "Use skill /NAME?",
+the glob, grep and search questions, and for any other tool "Do you want to proceed with TOOL?"
+with **Details**, its input. When a hook asked for the card, "A hook says:" and its words. A
+button in the header folds the card to its first line.
 
-Claude's questions show the same way, one card per question with a button per answer (the first
-16), in the order asked; a question that takes several answers takes one here. A plan Claude asks
-you to approve shows as a reply, then a card "Accept this plan?": **Yes** leaves plan mode for the
-default mode (Manual) and lets Claude go on, and **No, keep planning** keeps it planning. Requests
-of other kinds (from hooks, MCP servers, forms or dialogs) are answered as not supported, so Claude
+**1 Yes** lets the tool run, with your edit of the command if you made one. **No** refuses it and
+interrupts the turn, which ends with an "Interrupted" row; with text in "Tell Claude what to do
+instead" Claude reads your words and goes on. When Claude Code suggests a rule, **2** saves it so
+the same request does not ask again, such as "Yes, allow touch a.txt for this project (just you)",
+"Yes, allow access to src/ for this session" or "Yes, allow all edits this session". rhun sends
+back only Claude Code's own suggestion, and Claude Code saves it where the button says: **this
+project (just you)** (`.claude/settings.local.json`), **all projects** (`~/.claude/settings.json`),
+**this project (shared)** (`.claude/settings.json`) or **this session** (not saved). A click on the
+place, or Left and Right on the button, changes it; the place you chose last is the first one next
+time in the project. Under the button a line names anything else the answer does, such as "Also
+allows access to DIR/" or "Also switches to “Edit automatically” for this session". A suggestion
+to switch to Bypass permissions is dropped without **Allow bypass permissions**.
+
+A card takes the keys only when the focus is already in the agents panel or its box, the panel is
+shown, its conversation is the open one and you have not typed in the box for half a second; else it
+waits without them, "Waiting for permission…" ("Waiting for your answer…" for questions) shows under
+it while the box holds text, and a click on the card gives it the keys. Keys typed into the box or
+the editor never answer a card, and for the first half second a card's buttons do nothing. With the
+keys, 1, 2 and 3 pick a button and the next number goes to the text field, Up and Down move between
+the command, the buttons and the field, Enter presses the focused one (in the field, Enter sends the
+No with your text), and Tab goes back to the box. A card that suggests No starts on it, without
+numbers. One card shows at a time, the oldest first, and the others wait behind it (32 at most;
+Claude gets an error for one more). A request Claude withdraws goes, with a "Withdrawn by Claude"
+row. If the process ends while a card is up, the card goes and a row says "Claude Code ended before
+the request was answered."
+
+Claude's questions show on one card with a tab for each question, an answered one marked. Pick an
+answer (a click, Enter or Space), or several where the question takes more, or **Other** and
+type your own; a single answer moves on to the next question. Left and Right go between the
+questions, Up and Down between the answers. **Submit answers** sends them once every question has
+one. When answers come with a preview, the focused answer's preview shows beside the list, or
+under it in a narrow panel. The card's ×, or Escape, refuses the questions and ends the turn.
+
+A plan Claude asks you to approve opens in an editor tab, "Plan" (behind the active tab while you
+type in a document), with a card "Accept this plan?": **Yes, and use auto mode** (when Auto is
+offered; else **Yes, and auto-accept**, Edit automatically) or **Yes, and manually approve edits**
+(Manual) switch the mode and let Claude go on, and **No, keep planning** keeps it planning: with
+text in the field Claude reads it and plans again, without it the turn ends. To comment on the
+plan, select text in its tab and press **Comment** beside the selection (or Ctrl+Enter), then type
+the comment. The card then lists the comments, each with a × to remove it, and its one button
+**Send feedback and keep planning** sends them, with the field's text, for Claude to plan again.
+The tab is read-only (Ctrl+C copies, Ctrl+A selects all) and is never saved or reopened; closing it
+answers nothing, and the card's answer closes it.
+
+Claude Code may also ask about usage credits for a model ("Continue on Fable with usage credits?",
+"Fable requires usage credits") with **Switch to the default model and continue**, which also
+drops rhun's model choice for the project, and **Continue with NAME**, **Buy usage credits on
+claude.ai** or **Request usage credits from your admin**; and when auto mode falls back to Claude
+Code's own checks, with **Continue** and **Stop**. Both have **Learn more**. Requests of other
+kinds (from hooks, MCP servers, forms or other dialogs) are answered as not supported, so Claude
 never waits for a card that is not there.
 
 ### Open somewhere else
@@ -219,10 +374,14 @@ chat = true
 executable =
 wrapper =
 initial_mode =
+allow_bypass_permissions = false
+prompt_suggestions = true
 env.CLAUDE_CONFIG_DIR = /home/me/.claude-work
 [agents]
 idle_stop_minutes = 10
 font_size = 0
+ctrl_enter_sends = false
+scroll_on_send = true
 ```
 
 - `chat` (**Chat with Claude Code**, on by default): off, Claude Code's conversations get no box,
@@ -234,10 +393,17 @@ font_size = 0
   and `~/.bun/bin` (on Windows `~/.local/bin/claude.exe`).
 - `wrapper` (**Wrapper program**): a program started with `claude` and its arguments after it, a
   path or a name on the PATH; empty starts `claude` itself.
-- `initial_mode` (**Permission mode**): the mode a conversation starts in. **Claude Code's
-  setting** (empty, the default) leaves it to Claude Code's own settings; **Manual** (`default`),
-  **Edit automatically** (`acceptEdits`) or **Plan** (`plan`) names one. `manual` is read as
-  `default`.
+- `initial_mode` (**Permission mode**): the mode a new conversation starts in. **Claude Code's
+  setting** (empty, the default) leaves it to the mode you last picked in the project, else to
+  Claude Code's own settings; **Manual** (`default`), **Edit automatically** (`acceptEdits`),
+  **Plan** (`plan`), **Auto** (`auto`) or **Bypass permissions** (`bypassPermissions`, only with
+  the next setting) names one. `manual` is read as `default`.
+- `allow_bypass_permissions` (**Allow bypass permissions**, off by default): offers Bypass
+  permissions, in which Claude runs commands without asking, and starts Claude Code with
+  `--allow-dangerously-skip-permissions` so a conversation can switch to it. Off, rhun never
+  starts or switches a conversation to it.
+- `prompt_suggestions` (**Prompt suggestions**, on by default): Claude suggests your next prompt
+  after a reply, and Tab takes it.
 - `env.NAME = value`: a variable for Claude Code's environment, a line each, at most 64 of at most
   8 KiB each. NAME is letters, digits and `_`, and does not start with a digit; a line that breaks
   these rules is dropped with a log line that names it. The values are only in the config file:
@@ -250,6 +416,10 @@ font_size = 0
   by 5): minutes without a turn, a card or typing before a conversation's process is stopped. 0
   never stops it.
 - `font_size` (**Font size**, under Agents): see [Text size](#text-size) below.
+- `ctrl_enter_sends` (**Ctrl+Enter sends**, off by default): Enter starts a new line in the box,
+  and Ctrl+Enter (Cmd+Enter on macOS) sends.
+- `scroll_on_send` (**Scroll to the end on send**, on by default): sending a prompt moves the
+  conversation to its end.
 
 Otherwise Claude Code gets your environment: rhun's own when rhun was started from a terminal or
 runs on Windows, else the one your login shell gives, without the variables a Claude Code that
@@ -280,18 +450,19 @@ links. Your own prompts stay plain text, and tool, result, error and info rows a
 reply that is still streaming is drawn as it grows; a code block that has not been closed yet shows
 as code.
 
-`http` and `https` links open in the browser. An agent writes the replies, so of the `rhun://`
-links only a `rhun://file/` link to a file is followed, and it opens that file's text in a tab like
-any other file link (a workspace file too: a link in a reply never changes the project); other
-`rhun://` links, which could install an extension or open a project, a `rhun://file/` link to a
-folder and a link with another scheme do nothing. A link to a file opens it in the editor at its
-line: `path`,
-`path:12`, `path:12:5`, `path:12-20`, `path#L12` or `path#L12-L20`, absolute, or relative to the
-conversation's checkout and then to the project. A `file:` URI of one is read too (`file:///path`,
-`file://host/path` with the host left out, `file:/path`; `file:///C:/path` is `C:/path`), and `%`
-escapes such as `%20` are decoded, after the line is taken off, so `a%23b.txt` is the file
-`a#b.txt`; a file whose whole name is the link's text, `#` or `:` included, is opened as that. A
-range goes to its first line, and a file that does not exist shows "No such file: PATH" instead.
+`http` and `https` links ask before they open in the browser: "AGENT wants to open HOST in your
+browser: URL" with **Open**, **Copy Link** and **Cancel**. An agent writes the replies, so of the
+`rhun://` links only a `rhun://file/` link to a file is followed, and it opens that file's text in a
+tab like any other file link (a workspace file too: a link in a reply never changes the project);
+other `rhun://` links, which could install an extension or open a project, a `rhun://file/` link to
+a folder and a link with another scheme do nothing. A link to a file opens it in the editor at its
+line: `path`, `path:12`, `path:12:5`, `path:12-20`, `path#L12` or `path#L12-L20`, absolute, or
+relative to the conversation's checkout and then to the project. A `file:` URI of one is read too
+(`file:///path`, `file://host/path` with the host left out, `file:/path`; `file:///C:/path` is
+`C:/path`), and `%` escapes such as `%20` are decoded, after the line is taken off, so `a%23b.txt`
+is the file `a#b.txt`; a file whose whole name is the link's text, `#` or `:` included, is opened as
+that. A range goes to its first line, and a file that does not exist shows "No such file: PATH"
+instead.
 
 ### Text size
 
@@ -300,9 +471,9 @@ The agents panel has a text size of its own: **Font size** in Settings > Agents 
 Appearance); otherwise it is 8 to 32, and 1 to 7 act as 8. It sizes all the panel's text: the
 list, the conversation and its Markdown, cards and the prompt box. Rows, badges and buttons grow
 with it. When the panel is too narrow for its text size, the prompt box keeps room for about ten
-characters: first the `mode: NAME` label is left out, then **Send** (or **Stop**) shows as an icon,
-an arrow (or a square), and then it goes on a row under the box, with the mode label beside it when
-there is room.
+characters: **Send** (or **Stop**) shows as an icon, an arrow (or a square), and then it goes on a
+row under the box. The row under the box cuts the mode's name, leaves out the prompt cache's clock,
+and then puts the model on a row of its own.
 
 **Agents: Increase Font Size**, **Agents: Decrease Font Size** and **Agents: Reset Font Size** in
 the command palette change it wherever the focus is (`agents_font_increase`,

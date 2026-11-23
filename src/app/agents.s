@@ -22,6 +22,8 @@ F AM_dser, 4
 F AM_flags, 4           # AMF_*
 ENDSTRUCT AM_SIZE
 .equ AMF_PILL, 1                # a centred one-line pill ("Switched to NAME")
+.equ AMF_QUEUED, 2              # a message that has not started yet: after the thread, muted, "queued"
+.equ QROWS_MAX, AL_QUEUE_MAX + AH_MAX   # queued rows at most (agent_queued)
 
 .equ R_USER, 1
 .equ R_ASSIST, 2
@@ -93,6 +95,7 @@ sources_hash: .quad 0
 model_noted: .long 0            # row_model found a model since cleared (agent_session_tail_title)
 .p2align 3
 prefix_buf: .zero 65536         # model_before: the beginning of a line that begins near a window's end
+qrows: .zero AM_SIZE * QROWS_MAX    # the open conversation's queued messages as rows (queued_sync)
 .data
 index_fd: .long -1
 common_wd: .long -1             # the watch of the common .git folder (agents_watch_repo)
@@ -3019,7 +3022,7 @@ FN agents_dump
     mov r12, [rcx + rax*8]
     xor ebx, ebx
 4:  cmp rbx, [r12 + AS_msgs + VEC_len]
-    jae 9f
+    jae 8f
     imul r13, rbx, AM_SIZE
     add r13, [r12 + AS_msgs + VEC_ptr]
     mov eax, [r13 + AM_role]
@@ -3062,6 +3065,35 @@ FN agents_dump
     call sb_push_byte
     inc rbx
     jmp 4b
+8:  xor ebx, ebx                # then the messages that have not started: "queued TEXT"
+81: mov rdi, r12
+    mov rsi, rbx
+    call agent_queued
+    test rax, rax
+    jz 9f
+    mov r13, rax
+    mov r14, rdx
+    mov rdi, r15
+    lea rsi, [rip + .Lqueued_dump]
+    call sb_push_cstr
+    xor ecx, ecx
+82: cmp rcx, r14
+    jae 83f
+    cmp rcx, 60
+    jae 83f
+    cmp byte ptr [r13 + rcx], 10
+    je 83f
+    inc rcx
+    jmp 82b
+83: mov rdi, r15
+    mov rsi, r13
+    mov rdx, rcx
+    call sb_push
+    mov rdi, r15
+    mov esi, 10
+    call sb_push_byte
+    inc rbx
+    jmp 81b
 9:  EPILOGUE
 
 # agents_open(i): open session i (tests / control socket)
@@ -3489,6 +3521,53 @@ FN agents_msg_add
     je 9f
     mov rax, r12
 9:  EPILOGUE
+
+# queued_sync(AS*) -> eax n: the session's messages that have not started (agent_queued: those waiting
+#   for a start, then those held) as the rows qrows[0..n): the user's look, AMF_QUEUED. A row keeps its
+#   measured height while its text is the same
+queued_sync:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12d, QROWS_MAX
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r12
+    call agent_queued
+    test rax, rax
+    jz 9f
+    imul r13, r12, AM_SIZE
+    lea rcx, [rip + qrows]
+    add r13, rcx
+    inc r12d
+    cmp [r13 + AM_text], rax
+    jne 2f
+    cmp [r13 + AM_len], rdx
+    je 1b
+2:  mov [r13 + AM_text], rax
+    mov [r13 + AM_len], rdx
+    mov dword ptr [r13 + AM_role], R_USER
+    mov dword ptr [r13 + AM_flags], AMF_QUEUED
+    mov dword ptr [r13 + AM_w], -1      # measured again
+    inc dword ptr [r13 + AM_rev]
+    jmp 1b
+9:  mov eax, r12d
+    EPILOGUE
+
+# FN agents_sent(AS*): the user sent a message in that session: with [agents] scroll_on_send, its
+#   conversation, when it is the open one, follows its end again
+FN agents_sent
+    cmp dword ptr [rip + cfg_agents_scroll_on_send], 0
+    je 1f
+    mov rax, [rip + view]
+    test rax, rax
+    js 1f
+    mov rcx, [rip + sessions + VEC_ptr]
+    cmp [rcx + rax*8], rdi
+    jne 1f
+    mov dword ptr [rip + th_follow], 1
+    mov dword ptr [rip + g_dirty], 1
+1:  ret
 
 # FN agents_copy_rows(dst AS*, src AS*, n): the first n rows of src (at most all) added to dst, with their
 #   labels (a copy of a conversation shows what the original showed)
@@ -4942,7 +5021,22 @@ thread_draw:
     add r13d, [rip + g_pmt + 4*MI_8]
     inc r12
     jmp 4b
-5:  add r13d, [rip + g_pmt + 4*MI_32]
+5:  mov rdi, rbx                # the messages that have not started, after the rows: counted too
+    call queued_sync
+    mov [rsp + 164], eax
+    xor r12d, r12d
+51: cmp r12d, [rsp + 164]
+    jae 52f
+    imul rdi, r12, AM_SIZE
+    lea rax, [rip + qrows]
+    add rdi, rax
+    mov esi, [rsp + 32]
+    call msg_height
+    add r13d, eax
+    add r13d, [rip + g_pmt + 4*MI_8]
+    inc r12d
+    jmp 51b
+52: add r13d, [rip + g_pmt + 4*MI_32]
     mov rdi, rbx                # replies coming into view: their Markdown, the rows kept in place
     lea rsi, [rsp]
     mov edx, r13d
@@ -4985,6 +5079,8 @@ thread_draw:
     call gfx_clip_push
     cmp qword ptr [rbx + AS_msgs + VEC_len], 0
     jne 65f
+    cmp dword ptr [rsp + 164], 0
+    jne 65f
     mov rdi, [rip + ag_fsmall]
     mov esi, [rsp]
     add esi, [rsp + 28]
@@ -5001,13 +5097,14 @@ thread_draw:
     xor r12d, r12d
 .Ltd_msg:
     cmp r12, [rbx + AS_msgs + VEC_len]
-    jae .Ltd_msgs_done
+    jae .Ltd_queued
     mov eax, [rsp + 20]
     add eax, [rsp + 24]
     cmp r13d, eax
     jge .Ltd_msgs_done
     imul r14, r12, AM_SIZE
     add r14, [rbx + AS_msgs + VEC_ptr]
+.Ltd_row:
     mov rdi, r14
     mov esi, [rsp + 32]
     call msg_height
@@ -5026,6 +5123,19 @@ thread_draw:
     add r13d, [rip + g_pmt + 4*MI_8]
     inc r12
     jmp .Ltd_msg
+.Ltd_queued:                    # then the queued messages (queued_sync made them rows above)
+    mov rax, r12
+    sub rax, [rbx + AS_msgs + VEC_len]
+    cmp eax, [rsp + 164]
+    jae .Ltd_msgs_done
+    mov ecx, [rsp + 20]
+    add ecx, [rsp + 24]
+    cmp r13d, ecx
+    jge .Ltd_msgs_done
+    imul r14, rax, AM_SIZE
+    lea rcx, [rip + qrows]
+    add r14, rcx
+    jmp .Ltd_row
 .Ltd_msgs_done:
     call gfx_clip_pop
     mov r8d, [rsp + 160]
@@ -5130,7 +5240,10 @@ draw_msg:
     COLOR r9d, T_HOVER
     call gfx_round_rect
     lea r8, [rip + .Lyou]
-    COLOR r9d, T_MUTED
+    test dword ptr [rbx + AM_flags], AMF_QUEUED
+    jz 11f
+    lea r8, [rip + .Lqueued]    # not started yet: "queued", its text muted (below)
+11: COLOR r9d, T_MUTED
     jmp 2f
 1:  lea r8, [rip + .Lagent]
     COLOR r9d, T_ACCENT
@@ -5188,7 +5301,10 @@ draw_msg:
     add eax, [rip + g_pmt + 4*MI_28]
     mov [rsp + WR_y], eax
     COLOR eax, T_FG
-    mov [rsp + WR_color], eax
+    test dword ptr [rbx + AM_flags], AMF_QUEUED
+    jz 32f
+    COLOR eax, T_MUTED
+32: mov [rsp + WR_color], eax
     mov dword ptr [rsp + WR_draw], 1
     mov eax, [rip + g_cv + CV_cy0]
     mov [rsp + WR_top], eax
@@ -6047,6 +6163,8 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lnow: .asciz "just now"
 .Lago: .asciz " ago"
 .Lyou: .asciz "You"
+.Lqueued: .asciz "queued"
+.Lqueued_dump: .asciz "queued "
 .Lno_file: .asciz "No such file: "
 .Lrhun_file: .ascii "rhun://file/"
 .Lrow_n: .asciz "row="

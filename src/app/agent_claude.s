@@ -3,10 +3,16 @@
 # the environment and the shapes are pinned in tests/data/claude-shapes/README.txt (Claude Code 2.1.330):
 #
 #   [WRAPPER] CLAUDE --output-format stream-json --verbose --input-format stream-json
-#     --include-partial-messages --permission-prompt-tool=stdio
+#     --include-partial-messages --permission-prompt-tool=stdio --replay-user-messages
 #     --setting-sources=user,project,local | --setting-sources=user     (the project trusted or not)
-#     --max-thinking-tokens=31999 [--permission-mode=MODE]
+#     --max-thinking-tokens=31999 | --thinking=disabled                 (the project's thinking level)
+#     [--model=VALUE] [--effort=LEVEL]                                  (the project's choices)
+#     [--permission-mode=MODE]                                          (claude_start_mode)
+#     [--allow-dangerously-skip-permissions]                            ([claude] allow_bypass_permissions)
 #     --session-id=UUID | --resume=ID | --resume=SRC --fork-session --session-id=UUID
+#
+# Every user message carries the uuid agent_send made: its command_lifecycle and its replay (finding 17)
+# say when a message written during a turn starts (ev_started) or will not run (ev_dropped).
 #
 # A new conversation gets our UUID (agent_new); an existing one is continued with --resume and the id
 # its transcript is named after; a copy (Continue in a copy, ALF_FORK) is forked from its source with our
@@ -83,10 +89,11 @@ sh_ps: .long SH_PS              # the terminal's shell: PowerShell (Windows) or 
 # ---- start ----
 
 # cl_start(AL*) -> eax 1 with claude started and initialize written, 0 with AL_report saying why. Locals:
-#   [rsp] argv (20 slots), [rsp + 160] envp, [rsp + 168] the argv prefix (claude_exe), [rsp + 176] where a
-#   copy's --session-id= starts in asb (-1: not a copy)
+#   [rsp] argv (28 slots), [rsp + 224] envp, [rsp + 232] the argv prefix (claude_exe), [rsp + 240] where a
+#   copy's --session-id= starts in asb (-1: not a copy), [rsp + 248], [rsp + 256], [rsp + 264] where
+#   --model=, --effort= and --permission-mode= start in asb (-1: not passed)
 cl_start:
-    PROLOGUE 192
+    PROLOGUE 288
     mov rbx, rdi
     mov r12, [rbx + AL_as]
     lea rdi, [rbx + AL_report]
@@ -98,7 +105,7 @@ cl_start:
     call claude_exe
     test rax, rax
     jz .Lcs_missing
-    mov [rsp + 168], rax
+    mov [rsp + 232], rax
     xor ecx, ecx                # [wrapper,] claude
 1:  cmp ecx, edx
     jae 2f
@@ -128,14 +135,20 @@ cl_start:
     test eax, WS_TRUSTED
     cmovz rcx, rdx
     mov [r13], rcx
-    lea rax, [rip + .La_thinking]
-    mov [r13 + 8], rax
+    mov edi, AG_CLAUDE          # the project's thinking level (unset: on)
+    call agentcfg_get
+    mov r15, rax
+    lea rcx, [rip + .La_thinking]
+    lea rdx, [rip + .La_nothink]
+    cmp dword ptr [r15 + AGC_think], 0
+    cmove rcx, rdx
+    mov [r13 + 8], rcx
     add r13, 16
     # --session-id=UUID (new) or --resume=ID, or a copy's --resume=SRC --fork-session --session-id=UUID
-    # (its first start); before them --permission-mode=MODE when [claude] initial_mode names one
+    # (its first start); before them the project's --model= and --effort= (finding 13) and the mode
     lea rdi, [rip + asb]
     call sb_clear
-    mov qword ptr [rsp + 176], -1   # where a copy's --session-id= starts in asb
+    mov qword ptr [rsp + 240], -1   # where a copy's --session-id= starts in asb
     mov eax, [rbx + AL_flags]
     and eax, ALF_NEW | ALF_FORK
     cmp eax, ALF_NEW | ALF_FORK
@@ -150,7 +163,7 @@ cl_start:
     xor esi, esi
     call sb_push_byte
     mov rax, [rip + asb + SB_len]
-    mov [rsp + 176], rax
+    mov [rsp + 240], rax
     lea rsi, [rip + .La_sid]
     jmp 42f
 41: lea rsi, [rip + .La_sid]
@@ -165,38 +178,55 @@ cl_start:
     lea rdi, [rip + asb]
     xor esi, esi
     call sb_push_byte
-    mov r14, [rip + asb + SB_len]   # where the mode's argument starts, 0 without one
-    call claude_mode
+    mov rdi, r15
+    lea rsi, [r15 + AGC_model]
+    lea rdx, [rip + .La_model]
+    lea rcx, [rsp + 248]
+    call arg_add
+    mov rdi, r15
+    lea rsi, [r15 + AGC_effort]
+    lea rdx, [rip + .La_effort]
+    lea rcx, [rsp + 256]
+    call arg_add
+    mov rdi, rbx                # the conversation's mode, the project's default, initial_mode; bypass
+    call claude_start_mode      #   only with [claude] allow_bypass_permissions
+    mov rsi, rax
     test rax, rax
-    jz 5f
-    mov r15, rax
-    lea rdi, [rip + asb]
-    lea rsi, [rip + .La_mode]
-    call sb_push_cstr
-    lea rdi, [rip + asb]
-    mov rsi, r15
-    call sb_push_cstr
-    lea rdi, [rip + asb]
-    xor esi, esi
-    call sb_push_byte
-    mov rax, [rip + asb + SB_ptr]
+    jnz 43f
+    lea rsi, [rip + .Lempty]
+43: mov rdi, r15
+    lea rdx, [rip + .La_mode]
+    lea rcx, [rsp + 264]
+    call arg_add
+    mov r14, [rip + asb + SB_ptr]   # asb grows no more: its strings' places
+    mov ecx, 248
+44: mov rax, [rsp + rcx]
+    cmp rax, -1
+    je 45f
     add rax, r14
     mov [r13], rax
     add r13, 8
-5:  mov rax, [rip + asb + SB_ptr]
+45: add ecx, 8
+    cmp ecx, 264
+    jbe 44b
+    cmp dword ptr [rip + cfg_claude_allow_bypass], 0
+    je 5f
+    lea rax, [rip + .La_danger] # a running process may switch to bypass only with it (finding 10)
     mov [r13], rax
-    mov rcx, [rsp + 176]
+    add r13, 8
+5:  mov [r13], r14
+    mov rcx, [rsp + 240]
     cmp rcx, -1
     je 51f
     lea rdx, [rip + .La_fork]
     mov [r13 + 8], rdx
-    add rax, rcx
+    lea rax, [r14 + rcx]
     mov [r13 + 16], rax
     add r13, 16
 51: mov qword ptr [r13 + 8], 0
     mov rdi, rbx
     call start_env
-    mov [rsp + 160], rax
+    mov [rsp + 224], rax
     lea rax, [rip + cl_line]
     mov [rbx + AL_cn + CN_on_line], rax
     lea rax, [rip + cl_close]
@@ -208,12 +238,12 @@ cl_start:
     mov rcx, [rip + g_project]
 6:  lea rdi, [rbx + AL_cn]
     lea rsi, [rsp]
-    mov rdx, [rsp + 160]
+    mov rdx, [rsp + 224]
     call conn_open
     mov r13d, eax
-    mov rdi, [rsp + 160]
+    mov rdi, [rsp + 224]
     call mem_free
-    mov rdi, [rsp + 168]
+    mov rdi, [rsp + 232]
     call mem_free
     test r13d, r13d
     jz .Lcs_fail
@@ -237,6 +267,19 @@ cl_start:
     call jw_key
     lea rdi, [rip + cw]
     call jw_null
+    lea rdi, [rip + cw]         # [claude] prompt_suggestions (finding 19)
+    lea rsi, [rip + .Lk_suggestions]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov esi, [rip + cfg_claude_prompt_suggestions]
+    call jw_bool
+    lea rdi, [rip + cw]         # the dialog kinds rhun can show: none yet (a request of any other kind
+    lea rsi, [rip + .Lk_dialog_kinds]   #   gets an error reply, finding 25)
+    call jw_key
+    lea rdi, [rip + cw]
+    call jw_arr
+    lea rdi, [rip + cw]
+    call jw_end_arr
     mov rdi, rbx                # a child gone already breaks the connection here: its close reports the
     call req_end                #   failed start (cl_close: ev_failed, ev_closed), the state says so
     mov eax, 1
@@ -257,13 +300,36 @@ cl_start:
     xor eax, eax
     EPILOGUE
 .Lcs_badid:
-    mov rdi, [rsp + 168]
+    mov rdi, [rsp + 232]
     call mem_free
     lea rdi, [rbx + AL_report]
     lea rsi, [rip + .Lr_badid]
     call sb_push_cstr
     xor eax, eax
     EPILOGUE
+
+# arg_add(-, value cstr, prefix cstr, slot*): "PREFIXVALUE" and a NUL after asb's strings, its place in
+#   asb into the slot; an empty value adds nothing (-1 in the slot)
+arg_add:
+    PROLOGUE
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov qword ptr [r14], -1
+    cmp byte ptr [r12], 0
+    je 9f
+    mov rax, [rip + asb + SB_len]
+    mov [r14], rax
+    lea rdi, [rip + asb]
+    mov rsi, r13
+    call sb_push_cstr
+    lea rdi, [rip + asb]
+    mov rsi, r12
+    call sb_push_cstr
+    lea rdi, [rip + asb]
+    xor esi, esi
+    call sb_push_byte
+9:  EPILOGUE
 
 # start_env(AL*) -> rax envp for its program (mem_free it): claude_env's, or with CLAUDE_CONFIG_DIR its
 #   conversation's folder (live_dir) when the configuration names another one now
@@ -582,14 +648,16 @@ out_take:
     mov [rdx + 8], r8
 9:  ret
 
-# cl_send(AL*, ptr, len) -> eax 1 written: {"type":"user","message":{"role":"user","content":[{"type":
-#   "text","text":T}]},"parent_tool_use_id":null,"session_id":""}. 0 when the connection refused it, or
+# cl_send(AL*, ptr, len, uuid cstr or 0) -> eax 1 written: {"type":"user","message":{"role":"user",
+#   "content":[{"type":"text","text":T}]},"parent_tool_use_id":null,"session_id":"","uuid":U}: the uuid
+#   comes back in its command_lifecycle and its replay (finding 17). 0 when the connection refused it, or
 #   broke under the write (its close reported that: the state is not the caller's any more)
 cl_send:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
+    mov r14, rcx
     lea rdi, [rip + cw]
     call jw_begin
     lea rdi, [rip + cw]
@@ -648,7 +716,17 @@ cl_send:
     lea rdi, [rip + cw]
     lea rsi, [rip + .Lempty]
     call jw_cstr
+    test r14, r14
+    jz 1f
+    cmp byte ptr [r14], 0
+    je 1f
     lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_uuid]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, r14
+    call jw_cstr
+1:  lea rdi, [rip + cw]
     call jw_end_obj
     mov rdi, rbx
     call cl_write
@@ -1627,8 +1705,8 @@ h_assistant:
 9:  EPILOGUE
 
 # h_user(AL*, record): what Claude sends as the user's: a tool's results as result rows, as the file
-#   reader shows them. The user's own prompts (rhun showed them when sent), replayed copies, notices and a
-#   subagent's records are not shown
+#   reader shows them. The user's own prompts (rhun showed them when sent), notices and a subagent's records
+#   are not shown; a replayed copy (isReplay) says a held message started (claude_replay)
 h_user:
     PROLOGUE
     mov rbx, rdi
@@ -1643,8 +1721,12 @@ h_user:
     mov rdi, rax
     call json_type
     cmp eax, JT_TRUE
-    je 9f
-    mov rdi, r12
+    jne 2f
+    mov rdi, rbx                # a message of the user's as its turn starts (claude_session.s)
+    mov rsi, r12
+    call claude_replay
+    jmp 9f
+2:  mov rdi, r12
     lea rsi, [rip + .Lk_isMeta]
     call json_get
     mov rdi, rax
@@ -3003,7 +3085,7 @@ err_tail:
 .p2align 3
 .globl claude_drv
 claude_drv:
-    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST
+    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST | DRVC_QUEUE
     .quad .Lname, cl_start, cl_send, cl_stop, cl_answer, cl_release, cl_held, cl_auth, cl_terminal
     .quad claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra
     .quad claude_set_thinking, claude_reply, claude_action
@@ -3011,6 +3093,7 @@ cl_types:
     .quad .Lv_stream_event, h_stream, .Lv_assistant, h_assistant, .Lv_system, h_system
     .quad .Lv_result, h_result, .Lv_control_request, h_request, .Lv_control_response, h_response
     .quad .Lv_user, h_user, .Lv_cancel, h_cancel
+    .quad .Lv_lifecycle, claude_lifecycle       # task 3: a message's lifecycle (claude_session.s)
     .quad 0, 0
 perm_qs:                        # a permission card's question: the tool, before its summary, after it
     .quad .Lt_bash, .Lq_bash, .Lempty, .Lt_edit, .Lq_edit, .Lq_mark, .Lt_multiedit, .Lq_edit, .Lq_mark
@@ -3019,7 +3102,7 @@ perm_qs:                        # a permission card's question: the tool, before
 opts_yes_no: .quad .Lo_yes, .Lo_no
 opts_plan: .quad .Lo_yes, .Lo_keep
 cl_flags:
-    .quad .La_outf, .La_sj, .La_verbose, .La_inf, .La_sj, .La_partial, .La_ppt, 0
+    .quad .La_outf, .La_sj, .La_verbose, .La_inf, .La_sj, .La_partial, .La_ppt, .La_replay, 0
 .Lname: .asciz "Claude Code"
 .La_outf: .asciz "--output-format"
 .La_inf: .asciz "--input-format"
@@ -3030,6 +3113,11 @@ cl_flags:
 .La_sources_all: .asciz "--setting-sources=user,project,local"
 .La_sources_user: .asciz "--setting-sources=user"
 .La_thinking: .asciz "--max-thinking-tokens=31999"
+.La_nothink: .asciz "--thinking=disabled"
+.La_replay: .asciz "--replay-user-messages"
+.La_model: .asciz "--model="
+.La_effort: .asciz "--effort="
+.La_danger: .asciz "--allow-dangerously-skip-permissions"
 .La_sid: .asciz "--session-id="
 .La_resume: .asciz "--resume="
 .La_fork: .asciz "--fork-session"
@@ -3065,6 +3153,9 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lk_request: .asciz "request"
 .Lk_response: .asciz "response"
 .Lk_hooks: .asciz "hooks"
+.Lk_suggestions: .asciz "promptSuggestions"
+.Lk_dialog_kinds: .asciz "supportedDialogKinds"
+.Lk_uuid: .asciz "uuid"
 .Lk_message: .asciz "message"
 .Lk_model: .asciz "model"
 .Lk_role: .asciz "role"
@@ -3107,6 +3198,7 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lv_unsupported: .asciz "not supported by rhun yet"
 .Lv_interrupt: .asciz "interrupt"
 .Lv_cancel: .asciz "control_cancel_request"
+.Lv_lifecycle: .asciz "command_lifecycle"
 .Lv_can_use_tool: .asciz "can_use_tool"
 .Lv_tool_use: .asciz "tool_use"
 .Lv_tool_result: .asciz "tool_result"

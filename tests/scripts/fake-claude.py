@@ -56,6 +56,9 @@ FAKE_CLAUDE_AUTH_CONFLICT (initialize has auth_conflict); FAKE_CLAUDE_COMMANDS_C
 the system/commands_changed that follows initialize lists these instead, the known ones as initialize has
 them, the others as skills "Skill NAME", as the real list has skills initialize lacks); FAKE_CLAUDE_REFUSE_HELD (the first message written
 with a uuid while another waits or runs is refused: lifecycle refused, never run, logged {"refused": UUID});
+FAKE_CLAUDE_DISCARD_HELD (the first such message is queued, then, when its turn would start, lifecycle
+discarded, never run, logged {"discarded": UUID}); FAKE_CLAUDE_NO_LIFECYCLE (no command_lifecycle at all:
+only the replay says a message started);
 FAKE_CLAUDE_ECHO_ENV (comma-separated names whose values the log's start record shows, besides
 CLAUDE_CODE_ENTRYPOINT, CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, MCP_CONNECTION_NONBLOCKING, TRACEPARENT and
 TRACESTATE);
@@ -1245,11 +1248,15 @@ def s_subagent(prompt):
 
 
 def s_exit(prompt):
-    """the process dies mid-turn; a crash leaves its session record"""
+    """exit [MS]: the process dies mid-turn (MS after its text began: a message can be written meanwhile); a
+    crash leaves its session record"""
     CRASH.set()
     message_start()
     stream_event({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})
     stream_event({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': 'partial'}})
+    wait = prompt.split()[1:2]
+    if wait and wait[0].isdigit():
+        time.sleep(int(wait[0]) / 1000)
     crash(2)
 
 
@@ -1715,12 +1722,16 @@ def prompt_text(message):
 
 def lifecycle(uid, state):
     """command_lifecycle (finding 17): a message written with a uuid is queued at once, started when its turn
-    starts, completed, or cancelled when an interrupt ended its turn; without a uuid, none."""
+    starts, completed, or cancelled when an interrupt ended its turn; without a uuid, none.
+    FAKE_CLAUDE_NO_LIFECYCLE (unrecorded): none at all, so only the replay says a message started."""
+    if ENV.get('FAKE_CLAUDE_NO_LIFECYCLE'):
+        return
     emit({'type': 'command_lifecycle', 'command_uuid': uid, 'state': state, 'uuid': str(uuid.uuid4()),
           'session_id': SID})
 
 
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already
+DISCARDED = [False]                 # FAKE_CLAUDE_DISCARD_HELD: one held message was marked to be discarded
 
 
 def handle(message):
@@ -1825,6 +1836,9 @@ def handle(message):
                 log(refused=uid)
                 lifecycle(uid, 'refused')
                 return
+            if uid and ENV.get('FAKE_CLAUDE_DISCARD_HELD') and (BUSY[0] or QUEUE) and not DISCARDED[0]:
+                DISCARDED[0] = True         # unrecorded: queued now, discarded when its turn would start
+                entry['discard'] = True
             QUEUE.append(entry)
             if uid:
                 lifecycle(uid, 'queued')
@@ -1878,6 +1892,11 @@ def worker():
             while not QUEUE:
                 COND.wait()
             entry = QUEUE.pop(0)
+            if entry.get('discard'):        # FAKE_CLAUDE_DISCARD_HELD: it never runs
+                log(discarded=entry['uuid'])
+                lifecycle(entry['uuid'], 'discarded')
+                COND.notify_all()
+                continue
             BUSY[0] = True
             TURN_UUID[0] = entry['uuid']
         if entry['uuid']:

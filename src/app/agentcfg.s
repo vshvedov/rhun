@@ -27,7 +27,7 @@
 #   agentcfg_find_model(AGC*, ptr, len) -> rax AMO* or 0; agentcfg_find_cmd(AGC*, ptr, len) -> rax ACM*
 #     or 0 (its name or an alias)
 #   agentcfg_conv(AGC*, sid cstr) -> rax ACH* (made; valid until the next agentcfg_conv); agentcfg_dirty
-#     (AGC*) after changing an ACH_mode
+#     (AGC*) after changing an ACH_mode; agentcfg_conv_mode(AGC*, sid cstr) -> rax its mode or 0 (makes none)
 #   agentcfg_set(AGC*, field AGF_*, ptr, len) (an int field takes its value in rdx): dirty when it changed
 #   agentcfg_save(AGC*) when dirty, to its stored path; agentcfg_flush() (quit, project change: every
 #     record saved and freed)
@@ -1072,6 +1072,31 @@ conv_find:
     call set_fixed
     or dword ptr [rbx + AGC_flags], AGCF_DIRTY
 8:  mov rax, r14
+    EPILOGUE
+
+# FN agentcfg_conv_mode(AGC*, sid cstr) -> rax that conversation's kept mode (a cstr in the record), or 0
+#   when it has none; makes nothing (a start asks it)
+FN agentcfg_conv_mode
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d
+1:  cmp r13, [rbx + AGC_convs + VEC_len]
+    jae 8f
+    imul r14, r13, ACH_SIZE
+    add r14, [rbx + AGC_convs + VEC_ptr]
+    lea rdi, [r14 + ACH_sid]
+    mov rsi, r12
+    call strcmp_eq
+    test eax, eax
+    jnz 2f
+    inc r13
+    jmp 1b
+2:  lea rax, [r14 + ACH_mode]
+    cmp byte ptr [rax], 0
+    je 8f
+    EPILOGUE
+8:  xor eax, eax
     EPILOGUE
 
 # FN agentcfg_dirty(AGC*): something in it changed (an ACH_mode)

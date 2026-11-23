@@ -2036,6 +2036,8 @@ FN agentext_send
     je 6f
     cmp eax, SEND_QUEUED
     je 6f
+    cmp eax, SEND_HELD          # written during a turn, shown queued (SEND_TOOMANY: agent_send's toast)
+    je 6f
     lea rdi, [rip + .Lsend_refused]
     cmp eax, SEND_REFUSED
     je 7f

@@ -245,6 +245,247 @@ class ConfigTest(CfgCase):
         self.assertEqual(self.thread()[-1], chat.REPLY + 'ok: hello')
 
 
+class QueueTest(CfgCase):
+    """Messages sent while Claude works: written at once with a uuid, shown queued until the CLI starts them
+    (finding 17), and back in their own conversation's box when they will not run."""
+
+    NOT_SENT = 'toast=A queued message was not sent.'
+
+    def users(self):
+        """The user messages the fake read."""
+        return [m for m in self.stdin() if m.get('type') == 'user']
+
+    def queued(self):
+        """print-agents' queued rows (after the thread)."""
+        return [line for line in self.command('print-agents').splitlines() if line.startswith('queued ')]
+
+    def held(self):
+        return int(re.search(r' held=(\d+)', self.command('print-agent-live')).group(1))
+
+    def box(self):
+        return self.command('print-agent-input').split(' focus=')[0]
+
+    def until_read(self, n):
+        """Until the fake read n user messages."""
+        return self.until(lambda: (lambda u: u if len(u) >= n else None)(self.users()), f'{n} messages read')
+
+    def test_a_message_during_a_turn_is_written_at_once(self):
+        self.start()
+        self.chat('held', 'working')
+        self.command('agent-prompt more')
+        self.assertEqual(self.box(), 'input=')            # the box empties, as for any message that went
+        users = self.until_read(2)
+        self.assertEqual([m['message']['content'][0]['text'] for m in users], ['held', 'more'])
+        for m in users:
+            self.assertRegex(m['uuid'], chat.UUID4)
+        self.assertNotEqual(users[0]['uuid'], users[1]['uuid'])
+        self.assertEqual(self.command('print-agents').splitlines()[-1], 'queued more')
+        self.assertNotIn('user more', self.thread())
+        self.assertEqual(self.held(), 1)
+        self.command('wait-agent ready 20000')
+        self.assertEqual(self.thread(), ['user held', chat.REPLY + '1', 'user more', 'agent ok: more'])
+        self.assertEqual(self.queued(), [])
+        self.assertEqual(self.held(), 0)
+
+    def test_prompts_waiting_for_a_start_show_queued(self):
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '800'})
+        self.command('agent-new claude')
+        self.command('agent-prompt held')
+        self.command('agent-prompt two')
+        self.assertIn(' queued=2 ', self.live())
+        self.assertEqual(self.queued(), ['queued held', 'queued two'])
+        self.assertEqual(self.thread(), [])
+        # the handshake: the first is a row and runs, the second is written and held
+        self.until(lambda: 'user held' in self.thread(), 'the first one runs')
+        self.assertEqual(self.queued(), ['queued two'])
+        self.assertEqual(self.held(), 1)
+        self.command('wait-agent ready 20000')
+        self.assertEqual(self.thread(), ['user held', chat.REPLY + '1', 'user two', 'agent ok: two'])
+        self.assertEqual([m['message']['content'][0]['text'] for m in self.users()], ['held', 'two'])
+        self.assertEqual(self.queued(), [])
+
+    def scroll(self):
+        live = self.command('print-agent-live')
+        return {k: int(v) for k, v in re.findall(r' (scroll|max|follow)=(\d+)', live)}
+
+    def test_queued_rows_count_in_the_scroll(self):
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '3000'})
+        self.command('cmd focus_agents')
+        self.command('agent-new claude')
+        long = ' '.join('word%d' % i for i in range(400))
+        self.command('agent-prompt ' + long)
+        self.command('wait 50')
+        first = self.scroll()
+        self.command('agent-prompt ' + long)
+        self.command('wait 50')
+        second = self.scroll()
+        self.command('agent-prompt ' + long)
+        self.command('wait 50')
+        third = self.scroll()
+        self.assertGreater(second['max'], first['max'])
+        self.assertEqual(third['max'] - second['max'], second['max'] - first['max'])
+        self.assertEqual(third['follow'], 1)
+        self.assertEqual(third['scroll'], third['max'])
+
+    def test_sending_follows_the_end_again(self):
+        # [agents] scroll_on_send (default on): scrolled up, a message sent during a turn follows the end
+        self.start()
+        self.chat('long', 'ready', 20000)
+        self.command('agent-prompt held')
+        self.command('wait-agent working 5000')
+        self.command('move 1000 300')
+        self.command('scroll -5')
+        self.command('wait 100')
+        self.assertEqual(self.scroll()['follow'], 0)
+        self.command('agent-prompt more')
+        self.command('wait 100')
+        self.assertEqual(self.scroll()['follow'], 1)
+        self.command('wait-agent ready 20000')
+
+    def test_held_message_survives_stop(self):
+        self.start()
+        self.chat('held', 'working')
+        self.command('agent-prompt more')
+        self.until_read(2)
+        self.command('agent-stop')
+        self.command('wait-agent ready 20000')
+        interrupts = [m for m in self.stdin() if m.get('type') == 'control_request'
+                      and m['request'].get('subtype') == 'interrupt']
+        self.assertEqual(len(interrupts), 1)
+        self.assertNotIn('cancel_queued', interrupts[0]['request'])
+        thread = self.thread()
+        self.assertEqual(thread.count('user more'), 1, thread)
+        self.assertEqual(thread[-2:], ['user more', 'agent ok: more'])
+        self.assertIn('info Interrupted', thread[:-2])
+        self.assertEqual([m['message']['content'][0]['text'] for m in self.users()], ['held', 'more'])
+        self.assertEqual(self.queued(), [])
+
+    def test_held_message_after_a_crash_is_in_its_box(self):
+        self.start()
+        self.chat('exit 1500', 'working')
+        self.command('agent-prompt more')
+        self.until_read(2)
+        self.assertEqual(self.queued(), ['queued more'])
+        self.command('wait-agent failed 10000')
+        self.assertEqual(self.box(), 'input=more')
+        self.assertEqual(self.queued(), [])
+        self.assertNotIn('user more', self.thread())
+        self.assertEqual(self.command('print-toast').strip(), self.NOT_SENT)
+
+    def test_refused_held_message_comes_back(self):
+        self.start(env={'FAKE_CLAUDE_REFUSE_HELD': '1'})
+        self.chat('held', 'working')
+        self.command('agent-prompt more')
+        self.until(lambda: self.box() == 'input=more', 'the refused message back in the box')
+        self.assertEqual(self.command('print-toast').strip(), self.NOT_SENT)
+        self.assertEqual(self.queued(), [])
+        self.command('wait-agent ready 20000')     # the held turn's result was the last one waited for
+        self.assertNotIn('user more', self.thread())
+        self.assertEqual(self.held(), 0)
+
+    def test_discarded_message_goes_back_to_its_own_conversation(self):
+        self.start(env={'FAKE_CLAUDE_DISCARD_HELD': '1'})
+        self.command('cmd focus_agents')
+        self.chat('held', 'working')
+        self.command('agent-prompt more')
+        self.until_read(2)
+        first = self.sid()
+        self.command('agent-new claude')                # B, while A's message waits, with text of its own
+        self.command('agent-type b')
+        self.until(lambda: [r for r in self.records() if 'discarded' in r], 'the discard')
+        self.command('wait 100')
+        self.assertNotEqual(self.sid(), first)
+        self.assertEqual(self.box(), 'input=b')         # B's box is untouched
+        self.assertEqual(self.command('print-toast').strip(), self.NOT_SENT)
+        self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        rows = [line for line in self.command('print-agents').splitlines() if line.startswith('Claude')]
+        for n in range(1, len(rows) + 1):
+            self.command(f'print-agents {n}')
+            if self.sid() == first:
+                break
+            self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        self.assertEqual(self.sid(), first)
+        self.command('wait 50')
+        self.assertTrue(self.box().startswith('input=more'), self.box())
+        self.assertEqual(self.queued(), [])
+
+    def test_the_17th_held_message_is_refused(self):
+        self.start()
+        self.chat('held', 'working')
+        for n in range(1, 17):
+            self.command(f'agent-prompt m{n}')
+        self.assertEqual(self.held(), 16)
+        self.command('agent-prompt m17')
+        self.assertEqual(self.box(), 'input=m17')
+        self.assertEqual(self.command('print-toast').strip(), 'toast=Sixteen messages are already waiting.')
+        self.assertEqual(self.held(), 16)
+        self.command('wait-agent ready 30000')
+        self.assertEqual([m['message']['content'][0]['text'] for m in self.users()],
+                         ['held'] + ['m%d' % n for n in range(1, 17)])
+        self.assertEqual(self.thread()[-2:], ['user m16', 'agent ok: m16'])
+
+    def test_replay_alone_starts_it(self):
+        self.start(env={'FAKE_CLAUDE_NO_LIFECYCLE': '1'})
+        self.chat('held', 'working')
+        self.command('agent-prompt more')
+        self.until_read(2)
+        self.assertEqual(self.queued(), ['queued more'])
+        self.command('wait-agent ready 20000')
+        self.assertEqual(self.thread(), ['user held', chat.REPLY + '1', 'user more', 'agent ok: more'])
+        self.assertEqual(self.queued(), [])
+
+    def initialize(self):
+        return [r['initialize'] for r in self.records() if 'initialize' in r]
+
+    def test_the_new_flags_are_passed(self):
+        self.start(env={'FAKE_CLAUDE_ECHO_ENV': 'CLAUDE_CODE_QUESTION_PREVIEW_FORMAT'})
+        self.chat('hello')
+        start = self.starts()[-1]
+        argv = start['argv']
+        self.assertIn('--replay-user-messages', argv)
+        self.assertIn('--max-thinking-tokens=31999', argv)
+        self.assertEqual([a for a in argv if a.startswith(('--model', '--effort', '--thinking', '--allow-'))], [])
+        self.assertEqual(start['env']['CLAUDE_CODE_QUESTION_PREVIEW_FORMAT'], 'markdown')
+        self.assertEqual(self.initialize(), [{'promptSuggestions': True, 'supportedDialogKinds': []}])
+        # the project's choices, the remembered default mode and the bypass setting at the next start
+        self.command('agent-cfg-set model sonnet')
+        self.command('agent-cfg-set effort low')
+        self.command('agent-cfg-set think 0')
+        self.command('agent-cfg-set newmode acceptEdits')
+        self.command('agent-release')
+        self.until_gone()
+        self.command('agent-prompt again')
+        self.command('wait-agent ready 10000')
+        argv = self.starts()[-1]['argv']
+        self.assertEqual(len(self.starts()), 2)
+        self.assertIn('--model=sonnet', argv)
+        self.assertIn('--effort=low', argv)
+        self.assertIn('--thinking=disabled', argv)
+        self.assertNotIn('--max-thinking-tokens=31999', argv)
+        self.assertIn('--permission-mode=acceptEdits', argv)
+        self.assertNotIn('--allow-dangerously-skip-permissions', argv)
+
+    def test_bypass_setting_passes_its_flag_and_its_absence_says_so(self):
+        self.start(self.claude_section('initial_mode = bypassPermissions\n'))
+        self.chat('hello')
+        argv = self.starts()[-1]['argv']
+        self.assertIn('--permission-mode=default', argv)
+        self.assertNotIn('--allow-dangerously-skip-permissions', argv)
+        self.assertIn('info Bypass permissions is off in Settings > Claude Code.', self.thread())
+        self.quit()
+        self.start(self.claude_section('initial_mode = bypassPermissions\nallow_bypass_permissions = true\n'))
+        self.chat('hello')
+        argv = self.starts()[-1]['argv']
+        self.assertIn('--permission-mode=bypassPermissions', argv)
+        self.assertIn('--allow-dangerously-skip-permissions', argv)
+        self.assertNotIn('info Bypass permissions is off in Settings > Claude Code.', self.thread())
+
+    def test_suggestions_off_in_initialize(self):
+        self.start(self.claude_section('prompt_suggestions = false\n'))
+        self.chat('hello')
+        self.assertEqual(self.initialize(), [{'promptSuggestions': False, 'supportedDialogKinds': []}])
+
+
 class SeamWordsTest(unittest.TestCase):
     """Nothing above the seam knows Claude (decision 2): phase 1's names stay where phase 1 put them."""
 

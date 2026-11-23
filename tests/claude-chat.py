@@ -429,7 +429,7 @@ class SeamTest(ChatCase):
 MOD = 'cmd' if sys.platform == 'darwin' else 'ctrl'
 ROLES = ('user', 'agent', 'tool', 'result', 'error', 'info')
 PINNED = ['--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json',
-          '--include-partial-messages', '--permission-prompt-tool=stdio',
+          '--include-partial-messages', '--permission-prompt-tool=stdio', '--replay-user-messages',
           '--setting-sources=user,project,local', '--max-thinking-tokens=31999']
 MODEL = 'claude-opus-5-5'
 REPLY = f'agent({MODEL}) '            # the first reply of a conversation names its model
@@ -531,11 +531,14 @@ class ChatTest(DrivenCase):
         self.assertEqual(starts[0]['env']['MCP_CONNECTION_NONBLOCKING'], 'true')
         self.assertIsNone(starts[0]['env']['CLAUDECODE'])
         self.assertEqual(self.stdin()[0], {'type': 'control_request', 'request_id': 'r1',
-                                           'request': {'subtype': 'initialize', 'hooks': None}})
-        # then what is in effect (tests/claude-controls.py), then the prompt
+                                           'request': {'subtype': 'initialize', 'hooks': None,
+                                                       'promptSuggestions': True, 'supportedDialogKinds': []}})
+        # then what is in effect (tests/claude-controls.py), then the prompt, with its uuid (phase 2)
         self.assertEqual(self.stdin()[1], {'type': 'control_request', 'request_id': 'r2',
                                            'request': {'subtype': 'get_settings'}})
-        self.assertEqual(self.stdin()[2], {'type': 'user', 'message': {
+        prompt = self.stdin()[2]
+        self.assertRegex(prompt.pop('uuid', ''), UUID4)
+        self.assertEqual(prompt, {'type': 'user', 'message': {
             'role': 'user', 'content': [{'type': 'text', 'text': 'hello'}]},
             'parent_tool_use_id': None, 'session_id': ''})
         self.assertEqual(self.live(), f'state=ready pid=1 sid={sid} mode=default queued=0 requests=0 new=0\n')
@@ -693,7 +696,8 @@ class ChatTest(DrivenCase):
         lines = self.stdin()
         self.assertEqual([m.get('type') for m in lines], ['control_request', 'control_request', 'user', 'user'])
         self.assertEqual(self.prompts(), ['one', 'two'])
-        self.assertEqual(self.thread(), ['user one', 'user two', REPLY + 'ok: one', 'agent ok: two'])
+        # the second is held (shown queued) until its own turn starts (tests/claude-controls.py QueueTest)
+        self.assertEqual(self.thread(), ['user one', REPLY + 'ok: one', 'user two', 'agent ok: two'])
 
     def test_unknown_records_are_ignored(self):
         self.start()
@@ -775,14 +779,15 @@ class ChatTest(DrivenCase):
         self.assertEqual(thread.count('user hello'), 1, thread)
         self.assertEqual(thread.count(REPLY + 'ok: hello'), 1, thread)
 
-    def test_send_during_a_turn_is_refused(self):
+    def test_send_during_a_turn_is_held(self):
+        # phase 2: written at once, shown queued, a row of its own when its turn starts
         self.start()
         self.chat('slow', 'working')
         self.command('agent-prompt more')
-        self.assertTrue(self.command('print-agent-input').startswith('input=more '))
+        self.assertTrue(self.command('print-agent-input').startswith('input= '))
         self.command('wait-agent ready 20000')
-        self.assertEqual(self.prompts(), ['slow'])
-        self.assertNotIn('user more', self.thread())
+        self.assertEqual(self.prompts(), ['slow', 'more'])
+        self.assertEqual(self.thread()[-2:], ['user more', 'agent ok: more'])
 
     def test_back_before_its_file_lists_the_running_conversation(self):
         # the new conversation's file is not written yet (discovery cannot list it): the list still has
@@ -1702,7 +1707,7 @@ class LifeTest(DrivenCase):
         self.command('agent-prompt again')
         self.assertIn(' queued=1 ', self.live())
         self.assertEqual(self.command('print-agent-input').split(' ')[0], 'input=')
-        self.assertEqual(self.thread()[-1], 'user again')
+        self.assertEqual(self.command('print-agents').splitlines()[-1], 'queued again')   # drawn queued (phase 2)
         self.until(lambda: len(self.starts()) == 2, 'a second start', 15)
         self.until(lambda: self.thread()[-1].endswith(' ok: again'), 'the reply', 15)
         self.assertEqual(self.prompts(), ['hello', 'again'])
@@ -1832,7 +1837,8 @@ class HolderTest(DrivenCase):
         self.assertIn(' queued=1 ', self.live())
         self.assertEqual(self.starts(), [])         # nothing was spawned
         self.assertEqual(re.findall(r'\b\d+\b', self.command('print-uproc')), [])
-        self.assertEqual(self.thread(), old + ['user hello'])
+        self.assertEqual(self.thread(), old)        # drawn queued until it starts (phase 2)
+        self.assertEqual(self.command('print-agents').splitlines()[-1], 'queued hello')
         self.command('agent-prompt more')           # waits too, with the first
         self.assertIn(' queued=2 ', self.live())
 
@@ -2375,7 +2381,7 @@ class EdgeTest(DrivenCase):
         self.assertEqual(self.prompts(), ['pasted-héllo wörld ✓ 한국'])
 
     def test_follows_the_stream(self):
-        self.start()
+        self.start(extra='[agents]\nscroll_on_send = false\n')   # (on, a send follows again: claude-controls.py)
         self.chat('long', 'ready', 20000)
         self.command('wait 200')
         scroll, top, follow = self.scroll()

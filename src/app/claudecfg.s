@@ -21,6 +21,7 @@
 #       returned 1
 #   claude_expand_home(cstr) -> rax "~/" as the home folder, as the start reads a configured path
 #   claude_mode() -> rax the --permission-mode value of [claude] initial_mode, or 0 (the CLI's own)
+#   claude_mode_gated() -> eax 1 when initial_mode is bypassPermissions and that is not allowed
 #   claude_mode_alias(ptr, len) -> rax ptr, rdx len: the initial_mode value config.s looks up
 #   claude_dir(sb) -> eax 1: appended, the first of an absolute env.CLAUDE_CONFIG_DIR, the environment's
 #                   CLAUDE_CONFIG_DIR (not empty), "$HOME/.claude" (HOME: an env.HOME pair, else the
@@ -65,7 +66,7 @@ dir_checked: .long 0            # claude_dir_moved looked once the login environ
 .p2align 3
 dir_pin: .quad 0                # claude_dir_pin's folder, or 0
 pin_pair: .zero SB_SIZE         # claude_env_dir's "CLAUDE_CONFIG_DIR=..."
-pin_forced: .zero 8 * 4         # forced's entries, then pin_pair's text, 0
+pin_forced: .zero 8 * 5         # forced's entries, then pin_pair's text, 0
 rpath: .zero 4096 + 16          # a resolved working directory
 
 .text
@@ -441,9 +442,11 @@ FN claude_env_dir
     mov [rcx], rax
     lea rax, [rip + .Lf_mcp]
     mov [rcx + 8], rax
-    mov rax, [rip + pin_pair + SB_ptr]
+    lea rax, [rip + .Lf_preview]
     mov [rcx + 16], rax
-    mov qword ptr [rcx + 24], 0
+    mov rax, [rip + pin_pair + SB_ptr]
+    mov [rcx + 24], rax
+    mov qword ptr [rcx + 32], 0
     call pairs_list
     mov rbx, rax
     mov rdi, rax
@@ -673,6 +676,16 @@ usual_place:
     jmp 1b
 8:  xor eax, eax
 9:  EPILOGUE
+
+# FN claude_mode_gated() -> eax 1 when [claude] initial_mode names bypassPermissions and
+#   allow_bypass_permissions is off (claude_mode gives default then)
+FN claude_mode_gated
+    xor eax, eax
+    cmp dword ptr [rip + cfg_claude_initial_mode], MODE_OPT_BYPASS
+    jne 1f
+    cmp dword ptr [rip + cfg_claude_allow_bypass], 0
+    sete al
+1:  ret
 
 # claude_mode() -> rax the initial_mode value to pass, or 0 for the CLI's own default. Bypass
 #   permissions is rhun's gate alone ([claude] allow_bypass_permissions): without it, default
@@ -1030,7 +1043,7 @@ claude_ctl:
     .quad .Lc_print_claude_path, c_print_claude_path
     .quad 0, 0
 # rhun's forced values (they win over the env pairs) and the variables a surrounding Claude Code sets
-forced: .quad .Lf_entry, .Lf_mcp, 0
+forced: .quad .Lf_entry, .Lf_mcp, .Lf_preview, 0
 unsets: .quad .Lu_claudecode, .Lu_child, .Lu_traceparent, .Lu_tracestate, 0
 unsets_dir: .quad .Lu_claudecode, .Lu_child, .Lu_traceparent, .Lu_tracestate, .Lconfig_dir, 0
 
@@ -1054,6 +1067,7 @@ places:
 .Lc_print_claude_path: .asciz "print-claude-path"
 .Lf_entry: .asciz "CLAUDE_CODE_ENTRYPOINT=rhun"
 .Lf_mcp: .asciz "MCP_CONNECTION_NONBLOCKING=true"
+.Lf_preview: .asciz "CLAUDE_CODE_QUESTION_PREVIEW_FORMAT=markdown"
 .Lu_claudecode: .asciz "CLAUDECODE"
 .Lu_child: .asciz "CLAUDE_CODE_CHILD_SESSION"
 .Lu_traceparent: .asciz "TRACEPARENT"

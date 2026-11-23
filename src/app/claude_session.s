@@ -11,6 +11,9 @@
 #   claude_settings_answer(AL*, response)   get_settings' control_response: applied.model, .effort,
 #     .ultracodeAvailable and .ultracode (ev_model, ev_effort, ev_ultra); errors, when there are any, as
 #     the settings band (the extension's text, webview index.js @5828498); none: the band goes
+#   claude_lifecycle(AL*, record)           command_lifecycle: a held message started or will not run
+#   claude_replay(AL*, record)              a user record with isReplay: a held message started
+#   claude_start_mode(AL*) -> rax cstr|0    a start's --permission-mode, through the bypass gate
 #   claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra,
 #     claude_set_thinking, claude_action: the driver table's entries for the later tasks (0 until then)
 #
@@ -19,6 +22,7 @@
 .include "rhun.inc"
 
 .equ ERRORS_MAX, 50             # settings errors looked at
+.equ R_INFO_ROW, 6              # agents.s's info row (R_INFO)
 
 .bss
 .p2align 3
@@ -718,6 +722,113 @@ jdup:
     pop rbx
     ret
 
+# ---- messages during a turn (task 3) ----
+
+# FN claude_lifecycle(AL*, record): command_lifecycle {command_uuid, state} (finding 17): started -> the held
+#   message's row joins (ev_started); cancelled, discarded, refused -> it will not run (ev_dropped); queued
+#   and completed say nothing new. A uuid rhun does not hold (a message shown at once, one started) is
+#   nothing (the events look it up). refused and discarded have no recording (the CLI's schema has them)
+FN claude_lifecycle
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rsi
+    lea rsi, [rip + .Lk_command_uuid]
+    call jstr
+    test rdx, rdx
+    jz 9f
+    mov r13, rax
+    mov r14, rdx
+    mov rdi, r12
+    lea rsi, [rip + .Lk_state]
+    call json_get
+    mov r15, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lv_started]
+    call json_is
+    test eax, eax
+    jz 1f
+    mov rdi, rbx
+    mov rsi, r13
+    mov rdx, r14
+    call ev_started
+    EPILOGUE
+1:  lea r12, [rip + dropped_states]
+2:  mov rsi, [r12]
+    test rsi, rsi
+    jz 9f
+    add r12, 8
+    mov rdi, r15
+    call json_is
+    test eax, eax
+    jz 2b
+    mov rdi, rbx
+    mov rsi, r13
+    mov rdx, r14
+    call ev_dropped
+9:  EPILOGUE
+
+# FN claude_replay(AL*, record): a user record with isReplay (finding 17): the CLI echoes each message as
+#   its turn starts; its uuid, when rhun holds it, says it started (as command_lifecycle's started, whichever
+#   comes first)
+FN claude_replay
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, rsi
+    lea rsi, [rip + .Lk_uuid]
+    call jstr
+    test rdx, rdx
+    jz 9f
+    mov rdi, rbx
+    mov rsi, rax
+    call ev_started
+9:  EPILOGUE
+
+# FN claude_start_mode(AL*) -> rax the --permission-mode value of a start (a cstr), or 0 for the CLI's own:
+#   the conversation's kept mode, else (initial_mode empty) the project's remembered default, else
+#   initial_mode. bypassPermissions only with [claude] allow_bypass_permissions: without it default, and an
+#   info row says why
+FN claude_start_mode
+    PROLOGUE
+    mov rbx, rdi
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov r12, rax
+    mov rdi, rax
+    lea rsi, [rbx + AL_sid]
+    call agentcfg_conv_mode
+    test rax, rax
+    jnz 5f
+    cmp dword ptr [rip + cfg_claude_initial_mode], 0
+    jne 2f
+    lea rax, [r12 + AGC_newmode]
+    cmp byte ptr [rax], 0
+    jne 5f
+2:  call claude_mode_gated
+    test eax, eax
+    jnz 7f
+    call claude_mode
+    EPILOGUE
+5:  mov r13, rax                # a kept mode: through the gate too
+    mov rdi, rax
+    lea rsi, [rip + .Lv_bypass]
+    call strcmp_eq
+    test eax, eax
+    jz 6f
+    cmp dword ptr [rip + cfg_claude_allow_bypass], 0
+    je 7f
+6:  mov rax, r13
+    EPILOGUE
+7:  lea rdi, [rip + .Lbypass_off]
+    call strlen
+    mov rdi, rbx
+    mov esi, R_INFO_ROW
+    lea rdx, [rip + .Lbypass_off]
+    mov rcx, rax
+    call ev_note
+    lea rax, [rip + .Lv_default]
+    EPILOGUE
+
 # ---- the driver table's entries for later tasks ----
 
 # FN claude_modes(AS*, AMD** out) -> eax 0; claude_set_mode(AL*, id), claude_set_model(AL*, value),
@@ -748,6 +859,7 @@ FN claude_action
 .section .rodata
 .p2align 3
 default_levels: .quad .Le_low_id, .Le_medium_id, .Le_high_id, 0
+dropped_states: .quad .Lv_cancelled, .Lv_discarded, .Lv_refused, 0     # a held message will not run
 effort_labels:
     .quad .Le_low_id, .Le_low, .Le_medium_id, .Le_medium, .Le_high_id, .Le_high
     .quad .Le_xhigh_id, .Le_xhigh, .Le_max_id, .Le_max, 0, 0
@@ -816,6 +928,16 @@ local_cmds:
 .Lk_message: .asciz "message"
 .Lk_path: .asciz "path"
 .Lk_file: .asciz "file"
+.Lk_command_uuid: .asciz "command_uuid"
+.Lk_state: .asciz "state"
+.Lk_uuid: .asciz "uuid"
+.Lv_started: .asciz "started"
+.Lv_cancelled: .asciz "cancelled"
+.Lv_discarded: .asciz "discarded"
+.Lv_refused: .asciz "refused"
+.Lv_bypass: .asciz "bypassPermissions"
+.Lv_default: .asciz "default"
+.Lbypass_off: .asciz "Bypass permissions is off in Settings > Claude Code."
 .Lv_success: .asciz "success"
 .Lv_on: .asciz "on"
 .Lv_cooldown: .asciz "cooldown"

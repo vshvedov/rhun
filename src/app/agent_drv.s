@@ -15,7 +15,9 @@
 #   agent_live_state(AS*) -> eax ALS_* (ALS_OFF without a record)
 #   agent_send(AS*, ptr, len) -> eax SEND_*   the user's prompt: shown at once, then sent, or kept until
 #                                             the program is ready (it is started first when it is not
-#                                             running); refused while a turn runs
+#                                             running), drawn queued meanwhile; while a turn runs written
+#                                             at once and held (DRVC_QUEUE), else refused
+#   agent_queued(AS*, i) -> rax ptr, rdx len  its i-th message that has not started (drawn queued), or 0
 #   agent_stop(AS*), agent_answer(AS*, n), agent_typing(AS*) (typing starts the program),
 #   agent_touch(AS*) (more typing: the idle stop waits again), agent_stop_running(AS*) -> eax (Escape:
 #   Stop when a turn runs), agent_release(AS*) (the program ends politely, as the idle stop does)
@@ -41,7 +43,9 @@
 #     again), ev_config(al) (its lists changed: the project's record is saved, agentcfg.s),
 #     ev_model(al, ptr, len), ev_effort(al, ptr, len) (what is in effect), ev_ultra(al, available, on),
 #     ev_thinking(al, on), ev_fast(al, FS_*, reason ptr, len) (kept in the project's record too),
-#     ev_band(al, BK_*, ptr, len) (a band above the box; ptr 0 takes it away)
+#     ev_band(al, BK_*, ptr, len) (a band above the box; ptr 0 takes it away), ev_started(al, uuid ptr,
+#     len) (a held message started: its row joins), ev_dropped(al, uuid ptr, len) (a held message will not
+#     run: back to its own conversation's box)
 #   A driver's table also has its lists and controls (DRV_modes, DRV_set_*, DRV_reply, DRV_action): the
 #   extension driver's answer 0
 #
@@ -81,6 +85,9 @@
 .equ HOLD_MS, 10000             # how long a start waits for another holder of the conversation
 .equ PROMPT_CHARS, 50000        # a prompt's characters at most (the extension's limit)
 .equ ROWKEY_MAX, 80             # AL_rowkey's size
+.equ RS_QUEUE, 1                # queue_restore's: the prompts that waited for a start
+.equ RS_HELD, 2                 #   the messages held
+.equ RS_ALL, 3
 
 .bss
 .p2align 3
@@ -354,37 +361,91 @@ queue_free:
 2:  mov qword ptr [rbx + AL_queue + VEC_len], 0
     EPILOGUE
 
-# queue_restore(AL*): the prompts that waited go back in the box, joined by blank lines, when the box is
-#   the session's and empty; then they go
+# queue_restore(AL*, what RS_*): messages that will not go go back to their own conversation, joined by
+#   blank lines, the oldest first: the held ones (RS_HELD: written, never started; a toast says so), then
+#   the prompts that waited for a start (RS_QUEUE); then they go
 queue_restore:
     PROLOGUE
     mov rbx, rdi
-    cmp qword ptr [rbx + AL_queue + VEC_len], 0
-    je 9f
+    mov r14d, esi
     lea rdi, [rip + jsb]
     call sb_clear
+    xor r15d, r15d              # a held one went back
+    test r14d, RS_HELD
+    jz 3f
     xor r12d, r12d
-1:  cmp r12, [rbx + AL_queue + VEC_len]
+1:  cmp r12, [rbx + AL_held + VEC_len]
     jae 2f
-    test r12, r12
-    jz 11f
+    imul r13, r12, AH_SIZE
+    add r13, [rbx + AL_held + VEC_ptr]
+    mov rdi, [r13 + AH_text]
+    mov rsi, [r13 + AH_len]
+    call jsb_add
+    mov rdi, [r13 + AH_text]
+    call mem_free
+    mov r15d, 1
+    inc r12
+    jmp 1b
+2:  mov qword ptr [rbx + AL_held + VEC_len], 0
+3:  test r14d, RS_QUEUE
+    jz 5f
+    xor r12d, r12d
+4:  cmp r12, [rbx + AL_queue + VEC_len]
+    jae 41f
+    mov rax, [rbx + AL_queue + VEC_ptr]
+    mov r13, [rax + r12*8]
+    inc r12
+    test r13, r13
+    jz 4b
+    mov rdi, r13
+    call strlen
+    mov rdi, r13
+    mov rsi, rax
+    call jsb_add
+    jmp 4b
+41: mov rdi, rbx
+    call queue_free
+5:  cmp qword ptr [rip + jsb + SB_len], 0
+    je 9f
+    mov rdi, rbx
+    call jsb_keep
+    test r15d, r15d
+    jz 9f
+    lea rdi, [rip + .Lheld_back]
+    call app_toast
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# jsb_add(ptr, len): a message's text after what jsb holds, a blank line between
+jsb_add:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    cmp qword ptr [rip + jsb + SB_len], 0
+    je 1f
     lea rdi, [rip + jsb]
     lea rsi, [rip + .Lblank]
     call sb_push_cstr
-11: mov rax, [rbx + AL_queue + VEC_ptr]
-    lea rdi, [rip + jsb]
-    mov rsi, [rax + r12*8]
-    call sb_push_cstr
-    inc r12
-    jmp 1b
-2:  mov rdi, [rbx + AL_as]
+1:  lea rdi, [rip + jsb]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    EPILOGUE
+
+# jsb_keep(AL*): the text in jsb goes back to the session: into its box when the box is the session's
+#   (agentext_restore), else kept for its box (after what was kept already), given back when it is opened
+#   (agent_unsent_take)
+jsb_keep:
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, [rbx + AL_as]
     mov rsi, [rip + jsb + SB_ptr]
     mov rdx, [rip + jsb + SB_len]
     call agentext_restore
     test eax, eax
-    jnz 8f
-    mov rdi, [rbx + AL_unsent]  # the box is another conversation's: kept for this one's box (after what
-    test rdi, rdi               #   was kept already), given back when it is opened (agent_unsent_take)
+    jnz 9f
+    mov rdi, [rbx + AL_unsent]
+    test rdi, rdi
     jz 7f
     call strlen
     mov r12, rax
@@ -405,13 +466,11 @@ queue_restore:
     mov rdi, [rbx + AL_unsent]
     call mem_free
     mov [rbx + AL_unsent], r13
-    jmp 8f
+    jmp 9f
 7:  mov rdi, [rip + jsb + SB_ptr]
     mov rsi, [rip + jsb + SB_len]
     call mem_dup
     mov [rbx + AL_unsent], rax
-8:  mov rdi, rbx
-    call queue_free
 9:  EPILOGUE
 
 # FN agent_unsent_take(AS* or 0) -> rax the prompts of that session that never went and could not go back
@@ -443,9 +502,15 @@ FN agent_closed
 
 # ---- what the user does ----
 
-# FN agent_send(AS*, ptr, len) -> eax SEND_*: the user's prompt to the session's driver (see the top)
+# FN agent_send(AS*, ptr, len) -> eax SEND_*: the user's prompt to the session's driver (see the top). Every
+#   prompt gets a uuid (agent_uuid) the driver writes with it. Ready, nothing held: a row at once, then
+#   written (SEND_OK). Starting (or held by rhun's question): it waits for ready, drawn queued (SEND_QUEUED,
+#   AL_QUEUE_MAX at most: SEND_FULL). A turn runs, a card is up or others are held: a driver that takes
+#   messages during a turn (DRVC_QUEUE) has it written now and held, drawn queued until it starts
+#   (ev_started; SEND_HELD, AH_MAX at most: SEND_TOOMANY with a toast, the text stays); any other refuses it
+#   (SEND_REFUSED). Locals: [rsp] the uuid (40 bytes)
 FN agent_send
-    PROLOGUE
+    PROLOGUE 48
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
@@ -495,8 +560,6 @@ FN agent_send
     call time_ms
     mov [r15 + AL_used], rax
     mov eax, [r15 + AL_state]
-    cmp eax, ALS_READY
-    je .Las_ready
     cmp eax, ALS_STARTING
     je .Las_queue
     cmp eax, ALS_HELD           # its start waits for the user's answer: the prompt waits with it
@@ -505,8 +568,40 @@ FN agent_send
     je 3f
     cmp eax, ALS_FAILED
     je 3f
-    mov eax, SEND_REFUSED       # a turn runs, or a card is up
+    cmp qword ptr [r15 + AL_held + VEC_len], 0
+    jne .Las_busy               # others are held: this one goes after them
+    cmp eax, ALS_READY
+    je .Las_ready
+.Las_busy:                      # a turn runs, or a card is up
+    mov eax, SEND_REFUSED
+    test dword ptr [r14 + DRV_caps], DRVC_QUEUE
+    jz 9f
+    mov eax, SEND_TOOMANY
+    cmp qword ptr [r15 + AL_held + VEC_len], AH_MAX
+    jb 4f
+    lea rdi, [rip + .Ltoo_many] # the text stays in the box
+    call app_toast
+    mov eax, SEND_TOOMANY
     jmp 9f
+4:  lea rdi, [rsp]              # written now, held until it starts
+    call agent_uuid
+    mov rdi, r15
+    mov rsi, r12
+    mov rdx, r13
+    lea rcx, [rsp]
+    mov rax, [r15 + AL_drv]
+    call [rax + DRV_send]
+    mov ecx, eax
+    mov eax, SEND_FAILED        # refused, or the write broke (its close reported it)
+    test ecx, ecx
+    jz 9f
+    mov rdi, r15
+    lea rsi, [rsp]
+    mov rdx, r12
+    mov rcx, r13
+    call held_add
+    mov eax, SEND_HELD
+    jmp .Las_sent
 3:  mov rdi, r15                # not running: started first, the prompt waits for ready
     call agent_start
     mov ecx, eax
@@ -516,7 +611,7 @@ FN agent_send
     cmp dword ptr [r15 + AL_state], ALS_FAILED  # the start's first write broke the connection: its
     je 9f                                       #   close reported the failure already (ev_failed)
     jmp .Las_queue
-.Las_queue:
+.Las_queue:                     # it waits for ready, drawn queued (agents.s): no row yet
     mov eax, SEND_FULL
     cmp qword ptr [r15 + AL_queue + VEC_len], AL_QUEUE_MAX
     jae 9f
@@ -529,9 +624,9 @@ FN agent_send
     call vec_push
     mov [rax], r14
     and dword ptr [r15 + AL_flags], ~ALF_DRAFT     # it got a prompt: leaving it keeps it
-    call user_row
+    mov dword ptr [rip + g_dirty], 1
     mov eax, SEND_QUEUED
-    jmp 9f
+    jmp .Las_sent
 .Las_ready:
     cmp dword ptr [r15 + AL_cn + CN_state], CN_UP
     jne .Las_restart
@@ -548,20 +643,141 @@ FN agent_send
     mov rdi, r15                # WORKING before the write: a connection that breaks under it is a turn
     mov esi, ALS_WORKING        #   that failed (the driver's close reports it, FAILED)
     call agent_state_set
+    lea rdi, [rsp]
+    call agent_uuid
     mov rdi, r15
     mov rsi, r12
     mov rdx, r13
+    lea rcx, [rsp]
     mov rax, [r15 + AL_drv]
     call [rax + DRV_send]
     test eax, eax
     mov eax, SEND_OK
-    jnz 9f
+    jnz .Las_sent
     cmp dword ptr [r15 + AL_state], ALS_WORKING
     jne 8f                      # it broke: FAILED already
     mov rdi, r15                # refused, nothing went: ready again
     mov esi, ALS_READY
     call agent_state_set
 8:  mov eax, SEND_FAILED
+    jmp 9f
+.Las_sent:                      # it went or waits to: [agents] scroll_on_send
+    mov r14d, eax
+    mov rdi, rbx
+    call agents_sent
+    mov eax, r14d
+9:  EPILOGUE
+
+# held_add(AL*, uuid cstr, ptr, len): a message written during a turn joins AL_held (its text copied)
+held_add:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    lea rdi, [rbx + AL_held]
+    mov esi, AH_SIZE
+    call vec_push
+    mov r15, rax
+    lea rdi, [r15 + AH_uuid]
+    mov rsi, r12
+    call cstr_copy
+    mov rdi, r13
+    mov rsi, r14
+    call mem_dup
+    mov [r15 + AH_text], rax
+    mov [r15 + AH_len], r14
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# held_find(AL*, uuid ptr, len) -> rax the index in AL_held of the message written with that uuid, or -1
+held_find:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    xor r14d, r14d
+1:  cmp r14, [rbx + AL_held + VEC_len]
+    jae 8f
+    imul r15, r14, AH_SIZE
+    add r15, [rbx + AL_held + VEC_ptr]
+    lea rdi, [r15 + AH_uuid]
+    call strlen
+    cmp rax, r13
+    jne 2f
+    lea rdi, [r15 + AH_uuid]
+    mov rsi, r12
+    mov rdx, r13
+    call memeq
+    test eax, eax
+    jnz 3f
+2:  inc r14
+    jmp 1b
+3:  mov rax, r14
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# held_take(AL*, i) -> rax its text (now the caller's), rdx its length: message i leaves AL_held, the
+#   order of the others kept
+held_take:
+    PROLOGUE
+    mov rbx, rdi
+    imul r12, rsi, AH_SIZE
+    add r12, [rbx + AL_held + VEC_ptr]
+    mov r13, [r12 + AH_text]
+    mov r14, [r12 + AH_len]
+    mov rax, [rbx + AL_held + VEC_len]
+    dec rax
+    mov [rbx + AL_held + VEC_len], rax
+    imul rdx, rax, AH_SIZE
+    add rdx, [rbx + AL_held + VEC_ptr]
+    sub rdx, r12                # the bytes after it
+    mov rdi, r12
+    lea rsi, [r12 + AH_SIZE]
+    call memmove
+    mov dword ptr [rip + g_dirty], 1
+    mov rax, r13
+    mov rdx, r14
+    EPILOGUE
+
+# FN agent_queued(AS* or 0, i) -> rax ptr, rdx len of its i-th message that has not started (those that
+#   wait for a start first, then those held), or rax 0 past the last: what agents.s draws queued
+FN agent_queued
+    PROLOGUE
+    xor eax, eax
+    xor edx, edx
+    test rdi, rdi
+    jz 9f
+    mov rbx, [rdi + AS_live]
+    test rbx, rbx
+    jz 9f
+    mov r12, rsi
+    xor r13d, r13d
+1:  cmp r13, [rbx + AL_queue + VEC_len]
+    jae 3f
+    mov rax, [rbx + AL_queue + VEC_ptr]
+    mov rax, [rax + r13*8]
+    inc r13
+    test rax, rax
+    jz 1b                       # (one being written: ev_ready)
+    test r12, r12
+    jz 2f
+    dec r12
+    jmp 1b
+2:  mov r14, rax
+    mov rdi, rax
+    call strlen
+    mov rdx, rax
+    mov rax, r14
+    EPILOGUE
+3:  xor eax, eax
+    cmp r12, [rbx + AL_held + VEC_len]
+    jae 9f
+    imul rcx, r12, AH_SIZE
+    add rcx, [rbx + AL_held + VEC_ptr]
+    mov rax, [rcx + AH_text]
+    mov rdx, [rcx + AH_len]
 9:  EPILOGUE
 
 # user_row(): agent_send's prompt (rbx AS, r12 ptr, r13 len) as the user's row, shown at once
@@ -958,6 +1174,7 @@ start_abandon:
     mov qword ptr [rbx + AL_row], -1
     mov byte ptr [rbx + AL_rowkey], 0
     mov rdi, rbx
+    mov esi, RS_ALL
     call queue_restore
     EPILOGUE
 
@@ -1042,26 +1259,8 @@ fork_copy:
     inc r14
     jmp 3b
 4:  mov qword ptr [rbx + AL_queue + VEC_len], 0
-    mov rdi, r13
-    call agent_start
-    test eax, eax
-    jz 9f                       # it could not start: its error row, the prompts in its box (ev_failed)
-    xor r14d, r14d              # each its row in the copy, as agent_send shows one
-5:  cmp r14, [r13 + AL_queue + VEC_len]
-    jae 9f
-    mov rax, [r13 + AL_queue + VEC_ptr]
-    mov rax, [rax + r14*8]
-    mov [rsp + 40], rax
-    mov rdi, rax
-    call strlen
-    mov rdi, r15
-    mov esi, R_USER
-    mov rdx, [rsp + 40]
-    mov rcx, rax
-    xor r8d, r8d
-    call agents_msg_add
-    inc r14
-    jmp 5b
+    mov rdi, r13                # (drawn queued there until it is ready; a start that fails puts them in
+    call agent_start            #   its box: ev_failed)
 9:  EPILOGUE
 8:  mov rdi, rbx                # no copy: as Cancel
     call start_abandon
@@ -1473,11 +1672,14 @@ FN ev_note
     xor r8d, r8d
     jmp agents_msg_add
 
-# FN ev_ready(al): the handshake is done: the prompts that waited go, the oldest first. They go WORKING: a
-#   connection that breaks under a write is a turn that failed, and its close (the driver's: ev_failed,
-#   ev_closed) has put the prompts back in the box and freed them before the write returns
+# FN ev_ready(al): the handshake is done: the prompts that waited go, the oldest first, each with a uuid.
+#   The first is a row at once (nothing runs yet); with a driver that takes messages during a turn
+#   (DRVC_QUEUE) the others are held, drawn queued until each starts (ev_started), else each is a row as it
+#   goes. They go WORKING: a connection that breaks under a write is a turn that failed, and its close (the
+#   driver's: ev_failed, ev_closed) has put the prompts back in the box and freed them before the write
+#   returns. One the driver refuses goes back in the box. Locals: [rsp] the uuid (40 bytes)
 FN ev_ready
-    PROLOGUE
+    PROLOGUE 48
     mov rbx, rdi
     test dword ptr [rbx + AL_flags], ALF_ENDING
     jnz 9f                      # a start given up (start_cancel): it is ending, nothing goes
@@ -1493,19 +1695,55 @@ FN ev_ready
     jae 3f
     mov rax, [rbx + AL_queue + VEC_ptr]
     mov r14, [rax + r12*8]
-    inc r12
+    test r14, r14
+    jz 25f
     mov rdi, r14
     call strlen
-    mov rdi, rbx
+    mov r15, rax
+    lea rdi, [rsp]
+    call agent_uuid
+    test r13d, r13d             # the first that goes, or each when they cannot be held: a row now
+    jz 21f
+    mov rax, [rbx + AL_drv]
+    test dword ptr [rax + DRV_caps], DRVC_QUEUE
+    jnz 22f
+21: mov rdi, [rbx + AL_as]
+    mov esi, R_USER
+    mov rdx, r14
+    mov rcx, r15
+    xor r8d, r8d
+    call agents_msg_add
+    mov dword ptr [rsp + 40], 0 # shown as a row: not held
+    jmp 23f
+22: mov dword ptr [rsp + 40], 1
+23: mov rdi, rbx
     mov rsi, r14
-    mov rdx, rax
+    mov rdx, r15
+    lea rcx, [rsp]
     mov rax, [rbx + AL_drv]
     call [rax + DRV_send]
-    or r13d, eax
     cmp dword ptr [rbx + AL_state], ALS_WORKING
     jne 9f                      # it broke: the queue is gone (ev_failed), the state set
+    test eax, eax
+    jz 25f                      # refused: it stays in the queue, back in the box below
+    cmp dword ptr [rsp + 40], 0
+    je 24f
+    mov rdi, rbx
+    lea rsi, [rsp]
+    mov rdx, r14
+    mov rcx, r15
+    call held_add
+24: mov r13d, 1
+    mov rax, [rbx + AL_queue + VEC_ptr]
+    mov qword ptr [rax + r12*8], 0
+    mov rdi, r14
+    call mem_free
+25: inc r12
     jmp 2b
-3:  mov rdi, rbx
+3:  mov rdi, rbx                # what was refused goes back in the box
+    mov esi, RS_QUEUE
+    call queue_restore
+    mov rdi, rbx
     call queue_free
     test r13d, r13d
     jnz 4f
@@ -1517,6 +1755,67 @@ FN ev_ready
     jmp 9f
 4:  call time_ms
     mov [rbx + AL_used], rax
+9:  EPILOGUE
+
+# FN ev_started(al, uuid ptr, len): a held message started: it leaves AL_held and is the user's row now.
+#   A uuid not held (a message shown as a row at once, one started already) is nothing
+FN ev_started
+    PROLOGUE
+    mov rbx, rdi
+    call held_find
+    test rax, rax
+    js 9f
+    mov rdi, rbx
+    mov rsi, rax
+    call held_take
+    mov r12, rax
+    mov r13, rdx
+    mov rdi, [rbx + AL_as]
+    mov esi, R_USER
+    mov rdx, r12
+    mov rcx, r13
+    xor r8d, r8d
+    call agents_msg_add
+    mov rdi, r12
+    call mem_free
+9:  EPILOGUE
+
+# FN ev_dropped(al, uuid ptr, len): a held message will not run (the program cancelled, discarded or refused
+#   it): it goes back to its own conversation (its box, or AL_unsent when the box is another's) with a
+#   toast; no result comes for it, so the last turn's end may have come already (READY). A uuid not held is
+#   nothing
+FN ev_dropped
+    PROLOGUE
+    mov rbx, rdi
+    call held_find
+    test rax, rax
+    js 9f
+    mov rdi, rbx
+    mov rsi, rax
+    call held_take
+    mov r12, rax
+    mov r13, rdx
+    lea rdi, [rip + jsb]
+    call sb_clear
+    lea rdi, [rip + jsb]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    mov rdi, r12
+    call mem_free
+    mov rdi, rbx
+    call jsb_keep
+    lea rdi, [rip + .Lheld_back]
+    call app_toast
+    cmp qword ptr [rbx + AL_turns], 0
+    je 1f
+    dec qword ptr [rbx + AL_turns]
+    jnz 9f
+1:  cmp dword ptr [rbx + AL_state], ALS_WORKING
+    jne 9f
+    mov rdi, rbx                # nothing runs now
+    mov esi, ALS_READY
+    call agent_state_set
 9:  EPILOGUE
 
 # FN ev_text(al, key ptr, key len, ptr, len, replace) -> rax the row's index (-1 none): reply text of a
@@ -1898,11 +2197,12 @@ FN ev_closed
     cmp qword ptr [rbx + AL_queue + VEC_len], 0
     jne 11f
     xor r15d, r15d
-11: test r15d, r15d
-    jnz 12f
-    mov rdi, rbx                # prompts that waited for a start rhun ended go back in the box
+11: mov esi, RS_ALL             # prompts that waited for a start rhun ended go back in the box; the
+    test r15d, r15d             #   messages it held and never started always do
+    jz 12f
+    mov esi, RS_HELD
+12: mov rdi, rbx
     call queue_restore
-12:
     mov rdi, rbx                # nobody waits for an answer now: the cards go
     call reqs_drop
     mov r13d, eax
@@ -1932,32 +2232,16 @@ FN ev_closed
     mov rcx, [rbx + AL_report + SB_len]
     xor r8d, r8d
     call agents_msg_add
-9:  test r15d, r15d             # the start again; the prompts' rows after the file's, as agent_send's
-    jz 10f
+9:  test r15d, r15d             # the start again (its prompts drawn queued until ready; a failed one
+    jz 10f                      #   puts them in the box: ev_failed)
     mov rdi, rbx
     call agent_start
-    test eax, eax
-    jz 10f                      # failed: the prompts are in the box (ev_failed)
-    xor r13d, r13d
-91: cmp r13, [rbx + AL_queue + VEC_len]
-    jae 10f
-    mov rax, [rbx + AL_queue + VEC_ptr]
-    mov r14, [rax + r13*8]
-    inc r13
-    mov rdi, r14
-    call strlen
-    mov rdi, r12
-    mov esi, R_USER
-    mov rdx, r14
-    mov rcx, rax
-    xor r8d, r8d
-    call agents_msg_add
-    jmp 91b
+    jmp 10f
 8:  mov edi, r13d               # no file to read again: the rows the stream fed stay
     call closed_note
     test r15d, r15d
     jz 10f
-    mov rdi, rbx                # and the prompts' rows with them: the start again
+    mov rdi, rbx                # the start again
     call agent_start
 10: mov dword ptr [rip + g_dirty], 1
     EPILOGUE
@@ -2008,6 +2292,7 @@ FN ev_failed
     xor r8d, r8d
     call agents_msg_add
     mov rdi, rbx
+    mov esi, RS_ALL
     call queue_restore
     EPILOGUE
 
@@ -2599,6 +2884,8 @@ opts_failed: .quad .Lo_terminal
 .Lurandom: .asciz "/dev/urandom"
 .Lhex: .ascii "0123456789abcdef"
 .Lprompt_long: .asciz "The prompt is longer than 50,000 characters."
+.Ltoo_many: .asciz "Sixteen messages are already waiting."
+.Lheld_back: .asciz "A queued message was not sent."
 .Lturn_failed: .asciz "The turn failed."
 .Linterrupted: .asciz "Interrupted"
 .Ltool: .asciz "tool"

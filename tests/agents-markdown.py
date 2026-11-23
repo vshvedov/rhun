@@ -277,6 +277,28 @@ class AgentsMarkdown(unittest.TestCase):
             self.assertIn(' active=%s line=%d ' % (path, line), state, name)
             self.command('cmd focus_agents')
 
+    def test_only_rhun_file_links_to_files_are_followed(self):
+        other = self.work / 'other'
+        other.mkdir()
+        (other / 'x.txt').write_text('x\n', encoding='utf-8')
+        reply = ('[ext](rhun://ext/someone/thing), [install](rhun://extension/someone/thing), '
+                 '[folder](rhun://file/%s) and [file](rhun://file/%s).'
+                 % (other.as_posix(), (other / 'x.txt').as_posix()))
+        self.session('s1', [('user', 'where?'), ('assistant', reply)])
+        self.start()
+        self.open('s1')
+        where = self.links_at(2)
+        self.assertEqual(len(where), 4, where)
+        before = self.command('print-state')
+        for name in ('ext', 'install', 'folder'):
+            self.command('click %d %d' % where[name])
+            self.command('wait 50')
+            self.assertEqual(self.command('print-state'), before, name)
+            self.assertEqual(self.command('print-toast').strip(), 'toast=', name)
+        self.command('click %d %d' % where['file'])
+        self.command('wait 50')
+        self.assertIn(' active=x.txt ', self.command('print-state'))
+
     def test_a_width_change_lays_the_rows_out_again(self):
         self.session('s1', [('user', 'go'), ('assistant', REPLY + '\n\n' + 'a long line of words ' * 30)])
         self.start()

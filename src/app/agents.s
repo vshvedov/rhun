@@ -5440,8 +5440,9 @@ link_scheme:
     mov eax, 1
 9:  ret
 
-# reply_follow(): the link reply_click kept, followed: rhun:// as rhun opens it, else a file (a path,
-#   a file: URI)
+# reply_follow(): the link reply_click kept, followed: a rhun://file/ link to a file as rhun opens it
+#   (a model wrote it: no other rhun:// link, which may install an extension or open a project, and no
+#   folder), else a file (a path, a file: URI)
 reply_follow:
     PROLOGUE
     mov rbx, [rip + pend_link]
@@ -5452,11 +5453,24 @@ reply_follow:
     mov qword ptr [rip + pend_cwd], 0
     mov rdi, rbx
     call strlen
+    mov r13, rax
     mov rdi, rbx
     mov rsi, rax
     call link_scheme
     cmp eax, 1
     jne 1f
+    cmp r13, 12                 # "rhun://file/" and more
+    jbe 2f
+    mov rdi, rbx
+    lea rsi, [rip + .Lrhun_file]
+    mov edx, 12
+    call memeq
+    test eax, eax
+    jz 2f
+    mov rdi, rbx
+    call app_path_is_dir
+    test eax, eax
+    jnz 2f
     mov rdi, rbx
     call app_open_path
     jmp 2f
@@ -5953,6 +5967,7 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lago: .asciz " ago"
 .Lyou: .asciz "You"
 .Lno_file: .asciz "No such file: "
+.Lrhun_file: .ascii "rhun://file/"
 .Lrow_n: .asciz "row="
 .Lrow_role: .asciz " role="
 .Lrow_height: .asciz " height="

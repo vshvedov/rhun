@@ -387,10 +387,11 @@ FN claude_env_dir
     mov rax, r12
     EPILOGUE
 
-# dir_unsets(list) -> rax the names claude_env removes: unsets, and CLAUDE_CONFIG_DIR when its value is not
-#   an absolute path (or empty), from the pairs (its entry leaves the list) or else the environment. Claude
-#   would resolve a relative one against the conversation's folder, which claude_dir cannot follow; without
-#   it both use $HOME/.claude. A log line names the variable, never its value
+# dir_unsets(list) -> rax the names claude_env removes: unsets, and CLAUDE_CONFIG_DIR when the environment's
+#   is not an absolute path (or is empty). A pair of that kind leaves the list (the environment's counts
+#   then, as in claude_dir). Claude would resolve a relative one against the conversation's folder, which
+#   claude_dir cannot follow; without it both use $HOME/.claude. A log line names the variable, never its
+#   value
 dir_unsets:
     PROLOGUE
     mov rbx, rdi
@@ -415,13 +416,14 @@ dir_unsets:
     inc r12
     test rax, rax
     jnz 2b
-    jmp 7f
-4:  lea rdi, [rip + .Lconfig_dir]   # no pair: the environment's
+    lea rdi, [rip + .Ldir_dropped]
+    call log_cstr
+4:  lea rdi, [rip + .Lconfig_dir]   # no pair (that counts): the environment's
     call uproc_env_get
     test rax, rax
     jz 8f
     PATH_ABSOLUTE rax, 8f
-7:  lea rdi, [rip + .Ldir_dropped]
+    lea rdi, [rip + .Ldir_dropped]
     call log_cstr
     lea rax, [rip + unsets_dir]
     EPILOGUE
@@ -651,12 +653,8 @@ FN claude_dir
     lea r12, [rax + CONFIG_DIR_LEN]
     xor r13d, r13d
     jmp 3f
-1:  lea rdi, [rip + .Lconfig_dir_eq]   # a pair that is not absolute: claude gets none (dir_unsets)
-    mov esi, CONFIG_DIR_LEN
-    call pair_value
-    test rax, rax
-    jnz 2f
-    lea rdi, [rip + .Lconfig_dir]   # the environment claude gets: only an absolute one is passed on
+1:  lea rdi, [rip + .Lconfig_dir]   # the environment claude gets: only an absolute one is passed on
+                                    #   (a pair that is not absolute is not: dir_unsets)
     call uproc_env_get
     test rax, rax
     jz 2f

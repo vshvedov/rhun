@@ -1145,6 +1145,326 @@ class Phase2(Base):
         fake.finish()
 
 
+FILE_RECORDED = (SHAPES / 'file-keys.txt').read_text(encoding='utf-8').splitlines()
+# what the CLI writes to the file beside the records a reader reads (finding 27): the fake writes none of the
+# bookkeeping, and every type it writes is one the CLI wrote
+FILE_TYPES = {'user', 'assistant', 'system', 'attachment'}
+
+
+def file_faults(records):
+    """The file key lines (claude-shapes --file-keys) of the fake's file lines whose field order no recorded line
+    of their kind has."""
+    return sorted({line for line in claude_shapes.file_key_lines(records)
+                   if not claude_shapes.key_order_ok(line, FILE_RECORDED)})
+
+
+def shape_file(name):
+    return (SHAPES / (name + '.txt')).read_text().split()
+
+
+def is_result_of(tid):
+    return lambda r: r.get('type') == 'user' and isinstance(r['message']['content'], list) and \
+        r['message']['content'][0].get('tool_use_id') == tid
+
+
+def calls(records, parent=None):
+    """{tool_use id: name} of the calls in records (those made under parent, when given)."""
+    return {b['id']: b['name'] for r in records if r.get('type') == 'assistant'
+            and r.get('parent_tool_use_id') == parent for b in r['message']['content'] if b.get('type') == 'tool_use'}
+
+
+def results(records):
+    """{tool_use id: (block, tool_use_result)} of the tool results in records."""
+    return {r['message']['content'][0]['tool_use_id']: (r['message']['content'][0], r.get('tool_use_result'))
+            for r in records if r.get('type') == 'user' and isinstance(r['message']['content'], list)
+            and r['message']['content'] and r['message']['content'][0].get('type') == 'tool_result'}
+
+
+class Phase3(Base):
+    """What phase 3 reads (README.txt findings 27 on): the conversation's file, every tool's result, thinking
+    with text, subagents and tasks, compaction, local and custom commands, hooks."""
+
+    def lines(self, sid=None, path=None):
+        path = path or self.transcript(sid)
+        return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+
+    def sid(self, fake):
+        return next(r['session_id'] for r in fake.records if is_type('system', 'init')(r))
+
+    def test_the_file_is_written_as_the_cli_writes_it(self):
+        fake = self.fake(base=REPLAY, FAKE_CLAUDE_HOOKS='post,stop', FAKE_CLAUDE_PRESERVED='1')
+        fake.initialize(suggestions=False)
+        for prompt in ('hello', 'tools', 'think one two three four five six', 'echo hi', '/context', '/compact',
+                       'agent', 'denied', 'toolerror', 'bg'):
+            fake.prompt(prompt)
+            for _ in range(2 if prompt == 'agent' else 1):        # the agent's notification has a turn too
+                fake.until(is_type('result'))
+        fake.finish(30)
+        sid = self.sid(fake)
+        lines = self.lines(sid)
+        self.assertEqual(file_faults(lines), [], 'file lines whose field order no recorded line has')
+        self.assertLessEqual({line['type'] for line in lines}, FILE_TYPES)
+        # one content block a line, thinking saved with its text, the lines of a message share its id
+        assistant = [line for line in lines if line['type'] == 'assistant']
+        self.assertTrue(all(len(line['message']['content']) == 1 for line in assistant))
+        thought = [line for line in assistant if line['message']['content'][0]['type'] == 'thinking']
+        self.assertIn('one two three four five six', [line['message']['content'][0]['thinking'] for line in thought])
+        self.assertTrue(any(line.get('thinkingDurationMs') == 3109 for line in thought))
+        # parentUuid chains the message lines (a compaction boundary starts again with logicalParentUuid)
+        for before, line in zip(lines, lines[1:]):
+            if line['type'] == 'attachment' or before['type'] == 'attachment':
+                continue
+            expected = None if line.get('subtype') == 'compact_boundary' else before['uuid']
+            self.assertEqual(line['parentUuid'], expected, line)
+        # a tool's result line carries the stream's structured result and the call's line
+        streamed = results(fake.records)
+        written = {line['message']['content'][0]['tool_use_id']: line for line in lines if line['type'] == 'user'
+                   and isinstance(line['message']['content'], list)
+                   and line['message']['content'][0].get('type') == 'tool_result'}
+        for tid, line in written.items():
+            self.assertEqual(line['message']['content'][0], streamed[tid][0])
+            self.assertEqual(line.get('toolUseResult'), streamed[tid][1])
+            call = next(c for c in lines if c['uuid'] == line['sourceToolAssistantUUID'])
+            self.assertEqual(call['message']['content'][0]['id'], tid)
+        # the shapes the CLI's file has: summarized thinking, the commands and compaction (the file-*.txt shapes
+        # leave out the Stop hooks' summary, the maintainer's own)
+        shapes = claude_shapes.file_shapes([l for l in lines if l.get('subtype') != 'stop_hook_summary'])
+        self.assertIn(' '.join(shape_file('file-thinking')), ' '.join(shapes))
+        self.assertIn(' '.join(shape_file('file-compact')), ' '.join(shapes))
+        self.assertNotIn('isSidechain', {k for line in lines if line.get('isSidechain') for k in line})
+        flagged = {f: [line['message']['content'][:30] for line in lines if line.get(f)]
+                   for f in ('isMeta', 'isCompactSummary', 'isVisibleInTranscriptOnly')}
+        self.assertEqual(flagged['isCompactSummary'], ['This session is being continue'])
+        self.assertIn('<local-command-caveat>The comm', flagged['isMeta'])
+        kinds = {claude_shapes.file_kind(line, {}) for line in lines}
+        self.assertTrue({'system/local_command', 'system/compact_boundary', 'system/stop_hook_summary',
+                         'attachment/hook_additional_context'} <= kinds, kinds)
+
+    def test_every_tool_scenario_has_its_recorded_result(self):
+        fake = self.fake(base=REPLAY)
+        fake.initialize(suggestions=False)
+        fake.prompt('tools')
+        fake.until(is_type('result'))
+        fake.finish()
+        # 18-tools: two Reads in one message, the first's result as the second streams, the last after message_stop
+        turn = fake.records[next(i for i, r in enumerate(fake.records) if r.get('type') == 'user' and r.get('isReplay')):]
+        recorded = shape_file('18-tools')
+        self.assertEqual(claude_shapes.shapes(turn)[:16], recorded[:16])
+        made = calls(fake.records)
+        got = results(fake.records)
+        self.assertEqual(sorted(set(made.values())), ['Bash', 'Edit', 'Glob', 'Grep', 'Read', 'TodoWrite', 'ToolSearch',
+                                                     'WebFetch', 'WebSearch', 'Write'])
+        recorded_results = {}
+        for line in FILE_RECORDED:
+            kind, parts = claude_shapes.parse_key_line(line)
+            if kind.startswith('user:tool_result:') and 'toolUseResult' in parts:
+                recorded_results.setdefault(kind, []).append(parts['toolUseResult'])
+        for tid, name in made.items():
+            block, structured = got[tid]
+            error = block.get('is_error') is True
+            if isinstance(structured, dict):
+                self.assertTrue(any(claude_shapes.subsequence(list(structured), keys) for keys in
+                                    recorded_results.get('user:tool_result:%s%s' % (name, ':error' if error else ''), [])),
+                                (name, list(structured)))
+            elif structured is not None:
+                self.assertTrue(error and structured.startswith('Error: '), (name, structured))
+        texts = [(made[tid], got[tid][0]['content']) for tid in made]
+        reads = [c for n, c in texts if n == 'Read']
+        self.assertEqual(reads[0].split('\n')[:2], ['1\tone', '2\ttwo'])
+        self.assertTrue(reads[1].startswith('2\tx2 = 2'))
+        self.assertEqual(reads[3][0]['source']['media_type'], 'image/png')
+        self.assertIn('<tool_use_error>String to replace not found in file.\nString: nothing-here</tool_use_error>',
+                      [c for n, c in texts if n == 'Edit'])
+        self.assertIn('Found 8 total occurrences across 1 file.', '\n'.join(c for n, c in texts if n == 'Grep'))
+        self.assertEqual([c for n, c in texts if n == 'Glob'], ['a.py', 'No files found'])
+        # the todo tools: TodoWrite with the whole list, or the task tools one item a call
+        fake = self.fake(base=REPLAY, FAKE_CLAUDE_TASKS='1')
+        fake.initialize(suggestions=False)
+        fake.prompt('todo')
+        init = fake.until(is_type('system', 'init'))
+        fake.until(is_type('result'))
+        fake.finish()
+        self.assertTrue({'TaskCreate', 'TaskUpdate'} <= set(init['tools']) and 'TodoWrite' not in init['tools'])
+        self.assertEqual([n for n in calls(fake.records).values()],
+                         ['ToolSearch', 'TaskCreate', 'TaskCreate', 'TaskCreate', 'TaskUpdate'])
+        # phase 2's asking scenarios give the recorded results; with `run` they ask nothing (as 2.1.330 ran them)
+        fake = self.fake(base=REPLAY)
+        fake.initialize(suggestions=False)
+        for prompt in ('glob run', 'grep run', 'websearch run', 'read notes.txt', 'image'):
+            mark = len(fake.records)
+            fake.prompt(prompt)
+            fake.until(is_type('result'))
+            self.assertFalse([r for r in fake.since(mark) if is_type('control_request')(r)], prompt)
+        fake.finish()
+        structured = [s for _, s in results(fake.records).values()]
+        self.assertEqual(structured[0]['filenames'], ['notes.txt'])
+        self.assertEqual([s['mode'] for s in structured[1:4]], ['content', 'files_with_matches', 'count'])
+        self.assertEqual(structured[4]['query'], 'rhun editor')
+        self.assertEqual(structured[5], 'Error: File does not exist. Note: your current working directory is %s.'
+                         % self.project)
+
+    def test_thinking_with_text_and_duration(self):
+        fake = self.fake(base=REPLAY)
+        fake.initialize(suggestions=False)
+        fake.prompt('think 17 times 23 is 391 so the answer is 391')
+        fake.until(is_type('result'))
+        fake.finish()
+        turn = fake.records[next(i for i, r in enumerate(fake.records) if r.get('type') == 'user'):]
+        self.assertEqual(claude_shapes.fold_pairs(claude_shapes.shapes(turn)), shape_file('19-thinking'))
+        deltas = ''.join(r['event']['delta']['thinking'] for r in fake.records if r.get('type') == 'stream_event'
+                         and r['event'].get('delta', {}).get('type') == 'thinking_delta')
+        record = next(r for r in fake.records if r.get('type') == 'assistant'
+                      and r['message']['content'][0]['type'] == 'thinking')
+        said = record['message']['content'][0]['thinking']
+        self.assertEqual((said, deltas.strip()), ('17 times 23 is 391 so the answer is 391',) * 2)
+        self.assertEqual((record['thinking_duration_ms'], record['thinking_display']), (3109, 'summarized'))
+        line = next(l for l in self.lines(self.sid(fake)) if l['type'] == 'assistant')
+        self.assertEqual((line['message']['content'][0]['thinking'], line['thinkingDurationMs'], line['thinkingDisplay']),
+                         (said, 3109, 'summarized'))
+        self.assertEqual(claude_shapes.file_shapes(self.lines(self.sid(fake))), shape_file('file-thinking'))
+
+    def test_agent_records_and_nesting(self):
+        log = self.home / 'fake.log'
+        fake = self.fake(base=REPLAY, FAKE_CLAUDE_LOG=str(log))
+        fake.send({'type': 'control_request', 'request_id': 'r1', 'request': {
+            'subtype': 'initialize', 'hooks': None, 'promptSuggestions': False,
+            'perTaskStopAffordance': True, 'forwardNestedSubagentToolCalls': True}})
+        fake.until(lambda r: r.get('type') == 'control_response')
+        fake.prompt('agent')
+        first = fake.until(is_type('result'))
+        last = fake.until(is_type('result'))
+        fake.finish()
+        self.assertIn({'initialize': {'promptSuggestions': False, 'supportedDialogKinds': None,
+                                      'perTaskStopAffordance': True, 'forwardNestedSubagentToolCalls': True},
+                       'pid': fake.process.pid}, logged(log))
+        turn = fake.records[next(i for i, r in enumerate(fake.records) if r.get('type') == 'user'):]
+        self.assertEqual(claude_shapes.shapes(turn)[:len(shape_file('21-agent'))], shape_file('21-agent'))
+        (agent_tid, name), = calls(fake.records).items()
+        self.assertEqual(name, 'Agent')
+        launched = results(fake.records)[agent_tid][1]
+        self.assertEqual(launched['status'], 'async_launched')
+        children = calls(fake.records, agent_tid)
+        self.assertEqual(list(children.values()), ['Bash', 'Bash'])
+        after = fake.records[fake.records.index(first):]
+        self.assertTrue(any(r.get('parent_tool_use_id') == agent_tid for r in after), 'the agent works on after the result')
+        child = [r for r in fake.records if r.get('parent_tool_use_id') == agent_tid]
+        self.assertTrue(all(r.get('agent_id') == launched['agentId'] for r in child))
+        self.assertFalse(any('tool_use_result' in r for r in child))
+        notified = next(r for r in fake.records if is_type('system', 'task_notification')(r))
+        self.assertEqual((notified['task_id'], notified['tool_use_id'], notified['status']),
+                         (launched['agentId'], agent_tid, 'completed'))
+        self.assertEqual(last['result'], 'The folder has a.py and notes.txt.')
+        # on disk: the conversation's file holds no subagent line; the agent's own file and its meta beside it
+        sid = self.sid(fake)
+        lines = self.lines(sid)
+        self.assertFalse([l for l in lines if l.get('isSidechain') or l.get('agentId')])
+        self.assertEqual(claude_shapes.file_shapes(lines), shape_file('file-agent'))
+        folder = self.transcript(sid).with_suffix('') / 'subagents'
+        sub = self.lines(path=folder / ('agent-%s.jsonl' % launched['agentId']))
+        self.assertEqual(claude_shapes.file_shapes(sub), shape_file('file-subagent'))
+        self.assertTrue(all(l['isSidechain'] and l['agentId'] == launched['agentId'] for l in sub))
+        self.assertEqual(file_faults(sub), [])
+        meta = json.loads((folder / ('agent-%s.meta.json' % launched['agentId'])).read_text())
+        self.assertEqual(meta['toolUseId'], agent_tid)
+
+    def test_stop_task_and_background(self):
+        fake = self.fake(base=REPLAY, FAKE_CLAUDE_BG_MS='20000')
+        fake.initialize(suggestions=False)
+        # an agent stopped while it waits: its task ends killed, the agent's last record the interrupt mark
+        fake.prompt('agent wait')
+        fake.until(is_type('result'))
+        started = next(r for r in fake.records if is_type('system', 'task_started')(r))
+        mark = len(fake.records)
+        answer = fake.request('r2', 'stop_task', task_id=started['task_id'])['response']
+        self.assertEqual(answer, {'subtype': 'success', 'request_id': 'r2', 'response': {}})
+        fake.until(is_type('result'))
+        records = fake.since(mark)
+        self.assertEqual([r['patch']['status'] for r in records if is_type('system', 'task_updated')(r)], ['killed'])
+        self.assertEqual([r['status'] for r in records if is_type('system', 'task_notification')(r)], ['stopped'])
+        self.assertTrue(any(r.get('parent_tool_use_id') == started['tool_use_id'] and r.get('type') == 'user'
+                            and r['message']['content'][0].get('text') == '[Request interrupted by user]' for r in records))
+        self.assertEqual(fake.request('r3', 'stop_task', task_id='nothing')['response']['subtype'], 'error')
+        # a running call sent to the background: its result at once, then stop_task kills it
+        fake.prompt('bg')
+        call = fake.until(lambda r: r.get('type') == 'assistant' and r['message']['content'][0].get('type') == 'tool_use')
+        tid = call['message']['content'][0]['id']
+        fake.until(is_type('system', 'task_started'))
+        answer = fake.request('r4', 'background_tasks', tool_use_id=tid)['response']['response']
+        self.assertEqual(answer, {'backgrounded': True})
+        block = fake.until(is_result_of(tid))
+        self.assertTrue(block['message']['content'][0]['content'].startswith('Command was manually backgrounded by user'))
+        self.assertTrue(block['tool_use_result']['backgroundedByUser'])
+        fake.until(is_type('result'))
+        task = [r for r in fake.records if is_type('system', 'background_tasks_changed')(r)][-1]['tasks'][0]
+        self.assertEqual(fake.request('r5', 'background_tasks', tool_use_id=tid)['response']['response'],
+                         {'backgrounded': False})
+        self.assertEqual(fake.request('r6', 'stop_task', task_id=task['task_id'])['response']['response'], {})
+        # Stop while it runs: the bundle's cTt text and aborted_tools
+        fake.prompt('bg')
+        call = fake.until(lambda r: r.get('type') == 'assistant' and r['message']['content'][0].get('type') == 'tool_use')
+        fake.until(is_type('system', 'task_started'))
+        fake.interrupt('r7')
+        stopped = fake.until(is_result_of(call['message']['content'][0]['id']))
+        self.assertTrue(stopped['message']['content'][0]['content'].endswith('The instruction to stop and wait still stands.'))
+        self.assertEqual(stopped['tool_use_result'], 'User rejected tool use')
+        self.assertEqual(fake.until(is_type('result'))['terminal_reason'], 'aborted_tools')
+        fake.finish()
+
+    def test_compaction_commands_and_hooks(self):
+        # 20-compact: the preserved record sent again, with its uuid
+        fake = self.fake(base=REPLAY, FAKE_CLAUDE_PRESERVED='1')
+        fake.initialize(suggestions=False)
+        fake.prompt('hello')
+        fake.until(is_type('result'))
+        fake.prompt('/context')
+        fake.until(is_type('result'))
+        mark = len(fake.records)
+        fake.prompt('/compact')
+        fake.until(is_type('result'))
+        fake.finish()
+        excerpt = fake.since(mark)
+        self.assertEqual(claude_shapes.shapes(excerpt)[-len(shape_file('20-compact')):], shape_file('20-compact'))
+        again = [r for r in excerpt if r.get('type') == 'assistant']
+        self.assertEqual(again[0]['uuid'], [r for r in fake.records[:mark] if r.get('type') == 'assistant'][-1]['uuid'])
+        # 22-hooks: SessionStart before the answer, UserPromptSubmit before system/init, Stop before the result
+        fake = self.fake(*['--include-hook-events'], base=REPLAY, FAKE_CLAUDE_HOOKS='start,prompt,stop,block')
+        fake.initialize(suggestions=False)
+        fake.prompt('hello', UUID_A)
+        fake.until(is_type('result'))
+        self.assertEqual(claude_shapes.shapes(fake.records, hooks=True), shape_file('22-hooks'))
+        fake.prompt('BLOCKME reply ok')
+        blocked = fake.until(is_type('result'))
+        fake.prompt('echo hi')
+        fake.until(is_type('result'))
+        fake.finish()
+        self.assertTrue(blocked['result'].startswith('UserPromptSubmit operation blocked by hook:'))
+        self.assertTrue(any(is_type('system', 'informational')(r) for r in fake.records))
+        lines = self.lines(self.sid(fake))
+        self.assertFalse([l for l in lines if l['type'] == 'user' and 'BLOCKME' in json.dumps(l['message'])])
+        replayed = [r['message']['content'] for r in fake.records if r.get('type') == 'user' and r.get('isReplay')]
+        self.assertIn('<command-message>hi</command-message>\n<command-name>/hi</command-name>', replayed)
+        # without --include-hook-events only SessionStart's records
+        fake = self.fake(base=REPLAY, FAKE_CLAUDE_HOOKS='start,prompt,stop')
+        fake.initialize(suggestions=False)
+        fake.prompt('hello')
+        fake.until(is_type('result'))
+        fake.finish()
+        events = {r['hook_event'] for r in fake.records if is_type('system', 'hook_started')(r)}
+        self.assertEqual(events, {'SessionStart'})
+
+    def test_unrecorded_scenarios(self):
+        fake = self.fake(base=REPLAY)
+        fake.initialize(suggestions=False)
+        for prompt in ('unknownblock', 'apierror'):
+            fake.prompt(prompt)
+            fake.until(is_type('result'))
+        fake.finish()
+        unrecorded(fake, 'mystery', 'api_retry', 'overloaded')
+        blocks = [r['message']['content'][0]['type'] for r in fake.records if r.get('type') == 'assistant']
+        self.assertIn('mystery', blocks)
+        self.assertTrue(any(r.get('error') == 'overloaded' for r in fake.records if r.get('type') == 'assistant'))
+
+
 def logged(path):
     """The fake's log lines."""
     return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]

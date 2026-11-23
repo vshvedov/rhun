@@ -1,0 +1,8 @@
+user:string
+assistant:tool_use:Bash
+user:tool_result:Bash
+assistant:thinking
+assistant:text
+assistant:tool_use:Bash
+user:tool_result:Bash
+assistant:text

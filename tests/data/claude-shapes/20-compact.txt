@@ -1,0 +1,6 @@
+system/init
+system/compact_boundary
+user:string
+assistant:text
+user:string
+result/success

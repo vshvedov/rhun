@@ -1,0 +1,16 @@
+user:text
+stream_event/message_start
+stream_event/content_block_start:thinking
+system/thinking_tokens
+stream_event/content_block_delta:thinking_delta
+system/thinking_tokens
+stream_event/content_block_delta:signature_delta
+assistant:thinking
+stream_event/content_block_stop
+stream_event/content_block_start:text
+stream_event/content_block_delta:text_delta
+assistant:text
+stream_event/content_block_stop
+stream_event/message_delta
+stream_event/message_stop
+result/success

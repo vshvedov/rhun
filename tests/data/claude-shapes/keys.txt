@@ -11,10 +11,13 @@ assistant:thinking top=type,message,parent_tool_use_id,session_id,uuid,timestamp
 assistant:thinking top=type,message,parent_tool_use_id,session_id,uuid,timestamp,request_id,thinking_duration_ms,thinking_display,user_message_uuid,user_message_uuids message=model,id,type,role,content,container,stop_reason,stop_sequence,stop_details,usage,input_transformations,diagnostics,context_management message.content.0=type,thinking,signature
 assistant:tool_use top=type,message,parent_tool_use_id,agent_id,session_id,uuid,timestamp,request_id,subagent_type,task_description message=model,id,type,role,content,container,stop_reason,stop_sequence,stop_details,usage,input_transformations,diagnostics,context_management message.content.0=type,id,name,input,caller
 assistant:tool_use top=type,message,parent_tool_use_id,session_id,uuid,timestamp,request_id,wire_tool_inputs message=model,id,type,role,content,container,stop_reason,stop_sequence,stop_details,usage,input_transformations,diagnostics,context_management message.content.0=type,id,name,input,caller
+assistant:tool_use top=type,message,parent_tool_use_id,session_id,uuid,timestamp,request_id,wire_tool_inputs,user_message_uuid,user_message_uuids message=model,id,type,role,content,container,stop_reason,stop_sequence,stop_details,usage,input_transformations,diagnostics,context_management message.content.0=type,id,name,input,caller
 command_lifecycle top=type,command_uuid,state,uuid,session_id
 control_cancel_request top=type,request_id
 control_request/can_use_tool:AskUserQuestion top=type,request_id,request request=subtype,tool_name,display_name,input,tool_use_id,requires_user_interaction
 control_request/can_use_tool:Bash top=type,request_id,request request=subtype,tool_name,display_name,input,description,permission_suggestions,blocked_path,tool_use_id
+control_request/can_use_tool:Bash top=type,request_id,request request=subtype,tool_name,display_name,input,description,permission_suggestions,decision_reason,decision_reason_type,tool_use_id
+control_request/can_use_tool:Bash top=type,request_id,request request=subtype,tool_name,display_name,input,description,permission_suggestions,decision_reason,decision_reason_type,tool_use_id,agent_id
 control_request/can_use_tool:Edit top=type,request_id,request request=subtype,tool_name,display_name,input,description,permission_suggestions,tool_use_id
 control_request/can_use_tool:ExitPlanMode top=type,request_id,request request=subtype,tool_name,display_name,input,tool_use_id,requires_user_interaction
 control_request/can_use_tool:WebFetch top=type,request_id,request request=subtype,tool_name,display_name,input,description,permission_suggestions,tool_use_id,agent_id
@@ -23,6 +26,7 @@ control_response/error: top=type,response response=subtype,request_id,error
 control_response/error: top=type,response response=subtype,request_id,error,error_code
 control_response/success: top=type,response response=subtype,request_id
 control_response/success: top=type,response response=subtype,request_id,response response.response=
+control_response/success:backgrounded top=type,response response=subtype,request_id,response response.response=backgrounded
 control_response/success:behavior top=type,response response=subtype,request_id,response response.response=behavior,message,interrupt,toolUseID
 control_response/success:behavior top=type,response response=subtype,request_id,response response.response=behavior,updatedInput,toolUseID
 control_response/success:behavior top=type,response response=subtype,request_id,response response.response=behavior,updatedInput,updatedPermissions,toolUseID
@@ -39,10 +43,14 @@ rate_limit_event top=type,rate_limit_info,uuid,session_id
 result/error_during_execution top=duration_api_ms,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,terminal_reason,fast_mode_state,fast_mode_disabled_reason,subagent_stats,safety_stops,is_error,num_turns,subtype,errors,type,duration_ms,uuid,begun_message_ids,queued_turn_count,result_index,model_usage_since_last_result,credential_expires_at
 result/error_during_execution top=duration_api_ms,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,terminal_reason,fast_mode_state,fast_mode_disabled_reason,subagent_stats,safety_stops,is_error,num_turns,subtype,errors,user_message_uuid,type,duration_ms,uuid,begun_message_ids,user_message_uuids,queued_turn_count,result_index,model_usage_since_last_result,credential_expires_at
 result/error_during_execution:early top=type,subtype,duration_ms,duration_api_ms,is_error,num_turns,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,uuid,errors,result_index
+result/error_max_turns top=duration_api_ms,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,terminal_reason,fast_mode_state,fast_mode_disabled_reason,subagent_stats,safety_stops,is_error,num_turns,subtype,errors,user_message_uuid,type,duration_ms,uuid,begun_message_ids,user_message_uuids,queued_turn_count,result_index,model_usage_since_last_result,credential_expires_at
+result/success top=duration_api_ms,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,terminal_reason,fast_mode_state,fast_mode_disabled_reason,origin,subagent_stats,safety_stops,is_error,num_turns,subtype,api_error_status,result,ttft_ms,type,duration_ms,uuid,begun_message_ids,ttft_stream_ms,time_to_request_ms,first_content_frame_ms,queued_turn_count,result_index,model_usage_since_last_result,credential_expires_at
 result/success top=duration_api_ms,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,terminal_reason,fast_mode_state,fast_mode_disabled_reason,subagent_stats,safety_stops,is_error,num_turns,subtype,api_error_status,result,ttft_ms,type,duration_ms,uuid,begun_message_ids,ttft_stream_ms,time_to_request_ms,first_content_frame_ms,queued_turn_count,result_index,model_usage_since_last_result,credential_expires_at
 result/success top=duration_api_ms,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,terminal_reason,fast_mode_state,fast_mode_disabled_reason,subagent_stats,safety_stops,is_error,num_turns,subtype,api_error_status,result,ttft_ms,type,duration_ms,uuid,begun_message_ids,ttft_stream_ms,time_to_request_ms,first_content_frame_ms,user_message_uuid,user_message_uuids,request_sent_wall_ms,first_request_input_tokens,first_request_cache_read_input_tokens,queued_turn_count,result_index,model_usage_since_last_result,credential_expires_at
 result/success:early top=is_error,duration_api_ms,num_turns,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,fast_mode_state,fast_mode_disabled_reason,subagent_stats,safety_stops,subtype,result,local_command,type,duration_ms,uuid,queued_turn_count,result_index,model_usage_since_last_result,credential_expires_at
 result/success:early top=is_error,duration_api_ms,num_turns,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,fast_mode_state,fast_mode_disabled_reason,subagent_stats,safety_stops,subtype,result,type,duration_ms,uuid,queued_turn_count,result_index,model_usage_since_last_result,credential_expires_at
+result/success:early top=is_error,duration_api_ms,num_turns,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,fast_mode_state,fast_mode_disabled_reason,subagent_stats,safety_stops,subtype,result,user_message_uuid,user_message_uuids,local_command,type,duration_ms,uuid,queued_turn_count,result_index,model_usage_since_last_result,credential_expires_at
+result/success:early top=is_error,duration_api_ms,num_turns,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,fast_mode_state,fast_mode_disabled_reason,subagent_stats,safety_stops,subtype,result,user_message_uuid,user_message_uuids,type,duration_ms,uuid,queued_turn_count,result_index,model_usage_since_last_result,credential_expires_at
 stream_event/content_block_delta:input_json_delta top=type,event,session_id,parent_tool_use_id,uuid,api_message_id event=type,index,delta event.delta=type,partial_json
 stream_event/content_block_delta:signature_delta top=type,event,session_id,parent_tool_use_id,uuid,api_message_id event=type,index,delta event.delta=type,signature
 stream_event/content_block_delta:text_delta top=type,event,session_id,parent_tool_use_id,uuid,api_message_id event=type,index,delta event.delta=type,text
@@ -63,34 +71,54 @@ system/commands_changed top=type,subtype,commands,uuid,session_id
 system/compact_boundary top=type,subtype,session_id,uuid,compact_metadata,logical_parent_uuid
 system/hook_response top=type,subtype,hook_id,hook_name,hook_event,output,stdout,stderr,exit_code,outcome,uuid,session_id
 system/hook_started top=type,subtype,hook_id,hook_name,hook_event,uuid,session_id
+system/informational top=type,subtype,content,level,prevent_continuation,prompt_submit_outcome,uuid,session_id
 system/init top=type,subtype,cwd,session_id,tools,mcp_servers,model,permissionMode,slash_commands,terminal_slash_commands,apiKeySource,claude_code_version,output_style,agents,skills,plugins,capabilities,analytics_disabled,product_feedback_disabled,served_by_anthropic,uuid,memory_paths,scratchpad_path,original_cwd,additional_directories,messaging_socket_path,fast_mode_state,fast_mode_disabled_reason,per_turn_effort_active,ultrathink_available,ultrathink_typed_raises,view_mode
 system/init top=type,subtype,cwd,session_id,tools,mcp_servers,model,permissionMode,slash_commands,terminal_slash_commands,apiKeySource,claude_code_version,output_style,agents,skills,plugins,capabilities,analytics_disabled,product_feedback_disabled,served_by_anthropic,uuid,memory_paths,scratchpad_path,original_cwd,additional_directories,messaging_socket_path,fast_mode_state,fast_mode_disabled_reason,per_turn_effort_active,ultrathink_available,ultrathink_typed_raises,view_mode,user_message_uuids
+system/permission_denied top=type,subtype,tool_name,tool_use_id,decision_reason_type,message,uuid,session_id
 system/status top=type,subtype,status,compact_result,session_id,uuid
 system/status top=type,subtype,status,session_id,uuid
 system/status top=type,subtype,status,session_id,uuid,user_message_uuids
 system/status:mode top=type,subtype,status,permissionMode,uuid,session_id
+system/task_notification top=type,subtype,task_id,run_id,tool_use_id,status,output_file,summary,summary_is_report,usage,uuid,session_id
 system/task_notification top=type,subtype,task_id,run_id,tool_use_id,status,output_file,summary,usage,uuid,session_id
+system/task_notification top=type,subtype,task_id,run_id,tool_use_id,status,output_file,summary,uuid,session_id
 system/task_progress top=type,subtype,task_id,run_id,tool_use_id,description,subagent_type,usage,last_tool_name,uuid,session_id
+system/task_started top=type,subtype,task_id,run_id,tool_use_id,description,is_backgrounded,task_type,uuid,session_id
 system/task_started top=type,subtype,task_id,run_id,tool_use_id,description,subagent_type,is_backgrounded,awaited,spawn_depth,task_type,prompt,uuid,session_id
 system/task_started top=type,subtype,task_id,run_id,tool_use_id,description,subagent_type,is_backgrounded,spawn_depth,task_type,prompt,uuid,session_id
 system/task_updated top=type,subtype,task_id,run_id,patch,uuid,session_id
 system/thinking_tokens top=type,subtype,estimated_tokens,estimated_tokens_delta,session_id,uuid
+system/thinking_tokens top=type,subtype,estimated_tokens,estimated_tokens_delta,session_id,uuid,user_message_uuid
+user:image top=type,message,session_id,parent_tool_use_id,uuid,timestamp,isReplay message=role,content message.content.0=type,source
 user:string top=type,message,session_id,parent_tool_use_id,uuid,timestamp,isReplay message=role,content
 user:string top=type,message,session_id,parent_tool_use_id,uuid,timestamp,isReplay,isSynthetic message=role,content
+user:string top=type,message,session_id,parent_tool_use_id,uuid,timestamp,isReplay,origin message=role,content
 user:text top=type,message,parent_tool_use_id,agent_id,session_id,uuid,timestamp,subagent_type,task_description message=role,content message.content.0=type,text
 user:text top=type,message,parent_tool_use_id,session_id,uuid,timestamp message=role,content message.content.0=type,text
+user:text top=type,message,parent_tool_use_id,session_id,uuid,timestamp,isSynthetic message=role,content message.content.0=type,text
 user:text top=type,message,session_id,parent_tool_use_id,uuid,timestamp,isReplay message=role,content message.content.0=type,text
 user:tool_result:Agent top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
 user:tool_result:AskUserQuestion top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=type,content,tool_use_id
+user:tool_result:Bash top=type,message,parent_tool_use_id,agent_id,session_id,uuid,timestamp,tool_result_meta,subagent_type,task_description message=role,content message.content.0=tool_use_id,type,content,is_error
 user:tool_result:Bash top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content,is_error
+user:tool_result:Bash:error top=type,message,parent_tool_use_id,agent_id,session_id,uuid,timestamp,tool_use_result,subagent_type,task_description message=role,content message.content.0=type,content,is_error,tool_use_id
+user:tool_result:Bash:error top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result message=role,content message.content.0=type,content,is_error,tool_use_id
 user:tool_result:Bash:error top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=type,content,is_error,tool_use_id
 user:tool_result:Edit top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
+user:tool_result:Edit:error top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result message=role,content message.content.0=type,content,is_error,tool_use_id
 user:tool_result:ExitPlanMode top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=type,content,tool_use_id
 user:tool_result:ExitPlanMode:error top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=type,content,is_error,tool_use_id
+user:tool_result:Glob top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
+user:tool_result:Grep top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
 user:tool_result:Read top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
 user:tool_result:Read:error top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=type,content,is_error,tool_use_id
 user:tool_result:SendMessage top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
+user:tool_result:TaskCreate top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
+user:tool_result:TaskStop:error top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result message=role,content message.content.0=type,content,is_error,tool_use_id
+user:tool_result:TaskUpdate top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
+user:tool_result:TodoWrite top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
 user:tool_result:ToolSearch top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=type,tool_use_id,content
 user:tool_result:WebFetch top=type,message,parent_tool_use_id,agent_id,session_id,uuid,timestamp,tool_result_meta,subagent_type,task_description message=role,content message.content.0=tool_use_id,type,content
+user:tool_result:WebSearch top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
 user:tool_result:Write top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
 user:tool_result:Write:error top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=type,content,is_error,tool_use_id

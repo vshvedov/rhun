@@ -1,0 +1,12 @@
+user:text
+assistant:tool_use:Read
+user:tool_result:Read
+assistant:tool_use:Read
+user:tool_result:Read
+assistant:text
+user:text
+assistant:tool_use:Read
+user:tool_result:Read:error
+assistant:tool_use:Read
+user:tool_result:Read
+assistant:text

@@ -4,7 +4,14 @@ and the fake's output can be compared without their text. Usage: claude-shapes.p
 
 `claude-shapes.py --keys RECORDING.jsonl...` prints the field order of every kind of record instead (field
 names only, no values): tests/data/claude-shapes/keys.txt, which tests/fake-claude.py holds every record
-of the fake to (key_order_ok)."""
+of the fake to (key_order_ok).
+
+The conversation's own file (<config>/projects/<slug>/<id>.jsonl, and a subagent's <id>/subagents/agent-ID.jsonl)
+has records of its own (README.txt finding 27): `claude-shapes.py --file FILE.jsonl` prints the shapes of the
+records a reader of the file reads (user, assistant and system lines; the bookkeeping types are left out), and
+`claude-shapes.py --file-keys FILE.jsonl...` the field order of every kind of line: file-keys.txt.
+`--fold` (with a recording or --file) also folds a repeated pair of shapes (thinking_tokens and thinking_delta
+alternate once per delta) into one; `--hooks` keeps the hook records shape() leaves out."""
 import json
 import sys
 
@@ -14,11 +21,17 @@ SKIP = {'system/hook_started', 'system/hook_response', 'system/status', 'rate_li
         'system/commands_changed'}
 
 
-def shape(msg):
-    """The shape of one record from the CLI, or None for records the comparison ignores."""
+HOOKS = {'system/hook_started', 'system/hook_progress', 'system/hook_response'}
+
+
+def shape(msg, hooks=False):
+    """The shape of one record from the CLI, or None for records the comparison ignores (hooks: the hook
+    records are kept)."""
     if not isinstance(msg, dict):
         return 'raw'
     kind = msg.get('type', '?')
+    if hooks and kind == 'system' and 'system/' + str(msg.get('subtype')) in HOOKS:
+        return 'system/%s:%s' % (msg.get('subtype'), msg.get('hook_event'))
     if kind == 'stream_event':
         event = msg.get('event', {})
         name = 'stream_event/' + event.get('type', '?')
@@ -51,14 +64,89 @@ def shape(msg):
     return kind
 
 
-def shapes(records):
+def shapes(records, hooks=False):
     """Shapes of the records rhun reads, in order, runs of the same shape (deltas) folded into one."""
     out = []
     for msg in records:
-        name = shape(msg)
+        name = shape(msg, hooks)
         if name is None or (out and out[-1] == name):
             continue
         out.append(name)
+    return out
+
+
+def fold_pairs(names):
+    """names with a repeated pair (A B A B ...) folded into one A B: thinking_tokens and thinking_delta
+    alternate once per delta, as many times as the model thought."""
+    out = []
+    for name in names:
+        out.append(name)
+        while len(out) >= 4 and out[-4:-2] == out[-2:]:
+            del out[-2:]
+    return out
+
+
+# the conversation's file (finding 27): the types a reader reads; everything else is the CLI's bookkeeping
+# (attachment, queue-operation, api-request, api-request-blob, api-request-shape, session-owner, atis-latch,
+# ai-title, last-prompt, tools-used, cost-state, ...), and api-request-blob even carries copies of messages
+FILE_READ = ('user', 'assistant', 'system')
+
+
+def file_kind(rec, tools):
+    """The kind of one line of the conversation's file: user and assistant by their first block (a tool_result
+    by its tool's name and outcome, as key_kind), system by subtype, attachment by its type, else the type.
+    tools maps tool_use ids to names (filled from assistant lines)."""
+    kind = rec.get('type', '?')
+    if kind == 'system':
+        return 'system/' + str(rec.get('subtype'))
+    if kind == 'attachment':
+        return 'attachment/' + str((rec.get('attachment') or {}).get('type'))
+    if kind in ('user', 'assistant'):
+        content = part(rec, 'message.content')
+        if isinstance(content, str):
+            return kind + ':string'
+        block = content[0] if isinstance(content, list) and content and isinstance(content[0], dict) else {}
+        name = kind + ':' + str(block.get('type', '?'))
+        if block.get('type') == 'tool_use':
+            tools[block.get('id')] = block.get('name')
+            name += ':' + str(block.get('name'))
+        if block.get('type') == 'tool_result':
+            name += ':' + str(tools.get(block.get('tool_use_id'))) + (':error' if block.get('is_error') else '')
+        return name
+    return kind
+
+
+def file_records(path):
+    """The lines of a conversation's file, parsed."""
+    return [json.loads(line) for line in open(path, encoding='utf-8') if line.strip()]
+
+
+def file_shapes(records):
+    """The kinds of the lines a reader reads, in order, runs of the same kind folded."""
+    out, tools = [], {}
+    for rec in records:
+        name = file_kind(rec, tools)
+        if rec.get('type') not in FILE_READ or (out and out[-1] == name):
+            continue
+        out.append(name)
+    return out
+
+
+FILE_PARTS = ('message', 'message.content.0', 'attachment', 'toolUseResult', 'compactMetadata')
+
+
+def file_key_lines(records):
+    """KIND top=a,b PART=c,d of every line (names only), as key_line for the stream."""
+    tools, out = {}, []
+    for rec in records:
+        if not isinstance(rec, dict):
+            continue
+        fields = ['top=' + ','.join(rec)]
+        for path in FILE_PARTS:
+            value = part(rec, path)
+            if isinstance(value, dict):
+                fields.append(path + '=' + ','.join(value))
+        out.append(file_kind(rec, tools) + ' ' + ' '.join(fields))
     return out
 
 
@@ -154,18 +242,32 @@ def key_order_ok(line, recorded):
     """A record of the fake (its key_line) keeps the order of a recorded record of its kind: every part it
     has is in that record, and its names are a subsequence of the recorded ones (the fake may leave fields
     out, never add or reorder them). A tool the recordings never ran is compared with every recorded
-    tool_result of the same outcome."""
+    tool_result of the same outcome (and, in the file's lines, every recorded call)."""
     kind, parts = parse_key_line(line)
     candidates = [parse_key_line(r) for r in recorded]
     same = [p for k, p in candidates if k == kind]
     if not same and kind.startswith('user:tool_result:'):
         error = kind.endswith(':error')
         same = [p for k, p in candidates if k.startswith('user:tool_result:') and k.endswith(':error') == error]
+        if any('toolUseResult' in p for p in same):     # a file's line: its result's own keys are its tool's
+            same = [dict(p, toolUseResult=parts.get('toolUseResult', [])) for p in same]
+    if not same and kind.startswith('assistant:tool_use:'):
+        same = [p for k, p in candidates if k.startswith('assistant:tool_use:')]
     return any(all(name in p and subsequence(names, p[name]) for name, names in parts.items()) for p in same)
 
 
 if __name__ == '__main__':
-    if sys.argv[1] == '--keys':          # claude-shapes.py --keys RECORDING... : the recorded field orders
-        print('\n'.join(sorted({line for path in sys.argv[2:] for line in key_lines(recording(path))})))
+    args = sys.argv[1:]
+    fold = '--fold' in args
+    hooks = '--hooks' in args
+    args = [a for a in args if a not in ('--fold', '--hooks')]
+    if args[0] == '--keys':          # claude-shapes.py --keys RECORDING... : the recorded field orders
+        print('\n'.join(sorted({line for path in args[1:] for line in key_lines(recording(path))})))
+    elif args[0] == '--file-keys':   # the field orders of the conversation files' lines
+        print('\n'.join(sorted({line for path in args[1:] for line in file_key_lines(file_records(path))})))
+    elif args[0] == '--file':
+        names = file_shapes(file_records(args[1]))
+        print('\n'.join(fold_pairs(names) if fold else names))
     else:
-        print('\n'.join(shapes(recording(sys.argv[1]))))
+        names = shapes(recording(args[0]), hooks)
+        print('\n'.join(fold_pairs(names) if fold else names))

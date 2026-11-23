@@ -1,0 +1,7 @@
+user:string
+user:text
+assistant:text
+user:string
+system/local_command
+system/compact_boundary
+user:string

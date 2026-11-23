@@ -1,0 +1,7 @@
+user:text
+assistant:tool_use:Agent
+user:tool_result:Agent
+assistant:text
+user:string
+assistant:thinking
+assistant:text

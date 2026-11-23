@@ -69,6 +69,16 @@ discarded, never run, logged {"discarded": UUID}); FAKE_CLAUDE_NO_LIFECYCLE (no 
 only the replay says a message started); FAKE_CLAUDE_ULTRATHINK (system/init says ultrathink_available true:
 unrecorded, 2.1.330 said false on this account); FAKE_CLAUDE_REFUSE_AUTO (set_permission_mode auto is answered
 with an error: unrecorded, the plan review's fallback to acceptEdits);
+Phase 3 (README.txt findings 27 on): the conversation's file is written as 2.1.330 writes it (a line a content
+block, thinking included, toolUseResult, parentUuid, the compaction and local command records; a subagent's
+lines in <id>/subagents/agent-ID.jsonl); scenarios tools, read, write, grep run, glob run, websearch run,
+todo, think TEXT, agent [wait], bg, image, toolerror, denied, hooks, unknownblock, echo [NAME] (and /NAME
+with <cwd>/.claude/commands/NAME.md), apierror (unrecorded); stop_task and background_tasks are answered;
+initialize's perTaskStopAffordance and forwardNestedSubagentToolCalls are logged when sent;
+--include-hook-events is taken. FAKE_CLAUDE_TASKS (the task tools in place of TodoWrite); FAKE_CLAUDE_HOOKS
+(comma-separated: start, prompt, block, stop, post; see HOOKS_ON); FAKE_CLAUDE_BG_MS (how long `bg` runs
+before it ends, default 3000); FAKE_CLAUDE_PRESERVED (/compact sends the last assistant record again, as
+20-compact recorded).
 FAKE_CLAUDE_ECHO_ENV (comma-separated names whose values the log's start record shows, besides
 CLAUDE_CODE_ENTRYPOINT, CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, MCP_CONNECTION_NONBLOCKING, TRACEPARENT and
 TRACESTATE);
@@ -162,7 +172,7 @@ if ARGS[:2] == ['auth', 'status']:
 VALUED = {'--output-format', '--input-format', '--permission-prompt-tool', '--setting-sources',
           '--max-thinking-tokens', '--resume', '--session-id', '--permission-mode', '--model', '--effort', '--thinking'}
 SWITCHES = {'-p', '--print', '--verbose', '--include-partial-messages', '--fork-session', '--replay-user-messages',
-            '--allow-dangerously-skip-permissions'}
+            '--allow-dangerously-skip-permissions', '--include-hook-events'}
 SOURCES = ('user', 'project', 'local')
 
 
@@ -542,12 +552,83 @@ signal.signal(signal.SIGTERM, terminated)
 register()
 
 
-def transcript(record):
+CHAIN = [None]                      # the uuid of the file's last message line: the next line's parentUuid
+CALL_LINES = {}                     # tool_use id -> the uuid of the file line with the call
+BLOCK_INDEX = {}                    # message id -> the next block's apiBlockIndex
+LAST_ASSISTANT = [None]             # the last assistant record sent (FAKE_CLAUDE_PRESERVED sends it again)
+
+
+def file_line(record, result=None, chain=CHAIN, agent=None):
+    """record (the stream's {type, message, flags...}, or {type: system, subtype, ...}) as a line of the
+    conversation's file, in finding 27's field order (file-keys.txt; the fake leaves fields out, never adds
+    or reorders them): one content block a line, the uuid its own, parentUuid the line before; a tool's
+    result carries toolUseResult (result, the stream's tool_use_result) and the call's line;
+    a subagent's line (agent: its id) isSidechain and agentId. System records keep their members' order,
+    timestamp and uuid where the CLI puts them."""
+    uid = str(uuid.uuid4())
+    kind = record['type']
+    line = {'parentUuid': chain[0], 'isSidechain': agent is not None}
+    if kind == 'system':
+        if record['subtype'] == 'compact_boundary':
+            line = {'parentUuid': None, 'logicalParentUuid': chain[0], 'isSidechain': False}
+        line.update(type='system', subtype=record['subtype'])
+        for key, value in record.items():
+            if key == 'after':
+                line.update(timestamp=now_iso(), uuid=uid)
+                line.update(value)
+            elif key not in ('type', 'subtype'):
+                line[key] = value
+    elif kind == 'attachment':
+        line.update(attachment=record['attachment'], type='attachment', uuid=uid, timestamp=now_iso())
+    else:
+        if agent is not None:
+            line['agentId'] = agent
+        message = record['message']
+        content = message.get('content')
+        block = content[0] if isinstance(content, list) and content and isinstance(content[0], dict) else {}
+        if kind == 'assistant':
+            mid = message.get('id')
+            line['message'] = {'model': message.get('model'), 'id': mid, 'type': 'message', 'role': 'assistant',
+                               'content': content, 'stop_reason': None, 'stop_sequence': None, 'usage': usage()}
+            if block.get('type') == 'thinking':
+                line.update(thinkingDurationMs=record.get('thinking_duration_ms'),
+                            thinkingDisplay=record.get('thinking_display'))
+            BLOCK_INDEX[mid] = BLOCK_INDEX.get(mid, -1) + 1
+            line.update(apiBlockIndex=BLOCK_INDEX[mid], type='assistant', uuid=uid, timestamp=now_iso())
+            if block.get('type') == 'tool_use':
+                CALL_LINES[block.get('id')] = uid
+        else:
+            line.update(type='user', message={'role': 'user', 'content': content})
+            for flag in ('isMeta', 'isVisibleInTranscriptOnly', 'isCompactSummary'):
+                if record.get(flag):
+                    line[flag] = True
+            line.update(uuid=uid, timestamp=now_iso())
+            if block.get('type') == 'tool_result':
+                if result is not None:
+                    line['toolUseResult'] = result
+                if block.get('tool_use_id') in CALL_LINES:
+                    line['sourceToolAssistantUUID'] = CALL_LINES[block.get('tool_use_id')]
+            elif agent is None and not record.get('isMeta') and not record.get('isCompactSummary'):
+                if isinstance(content, list) or record.get('origin'):
+                    line['permissionMode'] = MODE
+                if record.get('origin'):
+                    line['origin'] = record['origin']
+                if isinstance(content, list) and TURN_UUID[0]:
+                    line['turnAttributionKey'] = TURN_UUID[0]
+    line.update(userType='external', entrypoint=ENV.get('CLAUDE_CODE_ENTRYPOINT') or 'sdk-cli', cwd=CWD,
+                sessionId=SID, version='2.1.330', gitBranch='')
+    if kind != 'attachment':
+        chain[0] = uid
+    return line
+
+
+def transcript(record, result=None, path=None, chain=CHAIN, agent=None):
+    """One line in the conversation's file (path: a subagent's file instead), in the CLI's shapes."""
     fork_copy()
-    os.makedirs(PROJECTS, exist_ok=True)
-    record = dict(record, sessionId=SID, cwd=CWD, uuid=str(uuid.uuid4()), timestamp=now_iso())
-    with open(TRANSCRIPT, 'a', encoding='utf-8') as stream:
-        stream.write(json.dumps(record, ensure_ascii=False) + '\n')
+    path = path or TRANSCRIPT
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, 'a', encoding='utf-8') as stream:
+        stream.write(json.dumps(file_line(record, result, chain, agent), ensure_ascii=False) + '\n')
 
 
 PENDING = {}                        # can_use_tool ids: None until rhun answers
@@ -608,14 +689,15 @@ def message_end(stop='end_turn'):
 
 def assistant(mid, block, save=True, **extra):
     """The consolidated record of one block (C3): same message id, one block, no index. save=False: not in
-    the transcript (yet)."""
-    emit(dict({'type': 'assistant', 'message': {
+    the transcript (yet). The file gets a line a block, thinking included (finding 27)."""
+    record = dict({'type': 'assistant', 'message': {
         'model': current_model(), 'id': mid, 'type': 'message', 'role': 'assistant', 'content': [block],
         'stop_reason': None, 'usage': usage()}, 'parent_tool_use_id': None, 'session_id': SID,
-        'uuid': str(uuid.uuid4())}, **extra))
-    if save and block['type'] != 'thinking':
-        transcript({'type': 'assistant', 'message': {'id': mid, 'role': 'assistant', 'model': current_model(),
-                                                     'content': [block]}})
+        'uuid': str(uuid.uuid4())}, **extra)
+    emit(record)
+    LAST_ASSISTANT[0] = record
+    if save:
+        transcript(dict(extra, type='assistant', message={'id': mid, 'model': current_model(), 'content': [block]}))
 
 
 def withdrawn():
@@ -683,12 +765,13 @@ def tool_use(mid, index, name, tool_input):
 
 
 def user(block, **extra):
+    """extra: tool_use_result (the structured result, also the file's toolUseResult) and the like."""
     emit(dict({'type': 'user', 'message': {'role': 'user', 'content': [block]}, 'parent_tool_use_id': None,
                'session_id': SID, 'uuid': str(uuid.uuid4()), 'timestamp': now_iso()}, **extra))
-    transcript({'type': 'user', 'message': {'role': 'user', 'content': [block]}})
+    transcript({'type': 'user', 'message': {'role': 'user', 'content': [block]}}, extra.get('tool_use_result'))
 
 
-def tool_result(tid, content, is_error=False, interactive=False, plain=False):
+def tool_result(tid, content, is_error=False, interactive=False, plain=False, structured=None):
     """The tool's result as the recordings order it: a failure (02 deny, 06 rejection) type, content,
     is_error, tool_use_id; AskUserQuestion and ExitPlanMode (03, 04) type, content, tool_use_id; Bash
     (02, 10) tool_use_id, type, content, is_error; Edit and WebFetch (plain: shape 16-edit) tool_use_id, type, content."""
@@ -700,7 +783,10 @@ def tool_result(tid, content, is_error=False, interactive=False, plain=False):
         block = {'tool_use_id': tid, 'type': 'tool_result', 'content': content}
     else:
         block = {'tool_use_id': tid, 'type': 'tool_result', 'content': content, 'is_error': False}
-    user(block)
+    if structured is None:
+        user(block)
+    else:
+        user(block, tool_use_result=structured)
 
 
 SESSION_RULES = []                  # allow rules saved with destination "session" (this process only)
@@ -832,6 +918,8 @@ def result(final='', subtype='success', errors=None, stop='end_turn', terminal='
         record['user_message_uuid'] = TURN_UUID[0]
     if ENV.get('FAKE_CLAUDE_RATE') and not RATE_TURN[0]:
         rate_limit(ENV['FAKE_CLAUDE_RATE'])
+    if 'stop' in HOOKS_ON:          # finding 32: the Stop hooks' records before the result, their summary in the file
+        hook_records('Stop', 'Stop')
     emit(record)
 
 
@@ -1001,9 +1089,10 @@ def s_bypass(prompt):
         final('done')
 
 
-def asked(name, tool_input, suggestions=None):
+def asked(name, tool_input, suggestions=None, outcome=None):
     """One call of NAME that asks, in finding 15's request shape (its description, its suggestions when given);
-    the tool's result is made up; a deny that interrupts ends the turn as bash's does"""
+    the tool's result is made up (outcome: the recorded form, finding 28); a deny that interrupts ends the
+    turn as bash's does"""
     mid = message_start()
     tid = tool_use(mid, 0, name, tool_input)
     message_end('tool_use')
@@ -1020,7 +1109,10 @@ def asked(name, tool_input, suggestions=None):
     log(answer=answer)
     if answer.get('behavior') == 'allow':
         apply_updates(answer)
-        tool_result(tid, 'done', plain=True)
+        if outcome is None:
+            tool_result(tid, 'done', plain=True)
+        else:
+            give(tid, name, outcome)
         final('done')
         return
     DENIALS.append({'tool_name': name, 'tool_use_id': tid, 'tool_input': tool_input})
@@ -1056,19 +1148,25 @@ def s_project(prompt):
 
 
 def s_glob(prompt):
-    """a Glob call in the project (with its path)"""
-    asked('Glob', {'pattern': '*.txt', 'path': CWD})
+    """a Glob call in the project (with its path); `glob run`: without asking (as 2.1.330 ran it, finding 28)"""
+    if prompt.split()[1:2] == ['run']:
+        return ran_calls([('Glob', {'pattern': '*.txt', 'path': CWD}, glob_outcome(['notes.txt']))])
+    asked('Glob', {'pattern': '*.txt', 'path': CWD}, outcome=glob_outcome(['notes.txt']))
 
 
 def s_grep(prompt):
-    """a Grep call without a path"""
-    asked('Grep', {'pattern': 'TODO'})
+    """a Grep call without a path; `grep run`: without asking, its three output modes (finding 28)"""
+    if prompt.split()[1:2] == ['run']:
+        return ran_calls(grep_calls())
+    asked('Grep', {'pattern': 'TODO'}, outcome=grep_calls()[1][2])
 
 
 def s_websearch(prompt):
-    """a WebSearch call with allowed and blocked domains"""
-    asked('WebSearch', {'query': 'rhun editor', 'allowed_domains': ['rhun.app', 'github.com'],
-                        'blocked_domains': ['example.com']})
+    """a WebSearch call with allowed and blocked domains; `websearch run`: without asking (finding 28)"""
+    tool_input = {'query': 'rhun editor', 'allowed_domains': ['rhun.app', 'github.com'], 'blocked_domains': ['example.com']}
+    if prompt.split()[1:2] == ['run']:
+        return ran_calls([('WebSearch', tool_input, websearch_outcome('rhun editor'))])
+    asked('WebSearch', tool_input, outcome=websearch_outcome('rhun editor'))
 
 
 def s_other(prompt):
@@ -1391,7 +1489,10 @@ def s_slow(prompt):
 
 
 def s_think(prompt):
-    """thinking, then a short text"""
+    """thinking, then a short text; `think TEXT`: thinking with that text (finding 29's summarized form)"""
+    if len(prompt.split()) > 1:
+        think_text(prompt.split(None, 1)[1])
+        return
     mid = message_start()
     thinking(mid, 0)
     if text(mid, 1, ['thought ', 'about ', 'it']):
@@ -1869,14 +1970,20 @@ def synthetic(command, text_, extra=None, local=None):
     """What a command the CLI runs itself answers (finding 22, shape 17-slash): a <synthetic> assistant text, then a result without
     a terminal_reason and with local_command (the command's name; /status, which it does not run here, has
     none)."""
-    emit(dict({'type': 'assistant', 'message': {
+    record = dict({'type': 'assistant', 'message': {
         'id': str(uuid.uuid4()), 'container': None, 'model': '<synthetic>', 'role': 'assistant',
         'stop_reason': 'end_turn', 'stop_sequence': None, 'type': 'message',
         'usage': {'input_tokens': 0, 'output_tokens': 0, 'cache_creation_input_tokens': 0,
                   'cache_read_input_tokens': 0}, 'content': [{'type': 'text', 'text': text_}],
         'context_management': None},
         'parent_tool_use_id': None, 'local_command_source': '<local-command-stdout>%s</local-command-stdout>' % text_,
-        'session_id': SID, 'uuid': str(uuid.uuid4()), 'timestamp': now_iso()}, **(extra or {})))
+        'session_id': SID, 'uuid': str(uuid.uuid4()), 'timestamp': now_iso()}, **(extra or {}))
+    emit(record)
+    LAST_ASSISTANT[0] = record
+    local_lines(command)
+    transcript({'type': 'system', 'subtype': 'local_command',
+                'content': '<local-command-stdout>%s</local-command-stdout>' % text_, 'level': 'info',
+                'after': {'isMeta': False}})
     local_result(text_, local)
 
 
@@ -1909,22 +2016,42 @@ def c_status(prompt):
 
 def c_compact(prompt):
     """/compact as finding 22 has it: compacting, the result, system/init, the boundary, the summary as a synthetic user line
-    (string content), the "Compacted" output echoed as a replay (with --replay-user-messages), the result"""
+    (string content), the "Compacted" output echoed as a replay (with --replay-user-messages), the result.
+    Finding 30: the boundary's metadata as 2.1.330 sends it; FAKE_CLAUDE_PRESERVED: the preserved segment's
+    last record (the last assistant record) is sent again after the summary, with its uuid (20-compact); the
+    file gets the boundary, the summary (isCompactSummary), the caveat, the command and its output."""
     emit({'type': 'system', 'subtype': 'status', 'status': 'compacting', 'session_id': SID, 'uuid': str(uuid.uuid4())})
+    if 'start' in HOOKS_ON:
+        hook_records('SessionStart', 'SessionStart:compact')
     time.sleep(0.2)
     emit({'type': 'system', 'subtype': 'status', 'status': None, 'compact_result': 'success', 'session_id': SID,
           'uuid': str(uuid.uuid4())})
     system_init()
+    metadata = {'trigger': 'manual', 'pre_tokens': 45783, 'post_tokens': 14115, 'cumulative_dropped_tokens': 31668,
+                'duration_ms': 6385}
+    kept = LAST_ASSISTANT[0] if ENV.get('FAKE_CLAUDE_PRESERVED') else None
+    if kept:
+        metadata['preserved_segment'] = {'head_uuid': kept['uuid'], 'anchor_uuid': kept['uuid'], 'tail_uuid': kept['uuid']}
     emit({'type': 'system', 'subtype': 'compact_boundary', 'session_id': SID, 'uuid': str(uuid.uuid4()),
-          'compact_metadata': {'trigger': 'manual', 'pre_tokens': 45783, 'post_tokens': 14115}})
-    emit({'type': 'user', 'message': {'role': 'user', 'content': 'This session is being continued from a previous '
-                                      'conversation that ran out of context. Summary: nothing yet.'},
+          'compact_metadata': metadata})
+    summary = ('This session is being continued from a previous conversation that ran out of context. The summary '
+               'below covers the earlier portion of the conversation.\n\nSummary: nothing yet.')
+    emit({'type': 'user', 'message': {'role': 'user', 'content': summary},
           'session_id': SID, 'parent_tool_use_id': None, 'uuid': str(uuid.uuid4()), 'timestamp': now_iso(),
           'isReplay': False, 'isSynthetic': True})
+    if kept:
+        emit(kept)
     if REPLAY:
         emit({'type': 'user', 'message': {'role': 'user', 'content': '<local-command-stdout>Compacted </local-command-stdout>'},
               'session_id': SID, 'parent_tool_use_id': None, 'uuid': str(uuid.uuid4()), 'timestamp': now_iso(),
               'isReplay': True})
+    transcript({'type': 'system', 'subtype': 'compact_boundary', 'content': 'Conversation compacted', 'isMeta': False,
+                'after': {'level': 'info', 'compactMetadata': {'trigger': 'manual', 'preTokens': 45783, 'durationMs': 6385,
+                                                               'postTokens': 14115, 'cumulativeDroppedTokens': 31668}}})
+    transcript({'type': 'user', 'message': {'content': summary}, 'isVisibleInTranscriptOnly': True,
+                'isCompactSummary': True})
+    local_lines('compact')
+    transcript({'type': 'user', 'message': {'content': '<local-command-stdout>Compacted </local-command-stdout>'}})
     local_result('', 'compact')
 
 
@@ -2062,6 +2189,706 @@ def s_askmax(prompt):
 
 
 SCENARIOS.update({'bigcard': s_bigcard, 'askmax': s_askmax})     # the phase 2 reviews' findings
+
+
+# ---- Phase 3 (README.txt findings 27 to 37): the tools' results, the file's records, thinking with text,
+# subagents and tasks, hooks. Every record keeps the recorded field order (keys.txt, and file-keys.txt for
+# the file's lines); what no run recorded says so.
+
+HOOK_EVENTS = '--include-hook-events' in FLAGS      # 32: UserPromptSubmit's and Stop's records too
+# FAKE_CLAUDE_HOOKS, comma-separated: start (SessionStart's records before the initialize answer and during
+# /compact), prompt (UserPromptSubmit's, with --include-hook-events), block (a prompt holding BLOCKME is
+# blocked by it), stop (Stop's before every result, with the flag; the file's stop_hook_summary), post (a
+# PostToolUse hook's context after a Read, in the file only)
+HOOKS_ON = set(filter(None, ENV.get('FAKE_CLAUDE_HOOKS', '').split(',')))
+TASKS = bool(ENV.get('FAKE_CLAUDE_TASKS'))          # 28: the task tools in place of TodoWrite
+WAIT_MS = int(ENV.get('FAKE_CLAUDE_BG_MS', '3000'))  # how long `bg` runs in the foreground, a task in the background
+NOTES = 'one\ntwo\nthree\nfour\nfive\n'             # what `tools` reads (nothing is read or written there)
+A_PY = ''.join('x%d = %d  # line %d\n' % (i, i, i) for i in range(1, 9)) + 'def f(x):\n    return x\n'
+DOT = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
+SAVED = ' (file state is current in your context — no need to Read it back)'
+CAVEAT = ("<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, "
+          "and its output goes straight to the user. It's recorded here as context for later messages."
+          "</local-command-caveat>")
+# 36: a call stopped while it ran (the bundle's cTt)
+STOPPED = (REJECTED + ' Correction to the text above: this call was stopped while running, not refused before it '
+           'ran. It may have run in part or in full, and its changes may have been written. No permission prompt '
+           'was involved. Work it started elsewhere (a remote command, a background process) may still be running, '
+           'so check before starting the same work again. The instruction to stop and wait still stands.')
+TODO_DONE = ('Todos have been modified successfully. Ensure that you continue to use the todo list to track your '
+             'progress. Please proceed with the current tasks if applicable')
+LIVE = {}                           # task id -> a running task (`agent`, `bg`): stop_task and background_tasks find it
+
+
+def todo_tools():
+    """system/init's todo tools (28: on a 5.x model only with an opt-in; the fake lists them always)."""
+    return ['TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate'] if TASKS else ['TodoWrite']
+
+
+def at(name):
+    return os.path.join(CWD, name)
+
+
+def hook_records(event, name):
+    """A hook's hook_started and hook_response (32): SessionStart's always, the others only with
+    --include-hook-events; Stop also writes the file's stop_hook_summary."""
+    if event == 'SessionStart' or HOOK_EVENTS:
+        hid = str(uuid.uuid4())
+        emit({'type': 'system', 'subtype': 'hook_started', 'hook_id': hid, 'hook_name': name, 'hook_event': event,
+              'uuid': str(uuid.uuid4()), 'session_id': SID})
+        emit({'type': 'system', 'subtype': 'hook_response', 'hook_id': hid, 'hook_name': name, 'hook_event': event,
+              'output': 'hi\n', 'stdout': 'hi\n', 'stderr': '', 'exit_code': 0, 'outcome': 'success',
+              'uuid': str(uuid.uuid4()), 'session_id': SID})
+    if event == 'Stop':
+        transcript({'type': 'system', 'subtype': 'stop_hook_summary', 'hookCount': 1,
+                    'hookInfos': [{'command': 'echo hi', 'durationMs': 5}], 'hookErrors': [],
+                    'failedHookErrorIndexes': [], 'hookAdditionalContext': [], 'preventedContinuation': False,
+                    'stopReason': '', 'hasOutput': False, 'level': 'suggestion',
+                    'after': {'toolUseID': str(uuid.uuid4())}})
+
+
+def prompt_hook(prompt):
+    """UserPromptSubmit's records; with `block` a prompt holding BLOCKME is blocked (32): system/init,
+    system/informational, the result, no prompt line in the file. True: it was blocked."""
+    hook_records('UserPromptSubmit', 'UserPromptSubmit')
+    if 'block' not in HOOKS_ON or 'BLOCKME' not in prompt:
+        return False
+    system_init()
+    said = 'UserPromptSubmit operation blocked by hook:\n[fake hook]: Blocked by the test hook\n\n\nOriginal prompt: ' + prompt
+    emit({'type': 'system', 'subtype': 'informational', 'content': said, 'level': 'warning',
+          'prevent_continuation': True, 'prompt_submit_outcome': {'kind': 'blocked_by_hook', 'prompt_kept': False},
+          'uuid': str(uuid.uuid4()), 'session_id': SID})
+    transcript({'type': 'system', 'subtype': 'informational', 'content': said, 'isMeta': False,
+                'after': {'level': 'warning', 'preventContinuation': True, 'promptSubmitEnding': {
+                    'ending': {'kind': 'blocked_by_hook', 'reason': 'Blocked by the test hook'}, 'promptKept': False}}})
+    local_result(said, None)
+    return True
+
+
+def local_lines(command):
+    """A command the CLI ran itself, in the file (31): the caveat (isMeta) and the command's line."""
+    transcript({'type': 'user', 'message': {'content': CAVEAT}, 'isMeta': True})
+    transcript({'type': 'user', 'message': {'content': '<command-name>/%s</command-name>\n            <command-message>'
+                                                      '%s</command-message>\n            <command-args></command-args>'
+                                                      % (command, command)}})
+
+
+def custom_command(prompt, entry):
+    """`echo [NAME]` (or /NAME with <cwd>/.claude/commands/NAME.md): a custom command as 31 has it: its
+    replayed string (message first, no args), in the file that string and the command's text (isMeta),
+    then the reply. True: it was one."""
+    words = prompt.split()
+    if words[:1] == ['echo']:
+        name, body = (words[1] if len(words) > 1 else 'hi'), 'Reply with the word hi.\n'
+    elif words and words[0].startswith('/') and os.path.isfile(at('.claude/commands/%s.md' % words[0][1:])):
+        name = words[0][1:]
+        with open(at('.claude/commands/%s.md' % name), encoding='utf-8') as stream:
+            body = stream.read()
+    else:
+        return False
+    said = '<command-message>%s</command-message>\n<command-name>/%s</command-name>' % (name, name)
+    if REPLAY:
+        emit({'type': 'user', 'message': {'role': 'user', 'content': said}, 'session_id': SID,
+              'parent_tool_use_id': None, 'uuid': entry['uuid'] or str(uuid.uuid4()), 'timestamp': now_iso(),
+              'isReplay': True})
+    transcript({'type': 'user', 'message': {'content': said}})
+    transcript({'type': 'user', 'message': {'content': [{'type': 'text', 'text': body}]}, 'isMeta': True})
+    final('hi')
+    return True
+
+
+# the tools' outcomes, (content, is_error, structured result), as finding 28 recorded them
+
+def read_text(path, text_, offset=None, limit=None):
+    lines = text_.split('\n')
+    start = offset or 1
+    shown = lines[start - 1:start - 1 + (limit or len(lines))]
+    return ('\n'.join('%d\t%s' % (start + i, line) for i, line in enumerate(shown)), False,
+            {'type': 'text', 'file': {'filePath': path, 'content': '\n'.join(shown) if offset or limit else text_,
+                                      'numLines': len(shown), 'startLine': start, 'totalLines': len(lines)}})
+
+
+def read_image(path, data):
+    return ([{'type': 'image', 'source': {'type': 'base64', 'data': data, 'media_type': 'image/png'}}], False,
+            {'type': 'image', 'file': {'base64': data, 'type': 'image/png', 'originalSize': len(data) * 3 // 4,
+                                       'dimensions': {'originalWidth': 1, 'originalHeight': 1, 'displayWidth': 1,
+                                                      'displayHeight': 1}}})
+
+
+def read_missing():
+    said = 'File does not exist. Note: your current working directory is %s.' % CWD
+    return said, True, 'Error: ' + said
+
+
+def read_call(path, offset=None, limit=None):
+    """Read of a file on disk: its lines, an image for a .png, the error for a missing one."""
+    try:
+        with open(path, 'rb') as stream:
+            data = stream.read()
+    except OSError:
+        return read_missing()
+    if path.endswith('.png'):
+        import base64
+        return read_image(path, base64.b64encode(data).decode())
+    return read_text(path, data.decode('utf-8', 'replace'), offset, limit)
+
+
+def patch(old, new):
+    """structuredPatch: one hunk with every line (context, removed, added)."""
+    import difflib
+    a, b = old.split('\n'), new.split('\n')
+    lines = []
+    for tag, i1, i2, j1, j2 in difflib.SequenceMatcher(None, a, b).get_opcodes():
+        if tag == 'equal':
+            lines += [' ' + line for line in a[i1:i2]]
+        else:
+            lines += ['-' + line for line in a[i1:i2]] + ['+' + line for line in b[j1:j2]]
+    return [{'oldStart': 1, 'oldLines': len(a), 'newStart': 1, 'newLines': len(b), 'lines': lines}]
+
+
+def edit_outcome(path, text_, old, new, replace_all=False):
+    if old not in text_:
+        said = 'String to replace not found in file.\nString: %s' % old
+        return '<tool_use_error>%s</tool_use_error>' % said, True, 'Error: ' + said
+    changed = text_.replace(old, new) if replace_all else text_.replace(old, new, 1)
+    said = ('The file %s has been updated. All occurrences were successfully replaced.' % path if replace_all
+            else 'The file %s has been updated successfully.%s' % (path, SAVED))
+    return said, False, {'filePath': path, 'oldString': old, 'newString': new, 'originalFile': text_,
+                         'structuredPatch': patch(text_, changed), 'userModified': False, 'replaceAll': replace_all}
+
+
+def write_outcome(path, content, old=None):
+    if old is None:
+        return ('File created successfully at: %s%s' % (path, SAVED), False,
+                {'type': 'create', 'filePath': path, 'content': content, 'structuredPatch': [], 'originalFile': None,
+                 'userModified': False})
+    return ('The file %s has been updated successfully.%s' % (path, SAVED), False,
+            {'type': 'update', 'filePath': path, 'content': content, 'structuredPatch': patch(old, content),
+             'originalFile': old, 'userModified': False})
+
+
+def bash_outcome(out, **more):
+    return out, False, dict({'stdout': out, 'stderr': '', 'interrupted': False, 'isImage': False,
+                             'noOutputExpected': False}, **more)
+
+
+def bash_failed(said):
+    return said, True, 'Error: ' + said
+
+
+def grep_calls():
+    hits = ['a.py:%d:x%d = %d  # row %d' % (i, i, i, i) for i in range(1, 9)]
+    return [('Grep', {'pattern': 'row', 'output_mode': 'content'},
+             ('\n'.join(hits), False, {'mode': 'content', 'numFiles': 0, 'filenames': [], 'content': '\n'.join(hits),
+                                       'numLines': 8, 'totalLines': 8})),
+            ('Grep', {'pattern': 'row', 'output_mode': 'files_with_matches'},
+             ('Found 1 file\na.py', False, {'mode': 'files_with_matches', 'filenames': ['a.py'], 'numFiles': 1,
+                                            'totalFiles': 1})),
+            ('Grep', {'pattern': 'row', 'output_mode': 'count'},
+             ('a.py:8\n\nFound 8 total occurrences across 1 file.', False,
+              {'mode': 'count', 'numFiles': 1, 'filenames': [], 'content': 'a.py:8', 'numMatches': 8}))]
+
+
+def glob_outcome(names):
+    return ('\n'.join(names) or 'No files found', False,
+            {'filenames': names, 'durationMs': 13, 'numFiles': len(names), 'truncated': False,
+             'totalMatches': len(names), 'countIsComplete': True})
+
+
+def websearch_outcome(query):
+    links = [{'title': 'rhun', 'url': 'https://rhun.app'}, {'title': 'Example Domain', 'url': 'https://example.com'}]
+    return ('Web search results for query: "%s"\n\nLinks: %s\n\nThe search found two pages.' % (
+        query, json.dumps(links, separators=(',', ':'))), False,
+        {'query': query, 'results': [{'tool_use_id': 'srvtoolu_fake' + uuid.uuid4().hex[:12], 'content': links},
+                                     'The search found two pages.'], 'durationSeconds': 1.2, 'searchCount': 1})
+
+
+def toolsearch_outcome(names, query):
+    return ([{'type': 'tool_reference', 'tool_name': name} for name in names], False,
+            {'matches': names, 'query': query, 'total_deferred_tools': 120})
+
+
+def give(tid, name, outcome, agent=None):
+    """A call's result in the recorded block order (a failure: type, content, is_error, tool_use_id; Bash:
+    tool_use_id, type, content, is_error; ToolSearch: type, tool_use_id, content; the others: tool_use_id,
+    type, content) with its structured result; agent: a subagent's (no structured result, its own file)."""
+    content, is_error, structured = outcome
+    if is_error:
+        block = {'type': 'tool_result', 'content': content, 'is_error': True, 'tool_use_id': tid}
+    elif name == 'Bash':
+        block = {'tool_use_id': tid, 'type': 'tool_result', 'content': content, 'is_error': False}
+    elif name == 'ToolSearch':
+        block = {'type': 'tool_result', 'tool_use_id': tid, 'content': content}
+    else:
+        block = {'tool_use_id': tid, 'type': 'tool_result', 'content': content}
+    if agent is not None:
+        sub_record(agent, 'user', block)
+    elif structured is None:
+        user(block)
+    else:
+        user(block, tool_use_result=structured)
+    if name == 'Read' and 'post' in HOOKS_ON and agent is None:     # 32: the context reaches the file only
+        context = 'The test hook saw this read.'
+        transcript({'type': 'attachment', 'attachment': {
+            'type': 'hook_success', 'hookName': 'PostToolUse:Read', 'toolUseID': tid, 'hookEvent': 'PostToolUse',
+            'content': '', 'stdout': json.dumps({'hookSpecificOutput': {'hookEventName': 'PostToolUse',
+                                                                        'additionalContext': context}}) + '\n',
+            'stderr': '', 'exitCode': 0, 'command': 'fake hook', 'durationMs': 41}})
+        transcript({'type': 'attachment', 'attachment': {'type': 'hook_additional_context', 'content': [context],
+                                                          'hookName': 'PostToolUse:Read', 'toolUseID': tid,
+                                                          'hookEvent': 'PostToolUse'}})
+
+
+def run_calls(calls):
+    """One message with these calls [(name, input, outcome)], as 2.1.330 streams them (18-tools): each call's
+    result goes out while the next call streams, the last one's after message_stop. The call ids."""
+    mid = message_start()
+    tids, waiting = [], []
+    for index, (name, tool_input, outcome) in enumerate(calls):
+        tid = 'toolu_fake' + uuid.uuid4().hex[:16]
+        stream_event({'type': 'content_block_start', 'index': index, 'content_block': {
+            'type': 'tool_use', 'id': tid, 'name': name, 'input': {}, 'caller': {'type': 'direct'}}})
+        stream_event({'type': 'content_block_delta', 'index': index, 'delta': {'type': 'input_json_delta',
+                                                                                'partial_json': ''}})
+        while waiting:
+            give(*waiting.pop(0))
+        stream_event({'type': 'content_block_delta', 'index': index, 'delta': {
+            'type': 'input_json_delta', 'partial_json': json.dumps(tool_input, ensure_ascii=False)}})
+        assistant(mid, {'type': 'tool_use', 'id': tid, 'name': name, 'input': tool_input, 'caller': {'type': 'direct'}})
+        stream_event({'type': 'content_block_stop', 'index': index})
+        waiting.append((tid, name, outcome))
+        tids.append(tid)
+    message_end('tool_use')
+    while waiting:
+        give(*waiting.pop(0))
+    return tids
+
+
+def ran_calls(calls, words='ok'):
+    """Calls that ran without asking, then the reply."""
+    run_calls(calls)
+    final(words)
+
+
+def s_tools(prompt):
+    """tools: one call of every recorded tool with its result (finding 28), none asks, made-up files (nothing
+    is read or written): two Reads in one message as 18-tools, a missing file and an image, three Edits (one
+    replace_all, one not found), two Writes (new, over a file), Bash (output, a failure), Grep's three modes,
+    Glob (matches, none), ToolSearch, WebSearch, WebFetch (called directly: unrecorded, 2.1.330 sent it to its
+    web-fetch agent, whose result has no structured part), the todo tool (FAKE_CLAUDE_TASKS: the task tools)"""
+    notes, a_py = at('notes.txt'), at('a.py')
+    run_calls([('Read', {'file_path': notes}, read_text(notes, NOTES)),
+               ('Read', {'file_path': a_py, 'offset': 2, 'limit': 3}, read_text(a_py, A_PY, 2, 3))])
+    run_calls([('Read', {'file_path': at('missing.txt')}, read_missing()),
+               ('Read', {'file_path': at('dot.png')}, read_image(at('dot.png'), DOT))])
+    edited = NOTES.replace('two', 'TWO', 1)
+    run_calls([('Edit', {'replace_all': False, 'file_path': notes, 'old_string': 'two', 'new_string': 'TWO'},
+                edit_outcome(notes, NOTES, 'two', 'TWO')),
+               ('Edit', {'replace_all': True, 'file_path': a_py, 'old_string': '# line', 'new_string': '# row'},
+                edit_outcome(a_py, A_PY, '# line', '# row', True)),
+               ('Edit', {'replace_all': False, 'file_path': a_py, 'old_string': 'nothing-here', 'new_string': 'x'},
+                edit_outcome(a_py, A_PY, 'nothing-here', 'x'))])
+    run_calls([('Write', {'file_path': at('new.txt'), 'content': 'hello'}, write_outcome(at('new.txt'), 'hello')),
+               ('Write', {'file_path': notes, 'content': 'only line'}, write_outcome(notes, 'only line', edited))])
+    run_calls([('Bash', {'command': 'echo out', 'description': 'Print out'}, bash_outcome('out')),
+               ('Bash', {'command': 'ls missing-dir', 'description': 'List missing directory'},
+                bash_failed('Exit code 1\nls: missing-dir: No such file or directory'))])
+    run_calls(grep_calls())
+    run_calls([('Glob', {'pattern': '*.py'}, glob_outcome(['a.py'])), ('Glob', {'pattern': '*.zzz'}, glob_outcome([]))])
+    run_calls([('ToolSearch', {'query': 'select:WebSearch', 'max_results': 1},
+                toolsearch_outcome(['WebSearch'], 'select:WebSearch'))])
+    run_calls([('WebSearch', {'query': 'IANA example domain', 'mode': 'standard'}, websearch_outcome('IANA example domain'))])
+    run_calls([('WebFetch', {'url': 'https://example.com', 'prompt': 'Report the title'},
+                ('Fetched https://example.com/ from a non-preapproved source (HTTP 200 OK, text/html, 172 characters).'
+                 '\n<fetched-web-content>\nExample Domain\n</fetched-web-content>', False, None))])
+    todo_calls()
+    final('ok')
+
+
+def todo_calls():
+    """The todo list as finding 28 has it: ToolSearch first (deferred), then TodoWrite with the whole list, or
+    (FAKE_CLAUDE_TASKS) a TaskCreate a message and a TaskUpdate."""
+    if TASKS:
+        run_calls([('ToolSearch', {'query': 'select:TaskCreate,TaskUpdate', 'max_results': 2},
+                    toolsearch_outcome(['TaskCreate', 'TaskUpdate'], 'select:TaskCreate,TaskUpdate'))])
+        for n, subject in enumerate(('a', 'b', 'c'), 1):
+            task = {'id': str(n), 'subject': subject, 'description': 'Todo item ' + subject}
+            run_calls([('TaskCreate', {'subject': subject, 'description': task['description']},
+                        ('Task #%d created successfully: %s' % (n, subject), False, {'task': task}))])
+        run_calls([('TaskUpdate', {'taskId': '1', 'status': 'completed'},
+                    ('Updated task #1 status', False, {'success': True, 'taskId': '1', 'updatedFields': ['status'],
+                                                       'statusChange': {'from': 'pending', 'to': 'completed'}}))])
+        return
+    run_calls([('ToolSearch', {'query': 'select:TodoWrite', 'max_results': 1},
+                toolsearch_outcome(['TodoWrite'], 'select:TodoWrite'))])
+    todos = [{'content': 'a', 'status': 'completed', 'activeForm': 'Completing a'},
+             {'content': 'b', 'status': 'in_progress', 'activeForm': 'Working on b'},
+             {'content': 'c', 'status': 'pending', 'activeForm': 'Working on c'}]
+    run_calls([('TodoWrite', {'todos': todos}, (TODO_DONE, False, {'oldTodos': [], 'newTodos': todos}))])
+
+
+def s_todo(prompt):
+    """todo: a todo list of three items, one done (finding 28; FAKE_CLAUDE_TASKS: the task tools)"""
+    todo_calls()
+    final('ok')
+
+
+def s_read(prompt):
+    """read [FILE]: a Read of a file of the project (default notes.txt): its lines, an image, or the error"""
+    words = prompt.split(None, 1)
+    path = at(words[1].strip() if len(words) > 1 else 'notes.txt')
+    ran_calls([('Read', {'file_path': path}, read_call(path))])
+
+
+def s_image(prompt):
+    """image: a Read of an image (finding 33): dot.png of the project, or a made-up 1x1 one"""
+    path = at('dot.png')
+    ran_calls([('Read', {'file_path': path}, read_call(path) if os.path.exists(path) else read_image(path, DOT))])
+
+
+def s_write(prompt):
+    """write [FILE [TEXT]]: a Write (default new.txt, "hello"): asks as Edit does unless the mode or a rule lets
+    it run (the recorded request had Write's own suggestions; the fake offers acceptEdits); the file is written"""
+    words = prompt.split(None, 2)
+    path = at(words[1] if len(words) > 1 else 'new.txt')
+    content = words[2] if len(words) > 2 else 'hello'
+    tool_input = {'file_path': path, 'content': content}
+    mid = message_start()
+    tid = tool_use(mid, 0, 'Write', tool_input)
+    message_end('tool_use')
+    if MODE in ('acceptEdits', 'bypassPermissions') or rule_allows('Write', path):
+        answer = {'behavior': 'allow'}
+    else:
+        answer = ask_request(request_id(), {
+            'subtype': 'can_use_tool', 'tool_name': 'Write', 'display_name': 'Write', 'input': tool_input,
+            'description': os.path.basename(path),
+            'permission_suggestions': [{'type': 'setMode', 'mode': 'acceptEdits', 'destination': 'session'}],
+            'tool_use_id': tid})
+        if answer is None:
+            tool_result(tid, REJECTED, True)
+            cut_off(tool_turn=True)
+            return
+        log(answer=answer)
+    if answer.get('behavior') == 'allow':
+        apply_updates(answer)
+        try:
+            with open(path, encoding='utf-8') as stream:
+                old = stream.read()
+        except OSError:
+            old = None
+        try:
+            with open(path, 'w', encoding='utf-8') as stream:
+                stream.write(content)
+        except OSError:
+            pass
+        give(tid, 'Write', write_outcome(path, content, old))
+        final('written')
+        return
+    DENIALS.append({'tool_name': 'Write', 'tool_use_id': tid, 'tool_input': tool_input})
+    tool_result(tid, answer.get('message', ''), True)
+    if answer.get('interrupt') is True:
+        cut_off(tool_turn=True)
+    else:
+        final('not written')
+
+
+def s_toolerror(prompt):
+    """toolerror: two failed calls (finding 36): a missing file (plain text) and an Edit whose string is not
+    there (<tool_use_error>)"""
+    a_py = at('a.py')
+    ran_calls([('Read', {'file_path': at('missing.txt')}, read_missing()),
+               ('Edit', {'replace_all': False, 'file_path': a_py, 'old_string': 'nothing-here', 'new_string': 'x'},
+                edit_outcome(a_py, A_PY, 'nothing-here', 'x'))], 'Both failed.')
+
+
+def s_denied(prompt):
+    """denied: a Bash call a deny rule refuses without asking (finding 36): system/permission_denied, the
+    error result, the result's permission_denials"""
+    mid = message_start()
+    tool_input = {'command': 'touch d3.txt', 'description': 'Create file d3.txt'}
+    tid = tool_use(mid, 0, 'Bash', tool_input)
+    message_end('tool_use')
+    said = 'Permission to use Bash with command touch d3.txt has been denied.'
+    emit({'type': 'system', 'subtype': 'permission_denied', 'tool_name': 'Bash', 'tool_use_id': tid,
+          'decision_reason_type': 'rule', 'message': said, 'uuid': str(uuid.uuid4()), 'session_id': SID})
+    DENIALS.append({'tool_name': 'Bash', 'tool_use_id': tid, 'tool_input': tool_input})
+    give(tid, 'Bash', (said, True, 'Error: ' + said))
+    final('The command was denied.')
+
+
+def think_text(said):
+    """Thinking with text (finding 29, the "summarized" display): its deltas carry the text, a thinking_tokens
+    record after each, the record has the whole text, its duration and display; then a short reply."""
+    mid = message_start()
+    stream_event({'type': 'content_block_start', 'index': 0,
+                  'content_block': {'type': 'thinking', 'thinking': '', 'signature': ''}}, thinking_display='summarized')
+    estimate = 0
+    for piece in thirds(said.split(' ')):
+        piece = ' '.join(piece) + ' '
+        estimate += max(1, len(piece) // 4)
+        thinking_tokens(estimate, max(1, len(piece) // 4))
+        stream_event({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'thinking_delta', 'thinking': piece}},
+                     thinking_display='summarized')
+    thinking_tokens(estimate + 375, 375)
+    stream_event({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'signature_delta', 'signature': 'c2lnbmF0dXJl'}})
+    assistant(mid, {'type': 'thinking', 'thinking': said, 'signature': 'c2lnbmF0dXJl'}, thinking_duration_ms=3109,
+              thinking_display='summarized')
+    stream_event({'type': 'content_block_stop', 'index': 0})
+    if text(mid, 1, ['thought ', 'it ', 'through']):
+        message_end()
+        result('thought it through')
+    else:
+        cut_off()
+
+
+def s_unknownblock(prompt):
+    """unknownblock: a content block of a type nobody knows ("mystery"; unrecorded), then a text"""
+    mid = message_start()
+    stream_event({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'mystery', 'data': 'x'}})
+    assistant(mid, {'type': 'mystery', 'data': 'x'})
+    stream_event({'type': 'content_block_stop', 'index': 0})
+    if text(mid, 1, ['after ', 'it']):
+        message_end()
+        result('after it')
+
+
+def s_apierror(prompt):
+    """apierror (unrecorded: no run provoked one; the shapes are the CLI binary's schemas, finding 35):
+    system/api_retry, then the <synthetic> reply with error "overloaded", then an error result"""
+    emit({'type': 'system', 'subtype': 'api_retry', 'attempt': 1, 'max_retries': 10, 'retry_delay_ms': 500,
+          'error_status': 529, 'error': 'overloaded', 'uuid': str(uuid.uuid4()), 'session_id': SID})
+    said = 'API Error: Repeated 529 Overloaded errors'
+    emit({'type': 'assistant', 'message': {'id': str(uuid.uuid4()), 'model': '<synthetic>', 'role': 'assistant',
+                                           'type': 'message', 'content': [{'type': 'text', 'text': said}]},
+          'parent_tool_use_id': None, 'error': 'overloaded', 'uuid': str(uuid.uuid4()), 'session_id': SID})
+    transcript({'type': 'assistant', 'message': {'id': str(uuid.uuid4()), 'model': '<synthetic>',
+                                                 'content': [{'type': 'text', 'text': said}]}})
+    result(subtype='error_during_execution', errors=[said], stop=None, terminal='api_error')
+
+
+def s_hooks(prompt):
+    """hooks: a Read, so the hooks FAKE_CLAUDE_HOOKS names have their records (finding 32)"""
+    notes = at('notes.txt')
+    ran_calls([('Read', {'file_path': notes}, read_call(notes))])
+
+
+def new_task(kind, tid, description, **more):
+    task = dict({'task_id': ('a' + uuid.uuid4().hex[:16]) if kind == 'agent' else ('b' + uuid.uuid4().hex[:8]),
+                 'run_id': uuid.uuid4().hex[:10], 'kind': kind, 'tid': tid, 'description': description,
+                 'background': kind == 'agent', 'moved': threading.Event(), 'stopped': threading.Event()}, **more)
+    with COND:
+        LIVE[task['task_id']] = task
+    return task
+
+
+def task_entry(task):
+    """A task as background_tasks_changed lists it."""
+    entry = {'task_id': task['task_id'], 'run_id': task['run_id'],
+             'task_type': 'local_agent' if task['kind'] == 'agent' else 'local_bash'}
+    if task['kind'] == 'agent':
+        entry['subagent_type'] = 'general-purpose'
+    entry['description'] = task['description']
+    return entry
+
+
+def tasks_changed():
+    with COND:
+        live = [task_entry(t) for t in LIVE.values() if t['background']]
+    emit({'type': 'system', 'subtype': 'background_tasks_changed', 'tasks': live, 'uuid': str(uuid.uuid4()),
+          'session_id': SID})
+
+
+def task_end(task, status, notified):
+    """task_updated (a background task), task_notification, background_tasks_changed (34)."""
+    with COND:
+        LIVE.pop(task['task_id'], None)
+    if task['background']:
+        emit({'type': 'system', 'subtype': 'task_updated', 'task_id': task['task_id'], 'run_id': task['run_id'],
+              'patch': {'status': status, 'end_time': int(time.time() * 1000)}, 'uuid': str(uuid.uuid4()),
+              'session_id': SID})
+    emit({'type': 'system', 'subtype': 'task_notification', 'task_id': task['task_id'], 'run_id': task['run_id'],
+          'tool_use_id': task['tid'], 'status': notified,
+          'output_file': task.get('output', '') if task['background'] else '', 'summary': task['description'],
+          'uuid': str(uuid.uuid4()), 'session_id': SID})
+    if task['background']:
+        tasks_changed()
+
+
+def stop_task(rid, task_id):
+    """stop_task (34): answered {} after the task's records; an id no task has (unrecorded): an error."""
+    with COND:
+        task = LIVE.get(task_id)
+    if task is None:
+        respond_error(rid, 'No task found with ID: %s' % task_id)
+        return
+    task_end(task, 'killed', 'stopped')
+    respond(rid, {})
+    task['stopped'].set()
+
+
+def to_background(rid, tid):
+    """background_tasks {tool_use_id} (34): a running foreground call moves ({backgrounded true}); anything
+    else answers {backgrounded false}."""
+    with COND:
+        task = next((t for t in LIVE.values() if t['tid'] == tid and not t['background']), None)
+        if task:
+            task['background'] = True
+    if task:
+        tasks_changed()
+        emit({'type': 'system', 'subtype': 'task_updated', 'task_id': task['task_id'], 'run_id': task['run_id'],
+              'patch': {'is_backgrounded': True}, 'uuid': str(uuid.uuid4()), 'session_id': SID})
+    respond(rid, {'backgrounded': task is not None})
+    if task:
+        task['moved'].set()
+
+
+def s_bg(prompt):
+    """bg: a Bash call ("sleep 20; echo done") that runs in the foreground for FAKE_CLAUDE_BG_MS (default 3 s)
+    and ends with "done", unless background_tasks moves it (its result at once, "Command was manually
+    backgrounded by user ...", then it ends by itself that long later or stop_task kills it) or an interrupt
+    stops it (the bundle's cTt text, tool_use_result "User rejected tool use", aborted_tools) (34, 36)"""
+    mid = message_start()
+    tool_input = {'command': 'sleep 20; echo done', 'description': 'Sleep 20 seconds then echo done'}
+    tid = tool_use(mid, 0, 'Bash', tool_input)
+    message_end('tool_use')
+    task = new_task('shell', tid, tool_input['description'], background=False)
+    task['output'] = os.path.join(CWD, '.fake-tasks', task['task_id'] + '.output')
+    emit({'type': 'system', 'subtype': 'task_started', 'task_id': task['task_id'], 'run_id': task['run_id'],
+          'tool_use_id': tid, 'description': task['description'], 'is_backgrounded': False, 'task_type': 'local_bash',
+          'uuid': str(uuid.uuid4()), 'session_id': SID})
+    deadline = time.time() + WAIT_MS / 1000
+    while not task['moved'].is_set() and not withdrawn() and time.time() < deadline:
+        task['moved'].wait(0.05)
+    if not task['moved'].is_set() and interrupted_now():
+        task_end(task, 'killed', 'stopped')
+        give(tid, 'Bash', (STOPPED, True, 'User rejected tool use'))
+        cut_off(tool_turn=True)
+        return
+    if not task['moved'].is_set():
+        task_end(task, 'completed', 'completed')
+        give(tid, 'Bash', bash_outcome('done'))
+        final('done')
+        return
+    said = ('Command was manually backgrounded by user with ID: %s. Output is being written to: %s If it is still '
+            'running after 30m in the background, it will be stopped and you will be notified.' % (
+                task['task_id'], task['output']))
+    give(tid, 'Bash', (said, False, bash_outcome('', backgroundTaskId=task['task_id'], backgroundedByUser=True)[2]))
+    final('It runs in the background.')
+    if not task['stopped'].wait(WAIT_MS / 1000):
+        task_end(task, 'completed', 'completed')
+
+
+def sub_record(agent, kind, block, parent_text=False):
+    """A subagent's record (34): in the stream with parent_tool_use_id and agent_id, no stream_event, a tool's
+    result without tool_use_result; in its own file (isSidechain, agentId), never the conversation's."""
+    record = {'type': kind, 'message': ({'model': current_model(), 'id': agent['mid'], 'type': 'message',
+                                         'role': 'assistant', 'content': [block], 'stop_reason': None,
+                                         'usage': usage()} if kind == 'assistant'
+                                        else {'role': 'user', 'content': [block]}),
+              'parent_tool_use_id': agent['tid'], 'agent_id': agent['task_id'], 'session_id': SID,
+              'uuid': str(uuid.uuid4()), 'timestamp': now_iso()}
+    emit(record)
+    message = {'id': agent['mid'], 'model': current_model(), 'content': [block]} if kind == 'assistant' else \
+        {'content': [block]}
+    transcript({'type': kind, 'message': message}, path=agent['file'], chain=agent['chain'], agent=agent['task_id'])
+
+
+def sub_call(agent, name, tool_input, outcome):
+    """A subagent's call, its progress record and its result."""
+    tid = 'toolu_fake' + uuid.uuid4().hex[:16]
+    sub_record(agent, 'assistant', {'type': 'tool_use', 'id': tid, 'name': name, 'input': tool_input,
+                                    'caller': {'type': 'direct'}})
+    agent['calls'] += 1
+    emit({'type': 'system', 'subtype': 'task_progress', 'task_id': agent['task_id'], 'run_id': agent['run_id'],
+          'tool_use_id': agent['tid'], 'description': 'Running ' + tool_input.get('description', name),
+          'subagent_type': 'general-purpose', 'usage': {'total_tokens': 34606 + agent['calls'],
+                                                        'tool_uses': agent['calls'], 'duration_ms': 1209},
+          'last_tool_name': name, 'uuid': str(uuid.uuid4()), 'session_id': SID})
+    give(tid, name, outcome, agent)
+
+
+def s_agent(prompt):
+    """agent [wait]: an Agent call that runs in the background (finding 34, 21-agent): the task records, the
+    call's result at once (async_launched, no count), the turn's reply; the agent's first call before the
+    turn's result, its second call and its report after it, then its end (task_updated, task_notification,
+    background_tasks_changed) and the turn the notification starts (the <task-notification> string, a reply,
+    a result). Its records are in <config>/projects/<slug>/<id>/subagents/agent-<id>.jsonl with a .meta.json.
+    `agent wait`: it waits (30 s at most) after its first call, so stop_task can stop it (status killed, its
+    "[Request interrupted by user]")."""
+    mid = message_start()
+    tool_input = {'description': 'List the files', 'prompt': 'List the files in this folder with Bash.',
+                  'subagent_type': 'general-purpose'}
+    tid = tool_use(mid, 0, 'Agent', tool_input)
+    message_end('tool_use')
+    agent = new_task('agent', tid, tool_input['description'])
+    agent.update(mid='msg_fake' + uuid.uuid4().hex[:16], calls=0, chain=[None],
+                 file=os.path.join(PROJECTS, SID, 'subagents', 'agent-%s.jsonl' % agent['task_id']),
+                 output=os.path.join(CWD, '.fake-tasks', agent['task_id'] + '.output'))
+    os.makedirs(os.path.dirname(agent['file']), exist_ok=True)
+    with open(agent['file'][:-len('.jsonl')] + '.meta.json', 'w', encoding='utf-8') as stream:
+        json.dump({'agentType': 'general-purpose', 'isBuiltIn': True, 'description': tool_input['description'],
+                   'toolUseId': tid, 'spawnDepth': 1, 'requestShape': 'background', 'requestNonInteractive': True,
+                   'model': current_model()}, stream)
+    transcript({'type': 'user', 'message': {'content': tool_input['prompt']}}, path=agent['file'],
+               chain=agent['chain'], agent=agent['task_id'])
+    tasks_changed()
+    emit({'type': 'system', 'subtype': 'task_started', 'task_id': agent['task_id'], 'run_id': agent['run_id'],
+          'tool_use_id': tid, 'description': agent['description'], 'subagent_type': 'general-purpose',
+          'is_backgrounded': True, 'spawn_depth': 1, 'task_type': 'local_agent', 'prompt': tool_input['prompt'],
+          'uuid': str(uuid.uuid4()), 'session_id': SID})
+    give(tid, 'Agent', ([{'type': 'text', 'text': 'Async agent launched successfully.\nagentId: %s\nThe agent is '
+                                                  'working in the background.\noutput_file: %s' % (
+                                                      agent['task_id'], agent['output'])}], False,
+                        {'isAsync': True, 'status': 'async_launched', 'agentId': agent['task_id'],
+                         'description': agent['description'], 'resolvedModel': current_model(),
+                         'prompt': tool_input['prompt'], 'outputFile': agent['output'], 'canReadOutputFile': True,
+                         'canContinueAgent': True}))
+    said = mid_reply(['The agent ', 'is working.'])
+    sub_call(agent, 'Bash', {'command': 'ls', 'description': 'List the files'}, bash_outcome('a.py\nnotes.txt'))
+    result(said)
+    stopped = agent['stopped'].wait(30 if prompt.split()[1:2] == ['wait'] else 0.3)
+    if stopped:
+        sub_record(agent, 'user', {'type': 'text', 'text': '[Request interrupted by user]'})
+        status_, summary = 'killed', 'Agent "%s" was stopped by user' % agent['description']
+    else:
+        sub_record(agent, 'assistant', {'type': 'thinking', 'thinking': '', 'signature': 'c2lnbmF0dXJl'})
+        sub_record(agent, 'assistant', {'type': 'text', 'text': 'Now the lines.'})
+        sub_call(agent, 'Bash', {'command': 'wc -l notes.txt', 'description': 'Count the lines'},
+                 bash_outcome('5 notes.txt'))
+        sub_record(agent, 'assistant', {'type': 'text', 'text': 'The folder has a.py and notes.txt.'})
+        task_end(agent, 'completed', 'completed')
+        status_, summary = 'completed', 'Agent "%s" completed' % agent['description']
+    note = ('<task-notification>\n<task-id>%s</task-id>\n<tool-use-id>%s</tool-use-id>\n<output-file>%s'
+            '</output-file>\n<status>%s</status>\n<summary>%s</summary>\n</task-notification>' % (
+                agent['task_id'], tid, agent['output'], status_, summary))
+    system_init()
+    origin = {'kind': 'task-notification', 'producer': 'session-task', 'runId': agent['run_id']}
+    if REPLAY:
+        emit({'type': 'user', 'message': {'role': 'user', 'content': note}, 'session_id': SID,
+              'parent_tool_use_id': None, 'uuid': str(uuid.uuid4()), 'timestamp': now_iso(), 'isReplay': True,
+              'origin': origin})
+    transcript({'type': 'user', 'message': {'content': note}, 'origin': origin})
+    mid = message_start()           # the notification's turn thinks first (file-agent)
+    thinking(mid, 0, estimates=False)
+    said = 'The agent stopped.' if stopped else 'The folder has a.py and notes.txt.'
+    if text(mid, 1, [said]):
+        message_end()
+        result(said)
+    else:
+        cut_off()
+
+
+def mid_reply(pieces):
+    """A reply message without the result that ends a turn (the turn goes on); its text."""
+    mid = message_start()
+    text(mid, 0, pieces)
+    message_end()
+    return ''.join(pieces)
+
+
+SCENARIOS.update({'tools': s_tools, 'read': s_read, 'write': s_write, 'todo': s_todo, 'agent': s_agent,
+                  'bg': s_bg, 'image': s_image, 'toolerror': s_toolerror, 'denied': s_denied,
+                  'hooks': s_hooks, 'unknownblock': s_unknownblock, 'apierror': s_apierror})
 
 
 # three of 2.1.330's commands, as its initialize lists them (finding 22; the real list has every built-in,
@@ -2362,8 +3189,14 @@ def handle(message):
         if sub == 'initialize':
             time.sleep(int(ENV.get('FAKE_CLAUDE_INIT_MS', '0')) / 1000)
             SUGGEST[0] = request.get('promptSuggestions') is True
-            log(initialize={'promptSuggestions': request.get('promptSuggestions'),
-                            'supportedDialogKinds': request.get('supportedDialogKinds')})
+            logged_init = {'promptSuggestions': request.get('promptSuggestions'),
+                           'supportedDialogKinds': request.get('supportedDialogKinds')}
+            for member in ('perTaskStopAffordance', 'forwardNestedSubagentToolCalls'):   # phase 3 sends both
+                if member in request:
+                    logged_init[member] = request[member]
+            log(initialize=logged_init)
+            if 'start' in HOOKS_ON:         # finding 32: SessionStart's records come before the answer
+                hook_records('SessionStart', 'SessionStart:startup')
             respond(rid, init_response())
             if not COMMANDS_SENT[0]:        # 2.1.330 follows the answer with the full command list
                 COMMANDS_SENT[0] = True
@@ -2446,6 +3279,10 @@ def handle(message):
         elif sub == 'get_plan':
             plan = review_plan()
             respond(rid, dict(exists=True, **plan) if plan else {'exists': False})
+        elif sub == 'stop_task':
+            stop_task(rid, request.get('task_id'))
+        elif sub == 'background_tasks':
+            to_background(rid, request.get('tool_use_id'))
         else:
             respond_error(rid, 'Unsupported control request subtype: %s' % sub)
     elif kind == 'control_response':
@@ -2484,7 +3321,7 @@ def handle(message):
 def system_init():
     """system/init: sent at the start of every turn (2.1.330, finding 17), not only the first (C4)."""
     emit({'type': 'system', 'subtype': 'init', 'cwd': CWD, 'session_id': SID,
-          'tools': ['Task', 'AskUserQuestion', 'Bash', 'ExitPlanMode'], 'mcp_servers': [],
+          'tools': ['Task', 'AskUserQuestion', 'Bash', 'ExitPlanMode'] + todo_tools(), 'mcp_servers': [],
           'model': current_model() + '[1m]', 'permissionMode': MODE, 'slash_commands': ['compact', 'context', 'usage'],
           'apiKeySource': ENV.get('FAKE_CLAUDE_KEYSRC', 'none'), 'claude_code_version': '2.1.330',
           'output_style': 'default', 'capabilities': ['interrupt_receipt_v1', 'msg_lifecycle_v1'],
@@ -2510,10 +3347,15 @@ def turn(entry):
         FAST[0] = 'off'
     if ENV.get('FAKE_CLAUDE_USER_LATE_MS'):    # pending from before system/init: a stop finds it
         LATE_USER.append({'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': prompt}]}})
+    if 'prompt' in HOOKS_ON or 'block' in HOOKS_ON:     # finding 32
+        if prompt_hook(prompt):
+            return False
     system_init()
     if LATE_USER:                    # wait for the stop rather than write to a reader that is gone
         CLOSED.wait(int(ENV.get('FAKE_CLAUDE_USER_LATE_WAIT_MS', '10000')) / 1000)
     status('requesting')
+    if custom_command(prompt, entry):           # finding 31: `echo`, or /NAME with .claude/commands/NAME.md
+        return True
     if REPLAY:                       # finding 17: the message comes back, with its uuid (the CLI's own without one)
         emit({'type': 'user', 'message': {'role': 'user', 'content': entry['content']}, 'session_id': SID,
               'parent_tool_use_id': None, 'uuid': entry['uuid'] or str(uuid.uuid4()), 'timestamp': now_iso(),

@@ -2364,7 +2364,13 @@ FN app_on_paste
     mov rsi, r12
     call agentext_box_paste
     jmp 9f
-5:  mov rdi, rbx                # an extension's version control message box (scmpanel.s)
+5:  cmp dword ptr [rip + g_focus], FOCUS_AGENTS
+    jne 51f
+    mov rdi, rbx                # a field of the agents panel's card (agentcard.s), cleaned as the box's
+    mov rsi, r12
+    call agentcard_paste
+    jmp 9f
+51: mov rdi, rbx                # an extension's version control message box (scmpanel.s)
     mov rsi, r12
     call scmpanel_paste
     test eax, eax
@@ -2422,6 +2428,8 @@ FN focused_field
     je vim_field
     cmp eax, FOCUS_AGENT_INPUT
     je agentext_field
+    cmp eax, FOCUS_AGENTS
+    je agentcard_field          # the agents panel's card's field with the keyboard (agentcard.s)
     xor eax, eax
     ret
 1:  sub rsp, 8                  # an extension's version control message box (scmpanel.s), else a

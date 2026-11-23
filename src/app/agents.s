@@ -5181,7 +5181,10 @@ thread_draw:
     cmp ecx, [rsp + 48]
     jge 46f
     mov ecx, [rsp + 48]
-46: mov eax, [rsp + 160]
+46: test ecx, ecx                # (a panel too short for any: none)
+    jg 47f
+    xor ecx, ecx
+47: mov eax, [rsp + 160]
     cmp eax, ecx
     jbe 42f
     mov eax, ecx                # at most half the panel
@@ -5327,8 +5330,12 @@ thread_draw:
     call gfx_clip_pop
     mov r8d, [rsp + 160]
     test r8d, r8d
-    jz 43f
-    mov rdi, rbx
+    jnz 431f
+    mov rdi, rbx                # no room under the messages: its card is not drawn, and takes no key
+    xor esi, esi
+    call agentcard_room
+    jmp 43f
+431:mov rdi, rbx
     mov esi, [rsp]
     mov edx, [rsp + 20]
     add edx, [rsp + 24]

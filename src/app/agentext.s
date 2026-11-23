@@ -3055,8 +3055,13 @@ any_card_draw:
 2:  mov rdi, rbx
     call waiting_h
     mov [rsp], eax
-    mov r8d, r15d
-    sub r8d, eax
+    mov esi, r15d               # its room (none: not drawn, and no key answers it)
+    sub esi, eax
+    mov [rsp + 4], esi
+    mov rdi, rbx
+    call agentcard_room
+    mov r8d, [rsp + 4]
+    test r8d, r8d
     jle 3f
     mov rdi, rbx
     mov esi, r12d
@@ -3067,6 +3072,8 @@ any_card_draw:
     je 9f
     mov rdi, rbx                # "Waiting for permission…", right under the card, muted
     call agentcard_waiting
+    test rax, rax               # (a click answered the card while it drew: it is gone)
+    jz 9f
     mov [rsp + 8], rax
     mov rdi, rax
     call strlen
@@ -3444,7 +3451,12 @@ FN agentext_bottom_draw
     jle 12f
     mov eax, [rsp + 20]
 12: test eax, eax
-    jle 2f
+    jg 15f
+    mov rdi, rbx                # no room for it: not drawn, and no key answers it
+    xor esi, esi
+    call agentcard_room
+    jmp 2f
+15:
     mov [rsp + 20], eax
     mov edi, [rsp]
     mov esi, [rsp + 16]

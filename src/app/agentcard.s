@@ -42,11 +42,15 @@
 #   agentcard_of(AS*) -> rax CD* or 0         the session's card on show
 #   agentcard_shown(AS*, CD*)                 ev_card's part: its lock starts, its focus, the focus rule
 #   agentcard_h(AS*, w) -> eax                its height (0 without one)
+#   agentcard_room(AS*, h)                    the room the bottom area gives it this frame (0: not drawn, so
+#                                             it takes no key)
 #   agentcard_draw(AS*, x, y, w, h)
 #   agentcard_key(AS*, keysym, cp, mods) -> eax 1 taken
 #   agentcard_answer(AS*, act) -> eax 1 sent to the driver    a button's action, as a click
 #   agentcard_pick(AS*, n) -> eax 1           button n (from 0) once its lock is over (headless)
 #   agentcard_set_text(AS*, which 0 field | 1 edit, ptr, len) -> eax 1   (headless)
+#   agentcard_field() -> rax TF* or 0          the card's field with the keyboard (focused_field)
+#   agentcard_paste(ptr, len) -> eax 1         a paste into it, cleaned as the prompt box's
 #   agentcard_toggle(AS*, what 0 fold | 1 details | 2 the place) -> eax 1 (headless, as a click)
 #   agentcard_live(CD*) -> eax 1 when its lock is over
 #   agentcard_timeout() -> eax ms or -1       the shown card's lock: one wake-up when it ends
@@ -90,6 +94,8 @@
 .equ FIELD_ROWS, 3
 .equ LABEL_LINES, 12
 .equ STOPS_MAX, 20
+.equ CW_PASTE, 1                # composer_check's reason (agentcompose.s): a paste
+.equ CDF_NOROOM, 0x10000        # the bottom area had no room for it in its last frame: not drawn, no keys
 # the dialog cards (dc_*, at the end)
 .equ LK_DLINK, 8                # its layout items (item_letters): the link
 .equ LK_DCLOSE, 9               #   the ×
@@ -144,11 +150,23 @@ ENDSTRUCT LI_SIZE
 g_card_lock_ms: .long CARD_LOCK_MS
 g_card_keyed_ms: .long CARD_KEYED_MS
 
+.data
+.p2align 3
+lis_p: .quad lis                # the last layout's items (bc_layout), from the card's top left: lis, or a
+lis_cap: .long LI_MAX           #   larger block once a layout needed more (li_grow); never smaller again
+
 .bss
 .p2align 3
-lis: .zero LI_SIZE * LI_MAX     # the last layout's items (bc_layout), from the card's top left
-li_spare: .zero LI_SIZE         # where items past LI_MAX go
+lis: .zero LI_SIZE * LI_MAX     # the first block of items
+li_spare: .zero LI_SIZE         # where items past lis_cap go while a layout runs (it runs again, li_fit)
+li_want: .long 0                # the items the layout asked for, past lis_cap too
 nlis: .long 0
+drawn_x: .long 0                # the card as drawn last: its left and its (scrolled) top on the screen,
+drawn_y: .long 0                #   the scrollbar's thumb from the room's top and its height (0: none)
+thumb_y: .long 0
+thumb_h: .long 0
+.p2align 3
+psb_: .zero SB_SIZE             # a paste into a card's field, its line breaks made line feeds
 lay_total: .long 0
 lx: .long 0                     # the layout's content: left, width, the next item's top
 lw: .long 0
@@ -358,6 +376,114 @@ FN agentcard_of
     mov rax, rcx
 9:  ret
 
+# FN agentcard_room(AS*, h): the bottom area gives the session's card h px this frame (0 or less: it is not
+#   drawn, and takes no key until it is drawn again)
+FN agentcard_room
+    PROLOGUE
+    mov r12d, esi
+    call agentcard_of
+    test rax, rax
+    jz 9f
+    and dword ptr [rax + CD_flags], ~CDF_NOROOM
+    test r12d, r12d
+    jg 9f
+    or dword ptr [rax + CD_flags], CDF_NOROOM
+9:  EPILOGUE
+
+# FN agentcard_field() -> rax the text field of the open conversation's card while it has the keyboard there
+#   (the reject field, the editable command, a question's Other), else 0: focused_field's, so that a paste
+#   reaches it (agentcard_paste)
+FN agentcard_field
+    PROLOGUE
+    xor r12d, r12d
+    call agents_open_driven
+    test rax, rax
+    jz 9f
+    mov rbx, rax
+    mov rdi, rax
+    call agentcard_of
+    test rax, rax
+    jz 9f
+    mov r13, rax
+    mov rdi, rbx
+    mov rsi, rax
+    call has_keys
+    test eax, eax
+    jz 9f
+    mov rdi, r13                # locked or folded: its keys do nothing, a paste neither
+    call agentcard_live
+    test eax, eax
+    jz 9f
+    test dword ptr [r13 + CD_flags], CDF_FOLDED
+    jnz 9f
+    mov eax, [r13 + CD_focus]
+    cmp dword ptr [r13 + CD_kind], CDK_QUESTIONS
+    jne 1f
+    cmp eax, CD_FIELD
+    jne 9f
+    mov rdi, r13
+    call qc_cur
+    test rax, rax
+    jz 9f
+    cmp dword ptr [rax + CDQ_otheron], 0
+    je 9f
+    lea r12, [rax + CDQ_other]
+    jmp 9f
+1:  cmp eax, CD_FIELD
+    jne 2f
+    lea r12, [r13 + CD_field]
+    jmp 9f
+2:  cmp eax, CD_EDIT
+    jne 9f
+    test dword ptr [r13 + CD_flags], CDF_EDIT
+    jz 9f
+    lea r12, [r13 + CD_edit]
+9:  mov rax, r12
+    EPILOGUE
+
+# FN agentcard_paste(ptr, len) -> eax 1 when the card's field took the paste (agentcard_field): cleaned as
+#   the prompt box cleans one (CR LF and CR a line feed, the invisible characters out: composer_check)
+FN agentcard_paste
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    call agentcard_field
+    test rax, rax
+    jz 8f
+    mov r14, rax
+    lea rdi, [rip + psb_]
+    call sb_clear
+    xor ebx, ebx
+1:  cmp rbx, r13
+    jae 3f
+    movzx esi, byte ptr [r12 + rbx]
+    inc rbx
+    cmp esi, 13
+    jne 2f
+    mov esi, 10
+    cmp rbx, r13
+    jae 2f
+    cmp byte ptr [r12 + rbx], 10
+    jne 2f
+    inc rbx
+2:  lea rdi, [rip + psb_]
+    call sb_push_byte
+    jmp 1b
+3:  mov rdi, [rip + psb_ + SB_ptr]
+    mov rsi, [rip + psb_ + SB_len]
+    test rsi, rsi
+    jz 7f
+    mov edx, CW_PASTE
+    call composer_check
+    mov rdi, r14
+    mov rsi, rax
+    call ta_insert
+7:  mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
 # FN agentcard_live(CD*) -> eax 1 when its lock is over (its buttons and keys work)
 FN agentcard_live
     PROLOGUE
@@ -377,6 +503,8 @@ has_keys:
     PROLOGUE
     mov rbx, rdi
     xor r12d, r12d
+    test dword ptr [rsi + CD_flags], CDF_NOROOM     # a card not drawn takes no key
+    jnz 9f
     cmp dword ptr [rip + g_focus], FOCUS_AGENTS
     jne 9f
     cmp dword ptr [rip + g_show_agents], 0
@@ -847,17 +975,18 @@ st_color:
     mov eax, [rcx + rdx*4]
     ret
 
-# li_new(kind, idx) -> rax a new layout item (its place still to fill); changes rax and rcx only
+# li_new(kind, idx) -> rax a new layout item (its place still to fill); changes rax and rcx only. Past
+#   lis_cap it is li_spare, counted in li_want: the layout runs again with room for all (li_fit)
 li_new:
+    inc dword ptr [rip + li_want]
     mov eax, [rip + nlis]
-    cmp eax, LI_MAX
+    cmp eax, [rip + lis_cap]
     jb 1f
     lea rax, [rip + li_spare]
     jmp 2f
 1:  inc dword ptr [rip + nlis]
     imul eax, eax, LI_SIZE
-    lea rcx, [rip + lis]
-    add rax, rcx
+    add rax, [rip + lis_p]
 2:  mov [rax + LI_kind], edi
     mov [rax + LI_idx], esi
     mov qword ptr [rax + LI_ptr], 0
@@ -1141,9 +1270,57 @@ set_focus_rect:
     mov [rip + foc_h], esi
     ret
 
-# FN bc_layout(CD*, w) -> eax the card's height at width w; lis/nlis its items from its top left, foc_y and
-#   foc_h the focused control's place, stops/nstops its focus stops
+# bc_layout(CD*, w), dc_layout(CD*, w), qc_layout(CD*, w) -> eax the card's height at width w: its kind's
+#   layout (bc_lay, dc_lay, qc_lay) with room for every item it makes (li_fit)
 bc_layout:
+    lea rax, [rip + bc_lay]
+    jmp li_fit
+dc_layout:
+    lea rax, [rip + dc_lay]
+    jmp li_fit
+qc_layout:
+    lea rax, [rip + qc_lay]
+    jmp li_fit
+
+# li_fit(CD*, w, rax the layout) -> eax its height: the layout, run again in a larger block of items when it
+#   made more than the block holds, so no item (a button, a field, a line) is ever left out
+li_fit:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rax
+1:  mov dword ptr [rip + li_want], 0
+    mov rdi, rbx
+    mov esi, r12d
+    call r13
+    mov r14d, eax
+    mov edi, [rip + li_want]
+    cmp edi, [rip + lis_cap]
+    jbe 9f
+    call li_grow
+    jmp 1b
+9:  mov eax, r14d
+    EPILOGUE
+
+# li_grow(n): lis_p a block for twice n items (the old one freed unless it is lis)
+li_grow:
+    PROLOGUE
+    lea ebx, [rdi + rdi]
+    imul edi, ebx, LI_SIZE
+    call mem_alloc
+    mov r12, rax
+    mov rdi, [rip + lis_p]
+    lea rax, [rip + lis]
+    cmp rdi, rax
+    je 1f
+    call mem_free
+1:  mov [rip + lis_p], r12
+    mov [rip + lis_cap], ebx
+    EPILOGUE
+
+# FN bc_lay(CD*, w) -> eax the card's height at width w; lis/nlis its items from its top left, foc_y and
+#   foc_h the focused control's place, stops/nstops its focus stops
+bc_lay:
     PROLOGUE 48
     mov rbx, rdi
     mov r12d, esi
@@ -1476,6 +1653,63 @@ bc_h:
 
 # ---------------------------------------------------------------- the button card: drawing
 
+# thumb(CD*, locals*, total): a card drawn (bc_draw's and qc_draw's locals: x, its scrolled top, w, the room's
+#   height, the room's top) and kept as drawn (drawn_x, drawn_y); taller than its room, a thumb at its right
+#   edge says how much is above and below: room * room / total high, MI_16 at least but never more than the
+#   room, at scroll * (room - thumb) / (total - room) (thumb_y, thumb_h; 0 high: none)
+thumb:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov eax, [r12]
+    mov [rip + drawn_x], eax
+    mov eax, [r12 + 4]
+    mov [rip + drawn_y], eax
+    mov dword ptr [rip + thumb_y], 0
+    mov dword ptr [rip + thumb_h], 0
+    mov ecx, [r12 + 12]         # the room
+    test ecx, ecx
+    jle 9f
+    cmp r13d, ecx
+    jle 9f
+    mov eax, ecx                # its height
+    imul rax, rcx
+    xor edx, edx
+    div r13
+    cmp eax, [rip + g_pmt + 4*MI_16]
+    jge 1f
+    mov eax, [rip + g_pmt + 4*MI_16]
+1:  cmp eax, ecx
+    cmovg eax, ecx
+    mov r14d, eax
+    mov eax, [rbx + CD_scroll]  # its top
+    test eax, eax
+    jns 2f
+    xor eax, eax
+2:  mov edx, r13d
+    sub edx, ecx                # total - room, more than 0
+    cmp eax, edx
+    cmova eax, edx
+    sub ecx, r14d               # room - thumb, 0 or more
+    imul rax, rcx
+    mov ecx, edx
+    xor edx, edx
+    div rcx
+    mov [rip + thumb_y], eax
+    mov [rip + thumb_h], r14d
+    mov esi, [r12 + 16]
+    add esi, eax
+    mov edi, [r12]
+    add edi, [r12 + 8]
+    sub edi, [rip + g_pmt + 4*MI_8]
+    sub edi, [rip + g_pmt + 4*MI_6]
+    PM edx, MI_3
+    mov ecx, r14d
+    COLOR r8d, T_SCROLLBAR
+    call gfx_fill
+9:  EPILOGUE
+
 # bc_draw(AS*, CD*, x, y, w, h): taller than h it scrolls so the focused control shows. A click's answer
 #   is sent after the drawing (it frees the card). Locals: [rsp] x, +4 y (the card's top, scrolled), +8
 #   w, +12 h, +16 the room's top, +20 live, +24 keys, +28 the room's bottom, +32 to +51 an item's
@@ -1578,42 +1812,17 @@ bc_draw:
     call gfx_frame
     add rsp, 16
     # cut: a thumb at its right edge says how much is above and below
-    mov ecx, [rsp + 12]
-    cmp r13d, ecx
-    jle 15f
-    mov eax, ecx                # its height: room * room / total, MI_16 at least
-    imul eax, ecx
-    xor edx, edx
-    div r13d
-    cmp eax, [rip + g_pmt + 4*MI_16]
-    jge 13f
-    mov eax, [rip + g_pmt + 4*MI_16]
-13: mov [rsp + 32], eax
-    mov eax, [r12 + CD_scroll]  # its top: scroll * (room - thumb) / (total - room)
-    mov ecx, [rsp + 12]
-    sub ecx, [rsp + 32]
-    imul eax, ecx
-    mov ecx, r13d
-    sub ecx, [rsp + 12]
-    xor edx, edx
-    div ecx
-    mov esi, [rsp + 16]
-    add esi, eax
-    mov edi, [rsp]
-    add edi, [rsp + 8]
-    sub edi, [rip + g_pmt + 4*MI_8]
-    sub edi, [rip + g_pmt + 4*MI_6]
-    PM edx, MI_3
-    mov ecx, [rsp + 32]
-    COLOR r8d, T_SCROLLBAR
-    call gfx_fill
-15: # the items
+    mov rdi, r12
+    lea rsi, [rsp]
+    mov edx, r13d
+    call thumb
+    # the items
     xor r14d, r14d
 .Lbd_item:
     cmp r14d, [rip + nlis]
     jae .Lbd_done
     imul eax, r14d, LI_SIZE
-    lea r15, [rip + lis]
+    mov r15, [rip + lis_p]
     add r15, rax
     inc r14d
     mov eax, [rsp + 4]          # in the room at all?
@@ -2462,6 +2671,30 @@ FN agentcard_dump
     mov rdi, rbx
     mov esi, [rip + foc_h]
     call sb_push_u64
+    mov rdi, rbx                # where it was drawn last, and its thumb (review fixes: clicks, A1)
+    lea rsi, [rip + .Ld_at]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + drawn_x]
+    call push_i32
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, [rip + drawn_y]
+    call push_i32
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_thumb]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + thumb_y]
+    call push_i32
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, [rip + thumb_h]
+    call push_i32
     mov rdi, rbx
     mov esi, 10
     call sb_push_byte
@@ -2480,6 +2713,21 @@ FN agentcard_dump
     lea rsi, [rip + .Lw_waiting]
     call push_line
 9:  EPILOGUE
+
+# push_i32(sb, esi value): its decimal, "-" first when it is below 0
+push_i32:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    test r12d, r12d
+    jns 1f
+    mov esi, '-'
+    call sb_push_byte
+    neg r12d
+1:  mov rdi, rbx
+    mov esi, r12d
+    call sb_push_u64
+    EPILOGUE
 
 # dest_btn(CD*) -> eax 1 when one of its buttons ends with the place (CDBF_DEST)
 dest_btn:
@@ -2778,7 +3026,7 @@ FN agentcard_fit_dump
     cmp ecx, [rip + nlis]
     jae 6f
     imul eax, ecx, LI_SIZE
-    lea rcx, [rip + lis]
+    mov rcx, [rip + lis_p]
     add rcx, rax
     mov [rsp + 8], rcx
     mov eax, [rcx + LI_kind]
@@ -2887,7 +3135,9 @@ FN agentcard_comment
     mov dword ptr [rip + g_dirty], 1
     mov eax, 1
     EPILOGUE
-8:  xor eax, eax
+8:  lea rdi, [rip + .Lcmt_full]  # the 17th: refused, and the user is told (its tab keeps the selection)
+    call app_toast
+    xor eax, eax
 9:  EPILOGUE
 
 # FN agentcard_uncomment(CD*, i) -> eax 1 when comment i (from 0) was removed; a focus on a × that went
@@ -3441,6 +3691,9 @@ item_letters: .byte '?', 't', 'f', 'e', 'b', 'l', 'F', 'd'
 .Ld_room: .asciz " room="
 .Ld_fy: .asciz " fy="
 .Ld_fh: .asciz " fh="
+.Ld_at: .asciz " at="
+.Lcmt_full: .asciz "A plan takes 16 comments"
+.Ld_thumb: .asciz " thumb="
 .Ld_card: .asciz "card="
 .Ld_options: .asciz " options="
 .Lw_field: .asciz "field"
@@ -3895,10 +4148,12 @@ qc_complete:
 7:  mov eax, 1
     EPILOGUE
 
-# qc_tab(CD*, i): question i shows, the keyboard on its first row
+# qc_tab(CD*, i): question i shows, the keyboard on its first row; a move a pick was about to make goes
+#   (a tab chosen meanwhile is not undone, and the next pick may make its own)
 qc_tab:
     push rbx
     mov rbx, rdi
+    mov qword ptr [rbx + CD_advat], 0
     mov [rbx + CD_tab], esi
     mov dword ptr [rbx + CD_focus], CD_OPTS
     and dword ptr [rbx + CD_flags], ~CDF_WHEEL
@@ -4235,7 +4490,7 @@ qc_lay_btn:
 #   lw kept, +32 the rows' width, +36 their top, +40 a mark's size, +44 a row's top, +48 the preview's x,
 #   +52 its width, +56 beside, +60 the items before a row's text, +64 a preview, +68 a row's text from its
 #   left, +72 the row, +76 Other's field's width
-qc_layout:
+qc_lay:
     PROLOGUE 80
     mov rbx, rdi
     mov r12d, esi
@@ -4480,7 +4735,7 @@ qc_layout:
 81: cmp ecx, [rip + nlis]
     jae 82f
     imul eax, ecx, LI_SIZE
-    lea rdx, [rip + lis]
+    mov rdx, [rip + lis_p]
     add rdx, rax
     mov dword ptr [rdx + LI_kind], LK_OLINE
     mov eax, [rdx + LI_idx]
@@ -4711,41 +4966,16 @@ qc_draw:
     call gfx_frame
     add rsp, 16
     # cut: a thumb at its right edge
-    mov ecx, [rsp + 12]
-    cmp r13d, ecx
-    jle 15f
-    mov eax, ecx
-    imul eax, ecx
-    xor edx, edx
-    div r13d
-    cmp eax, [rip + g_pmt + 4*MI_16]
-    jge 13f
-    mov eax, [rip + g_pmt + 4*MI_16]
-13: mov [rsp + 32], eax
-    mov eax, [r12 + CD_scroll]
-    mov ecx, [rsp + 12]
-    sub ecx, [rsp + 32]
-    imul eax, ecx
-    mov ecx, r13d
-    sub ecx, [rsp + 12]
-    xor edx, edx
-    div ecx
-    mov esi, [rsp + 16]
-    add esi, eax
-    mov edi, [rsp]
-    add edi, [rsp + 8]
-    sub edi, [rip + g_pmt + 4*MI_8]
-    sub edi, [rip + g_pmt + 4*MI_6]
-    PM edx, MI_3
-    mov ecx, [rsp + 32]
-    COLOR r8d, T_SCROLLBAR
-    call gfx_fill
-15: xor r14d, r14d
+    mov rdi, r12
+    lea rsi, [rsp]
+    mov edx, r13d
+    call thumb
+    xor r14d, r14d
 .Lqd_item:
     cmp r14d, [rip + nlis]
     jae .Lqd_done
     imul eax, r14d, LI_SIZE
-    lea r15, [rip + lis]
+    mov r15, [rip + lis_p]
     add r15, rax
     inc r14d
     mov eax, [rsp + 4]          # in the room at all?
@@ -5786,7 +6016,7 @@ dc_open_link:
 
 # dc_layout(CD*, w) -> eax the card's height at width w; lis/nlis its items from its top left, foc_y and foc_h
 #   the focused control's place, stops/nstops its focus stops (the link, the buttons but the greyed ones)
-dc_layout:
+dc_lay:
     PROLOGUE 16
     mov rbx, rdi
     mov r12d, esi
@@ -6125,7 +6355,8 @@ dc_item:
 9:  EPILOGUE
 
 # dc_key(AS*, CD*, keysym, cp, mods) -> eax 1 taken: Enter or Space on the link asks to open it; a digit that
-#   names no numbered button (the ×, a greyed one, none) is swallowed; the rest is bc_key's
+#   names no numbered button (the ×, a greyed one, none) is swallowed; Escape on a card without a × is not
+#   the card's (it does what it does in the panel without a card: no button answers it); the rest is bc_key's
 dc_key:
     PROLOGUE
     mov rbx, rdi
@@ -6133,7 +6364,15 @@ dc_key:
     mov r13d, edx
     mov r14d, ecx
     mov r15d, r8d
-    test dword ptr [r12 + CD_flags], CDF_FOLDED
+    cmp r13d, KEY_ESCAPE
+    jne 0f
+    mov rdi, r12
+    call dc_close
+    test eax, eax
+    jns 0f
+    xor eax, eax
+    EPILOGUE
+0:  test dword ptr [r12 + CD_flags], CDF_FOLDED
     jnz 8f
     mov rdi, r12
     call agentcard_live

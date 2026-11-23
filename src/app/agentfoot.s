@@ -64,7 +64,6 @@ fl_force: .long -1              # print-agents-foot every: the extras as a mask 
 .bss
 .p2align 3
 bsb: .zero SB_SIZE              # a cut line with its "…"
-compact_as: .quad 0             # the conversation the context pie last sent "/compact" for (compact_busy)
 band_lines: .zero 4 * BK_COUNT  # as drawn last: its lines, where its x is (its centre)
 band_cx: .zero 4 * BK_COUNT
 band_cy: .zero 4 * BK_COUNT
@@ -1737,42 +1736,19 @@ ctx_draw:
     call tip_note_text
     test rbx, rbx
     jz 9f
-    mov rdi, rbx                # one at a time: nothing while the last one it sent is held or runs
-    call compact_busy
     test r13d, UB_CLICK
     jz 9f
+    mov rdi, rbx                # one at a time: nothing while a /compact of this conversation (the pie's or
+    lea rsi, [rip + .Lv_compact]    #   typed) waits for a start, is held or runs (agent_pending)
+    call agent_pending
     test eax, eax
     jnz 9f
-    mov [rip + compact_as], rbx
     mov rdi, rbx                # compact now: a prompt, as if typed
     lea rsi, [rip + .Lv_compact]
     mov edx, 8
     call agent_send
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
-
-# compact_busy(AS*) -> eax 1 while the "/compact" the pie sent for that conversation is held or runs: its
-#   program starts, works, waits on a card or on rhun's own question (the pie sends none then); once the
-#   conversation is idle again (ready, off, failed) that is over (compact_as clears: the pie draws it each
-#   frame it shows, before its click counts)
-compact_busy:
-    xor eax, eax
-    cmp [rip + compact_as], rdi
-    jne 9f
-    mov rcx, [rdi + AS_live]
-    test rcx, rcx
-    jz 8f
-    mov ecx, [rcx + AL_state]
-    cmp ecx, ALS_STARTING
-    je 1f
-    cmp ecx, ALS_WORKING
-    jb 8f
-    cmp ecx, ALS_HELD
-    ja 8f
-1:  mov eax, 1
-    ret
-8:  mov qword ptr [rip + compact_as], 0
-9:  ret
 
 # pie_draw(x, y, d, percent): a disc d wide at x, y: the part in use from 12 o'clock clockwise in the warning
 #   colour, the rest muted

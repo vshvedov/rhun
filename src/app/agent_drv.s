@@ -895,6 +895,104 @@ FN agent_queued
     mov rcx, [rcx + AH_uuid]    # the start of its uuid: which message it is (queued_sync)
 9:  EPILOGUE
 
+# FN agent_pending(AS* or 0, word cstr) -> eax 1 while a message that is that command (the word alone, or
+#   followed by a blank and its arguments) has not ended in that conversation: it waits for a start, is
+#   held, or is the turn that runs now (WORKING or WAITING, and the message that started last is it).
+#   Asked each time, nothing remembered: typed or sent by a control, refused sends and freed conversations
+#   need no care
+FN agent_pending
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor r15d, r15d
+    test rbx, rbx
+    jz 9f
+    mov r13, [rbx + AS_live]
+    test r13, r13
+    jz 9f
+    xor r14d, r14d              # waiting for a start
+1:  cmp r14, [r13 + AL_queue + VEC_len]
+    jae 2f
+    mov rax, [r13 + AL_queue + VEC_ptr]
+    mov rdi, [rax + r14*8]
+    inc r14
+    test rdi, rdi
+    jz 1b
+    mov rsi, -1
+    mov rdx, r12
+    call is_cmd
+    test eax, eax
+    jnz 8f
+    jmp 1b
+2:  xor r14d, r14d              # held
+3:  cmp r14, [r13 + AL_held + VEC_len]
+    jae 4f
+    imul rax, r14, AH_SIZE
+    add rax, [r13 + AL_held + VEC_ptr]
+    inc r14
+    mov rdi, [rax + AH_text]
+    mov rsi, [rax + AH_len]
+    mov rdx, r12
+    call is_cmd
+    test eax, eax
+    jnz 8f
+    jmp 3b
+4:  mov eax, [r13 + AL_state]   # running
+    cmp eax, ALS_WORKING
+    je 5f
+    cmp eax, ALS_WAITING
+    jne 9f
+5:  mov rdi, rbx
+    call agents_last_user
+    test rax, rax
+    jz 9f
+    mov rdi, rax
+    mov rsi, rdx
+    mov rdx, r12
+    call is_cmd
+    test eax, eax
+    jz 9f
+8:  mov r15d, 1
+9:  mov eax, r15d
+    EPILOGUE
+
+# is_cmd(ptr, len (-1: a cstr), word cstr) -> eax 1 when the text is the word, or the word and a blank after it
+is_cmd:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    xor r14d, r14d
+    test rbx, rbx
+    jz 9f
+    cmp r12, -1
+    jne 1f
+    call strlen
+    mov r12, rax
+1:  mov rdi, r13
+    call strlen
+    mov r15, rax
+    cmp r12, r15
+    jb 9f
+    mov rdi, rbx
+    mov rsi, r13
+    mov rdx, r15
+    call memeq
+    test eax, eax
+    jz 9f
+    cmp r12, r15
+    je 8f
+    movzx eax, byte ptr [rbx + r15]
+    cmp eax, ' '
+    je 8f
+    cmp eax, 9
+    je 8f
+    cmp eax, 10
+    jne 9f
+8:  mov r14d, 1
+9:  mov eax, r14d
+    EPILOGUE
+
 # user_row(): agent_send's prompt (rbx AS, r12 ptr, r13 len) as the user's row, shown at once
 user_row:
     PROLOGUE

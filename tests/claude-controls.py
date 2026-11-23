@@ -2490,7 +2490,8 @@ TRUNCATED = '[Message truncated - exceeded 50,000 character limit]'
 
 
 class ReviewControlsTest(NoticeCase):
-    """The review findings S2 (= A3), A4, A7, A8, A9, S5b; the command menu's entries and /login, /logout
+    """The review findings S2 (= A3), A4, A7, A8, A9, S5b, and the second round's R6 and R14; the command
+    menu's entries and /login, /logout
     (checklist rows 1.24, 1.25; nothing here starts the real claude: the sign-in commands are only put in rhun's
     terminal prompt and left there); the CLI's truncation marker drawn muted (row 1.13)."""
 
@@ -2597,6 +2598,83 @@ class ReviewControlsTest(NoticeCase):
         self.command('wait-agent ready 20000')
         self.until(lambda: self.command('print-agents').count('queued') == 0, 'all ran')
         self.assertEqual(self.prompts().count('/compact'), 1)
+
+    def pie_start(self):
+        """A conversation whose context pie shows; where to click it."""
+        self.start(env={'FAKE_CLAUDE_CONTEXT': str(WINDOW * 70 // 100)})
+        self.chat('hello')
+        return self.foot()['ctx_at'].split(',')
+
+    def compacts_queued(self):
+        return self.command('print-agents').count('queued /compact')
+
+    def held_now(self):
+        return int(re.search(r' held=(\d+)', self.command('print-agent-live')).group(1))
+
+    def test_the_pies_guard_is_each_conversations_own(self):
+        """R6: a /compact held in one conversation; another's pie sends its own; back in the first, its pie
+        still sends no second one."""
+        x, y = self.pie_start()
+        first = self.sid()
+        self.command('agent-prompt slow')
+        self.command('wait-agent working')
+        self.command(f'click {x} {y}')
+        self.assertEqual(self.compacts_queued(), 1)
+        self.chat('two')
+        bx, by = self.foot()['ctx_at'].split(',')
+        self.command(f'click {bx} {by}')                # the second conversation's: sent, it runs at once
+        self.until(lambda: self.prompts().count('/compact') == 2, 'its /compact')
+        self.open_sid(first)
+        self.assertIn('state=working ', self.live())
+        self.command(f'click {x} {y}')
+        self.assertEqual(self.compacts_queued(), 1)
+
+    def test_a_typed_compact_holds_the_pie(self):
+        """R6: a /compact typed while a turn runs is held: the pie sends no second one."""
+        x, y = self.pie_start()
+        self.command('agent-prompt slow')
+        self.command('wait-agent working')
+        self.command('agent-prompt /compact')
+        self.assertEqual(self.compacts_queued(), 1)
+        self.command(f'click {x} {y}')
+        self.assertEqual(self.compacts_queued(), 1)
+
+    def test_a_compact_that_ended_unseen_does_not_hold_the_pie(self):
+        """R6: the pie's /compact ran and ended while the panel was hidden; during a later ordinary turn the
+        pie sends one again (held)."""
+        x, y = self.pie_start()
+        self.command('agent-prompt held')
+        self.command('wait-agent working')
+        self.command(f'click {x} {y}')                  # held: it runs after the turn, the panel hidden
+        self.assertEqual(self.compacts_queued(), 1)
+        self.command('cmd toggle_agents')
+        self.until(lambda: '/compact' in self.prompts(), '/compact sent')
+        self.command('wait-agent ready 20000')
+        self.command('wait 300')
+        self.command('agent-prompt slow')
+        self.command('wait-agent working')
+        self.command('cmd toggle_agents')
+        self.until(lambda: self.foot()['ctx_at'] != '0,0', 'the pie again')
+        x, y = self.foot()['ctx_at'].split(',')
+        self.command(f'click {x} {y}')
+        self.assertEqual(self.compacts_queued(), 1)
+
+    def test_a_refused_pie_send_does_not_hold_the_pie(self):
+        """R6: a pie click refused (sixteen messages held already) sends nothing and holds nothing: once there
+        is room, a click sends it."""
+        x, y = self.pie_start()
+        self.command('agent-prompt held')
+        self.command('wait-agent working')
+        self.command('agent-prompt slow')
+        for n in range(2, 17):
+            self.command(f'agent-prompt m{n}')
+        self.assertEqual(self.held_now(), 16)
+        self.command(f'click {x} {y}')
+        self.assertEqual(self.command('print-toast').strip(), 'toast=Sixteen messages are already waiting.')
+        self.assertEqual(self.compacts_queued(), 0)
+        self.until(lambda: self.held_now() == 15, 'slow started')
+        self.command(f'click {x} {y}')
+        self.assertEqual(self.compacts_queued(), 1)
 
     def test_the_menu_is_built_once_for_many_frames(self):
         """A8: the open command menu's rows are made when what they come from changes, not each frame."""

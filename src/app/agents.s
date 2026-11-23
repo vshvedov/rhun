@@ -3612,6 +3612,23 @@ FN agents_msg_add
     mov rax, r12
 9:  EPILOGUE
 
+# FN agents_last_user(AS*) -> rax ptr, rdx len: the text of its last user row (in a session rhun drives, the
+#   message that started last), rax 0 when it has none
+FN agents_last_user
+    mov rcx, [rdi + AS_msgs + VEC_len]
+1:  xor eax, eax
+    xor edx, edx
+    test rcx, rcx
+    jz 9f
+    dec rcx
+    imul rax, rcx, AM_SIZE
+    add rax, [rdi + AS_msgs + VEC_ptr]
+    cmp dword ptr [rax + AM_role], R_USER
+    jne 1b
+    mov rdx, [rax + AM_len]
+    mov rax, [rax + AM_text]
+9:  ret
+
 # FN agents_pill(AS*, ptr, len): a one-line pill row of a session rhun drives ("Switched to NAME"): an info
 #   row drawn centred, muted, in a rounded frame (AMF_PILL); print-agents shows it as "pill TEXT"
 FN agents_pill

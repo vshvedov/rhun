@@ -1706,6 +1706,49 @@ class ReviewRulesTest(CardCase):
     `percent` and its knob FAKE_CLAUDE_MODE_MS have no recording behind them. Rules go to localSettings
     inside the test's project only."""
 
+    def test_a_suggestion_past_the_cap_is_not_sent(self):
+        # a suggestion whose rules the card cannot all show is dropped whole; the count is the shown one
+        self.ask('rules 70 allow allow')
+        self.assertEqual(self.buttons()[1], f'Yes, allow echo second for [{LOCAL}]')
+        self.assertEqual(self.lines('extra'), [])
+        self.command('agent-card 2')
+        self.assertEqual(self.until_answered()[0]['updatedPermissions'], [
+            {'type': 'addRules', 'rules': [{'toolName': 'Bash', 'ruleContent': 'echo second'}], 'behavior': 'allow',
+             'destination': 'localSettings'}])
+        self.command('wait-agent ready')
+        self.command('agent-prompt rules 64')            # 64: every one shown, every one sent
+        self.command('wait-agent waiting')
+        self.assertEqual(self.buttons()[1], f'Yes, allow echo r1 and 63 more for [{LOCAL}]')
+        self.assertEqual(len(self.lines('extra')), 63)
+        self.command('agent-card 2')
+        self.assertEqual(len(self.until_answered(2)[1]['updatedPermissions'][0]['rules']), 64)
+        self.command('wait-agent ready')
+        self.command('agent-prompt dirs 70')              # directories past the cap: the same
+        self.command('wait-agent waiting')
+        self.assertEqual(self.buttons(), ['Yes', 'No'])
+        self.command('agent-card 2')
+        self.until_answered(3)
+
+    def test_rules_say_what_they_do(self):
+        # a rule that denies or asks never reads "Yes, allow"
+        self.ask('rules 1 deny')
+        self.assertEqual(self.buttons()[1], f'Yes, and deny echo r1 for [{LOCAL}]')
+        self.command('agent-card 3')
+        self.command('wait-agent ready')
+        self.command('agent-prompt rules 2 ask')
+        self.command('wait-agent waiting')
+        self.assertEqual(self.buttons()[1], f'Yes, and ask before echo r1 and echo r2 for [{LOCAL}]')
+        self.command('agent-card 3')
+        self.command('wait-agent ready')
+        self.command('agent-prompt rules 1 allow deny')   # two rules that do different things: each in its words
+        self.command('wait-agent waiting')
+        self.assertEqual(self.buttons()[1], f'Yes, allow echo r1 and 1 more for [{LOCAL}]')
+        self.assertEqual(self.lines('extra'), ['Also denies Bash(echo second)'])
+        self.command('agent-card 2')
+        sent = self.until_answered(3)[2]['updatedPermissions']
+        self.assertEqual([(u['behavior'], u['destination']) for u in sent], [('allow', 'localSettings'),
+                                                                              ('deny', 'localSettings')])
+
     def test_a_late_mode_answer_releases_no_other_plan(self):
         # 3.4: plan 1's "Yes, and use auto mode" waits for its set_permission_mode answer; plan 1 is withdrawn
         # and plan 2 answered the same way before that answer comes: only plan 2's own answer releases it

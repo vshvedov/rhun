@@ -99,7 +99,7 @@ n_rules: .long 0
 d_lab: .zero 4 * NAMES_MAX      # the addDirectories' directories
 d_full: .zero 4 * NAMES_MAX
 n_dirs: .long 0
-m_last: .quad 0                 # the last setMode's index among the kept, -1 none
+m_last: .quad 0                 # the last kept setMode's index among the request's suggestions, -1 none
 own_dest: .long 0               # the widest place the suggestions name (D_*)
 own_rank: .long 0
 jcut: .long 0
@@ -1116,8 +1116,10 @@ rule_lines:
 9:  EPILOGUE
 
 # keep_suggestions(AL*, request jv): the suggestions the card may send, kept in ssb as a JSON array at
-#   answer depth (the schema's types; a setMode bypassPermissions only through the gate); their names
-#   (n_rules, n_dirs, m_last), own_dest. -> eax how many were kept (0 also when one could not be echoed)
+#   answer depth (the schema's types; a setMode bypassPermissions only through the gate; an addRules or
+#   addDirectories whose rules or directories would pass NAMES_MAX shown is dropped whole: nothing goes that
+#   the card does not show); their names (n_rules, n_dirs, m_last), own_dest. -> eax how many were kept (0
+#   also when one could not be echoed)
 keep_suggestions:
     PROLOGUE 16
     mov rbx, rdi
@@ -1162,7 +1164,7 @@ keep_suggestions:
     test eax, eax
     jz 1b                       # not one of the schema's
     cmp eax, SG_SETMODE
-    jne 2f
+    jne 12f
     mov rdi, [rsp + 8]
     lea rsi, [rip + .Lk_mode]
     call json_get
@@ -1175,7 +1177,25 @@ keep_suggestions:
     call bypass_ok
     test eax, eax
     jz 1b                       # bypass is rhun's gate alone
-11: mov [rip + m_last], r15
+11: lea eax, [r14 - 1]
+    mov [rip + m_last], rax
+    jmp 2f
+12: lea rsi, [rip + .Lk_rules]  # rules or directories past what the card shows: not kept
+    mov ecx, [rip + n_rules]
+    cmp eax, SG_ADD
+    je 13f
+    cmp eax, SG_ADDDIR
+    jne 2f
+    lea rsi, [rip + .Lk_directories]
+    mov ecx, [rip + n_dirs]
+13: mov [rsp + 4], ecx
+    mov rdi, [rsp + 8]
+    call json_get
+    mov rdi, rax
+    call json_len
+    add eax, [rsp + 4]
+    cmp eax, NAMES_MAX
+    ja 1b
 2:  lea rdi, [rip + ssb]
     mov rsi, [rsp + 8]
     call jw_jv
@@ -1297,8 +1317,10 @@ rule_button:
     lea rdi, [rip + .Lb_dont_ask]
 1:  call hsb_cstr
     jmp .Lrb_made
-.Lrb_rules:
-    lea rdi, [rip + .Lb_allow]
+.Lrb_rules:                     # in the first rule's own words ("Yes, allow", the extension's, for an
+    mov eax, [rip + r_beh]      #   allow; a deny or an ask says what it saves)
+    lea rcx, [rip + rule_words]
+    mov rdi, [rcx + rax*8]
     call hsb_cstr
     mov edi, [rip + r_lab]
     call name_at
@@ -1309,6 +1331,9 @@ rule_button:
     lea rdi, [rip + .Lb_and]
     call hsb_cstr
     cmp r12d, 2
+    jne 21f
+    mov eax, [rip + r_beh + 4]  # the second named only when it does what the first does
+    cmp eax, [rip + r_beh]
     jne 21f
     mov edi, [rip + r_lab + 4]
     call name_at
@@ -1351,10 +1376,14 @@ rule_button:
     mov edx, CBA_RULE
     mov ecx, r14d
     call agentcard_btn
-    # the lines: the rules the label does not name
+    # the lines: the rules the label does not name (the second too when it does something else)
     cmp r12d, 2
-    jbe 5f
-    mov r15d, 1
+    ja 3f
+    jb 5f
+    mov eax, [rip + r_beh + 4]
+    cmp eax, [rip + r_beh]
+    je 5f
+3:  mov r15d, 1
 4:  cmp r15d, r12d
     jae 5f
     lea rax, [rip + r_beh]
@@ -1418,8 +1447,8 @@ other_lines:
     mov rdi, rax
     call json_len
     mov r13d, eax
-    xor r14d, r14d              # read
-    xor r15d, r15d              # kept (the index m_last counts)
+    xor r14d, r14d              # read (m_last is the index of the request's)
+    xor r15d, r15d              # kept
 1:  cmp r14d, r13d
     jae 9f
     mov rdi, r12
@@ -1492,7 +1521,7 @@ other_lines:
     inc rcx
     jmp 51b
 6:  # a mode change: named by the label only when it is the last one and nothing else is
-    lea eax, [r15 - 1]
+    lea eax, [r14 - 1]
     cmp rax, [rip + m_last]
     jne 61f
     cmp dword ptr [rip + n_rules], 0
@@ -1749,7 +1778,7 @@ hook_cut:
 8:  mov rax, rcx
     ret
 
-# find_last_mode(request jv): lm_ptr/lm_len, the mode of the m_last-th kept suggestion (a setMode)
+# find_last_mode(request jv): lm_ptr/lm_len, the mode of the request's m_last-th suggestion (a kept setMode)
 find_last_mode:
     PROLOGUE
     mov qword ptr [rip + lm_ptr], 0
@@ -1789,7 +1818,8 @@ find_last_mode:
     call bypass_ok
     test eax, eax
     jz 1b
-11: cmp r15, [rip + m_last]
+11: lea eax, [r14 - 1]
+    cmp rax, [rip + m_last]
     jne 2f
     mov rdi, rbx
     lea rsi, [rip + .Lk_mode]
@@ -2962,6 +2992,7 @@ dest_labels: .quad .Ld_local, .Ld_user, .Ld_project, .Ld_session
 dest_tips: .quad .Lp_local, .Lp_user, .Lp_project, .Lp_session
 type_names: .quad .Lv_add, .Lv_replace, .Lv_remove, .Lv_adddir, .Lv_removedir, .Lv_setmode
 beh_words: .quad .Lx_allows, .Lx_denies, .Lx_asks
+rule_words: .quad .Lb_allow, .Lb_deny, .Lb_ask            # the rule button's first words, by behavior
 mode_names:                     # a mode's id, its label (claude_session.s's)
     .quad .Lv_dont_ask, .Lml_dont_ask, .Lv_default, .Lml_default, .Lv_accept, .Lml_accept
     .quad .Lv_plan, .Lml_plan, .Lv_auto, .Lml_auto, .Lv_bypass, .Lml_bypass, 0, 0
@@ -3021,6 +3052,8 @@ dest_rank: .long 2, 0, 1, 3     # the four's width (the extension's SPn: user, p
 .Lb_yes: .asciz "Yes"
 .Lb_no: .asciz "No"
 .Lb_allow: .asciz "Yes, allow "
+.Lb_deny: .asciz "Yes, and deny "
+.Lb_ask: .asciz "Yes, and ask before "
 .Lb_and: .asciz " and "
 .Lb_more: .asciz " more"
 .Lb_for: .asciz " for "

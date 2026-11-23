@@ -80,8 +80,10 @@ pop_te: .quad 0
 dis_hash: .quad 0               # the typed menu was closed with Escape over this text (its hash), 0 none
 q_ptr: .quad 0                  # the filter without its "/"
 q_len: .quad 0
+pop_sig: .quad 0                # build_sig of the rows built last (the command menu's), 0 none
 pop_kind: .long 0               # APP_*, 0 closed
 pop_typed: .long 0
+pop_builds: .long 0             # the rows made since rhun started (print-agent-menu builds=)
 pop_dkind: .long 0              # the driver kind
 pop_slash: .long 0              # the slash commands show
 pop_sel: .long 0                # the selected row (index in rows), -1 none
@@ -132,6 +134,7 @@ FN agentpop_close
     je 1f
     mov dword ptr [rip + g_dirty], 1
 1:  mov dword ptr [rip + pop_kind], 0
+    mov qword ptr [rip + pop_sig], 0
     mov dword ptr [rip + pop_typed], 0
     mov dword ptr [rip + pop_rect + 12], 0
     mov qword ptr [rip + pop_owner], 0
@@ -152,6 +155,7 @@ FN agentpop_gone
 
 # FN agentpop_changed(): the driver's lists changed: the rows are made again when it draws
 FN agentpop_changed
+    mov qword ptr [rip + pop_sig], 0
     cmp dword ptr [rip + pop_kind], 0
     je 1f
     mov dword ptr [rip + g_dirty], 1
@@ -507,9 +511,18 @@ hash_text:
 
 # ---- the rows ----
 
-# build(): the rows for the open popup and its filter, and its selection
+# build(): the rows for the open popup and its filter, and its selection. The command menu's rows are made
+#   again only when what they come from changed (build_sig): not on each frame a pointer's move or the caret's
+#   blink draws (its commands may be a thousand)
 build:
     PROLOGUE
+    call build_sig
+    cmp dword ptr [rip + pop_kind], APP_MENU
+    jne 1f
+    cmp rax, [rip + pop_sig]
+    je 9f
+1:  mov [rip + pop_sig], rax
+    inc dword ptr [rip + pop_builds]
     call free_owned
     mov qword ptr [rip + cands + VEC_len], 0
     mov qword ptr [rip + rows + VEC_len], 0
@@ -528,7 +541,78 @@ build:
     jne 5f
     call build_models
 5:  call select
-    EPILOGUE
+9:  EPILOGUE
+
+# build_sig() -> rax a hash of what the rows come from: the popup, its owner and request, its filter, the
+#   driver's record (agentcfg: g_agentcfg_gen counts its lists' and choices' changes, its values) and the
+#   owner's state, mode, model, effort, Ultracode, thinking and fast mode. Never 0 (pop_sig 0: none built)
+build_sig:
+    PROLOGUE
+    mov rbx, 0xcbf29ce484222325
+    lea rdi, [rip + pop_kind]
+    mov esi, 4
+    call sig_mix
+    lea rdi, [rip + pop_typed]
+    mov esi, 4
+    call sig_mix
+    lea rdi, [rip + pop_slash]
+    mov esi, 4
+    call sig_mix
+    lea rdi, [rip + pop_dkind]
+    mov esi, 4
+    call sig_mix
+    lea rdi, [rip + pop_owner]
+    mov esi, 8
+    call sig_mix
+    lea rdi, [rip + pop_aq]
+    mov esi, 8
+    call sig_mix
+    lea rdi, [rip + g_agentcfg_gen]
+    mov esi, 8
+    call sig_mix
+    mov rdi, [rip + pop_q + SB_ptr]
+    mov rsi, [rip + pop_q + SB_len]
+    test rdi, rdi
+    jz 1f
+    call sig_mix
+1:  mov edi, [rip + pop_dkind]
+    call agentcfg_get
+    lea rdi, [rax + AGC_version]
+    mov esi, AGC_convs - AGC_version
+    call sig_mix
+    mov rax, [rip + pop_owner]
+    test rax, rax
+    jz 8f
+    mov r12, [rax + AS_live]
+    test r12, r12
+    jz 8f
+    lea rdi, [r12 + AL_state]
+    mov esi, 8
+    call sig_mix
+    lea rdi, [r12 + AL_mode]
+    mov esi, 32
+    call sig_mix
+    lea rdi, [r12 + AL_model]
+    mov esi, AL_bandoff - AL_model
+    call sig_mix
+8:  mov rax, rbx
+    test rax, rax
+    jnz 9f
+    inc rax
+9:  EPILOGUE
+
+# sig_mix(ptr, len): build_sig's hash (rbx) goes on over those bytes
+sig_mix:
+    mov r8, 0x100000001b3
+    xor ecx, ecx
+1:  cmp rcx, rsi
+    jae 9f
+    movzx edx, byte ptr [rdi + rcx]
+    xor rbx, rdx
+    imul rbx, r8
+    inc rcx
+    jmp 1b
+9:  ret
 
 # free_owned(): the strings the last build made
 free_owned:
@@ -873,27 +957,59 @@ key_sec:
     and eax, 7
     ret
 
-# sort_keys(): keys in ascending order (insertion sort: a few hundred at most)
+# sort_keys(): keys in ascending order (a heap sort: n log n for the thousand a menu may have; the keys are
+#   unique, their low bits the candidate's index)
 sort_keys:
     mov r8, [rip + keys + VEC_ptr]
     mov r9, [rip + keys + VEC_len]
-    mov ecx, 1
-1:  cmp rcx, r9
-    jae 9f
-    mov rax, [r8 + rcx*8]
-    mov rdx, rcx
-2:  test rdx, rdx
-    jz 3f
-    mov r10, [r8 + rdx*8 - 8]
-    cmp r10, rax
-    jbe 3f
-    mov [r8 + rdx*8], r10
-    dec rdx
+    cmp r9, 2
+    jb 9f
+    mov rcx, r9                 # the heap: each parent from the last one down sifted
+    shr rcx, 1
+1:  dec rcx
+    mov rsi, r9
+    call sift
+    test rcx, rcx
+    jnz 1b
+    mov r11, r9                 # then the largest to the end, the heap one shorter
+2:  dec r11
+    jz 9f
+    mov rax, [r8]
+    mov rdx, [r8 + r11*8]
+    mov [r8], rdx
+    mov [r8 + r11*8], rax
+    push rcx
+    xor ecx, ecx
+    mov rsi, r11
+    call sift
+    pop rcx
     jmp 2b
-3:  mov [r8 + rdx*8], rax
-    inc rcx
-    jmp 1b
 9:  ret
+
+# sift(): sort_keys' heap (r8 the keys) of rsi keys: the key at rcx goes down to its place; rcx stays
+sift:
+    push rcx
+    mov rdx, rcx
+1:  lea rax, [rdx + rdx + 1]    # the larger child
+    cmp rax, rsi
+    jae 9f
+    lea r10, [rax + 1]
+    cmp r10, rsi
+    jae 2f
+    mov r10, [r8 + r10*8]
+    cmp r10, [r8 + rax*8]
+    jbe 2f
+    inc rax
+2:  mov r10, [r8 + rax*8]
+    cmp r10, [r8 + rdx*8]
+    jbe 9f
+    mov rdi, [r8 + rdx*8]
+    mov [r8 + rdx*8], r10
+    mov [r8 + rax*8], rdi
+    mov rdx, rax
+    jmp 1b
+9:  pop rcx
+    ret
 
 # emit(): the rows in the keys' order, a section row before each section's first; the empty row; the foot
 emit:
@@ -3305,6 +3421,12 @@ FN agentpop_dump
     mov esi, '-'
     call sb_push_byte
 6:  mov rdi, rbx
+    lea rsi, [rip + .Ld_builds]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + pop_builds]
+    call sb_push_u64
+    mov rdi, rbx
     mov esi, 10
     call sb_push_byte
     xor r12d, r12d              # the rows
@@ -3736,6 +3858,7 @@ empty: .byte 0
 .Ld_filter: .asciz " filter="
 .Ld_sel: .asciz " sel="
 .Ld_owner: .asciz " owner="
+.Ld_builds: .asciz " builds="
 .Ld_dash: .asciz "-"
 .Ld_section: .asciz "section "
 .Ld_empty: .asciz "empty "

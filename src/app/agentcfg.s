@@ -61,6 +61,8 @@ fsb: .zero SB_SIZE              # a line's fields, unescaped, each NUL-terminate
 nsb: .zero SB_SIZE              # a name, the suffix
 foff: .zero 8 * FIELDS_MAX      # where each field starts in fsb
 fcount: .quad 0
+.globl g_agentcfg_gen
+g_agentcfg_gen: .quad 0         # counts every change of a record's lists or choices (agentpop's rows follow it)
 
 .text
 
@@ -672,6 +674,7 @@ csb_differ:
 # FN agentcfg_model(AGC*, value, label, desc cstrs, flags) -> rax the model added, or 0 (no value, one of
 #   that value already, the list is full)
 FN agentcfg_model
+    inc qword ptr [rip + g_agentcfg_gen]
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
@@ -875,6 +878,7 @@ FN agentcfg_effort
 
 # FN agentcfg_level(AMO* or 0, id, label cstrs): an effort level of the model (16 at most)
 FN agentcfg_level
+    inc qword ptr [rip + g_agentcfg_gen]
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
@@ -931,6 +935,7 @@ level_add:
 #   or 0, [rbp+32] origin cstr or 0, [rbp+40] act, [rbp+48] flags) -> rax the command added, or 0 (no
 #   name, one of that name already, the list is full). A leading "/" of the name is dropped
 FN agentcfg_cmd
+    inc qword ptr [rip + g_agentcfg_gen]
     PROLOGUE 16
     mov rbx, rdi
     mov r12, rsi
@@ -1118,6 +1123,7 @@ word_in:
 
 # models_free(VEC* of AMO*), cmds_free(VEC* of ACM*): the lists and everything they own
 models_free:
+    inc qword ptr [rip + g_agentcfg_gen]
     PROLOGUE
     mov rbx, rdi
     xor r12d, r12d
@@ -1156,6 +1162,7 @@ models_free:
     EPILOGUE
 
 cmds_free:
+    inc qword ptr [rip + g_agentcfg_gen]
     PROLOGUE
     mov rbx, rdi
     xor r12d, r12d
@@ -1269,6 +1276,7 @@ FN agentcfg_dirty
 # FN agentcfg_set(AGC*, field AGF_*, ptr, len): a choice or a value of the program's (an int field: the
 #   value in rdx); dirty when it changed
 FN agentcfg_set
+    inc qword ptr [rip + g_agentcfg_gen]
     PROLOGUE
     mov rbx, rdi
     mov r12d, esi

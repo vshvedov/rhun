@@ -77,6 +77,13 @@ chk: .zero SB_SIZE              # composer_check's text
 nsb: .zero SB_SIZE              # a notice
 csb: .zero SB_SIZE              # text being put in the box
 paint_buf: .zero 24 * (PAINT_MAX + 1)
+pt_tf: .quad 0                  # composer_paint's last look: the field, its revision, its text, the word
+pt_rev: .quad 0
+pt_ptr: .quad 0
+pt_len: .quad 0
+pt_word: .zero 16
+pt_count: .long 0               #   and the ranges it found
+pt_scans: .long 0               # the looks since rhun started (print-agent-composer scans=)
 
 .data
 .p2align 2
@@ -1393,7 +1400,8 @@ paint_find:
     mov eax, r15d
     EPILOGUE
 
-# FN composer_paint(TF*, AS* or 0): see the top
+# FN composer_paint(TF*, AS* or 0): see the top. The text is looked through again only when it, its field
+#   or the word changed (pt_*: as looked through last), not on each frame
 FN composer_paint
     PROLOGUE
     mov rbx, rdi
@@ -1407,11 +1415,41 @@ FN composer_paint
     je 9f
     mov rdi, rbx
     call tf_text
-    mov rdi, rax
-    mov rsi, rdx
+    mov r13, rax
+    mov r14, rdx
+    cmp [rip + pt_tf], rbx      # the same as last time: the ranges found then
+    jne 1f
+    mov rax, [rbx + TF_revision]
+    cmp [rip + pt_rev], rax
+    jne 1f
+    cmp [rip + pt_ptr], r13
+    jne 1f
+    cmp [rip + pt_len], r14
+    jne 1f
+    mov rax, [r12 + AL_word]
+    cmp [rip + pt_word], rax
+    jne 1f
+    mov rax, [r12 + AL_word + 8]
+    cmp [rip + pt_word + 8], rax
+    jne 1f
+    mov eax, [rip + pt_count]
+    jmp 2f
+1:  mov [rip + pt_tf], rbx
+    mov rax, [rbx + TF_revision]
+    mov [rip + pt_rev], rax
+    mov [rip + pt_ptr], r13
+    mov [rip + pt_len], r14
+    mov rax, [r12 + AL_word]
+    mov [rip + pt_word], rax
+    mov rax, [r12 + AL_word + 8]
+    mov [rip + pt_word + 8], rax
+    inc dword ptr [rip + pt_scans]
+    mov rdi, r13
+    mov rsi, r14
     lea rdx, [r12 + AL_word]
     call paint_find
-    test eax, eax
+    mov [rip + pt_count], eax
+2:  test eax, eax
     jz 9f
     lea rax, [rip + paint_buf]
     mov [rbx + TF_paint], rax
@@ -1459,6 +1497,12 @@ FN composer_dump
     mov rsi, [rip + paint_buf + 8]
     call sb_push_u64
 2:  mov rdi, rbx
+    lea rsi, [rip + .Ld_scans]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + pt_scans]
+    call sb_push_u64
+    mov rdi, rbx
     mov esi, 10
     call sb_push_byte
 9:  EPILOGUE
@@ -1700,6 +1744,7 @@ FN composer_hint_dump
 .Ld_hint: .asciz "hint "
 .Ld_at: .asciz " at "
 .Ld_draft: .asciz "draft="
+.Ld_scans: .asciz " scans="
 .Ld_paint: .asciz " paint="
 .Lnone: .byte 0
 .Lnl: .ascii "\n"

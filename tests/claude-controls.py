@@ -2018,16 +2018,36 @@ class NoticeCase(ModelCase):
         passes, draws = (int(w.split('=')[1]) for w in self.command('print-loop-stats').split()[:2])
         return passes, draws
 
-    def idle(self, seconds=3, samples=1):
-        """The main loop's passes (without the second command's own) and the frames it drew over that long;
-        of several samples, the one with the fewest passes (the panel's discovery may run in one)."""
+    def runs(self):
+        """The panel's discovery runs started so far (print-agents-runs)."""
+        return int(self.command('print-agents-runs').split('=')[1])
+
+    def idle(self, seconds=3, samples=1, settle=2.5, again=True):
+        """The main loop's passes (without the second command's own) and the frames it drew over that long,
+        in windows the panel's discovery stayed out of; of several samples, the one with the fewest passes.
+        While the panel shows, discovery runs every 10 s (agents.s, last_scan): a child process whose answer
+        costs 3 to 5 passes and 2 or 3 frames within about a second of its start, a wake-up source of the
+        panel's own that has nothing to do with what a test measures. So a window counts only when no run
+        started in it or in the settle time before it; one that had a run is measured again after the run's
+        answer has landed (the next run is 10 s away then); again False: None instead."""
         out = []
-        for _ in range(samples):
+        before = self.runs()
+        time.sleep(settle)
+        for _ in range(samples + 6):
             p0, d0 = self.stats()
             time.sleep(seconds)
             p1, d1 = self.stats()
-            out.append((p1 - p0 - 1, d1 - d0))
-        return min(out)
+            after = self.runs()
+            if after == before:
+                out.append((p1 - p0 - 1, d1 - d0))
+                if len(out) == samples:
+                    return min(out)
+            elif not again:
+                return None
+            else:
+                before = after
+                time.sleep(settle)
+        self.fail('discovery ran in every window: %s' % out)
 
 
 class NoticeTest(NoticeCase):
@@ -2229,13 +2249,25 @@ class NoticeTest(NoticeCase):
         warm, frames = self.idle(samples=2)
         self.assertLessEqual(warm, plain + 1, (warm, plain))         # its minute may turn once in 3 s
         self.assertLessEqual(frames, 1, frames)
-        # a clock that changes while measured: a frame for it, no pass of its own
-        self.command('agent-timing cache=4500')
-        self.command('agent-prompt usage')
-        self.command('wait-agent ready 10000')
-        self.assertEqual(self.foot()['clock'], '1m')
-        time.sleep(1.5)
-        changing, frames = self.idle(4)
+        # a clock that changes while measured: a frame for it, no pass of its own. The window starts 2.5 s
+        # after the discovery run the turn caused (1 to 3 s after the turn: 3.5 to 5.5 s after it), so the
+        # clock goes cold 6 s after the turn, and is drawn at the next second, inside it; a window a
+        # discovery run spoilt is measured again with a new turn
+        self.command('agent-timing cache=6000')
+        for _ in range(4):
+            runs = self.runs()
+            self.command('agent-prompt usage')
+            self.command('wait-agent ready 10000')
+            self.assertEqual(self.foot()['clock'], '1m')
+            turned = time.time()
+            while (self.runs() == runs or time.time() < turned + 1) and time.time() < turned + 3:
+                time.sleep(0.1)
+            measured = self.idle(4, again=False)
+            if measured:
+                break
+        else:
+            self.fail('discovery ran in every window')
+        changing, frames = measured
         self.assertLessEqual(changing, plain4 + 1, (changing, plain4))
         self.assertGreaterEqual(frames, 1, 'the clock was redrawn when it went cold')
         self.assertEqual(self.foot()['clock'], 'cold')

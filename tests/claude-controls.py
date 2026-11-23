@@ -2629,6 +2629,18 @@ class ReviewControlsTest(NoticeCase):
         self.assertEqual(int(ComposerTest.composer(self)['scans']), scans)
         self.assertEqual(ComposerTest.composer(self)['paint'], '30000-30010')
 
+    def test_reopening_the_menu_selects_its_first_row_again(self):
+        """R14: the command menu opened again over itself (its rows unchanged) starts at the top: its first row
+        selected, as its scroll is, not the row the keys had moved to."""
+        self.ready()
+        self.command('agent-menu')
+        first = self.head()['sel']
+        for _ in range(8):
+            self.command('key Down')
+        self.assertNotEqual(self.head()['sel'], first)
+        self.command('agent-menu')
+        self.assertEqual(self.head()['sel'], first)
+
     def test_menu_entries_without_a_test_before(self):
         """Checklist row 1.24: New conversation, Switch mode…, Open Claude in Terminal, General config…,
         Switch account, Sign out, View help docs, each run from the menu."""

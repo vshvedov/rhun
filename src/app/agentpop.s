@@ -251,6 +251,7 @@ FN agentpop_open
     lea rdi, [rip + pop_q]
     call sb_clear
     mov byte ptr [rip + pop_q_marker], 1    # differs from any query: the first build starts fresh
+    mov qword ptr [rip + pop_sig], 0        # (made again, selection and all, even over the same menu)
     call need_cfg
     call sync
     call build
@@ -544,8 +545,10 @@ build:
 9:  EPILOGUE
 
 # build_sig() -> rax a hash of what the rows come from: the popup, its owner and request, its filter, the
-#   driver's record (agentcfg: g_agentcfg_gen counts its lists' and choices' changes, its values) and the
-#   owner's state, mode, model, effort, Ultracode, thinking and fast mode. Never 0 (pop_sig 0: none built)
+#   driver's record (agentcfg: g_agentcfg_gen counts its lists' and choices' changes, its values), the
+#   owner's model from its transcript (AS_model: the one named without a live record or a reported model)
+#   and its live state, mode, model, effort, Ultracode, thinking and fast mode. Never 0 (pop_sig 0: none
+#   built)
 build_sig:
     PROLOGUE
     mov rbx, 0xcbf29ce484222325
@@ -580,10 +583,17 @@ build_sig:
     lea rdi, [rax + AGC_version]
     mov esi, AGC_convs - AGC_version
     call sig_mix
-    mov rax, [rip + pop_owner]
-    test rax, rax
+    mov r12, [rip + pop_owner]
+    test r12, r12
     jz 8f
-    mov r12, [rax + AS_live]
+    mov rdi, [r12 + AS_model]
+    test rdi, rdi
+    jz 2f
+    call strlen
+    mov rsi, rax
+    mov rdi, [r12 + AS_model]
+    call sig_mix
+2:  mov r12, [r12 + AS_live]
     test r12, r12
     jz 8f
     lea rdi, [r12 + AL_state]

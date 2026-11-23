@@ -2751,6 +2751,9 @@ plan_on_closed:
     test eax, eax
     jz .Lcr_gone
     or dword ptr [r12 + AQ_state], PLS_MODEWAIT
+    mov rax, [rbx + AL_next]    # the request whose answer releases this plan's Yes (its number: AQ_n,
+    dec rax                     #   which only a question uses otherwise)
+    mov [r12 + AQ_n], rax
     jmp .Lcr_gone
 .Lpr_no:
     lea rdi, [r13 + CD_field]
@@ -2825,8 +2828,9 @@ plan_on_closed:
     call write_deny
     jmp .Lcr_after
 
-# FN claude_plan_mode_answer(AL*, control_response's response): set_permission_mode auto's answer for the
-#   plan whose Yes waits: in effect, or refused and acceptEdits asked instead; then the allow with the input
+# FN claude_plan_mode_answer(AL*, control_response's response, request number): set_permission_mode auto's
+#   answer for the plan whose Yes waits on that request (AQ_n): in effect, or refused and acceptEdits asked
+#   instead; then the allow with the input. The answer to a withdrawn plan's request releases no other plan
 FN claude_plan_mode_answer
     PROLOGUE
     mov rbx, rdi
@@ -2840,6 +2844,8 @@ FN claude_plan_mode_answer
     jne 1f
     test dword ptr [rax + AQ_state], PLS_MODEWAIT
     jz 1f
+    cmp [rax + AQ_n], rdx
+    jne 1f
     mov r13, rax
     and dword ptr [r13 + AQ_state], ~PLS_MODEWAIT
 1:  mov rdi, r12

@@ -3094,7 +3094,11 @@ h_response:
     jne 9f
     lea rdi, [rax + 1]
     lea rsi, [rdx - 1]
+    mov r13, rsi
     call parse_u64
+    cmp rdx, r13                # every byte after the "r" a digit: "r2abc" is another's id, not request 2
+    jne 9f
+    mov r15, rax                # the request's number
     mov rdi, rbx
     mov rsi, rax
     call out_take
@@ -3102,6 +3106,7 @@ h_response:
     jne 33f
     mov rdi, rbx
     mov rsi, r12
+    mov rdx, r15                # (the plan whose Yes waits for this request's answer)
     call claude_plan_mode_answer
     jmp 9f
 33: cmp eax, OA_GET_PLAN

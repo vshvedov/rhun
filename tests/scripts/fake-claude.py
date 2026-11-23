@@ -331,7 +331,7 @@ def model_list():
         first['supportsThinkingOff'] = True
     if 'noeffort' in MODEL_KNOBS:           # a model without effort levels (as the older ones are)
         del models[1]['supportsEffort']
-    return models
+    return models + review_models()
 
 
 def unavailable_models():
@@ -1315,6 +1315,7 @@ def plan_turn(plans):
     path = os.path.join(config_dir(), 'plans', 'fake.md')
     for plan in plans:
         PLAN[0] = {'content': plan, 'path': path}     # get_plan's answer from here on (finding 24)
+        review_plan_save()
         tid, answer = interactive('ExitPlanMode', {'plan': plan, 'planFilePath': path})
         if answer is None:
             return
@@ -2099,7 +2100,7 @@ def init_response():
     if ENV.get('FAKE_CLAUDE_FAST'):             # 2.1.330 sends the reason (finding 19), after the state
         response['fast_mode_disabled_reason'] = FAST[1]
     response.update(session_state='idle', capabilities=['ui_surface_v1'])
-    return response
+    return review_init(response)
 
 
 def respond(rid, response):
@@ -2131,6 +2132,177 @@ def lifecycle(uid, state):
         return
     emit({'type': 'command_lifecycle', 'command_uuid': uid, 'state': state, 'uuid': str(uuid.uuid4()),
           'session_id': SID})
+
+
+# ---- the protocol review's knobs and scenarios (2026-11-23). No recording is behind any of them: each
+# provokes a condition the real CLI could produce (by its schema, or by timing) that no run of it did.
+# FAKE_CLAUDE_FOREIGN_ID: get_settings is first answered for another id that starts as rhun's does (rhun's
+#   id followed by "abc", applied model "claude-foreign"), then for rhun's own.
+# FAKE_CLAUDE_MODE_MS: set_permission_mode is answered that long after it was read, by a thread of its own
+#   (the stdin reader goes on); logged {"mode_answer": ID} as it goes out.
+# FAKE_CLAUDE_SETTINGS_MS: get_settings is answered that long after it was read ("never": not at all);
+#   logged {"settings_answer": ID} as it goes out.
+# FAKE_CLAUDE_NO_INIT_MODE: initialize's answer has no current_permission_mode.
+# FAKE_CLAUDE_REFUSE_MODEL (VALUE): apply_flag_settings {"model": VALUE} is answered with an error.
+# FAKE_CLAUDE_MODELS longresolved: a third model whose resolvedModel is 500 bytes long.
+# The plan a `plan` turn writes is also in <config>/plans/fake-<session id>.md (as finding 24's file): a later
+#   process of the same conversation answers get_plan from it (the real CLI read its plan file; resuming was not recorded).
+# Scenarios: `rules N [B1] [B2]` (a Bash call whose suggestion has N rules of behavior B1, default allow, and
+# with B2 a second suggestion of one rule of that behavior), `planagain [MS]` (an ExitPlanMode Claude takes
+# back after MS (default 700) unanswered, then a second one in the same turn, which waits).
+
+def review_later(message, what, env):
+    """True when the request is answered later (the knob env names a delay): handle() runs it again in a
+    thread of its own after that delay, logging {what: id} first; "never" drops it."""
+    delay = ENV.get(env)
+    if not delay or message.get('_later'):
+        return False
+    if delay == 'never':
+        return True
+
+    def later():
+        log(**{what: message.get('request_id')})
+        try:
+            handle(dict(message, _later=True))
+        except Exception:
+            log(error=traceback.format_exc())
+    threading.Timer(int(delay) / 1000, later).start()
+    return True
+
+
+def review_settings(message):
+    """get_settings' knobs: a foreign answer first (FAKE_CLAUDE_FOREIGN_ID), a late or no answer
+    (FAKE_CLAUDE_SETTINGS_MS). True when it is not answered now."""
+    rid = message.get('request_id')
+    if ENV.get('FAKE_CLAUDE_FOREIGN_ID') and not message.get('_later') and isinstance(rid, str):
+        respond(rid + 'abc', dict(get_settings(), applied=dict(applied(), model='claude-foreign')))
+    return review_later(message, 'settings_answer', 'FAKE_CLAUDE_SETTINGS_MS')
+
+
+def review_refuse_flags(rid, settings):
+    """FAKE_CLAUDE_REFUSE_MODEL: apply_flag_settings for that model is refused (True: answered)."""
+    if ENV.get('FAKE_CLAUDE_REFUSE_MODEL') and settings.get('model') == ENV['FAKE_CLAUDE_REFUSE_MODEL']:
+        respond_error(rid, 'Model %s is not available' % settings['model'])
+        return True
+    return False
+
+
+def review_models():
+    """FAKE_CLAUDE_MODELS longresolved: a model whose resolvedModel is far past what rhun keeps."""
+    if 'longresolved' not in MODEL_KNOBS:
+        return []
+    return [{'value': 'long', 'resolvedModel': 'claude-' + 'x' * 493, 'displayName': 'Long',
+             'description': 'A long id', 'supportsEffort': True}]
+
+
+def review_plan_file():
+    return os.path.join(config_dir(), 'plans', 'fake-%s.md' % (RESUME or SID))
+
+
+def review_plan_save():
+    os.makedirs(os.path.dirname(review_plan_file()), exist_ok=True)
+    with open(review_plan_file(), 'w', encoding='utf-8') as stream:
+        stream.write(PLAN[0]['content'])
+
+
+def review_plan():
+    """get_plan's plan: this process's, else the file an earlier process of the conversation wrote."""
+    path = review_plan_file()
+    if PLAN[0] is None and os.path.exists(path):
+        with open(path, encoding='utf-8') as stream:
+            return {'content': stream.read(), 'path': path}
+    return PLAN[0]
+
+
+def review_init(response):
+    """FAKE_CLAUDE_NO_INIT_MODE: initialize's answer without current_permission_mode."""
+    if ENV.get('FAKE_CLAUDE_NO_INIT_MODE'):
+        response.pop('current_permission_mode', None)
+    return response
+
+
+def s_rules(prompt):
+    """rules N [B1] [B2]: a Bash call whose first suggestion has N rules (Bash "echo rN") of behavior B1 (allow
+    by default); with B2, a second suggestion of one rule of that behavior; both for localSettings"""
+    words = prompt.split()
+    count = int(words[1]) if len(words) > 1 and words[1].isdigit() else 1
+    first = words[2] if len(words) > 2 else 'allow'
+    rules = [{'type': 'addRules', 'rules': [{'toolName': 'Bash', 'ruleContent': 'echo r%d' % i}
+                                            for i in range(1, count + 1)],
+              'behavior': first, 'destination': 'localSettings'}]
+    if len(words) > 3:
+        rules.append({'type': 'addRules', 'rules': [{'toolName': 'Bash', 'ruleContent': 'echo second'}],
+                      'behavior': words[3], 'destination': 'localSettings'})
+    if bash('echo r1', rules=rules):
+        final('done')
+
+
+def s_planagain(prompt):
+    """planagain [MS]: an ExitPlanMode Claude takes back by itself after MS (default 700) unanswered, then a
+    second ExitPlanMode in the same turn, which waits for its answer (logged); then the final text"""
+    global MODE
+    words = prompt.split()
+    wait = int(words[1]) / 1000 if len(words) > 1 and words[1].isdigit() else 0.7
+    path = os.path.join(config_dir(), 'plans', 'fake.md')
+    for n, plan in enumerate(['# Plan\n\n1. Add the file', '# Plan, again\n\n1. Add notes.txt']):
+        PLAN[0] = {'content': plan, 'path': path}
+        mid = message_start()
+        tool_input = {'plan': plan, 'planFilePath': path}
+        tid = tool_use(mid, 0, 'ExitPlanMode', tool_input)
+        message_end('tool_use')
+        rid = request_id()
+        deadline = time.time() + wait if n == 0 else None
+        with COND:
+            PENDING[rid] = None
+            emit({'type': 'control_request', 'request_id': rid, 'request': {
+                'subtype': 'can_use_tool', 'tool_name': 'ExitPlanMode', 'display_name': 'ExitPlanMode',
+                'input': tool_input, 'tool_use_id': tid, 'requires_user_interaction': True}})
+            while PENDING.get(rid) is None and not withdrawn() and (deadline is None or time.time() < deadline):
+                COND.wait(0.05)
+            answer = PENDING.pop(rid, None)
+            if answer is None and not CLOSED.is_set() and n == 0:
+                emit({'type': 'control_cancel_request', 'request_id': rid})
+        if answer is not None:
+            log(answer=dict(answer, plan=n + 1))
+        tool_result(tid, 'The user withdrew the plan' if answer is None else 'answered', answer is None)
+        if answer is None and n == 1:
+            return
+    final('done')
+
+
+def s_manydialog(prompt):
+    """32 Bash calls that ask at once, then a dialog (auto_mode_server_fallback) while they wait: rhun keeps 32
+    and answers the dialog at once (logged {"answer": ...}, an error comes as {"behavior": "error"}); the turn
+    then waits for the 32 (an interrupt ends it)"""
+    mid = message_start()
+    calls = []
+    for i in range(32):
+        tool_input = {'command': 'touch md%d.txt' % i, 'description': 'many'}
+        calls.append((tool_use(mid, i, 'Bash', tool_input), tool_input))
+    message_end('tool_use')
+    ids = []
+    with COND:
+        for tid, tool_input in calls:
+            rid = request_id()
+            PENDING[rid] = None
+            ids.append(rid)
+            emit({'type': 'control_request', 'request_id': rid, 'request': bash_request(tool_input, tid, [])})
+    dialog('auto_mode_server_fallback', AUTO_DIALOGS['full'])
+    with COND:
+        while not (withdrawn() or all(PENDING.get(rid) is not None for rid in ids)):
+            COND.wait(0.05)
+        answers = [PENDING.pop(rid, None) for rid in ids]
+    if None in answers and not CLOSED.is_set():
+        ACKED.wait(5)
+    for (tid, tool_input), answer in zip(calls, answers):
+        bash_result(tid, tool_input, answer)
+    cut_off(tool_turn=True) if None in answers else final('done')
+
+
+# a help URL whose host has a percent-escape: new URL() would read another host than the text shows
+AUTO_DIALOGS['percent'] = {'title': 'Auto mode is using a fallback', 'paragraphs': ['A paragraph.'],
+                           'helpUrl': 'https://evil.example%2F.claude.com/docs'}
+SCENARIOS.update({'rules': s_rules, 'planagain': s_planagain, 'manydialog': s_manydialog})
 
 
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already
@@ -2179,6 +2351,8 @@ def handle(message):
                 respond(rid, {'still_queued': held})
                 ACKED.set()
         elif sub == 'set_permission_mode':
+            if review_later(message, 'mode_answer', 'FAKE_CLAUDE_MODE_MS'):
+                return
             mode = 'default' if request.get('mode') == 'manual' else request.get('mode', MODE)
             if mode == 'bypassPermissions' and not BYPASS_OK:
                 respond_error(rid, 'Cannot set permission mode to bypassPermissions because the session was not '
@@ -2197,12 +2371,16 @@ def handle(message):
         elif sub == 'set_model':
             respond_empty(rid)
         elif sub == 'get_settings':
+            if review_settings(message):
+                return
             if ENV.get('FAKE_CLAUDE_SETTINGS_FAIL'):    # unrecorded: the CLI's error answer, with that text
                 respond_error(rid, ENV['FAKE_CLAUDE_SETTINGS_FAIL'])
             else:
                 respond(rid, get_settings())
         elif sub == 'apply_flag_settings':
             settings = request.get('settings') if isinstance(request.get('settings'), dict) else {}
+            if review_refuse_flags(rid, settings):
+                return
             for key, value in settings.items():
                 if value is None:
                     FLAG_SETTINGS.pop(key, None)
@@ -2222,7 +2400,8 @@ def handle(message):
                           'thinking_display': request.get('thinking_display')})
             respond_empty(rid)
         elif sub == 'get_plan':
-            respond(rid, dict(exists=True, **PLAN[0]) if PLAN[0] else {'exists': False})
+            plan = review_plan()
+            respond(rid, dict(exists=True, **plan) if plan else {'exists': False})
         else:
             respond_error(rid, 'Unsupported control request subtype: %s' % sub)
     elif kind == 'control_response':

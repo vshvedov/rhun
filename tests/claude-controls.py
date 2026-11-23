@@ -2680,5 +2680,46 @@ class ReviewControlsTest(NoticeCase):
         self.assertIn(' muted=-', self.command('print-agent-row 2').splitlines()[0])
 
 
+class ReviewProtocolTest(ModelCase):
+    """The protocol review's findings (2026-11-23), each against the fake: its knobs FAKE_CLAUDE_FOREIGN_ID,
+    FAKE_CLAUDE_MODE_MS, FAKE_CLAUDE_SETTINGS_MS, FAKE_CLAUDE_NO_INIT_MODE, FAKE_CLAUDE_REFUSE_MODEL and the
+    model knob longresolved have no recording behind them (the fake's docstring block says so). Nothing here
+    writes Claude Code's own settings (ModelCase checks it after each test)."""
+
+    def order(self):
+        """What the fake read, in order: control requests by subtype, user messages as "user TEXT"."""
+        out = []
+        for m in self.stdin():
+            if m.get('type') == 'control_request':
+                out.append(m['request']['subtype'])
+            elif m.get('type') == 'user':
+                out.append('user ' + m['message']['content'][0]['text'])
+        return out
+
+    def open_sid(self, sid):
+        """The listed conversation whose id is sid, opened."""
+        rows = self.listed()
+        for n in range(1, len(rows) + 1):
+            self.command(f'print-agents {n}')
+            if self.sid() == sid:
+                return
+        self.fail('no conversation ' + sid)
+
+    def held_count(self):
+        return int(re.search(r' held=(\d+)', self.command('print-agent-live')).group(1))
+
+    def head_cfg(self):
+        first = self.command('print-agent-cfg').splitlines()[0]
+        return dict(word.split('=', 1) for word in first.split(' '))
+
+    def test_a_foreign_answer_is_not_rhuns(self):
+        # P4: an answer whose id is rhun's own followed by more ("r2abc") answers nothing of rhun's
+        self.start(env={'FAKE_CLAUDE_FOREIGN_ID': '1'})
+        self.chat('hello')
+        self.until(lambda: ' model=claude-opus-5-5 ' in self.command('print-agent-live'), 'the true answer')
+        self.command('wait 200')
+        self.assertIn(' model=claude-opus-5-5 ', self.command('print-agent-live'))
+
+
 if __name__ == '__main__':
     unittest.main()

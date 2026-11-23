@@ -1700,5 +1700,33 @@ class ReviewCardsTest(CardCase):
         self.until_answered()
 
 
+class ReviewRulesTest(CardCase):
+    """The protocol review's findings on the permission card's rules (P5) and on the CLI's requests
+    (2026-11-23). The fake's scenarios `rules`, `planagain` and `manydialog`, its auto dialog variant
+    `percent` and its knob FAKE_CLAUDE_MODE_MS have no recording behind them. Rules go to localSettings
+    inside the test's project only."""
+
+    def test_a_late_mode_answer_releases_no_other_plan(self):
+        # 3.4: plan 1's "Yes, and use auto mode" waits for its set_permission_mode answer; plan 1 is withdrawn
+        # and plan 2 answered the same way before that answer comes: only plan 2's own answer releases it
+        self.ask('planagain 700', env={'FAKE_CLAUDE_MODELS': 'auto', 'FAKE_CLAUDE_MODE_MS': '2000'})
+        self.assertEqual(self.buttons()[0], 'Yes, and use auto mode')
+        self.command('agent-card 1')
+        time.sleep(1.2)                                   # plan 1 withdrawn, plan 2 shown
+        self.assertEqual(self.head()['kind'], 'plan')
+        self.command('agent-card 1')
+        self.command('wait-agent ready 10000')
+        self.until(lambda: len([r for r in self.records() if 'mode_answer' in r]) == 2, 'both answers')
+        records = self.records()
+        modes = [json.loads(r['stdin'])['request_id'] for r in records
+                 if 'stdin' in r and '"set_permission_mode"' in r['stdin']]
+        self.assertEqual(len(modes), 2, modes)
+        answered = next(i for i, r in enumerate(records) if r.get('mode_answer') == modes[1])
+        allow = next(i for i, r in enumerate(records) if 'stdin' in r and '"control_response"' in r['stdin']
+                     and '"allow"' in r['stdin'])
+        self.assertGreater(allow, answered)
+        self.assertEqual([(a['plan'], a['behavior']) for a in self.answers()], [(2, 'allow')])
+
+
 if __name__ == '__main__':
     unittest.main()

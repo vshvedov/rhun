@@ -3046,6 +3046,19 @@ class ReviewProtocolTest(ModelCase):
         self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
         self.assertNotIn('user hello', self.thread())
 
+    def test_each_model_answer_settles_its_own_pick(self):
+        # R4: Sonnet, then Default picked before the first answer (FAKE_CLAUDE_FLAGS_MS: both answered later, in
+        # order); Sonnet applies, Default is refused: the project's model is Sonnet, the only pill names it
+        self.start(env={'FAKE_CLAUDE_FLAGS_MS': '600', 'FAKE_CLAUDE_REFUSE_MODEL': 'default'})
+        self.chat('hello')
+        self.command('agent-model sonnet')
+        self.command('agent-model default')
+        self.until(lambda: len([r for r in self.records() if 'flags_answer' in r]) == 2, 'both answered')
+        self.until(lambda: 'Failed to set model' in self.command('print-toast'), 'the refusal')
+        self.until(lambda: ' model=claude-sonnet-5 ' in self.command('print-agent-live'), 'in effect')
+        self.assertTrue(self.choices().startswith('model=sonnet '), self.choices())
+        self.assertEqual(self.pills(), ['Switched to Sonnet'])
+
     def test_a_long_resolved_id_is_cut(self):
         # 2.1: a model's resolvedModel is kept at most 63 bytes, in memory and in the state file
         self.start(env={'FAKE_CLAUDE_MODELS': 'longresolved'})

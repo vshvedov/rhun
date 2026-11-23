@@ -3145,6 +3145,7 @@ h_response:
     lea edx, [rax - OA_FLAGS]
     mov rdi, rbx
     mov rsi, r12
+    mov rcx, r15                # (the request: the pick it settles)
     call claude_flags_answer
     jmp 9f
 2:  xor edx, edx                # set_permission_mode: the mode it answers is in effect (no status line

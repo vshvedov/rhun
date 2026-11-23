@@ -61,16 +61,19 @@
 .equ CLF_THINK, 3
 .equ THINK_TOKENS, 31999        # thinking on (finding 14; --max-thinking-tokens=31999 at a start)
 .equ CLP_PREV, 512              # AL_cfg, per conversation (the review of 2026-11-23): AL_dprev is what a
-.equ CLP_FLMODEL, 1024          #   refused pick puts back; AL_dmodel a model asked of the running program,
-.equ CLP_ULON, 4096             #   kept and named once applied; Ultracode asked on (its failure's words);
+                                #   refused pick puts back (a model asked of the running program: AL_dpicks);
+.equ CLP_ULON, 4096             #   Ultracode asked on (its failure's words);
 .equ CLP_WAITTHINK, 16384       #   thinking switched while it started (apply_kept); the prompts wait for its
 .equ CLP_PROMPTS, 32768         #   first settings answer (prompts_go, at most g_settings_wait_ms); it started
 .equ CLP_UNBYPASS, 65536        #   in bypass without rhun's gate (default is asked first); AL_dpend is a pick
 .equ CLP_PEND, 131072           #   made while it started, asked once initialize is answered (claude_init_ask);
 .equ CLP_PLANWAIT, 262144       #   /plan without a program: get_plan once it is up (prompts_go)
-.equ CLP_RUN, CLP_MODEWAIT | CLP_WAITMODEL | CLP_WAITEFFORT | CLP_FIRST | CLP_WAITTHINK | CLP_PROMPTS | CLP_UNBYPASS | CLP_PEND | CLP_PLANWAIT | CLP_PREV | CLP_FLMODEL
-                                # what a start or a run keeps: claude_ended lets go of it
+.equ CLP_RUN, CLP_MODEWAIT | CLP_WAITMODEL | CLP_WAITEFFORT | CLP_FIRST | CLP_WAITTHINK | CLP_PROMPTS | CLP_UNBYPASS | CLP_PEND | CLP_PLANWAIT | CLP_PREV
+                                # what a start or a run keeps: claude_ended lets go of it (and AL_dpicks)
 .equ SETTINGS_WAIT_MS, 3000     # the prompts wait this long at most for the first get_settings answer
+.equ DPICK_N, 4                 # AL_dpicks: the models asked of the running program, by request: {its
+.equ DPICK_SIZE, 72             #   number 8 (0: a free slot), the value cstr 64}; a fifth pick before four
+.equ DPICK_VAL, 8               #   answers takes the oldest's slot (its answer then settles nothing)
 
 .data
 .p2align 2
@@ -1630,6 +1633,69 @@ live_up:
     mov eax, 1
 9:  ret
 
+# dpick_add(AL*, request number, value cstr (at most 63 bytes)): a model asked of the running program with
+#   that request, kept until its answer (dpick_take): a free slot, else the oldest pick's
+dpick_add:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    lea r14, [rbx + AL_dpicks]  # the slot: a free one, else the smallest number
+    xor ecx, ecx
+1:  cmp ecx, DPICK_N
+    jae 3f
+    imul rax, rcx, DPICK_SIZE
+    lea rax, [rbx + AL_dpicks + rax]
+    cmp qword ptr [rax], 0
+    je 2f
+    mov rdx, [rax]
+    cmp rdx, [r14]
+    jae 11f
+    mov r14, rax
+11: inc ecx
+    jmp 1b
+2:  mov r14, rax
+3:  mov [r14], r12
+    lea rdi, [r14 + DPICK_VAL]
+    mov rsi, r13
+    call cstr_copy
+    EPILOGUE
+
+# dpick_take(AL*, request number, out (64 bytes)) -> eax 1 when a model was asked with that request: its
+#   value into out, its slot free again; 0 (out untouched) for any other request
+dpick_take:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    xor eax, eax
+    test r12, r12
+    jz 9f
+    xor ecx, ecx
+1:  cmp ecx, DPICK_N
+    jae 9f
+    imul r14, rcx, DPICK_SIZE
+    lea r14, [rbx + AL_dpicks + r14]
+    inc ecx
+    cmp [r14], r12
+    jne 1b
+    mov qword ptr [r14], 0
+    mov rdi, r13
+    lea rsi, [r14 + DPICK_VAL]
+    call cstr_copy
+    mov eax, 1
+9:  EPILOGUE
+
+# dpicks_clear(AL*): no model pick waits for an answer any more (a process ended or begins)
+dpicks_clear:
+    xor ecx, ecx
+1:  imul rax, rcx, DPICK_SIZE
+    mov qword ptr [rdi + AL_dpicks + rax], 0
+    inc ecx
+    cmp ecx, DPICK_N
+    jb 1b
+    ret
+
 # record() -> rax the project's record, read (every pick is a writer's action)
 record:
     PROLOGUE
@@ -1669,12 +1735,7 @@ FN claude_set_model
     mov rdi, rbx
     call live_up
     test eax, eax
-    jz 2f
-    lea rdi, [rbx + AL_dmodel]  # running: kept, and its pill, once it is applied (claude_flags_answer)
-    mov rsi, r12
-    call cstr_copy
-    or dword ptr [rbx + AL_cfg], CLP_FLMODEL
-    jmp 1f
+    jnz 1f
 2:  mov rdi, r13
     mov esi, AGF_MODEL
     mov rdx, r12
@@ -1685,13 +1746,18 @@ FN claude_set_model
     test rbx, rbx               # a draft's pick (AL* 0): the project's choice only
     jz .Lsmo_yes
     jmp 3f
-1:  mov rdi, rbx
-    mov esi, CLF_MODEL
+1:  mov rdi, rbx               # running: asked; the project's, and its pill, once its own answer says it
+    mov esi, CLF_MODEL          #   applied (claude_flags_answer, by the request's number: AL_dpicks)
     lea rdx, [rip + .Lk_model]
     mov rcx, r12
     call cl_apply
     test eax, eax
     jz .Lsmo_yes                # the write broke the connection: its close says so
+    mov rdi, rbx
+    mov rsi, [rbx + AL_next]    # (the number req_begin gave it)
+    dec rsi
+    mov rdx, r12
+    call dpick_add
     mov rdi, rbx                # the footer follows the pick at once; get_settings settles it
     mov rsi, r12
     mov rdx, r14
@@ -1901,8 +1967,9 @@ FN claude_set_thinking
 FN claude_started
     PROLOGUE
     mov rbx, rdi
-    and dword ptr [rbx + AL_cfg], ~(CLP_WAITMODEL | CLP_WAITEFFORT | CLP_WAITTHINK | CLP_CREDITS | CLP_PREV | CLP_FLMODEL | CLP_PROMPTS | CLP_UNBYPASS | CLP_PEND)
+    and dword ptr [rbx + AL_cfg], ~(CLP_WAITMODEL | CLP_WAITEFFORT | CLP_WAITTHINK | CLP_CREDITS | CLP_PREV | CLP_PROMPTS | CLP_UNBYPASS | CLP_PEND)
     or dword ptr [rbx + AL_cfg], CLP_FIRST
+    call dpicks_clear           # (request numbers start again at r1)
     mov edi, AG_CLAUDE
     call agentcfg_get
     xor ecx, ecx
@@ -1918,7 +1985,7 @@ FN claude_started
 #   the next start begins clean
 FN claude_ended
     and dword ptr [rdi + AL_cfg], ~CLP_RUN
-    ret
+    jmp dpicks_clear
 
 # starting_up(AL*) -> eax 1 while its start is under way with its program up (STARTING, connected): what
 #   the start waits for may be written
@@ -1973,8 +2040,7 @@ kept_picks:
     jz 1f
     cmp byte ptr [r13 + AGC_model], 0
     je 1f
-    and dword ptr [rbx + AL_cfg], ~CLP_FLMODEL  # (the project's already: no pill)
-    mov rdi, rbx
+    mov rdi, rbx                # (the project's already: no slot, no pill)
     mov esi, CLF_MODEL
     lea rdx, [rip + .Lk_model]
     lea rcx, [r13 + AGC_model]
@@ -2068,16 +2134,18 @@ apply_kept:
 8:  mov eax, 1
 9:  EPILOGUE
 
-# FN claude_flags_answer(AL*, control_response's response, kind CLF_*): apply_flag_settings' or
-#   set_max_thinking_tokens' answer. Done: a picked model's pill row ("Switched to NAME"), then what is in
-#   effect is read again (get_settings); refused: the toast says why ("Failed to set model: …", "Failed to
-#   set effort: …", "Failed to turn Ultracode on: …" / "off: …", "Failed to set thinking: …") and what is
-#   in effect is read again
+# FN claude_flags_answer(AL*, control_response's response, kind CLF_*, request number): apply_flag_settings'
+#   or set_max_thinking_tokens' answer. Done: a model the user picked with that request (AL_dpicks: its own
+#   value, whatever was picked after it) is the project's and its pill row says so ("Switched to NAME"),
+#   then what is in effect is read again (get_settings); refused: the toast says why ("Failed to set
+#   model: …", "Failed to set effort: …", "Failed to turn Ultracode on: …" / "off: …", "Failed to set
+#   thinking: …"), that pick is nobody's, and what is in effect is read again
 FN claude_flags_answer
-    PROLOGUE
+    PROLOGUE 80
     mov rbx, rdi
     mov r12, rsi
     mov r13d, edx
+    mov [rsp], rcx
     mov rdi, rsi
     lea rsi, [rip + .Lk_subtype]
     call json_get
@@ -2088,18 +2156,21 @@ FN claude_flags_answer
     jz 5f
     cmp r13d, CLF_MODEL
     jne 4f
-    test dword ptr [rbx + AL_cfg], CLP_FLMODEL
+    mov rdi, rbx                # the pick this request asked for (its value kept: [rsp + 8])
+    mov rsi, [rsp]
+    lea rdx, [rsp + 8]
+    call dpick_take
+    test eax, eax
     jz 4f
-    and dword ptr [rbx + AL_cfg], ~CLP_FLMODEL
     mov edi, AG_CLAUDE          # applied: the project's model now
     call agentcfg_get
     mov r14, rax
-    lea rdi, [rbx + AL_dmodel]
+    lea rdi, [rsp + 8]
     call strlen
     mov r15, rax
     mov rdi, r14
     mov esi, AGF_MODEL
-    lea rdx, [rbx + AL_dmodel]
+    lea rdx, [rsp + 8]
     mov rcx, r15
     call agentcfg_set
     mov rdi, r14
@@ -2110,10 +2181,10 @@ FN claude_flags_answer
     lea rsi, [rip + .Lp_switched]
     call sb_push_cstr
     mov rdi, r14
-    lea rsi, [rbx + AL_dmodel]
+    lea rsi, [rsp + 8]
     mov rdx, r15
     call agentcfg_find_model
-    lea rsi, [rbx + AL_dmodel]
+    lea rsi, [rsp + 8]
     test rax, rax
     jz 3f
     mov rsi, [rax + AMO_label]
@@ -2140,7 +2211,12 @@ FN claude_flags_answer
     lea rsi, [rip + .Lf_ultra_on]
 6:  cmp r13d, CLF_MODEL         # a refused model is not the project's, and no pill names it
     jne 61f
-    and dword ptr [rbx + AL_cfg], ~CLP_FLMODEL
+    mov [rsp + 72], rsi     # (the words: dpick_take keeps no register)
+    mov rdi, rbx
+    mov rsi, [rsp]
+    lea rdx, [rsp + 8]
+    call dpick_take
+    mov rsi, [rsp + 72]
 61: lea rdi, [rip + bsb]
     call sb_push_cstr
     mov rdi, r12

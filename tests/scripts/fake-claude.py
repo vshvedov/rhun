@@ -2150,6 +2150,8 @@ def lifecycle(uid, state):
 # FAKE_CLAUDE_NO_INIT_MODE: initialize's answer has no current_permission_mode.
 # FAKE_CLAUDE_REFUSE_MODEL (VALUE): apply_flag_settings {"model": VALUE} is answered with an error.
 # FAKE_CLAUDE_MODELS longresolved: a third model whose resolvedModel is 500 bytes long.
+# FAKE_CLAUDE_FLAGS_MS: apply_flag_settings is applied and answered that long after it was read, the requests
+#   in the order they came (one thread), the reader going on meanwhile; logged {"flags_answer": ID}.
 # The plan a `plan` turn writes is also in <config>/plans/fake-<session id>.md (as finding 24's file): a later
 #   process of the same conversation answers get_plan from it (the real CLI read its plan file; resuming was not recorded).
 # Scenarios: `rules N [B1] [B2]` (a Bash call whose suggestion has N rules of behavior B1, default allow, and
@@ -2182,6 +2184,38 @@ def review_settings(message):
     if ENV.get('FAKE_CLAUDE_FOREIGN_ID') and not message.get('_later') and isinstance(rid, str):
         respond(rid + 'abc', dict(get_settings(), applied=dict(applied(), model='claude-foreign')))
     return review_later(message, 'settings_answer', 'FAKE_CLAUDE_SETTINGS_MS')
+
+
+FLAGS_LATER = []                    # FAKE_CLAUDE_FLAGS_MS: (due, message) in the order read
+
+
+def review_flags_later(message):
+    """FAKE_CLAUDE_FLAGS_MS: True when apply_flag_settings is answered later, in order, by one thread."""
+    delay = ENV.get('FAKE_CLAUDE_FLAGS_MS')
+    if not delay or message.get('_later'):
+        return False
+
+    def later():
+        while True:
+            with COND:
+                while not FLAGS_LATER:
+                    COND.wait(0.05)
+                due, queued = FLAGS_LATER[0]
+            time.sleep(max(0.0, due - time.time()))
+            with COND:
+                FLAGS_LATER.pop(0)
+            log(flags_answer=queued.get('request_id'))
+            try:
+                handle(dict(queued, _later=True))
+            except Exception:
+                log(error=traceback.format_exc())
+    with COND:
+        if not FLAGS_LATER and not getattr(review_flags_later, 'thread', None):
+            review_flags_later.thread = threading.Thread(target=later, daemon=True)
+            review_flags_later.thread.start()
+        FLAGS_LATER.append((time.time() + int(delay) / 1000, message))
+        COND.notify_all()
+    return True
 
 
 def review_refuse_flags(rid, settings):
@@ -2384,7 +2418,7 @@ def handle(message):
                 respond(rid, get_settings())
         elif sub == 'apply_flag_settings':
             settings = request.get('settings') if isinstance(request.get('settings'), dict) else {}
-            if review_refuse_flags(rid, settings):
+            if review_flags_later(message) or review_refuse_flags(rid, settings):
                 return
             for key, value in settings.items():
                 if value is None:

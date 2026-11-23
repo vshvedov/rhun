@@ -5513,8 +5513,10 @@ reply_follow:
 
 # follow_file(target, cwd or 0): a reply's link to a file, opened in the editor at its line. The
 #   target is PATH, PATH:L, PATH:L-M, PATH:L:C, PATH#LL or PATH#LL-LM, or a file: URI of one (file:///P,
-#   file://HOST/P with the host left out, file:/P; file:///C:/P is C:/P), %XX decoded, absolute or
-#   relative to the conversation's checkout, then to the project. Only the first line of a range is
+#   file://HOST/P with the host left out, file:/P; file:///C:/P is C:/P), absolute or relative to the
+#   conversation's checkout, then to the project. First the whole text, %XX decoded, is tried as a file's
+#   name (a name written with a # or a : in it); then the suffix is split off the text as written and
+#   only the path before it decoded (so %23 and %3A stay in the name). Only the first line of a range is
 #   gone to. A toast when it names no file
 follow_file:
     PROLOGUE 32
@@ -5549,7 +5551,19 @@ follow_file:
     cmp byte ptr [rbx + rcx + 2], ':'
     jne 12f
     inc ecx
-12: lea rsi, [rbx + rcx]
+12: mov [rsp + 24], rcx         # where the path starts
+    xor r13d, r13d              # the line
+    xor r14d, r14d              # the column
+    lea rsi, [rbx + rcx]        # first the whole text decoded, when a file has that very name
+    call lk_decode              #   ("a#b.txt" written as it is, or "a%23b.txt")
+    test rax, rax
+    js 13f
+    mov r15, rax
+    call ff_resolve
+    test eax, eax
+    jnz 9f
+13: mov rcx, [rsp + 24]         # then the suffix split from the text as written (a %23 or %3A is part
+    lea rsi, [rbx + rcx]        #   of the name, never a line), the path before it decoded at .Lff_open
     lea rdi, [rip + lk_buf]
     lea r8, [rdi + 4000]
 2:  movzx eax, byte ptr [rsi]
@@ -5557,24 +5571,7 @@ follow_file:
     jz 3f
     cmp rdi, r8
     jae .Lff_none
-    cmp eax, '%'
-    jne 25f
-    mov al, [rsi + 1]
-    call lk_hex
-    test eax, eax
-    js 24f
-    mov ecx, eax
-    shl ecx, 4
-    mov al, [rsi + 2]
-    call lk_hex
-    test eax, eax
-    js 24f
-    or eax, ecx
-    jz .Lff_none                # %00
-    add rsi, 2
-    jmp 25f
-24: mov eax, '%'
-25: mov [rdi], al
+    mov [rdi], al
     inc rdi
     inc rsi
     jmp 2b
@@ -5582,8 +5579,6 @@ follow_file:
     lea rax, [rip + lk_buf]
     sub rdi, rax
     mov r15, rdi                # its length
-    xor r13d, r13d              # the line
-    xor r14d, r14d              # the column
     # "#L12" or "#L12-L20", any other fragment left out
     lea rdi, [rip + lk_buf]
     xor ecx, ecx
@@ -5676,34 +5671,12 @@ follow_file:
     lea rax, [rip + lk_buf]
     mov byte ptr [rax + rdx], 0
 .Lff_open:
-    lea rdi, [rip + lk_buf]
-    cmp byte ptr [rdi], 0
-    je .Lff_none
-    PATH_ABSOLUTE rdi, 6f
-    test r12, r12               # relative: to the checkout, then the project
-    jz 61f
-    mov rdi, r12
-    lea rsi, [rip + lk_buf]
-    call path_join
-    mov rdi, rax
-    call lk_try
-    test eax, eax
-    jnz 9f
-61: mov rdi, [rip + g_project]
-    test rdi, rdi
-    jz .Lff_none
-    lea rsi, [rip + lk_buf]
-    call path_join
-    mov rdi, rax
-    call lk_try
-    test eax, eax
-    jnz 9f
-    jmp .Lff_none
-6:  lea rdi, [rip + lk_buf]
-    mov rsi, r15
-    call mem_dup
-    mov rdi, rax
-    call lk_try
+    lea rsi, [rip + lk_buf]     # the path, decoded in place
+    call lk_decode
+    test rax, rax
+    js .Lff_none
+    mov r15, rax
+    call ff_resolve
     test eax, eax
     jnz 9f
 .Lff_none:
@@ -5723,6 +5696,83 @@ follow_file:
     EPILOGUE
 9:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
+
+# lk_decode(src cstr) -> rax the length of src %XX-decoded into lk_buf (it may be lk_buf: decoding only
+#   shortens), -1 when it is too long or holds %00. A % without two hex digits after it stays
+lk_decode:
+    lea rdi, [rip + lk_buf]
+    lea r8, [rdi + 4000]
+    mov r9, rdi
+1:  movzx eax, byte ptr [rsi]
+    test eax, eax
+    jz 3f
+    cmp rdi, r8
+    jae 8f
+    cmp eax, '%'
+    jne 2f
+    mov al, [rsi + 1]
+    call lk_hex
+    test eax, eax
+    js 11f
+    mov ecx, eax
+    shl ecx, 4
+    mov al, [rsi + 2]
+    call lk_hex
+    test eax, eax
+    js 11f
+    or eax, ecx
+    jz 8f                       # %00
+    add rsi, 2
+    jmp 2f
+11: mov eax, '%'
+2:  mov [rdi], al
+    inc rdi
+    inc rsi
+    jmp 1b
+3:  mov byte ptr [rdi], 0
+    mov rax, rdi
+    sub rax, r9
+    ret
+8:  mov rax, -1
+    ret
+
+# ff_resolve() -> eax 1 opened: follow_file's lk_buf (r15 its length, r12 the checkout or 0, r13d and r14d
+#   the line and column) as a file: absolute, else in the checkout, then in the project (lk_try)
+ff_resolve:
+    push rbx
+    lea rdi, [rip + lk_buf]
+    cmp byte ptr [rdi], 0
+    je 8f
+    PATH_ABSOLUTE rdi, 6f
+    test r12, r12               # relative: to the checkout, then the project
+    jz 1f
+    mov rdi, r12
+    lea rsi, [rip + lk_buf]
+    call path_join
+    mov rdi, rax
+    call lk_try
+    test eax, eax
+    jnz 9f
+1:  mov rdi, [rip + g_project]
+    test rdi, rdi
+    jz 8f
+    lea rsi, [rip + lk_buf]
+    call path_join
+    mov rdi, rax
+    call lk_try
+    test eax, eax
+    jnz 9f
+    jmp 8f
+6:  lea rdi, [rip + lk_buf]
+    mov rsi, r15
+    call mem_dup
+    mov rdi, rax
+    call lk_try
+    test eax, eax
+    jnz 9f
+8:  xor eax, eax
+9:  pop rbx
+    ret
 
 # lk_try(path, owned) using r13d = the line, r14d = the column: the file opened there, eax 1; 0 when
 #   the path names no file (a folder, nothing). Frees the path

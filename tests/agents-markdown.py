@@ -277,6 +277,27 @@ class AgentsMarkdown(unittest.TestCase):
             self.assertIn(' active=%s line=%d ' % (path, line), state, name)
             self.command('cmd focus_agents')
 
+    def test_an_encoded_hash_or_colon_stays_in_the_name(self):
+        # the line suffix is split from the text as written, then the path decoded: %23 and %3A are part of
+        # the file's name; a name written with a # in it still opens
+        for name in ('a#b.txt', 'a:b.txt', 'c d.txt'):
+            (self.project / name).write_text(''.join('l%d\n' % i for i in range(1, 6)), encoding='utf-8')
+        spaced = (self.project / 'c d.txt').as_posix().replace(' ', '%20')
+        reply = ('[hash](a%%23b.txt), [colon](a%%3Ab.txt), [hash at 3](a%%23b.txt#L3), [plain](src/main.c:12), '
+                 '[uri](file://%s:2) and [raw](a#b.txt).' % spaced)
+        self.session('s1', [('user', 'where?'), ('assistant', reply)])
+        self.start()
+        self.open('s1')
+        where = self.links_at(2)
+        self.assertEqual(len(where), 6, where)
+        for name, path, line in (('hash', 'a#b.txt', 1), ('raw', 'a#b.txt', 1), ('colon', 'a:b.txt', 1),
+                                 ('hash at 3', 'a#b.txt', 3), ('plain', 'main.c', 12), ('uri', 'c d.txt', 2)):
+            self.command('click %d %d' % where[name])
+            self.command('wait 50')
+            state = self.command('print-state')
+            self.assertIn(' active=%s line=%d ' % (path, line), state, name)
+            self.command('cmd focus_agents')
+
     def test_only_rhun_file_links_to_files_are_followed(self):
         other = self.work / 'other'
         other.mkdir()

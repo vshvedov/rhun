@@ -30,6 +30,9 @@ lay_mode: .long 0               #   the mode label's room (its gap included), 0:
 lay_btn: .long 0                #   Send's (or Stop's) width: MI_64 with its word, MI_32 an icon
 lay_below: .long 0              #   1: Send (and the mode label) on a row under the box
 lay_min: .long 0                #   the least the box is given
+.p2align 3
+ph_last: .quad 0                # the placeholder the box was drawn with last, and the box's width
+ph_w: .long 0
 match_len: .quad 0              # cwd_match: the longest root that holds the CWD so far
 match_name: .quad 0             #   its worktree name (a copy) when it is a linked worktree
 match_cwd: .quad 0
@@ -3071,6 +3074,60 @@ FN agentext_box_dump
     call agents_metrics
     EPILOGUE
 
+# FN agentext_placeholder_dump(sb): "placeholder=TEXT" as the box drew it last: cut with "…" at a
+#   character's end when wider than the box (ui_textarea's room: MI_10 each side), "" before any box
+FN agentext_placeholder_dump
+    PROLOGUE
+    mov rbx, rdi
+    lea rsi, [rip + .Ld_placeholder]
+    call sb_push_cstr
+    mov r12, [rip + ph_last]
+    test r12, r12
+    jz 8f
+    mov rdi, r12
+    call strlen
+    mov r13, rax
+    mov r14, [rip + in_tf + TF_face]
+    test r14, r14
+    jnz 1f
+    lea r14, [rip + g_face_ui]
+1:  mov r15d, [rip + ph_w]
+    sub r15d, [rip + g_mt + 4*MI_10]
+    sub r15d, [rip + g_mt + 4*MI_10]
+    mov rdi, r14
+    mov rsi, r12
+    mov rdx, r13
+    call text_width
+    cmp eax, r15d
+    jle 7f
+    mov rdi, r14
+    lea rsi, [rip + ellipsis]
+    mov edx, 3
+    call text_width
+    sub r15d, eax
+    mov rdi, r14
+    mov rsi, r12
+    mov rdx, r13
+    mov ecx, r15d
+    call text_fit
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, rax
+    call sb_push
+    mov rdi, rbx
+    lea rsi, [rip + ellipsis]
+    mov edx, 3
+    call sb_push
+    jmp 8f
+7:  mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+8:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    EPILOGUE
+
 # send_x(x) -> eax where Send starts for a panel whose left is x (box_fit's lay_*): right of the box and
 #   the mode label, or at the right end of the row under the box
 send_x:
@@ -3207,11 +3264,17 @@ FN agentext_bottom_draw
 31: mov [rsp + 56], eax         # Send's y
     mov eax, [rip + lay_btn]
     mov [rsp + 60], eax         # its width
-    lea rax, [rip + .Lph_reply]
+    lea rax, [rip + .Lph_new]   # the placeholder: a new draft's, an extension's session's, or Claude Code's
     test rbx, rbx
-    jnz 4f
-    lea rax, [rip + .Lph_new]
-4:  push rax
+    jz 4f
+    lea rax, [rip + .Lph_reply]
+    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
+    je 4f
+    lea rax, [rip + .Lph_claude]
+4:  mov [rip + ph_last], rax    # (print-agent-placeholder)
+    mov ecx, [rsp + 32]
+    mov [rip + ph_w], ecx
+    push rax
     push rax
     lea rdi, [rip + in_tf]
     mov esi, [rsp + 16 + 28]
@@ -3900,7 +3963,9 @@ FN agentext_prompts_gone
 .Lsend_full: .asciz "Four prompts are already waiting to be sent."
 .Lnew_failed: .asciz "The new conversation could not be started."
 .Lph_reply: .asciz "Reply to the agent (Enter sends, Shift+Enter a new line)"
-.Lph_new: .asciz "What should the agent do? (Enter starts the session)"
+.Lph_new: .asciz "Start a conversation"
+.Lph_claude: .asciz "Message Claude Code"
+.Ld_placeholder: .asciz "placeholder="
 .Lb_send: .asciz "Send"
 .Lrestore_gap: .asciz "\n\n"
 .Lbd_size: .asciz "size="

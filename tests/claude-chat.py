@@ -1138,6 +1138,25 @@ class RequestTest(DrivenCase):
 class BoxLayoutTest(DrivenCase):
     """The prompt row in a narrow panel at a large text size: the box keeps its room."""
 
+    def placeholder(self):
+        self.command('wait 50')                         # a frame drawn
+        return self.command('print-agent-placeholder').rstrip('\n')
+
+    def test_the_placeholder_names_the_box_and_is_cut_with_an_ellipsis(self):
+        self.start()
+        self.command('cmd focus_agents')
+        self.command('agent-new claude')
+        self.assertEqual(self.placeholder(), 'placeholder=Start a conversation')
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready')
+        self.assertEqual(self.placeholder(), 'placeholder=Message Claude Code')
+        self.config.write_text(self.BASE + self.claude_section() + '[ui]\nagents_width = 240\n'
+                               '[agents]\nfont_size = 30\n', encoding='utf-8')
+        self.until(lambda: self.placeholder() != 'placeholder=Message Claude Code', 'the reload', 10)
+        text = self.placeholder()[len('placeholder='):]
+        self.assertTrue(text.endswith('\u2026'), text)  # cut at a character, an ellipsis after it
+        self.assertTrue('Message Claude Code'.startswith(text[:-1]) and len(text) > 1, text)
+
     def test_the_box_keeps_its_room_at_every_size_and_width(self):
         self.start()
         self.chat('hello')

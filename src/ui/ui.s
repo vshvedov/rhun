@@ -2028,16 +2028,31 @@ FN ui_textarea
     mov [rsp + 36], eax
     test r15, r15
     jnz 6f
-    # placeholder
-    mov r8, [rsp + 24]
-    test r8, r8
+    # placeholder: its first line, with "…" at a character's end when it is wider than the box
+    mov rdi, [rsp + 24]
+    test rdi, rdi
     jz .Lta_caret
+    call strlen
+    mov [rsp + 84], eax
     call ta_face
+    mov eax, [rsp + 32]         # its baseline, centered in the line's height
+    sub eax, [rdi + FACE_ascent]
+    sub eax, [rdi + FACE_descent]
+    sar eax, 1
+    add eax, [rsp + 40]
+    add eax, [rdi + FACE_ascent]
+    mov edx, eax
+    mov eax, [rsp + 8]          # the room inside: the text's own padding on both sides
+    sub eax, [rip + g_mt + 4*MI_10]
+    sub eax, [rip + g_mt + 4*MI_10]
     mov esi, [rsp + 36]
-    mov edx, [rsp + 40]
-    mov ecx, [rsp + 32]
+    mov rcx, [rsp + 24]
+    mov r8d, [rsp + 84]
     COLOR r9d, T_MUTED
-    call ui_text_c
+    push rax
+    push rax
+    call text_draw_fit
+    add rsp, 16
     jmp .Lta_caret
 6:  mov rdi, rbx
     call tf_sel

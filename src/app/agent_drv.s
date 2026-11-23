@@ -1812,6 +1812,7 @@ FN ev_failed
 #   conversation left without a prompt goes (draft_left); the idle stop (idle_ms)
 FN agent_drv_tick
     PROLOGUE
+    call claude_auth_tick       # the sign-in question's time, with or without a record waiting
     cmp qword ptr [rip + lives + VEC_len], 0
     je 9f
     xor ebx, ebx
@@ -1953,7 +1954,16 @@ FN agent_drv_timeout
     jae 1b
 3:  mov r13, rax
     jmp 1b
-8:  mov rax, 0x3fffffff
+8:  call claude_auth_timeout   # the sign-in question's time (none: -1)
+    test eax, eax
+    js 82f
+    mov eax, eax
+    cmp r13, -1
+    je 81f
+    cmp rax, r13
+    jae 82f
+81: mov r13, rax
+82: mov rax, 0x3fffffff
     cmp r13, rax
     jbe 9f
     cmp r13, -1

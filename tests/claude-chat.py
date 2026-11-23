@@ -1992,6 +1992,20 @@ class EdgeTest(DrivenCase):
         self.command('agent-type y')
         self.until(lambda: len(self.auths()) == 2, 'asked again', 5)
 
+    def test_a_sign_in_question_nobody_waits_for_ends_in_time(self):
+        # typing in a new draft asks; Back leaves the draft (its record goes) before the slow answer:
+        # the question still ends at its 10 s
+        self.start(env={'FAKE_CLAUDE_AUTH_MS': '30000'})
+        self.command('agent-new claude')
+        self.command('agent-type x')
+        self.until(lambda: len(self.auths()) == 1, 'the sign-in question')
+        pid = self.auths()[0]['pid']
+        self.command(f'click {BACK[0]} {BACK[1]}')
+        self.until(lambda: self.live().startswith('state=off pid=0 sid= '), 'the draft goes')
+        time.sleep(5)
+        self.assertTrue(alive(pid))
+        self.until(lambda: not alive(pid), 'the question ends', 12)
+
     def test_chat_off_ends_the_sign_in_question(self):
         self.start(env={'FAKE_CLAUDE_AUTH_MS': '20000'})
         self.command('agent-new claude')

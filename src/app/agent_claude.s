@@ -774,6 +774,33 @@ au_answer:
 9:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
+# FN claude_auth_tick(): the sign-in question's time, kept whoever waits for it (a draft left before the
+#   answer has no record to ask cl_auth): past AUTH_MS it ends and counts as signed in, as in cl_auth
+FN claude_auth_tick
+    PROLOGUE
+    cmp dword ptr [rip + au_state], AU_ASKING
+    jne 9f
+    call time_ms
+    cmp rax, [rip + au_until]
+    jl 9f
+    call claude_auth_end
+    mov dword ptr [rip + au_state], AU_IN
+9:  EPILOGUE
+
+# FN claude_auth_timeout() -> eax ms until the sign-in question's time is up (0: now), -1 when none runs
+FN claude_auth_timeout
+    PROLOGUE
+    mov eax, -1
+    cmp dword ptr [rip + au_state], AU_ASKING
+    jne 9f
+    call time_ms
+    mov rcx, [rip + au_until]
+    sub rcx, rax
+    xor eax, eax
+    test rcx, rcx
+    cmovg eax, ecx
+9:  EPILOGUE
+
 # FN claude_auth_end(): the status question, if one runs, ends (its watch, its pipe, its process); one
 #   ended before its answer is asked again next time (au_answer and the timeout set the state after)
 FN claude_auth_end

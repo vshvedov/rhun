@@ -184,11 +184,12 @@ seconds, counts as signed in. When it is not signed in, or a turn fails because 
 refused, the prompt goes back into the box and a card says "Claude Code is not signed in." with
 **Sign In**. Sign In opens the prompt "Run in the terminal: Enter, or Esc" with `claude auth login`
 in it (the **Claude Code program** in place of `claude` when one is set, with `~/` written out as
-your home folder): Enter runs it in rhun's terminal. When an absolute `env.CLAUDE_CONFIG_DIR` is
-set, the command starts with `CLAUDE_CONFIG_DIR=FOLDER ` (on Windows, where the terminal runs
-PowerShell, `$env:CLAUDE_CONFIG_DIR=FOLDER; `), so the sign-in goes to the folder rhun's Claude Code
-uses. No other `env.` line goes there, as the command stays in the shell's history. The card stays
-until the next Send, which asks again.
+your home folder): Enter runs it in rhun's terminal. The sign-in must go where that conversation's
+Claude Code looks for it, so when its process gets a `CLAUDE_CONFIG_DIR` the command starts with
+`CLAUDE_CONFIG_DIR=FOLDER ` (on Windows, where the terminal runs PowerShell,
+`$env:CLAUDE_CONFIG_DIR=FOLDER; `), and when an `env.HOME` line gives it another home folder than
+the terminal's, with `HOME=FOLDER ` instead. Nothing else of the `env.` lines goes there, as the
+command stays in the shell's history. The card stays until the next Send, which asks again.
 
 When a start fails, an error row says why, such as "Claude Code was not found. Install it, or set
 its path in Settings > Claude Code.", and a card says "Claude Code could not start." (followed by
@@ -279,9 +280,11 @@ reply that is still streaming is drawn as it grows; a code block that has not be
 as code.
 
 `http` and `https` links open in the browser. An agent writes the replies, so of the `rhun://`
-links only a `rhun://file/` link to a file is followed, as rhun opens it; other `rhun://` links,
-which could install an extension or open a project, a `rhun://file/` link to a folder and a link
-with another scheme do nothing. A link to a file opens it in the editor at its line: `path`,
+links only a `rhun://file/` link to a file is followed, and it opens that file's text in a tab like
+any other file link (a workspace file too: a link in a reply never changes the project); other
+`rhun://` links, which could install an extension or open a project, a `rhun://file/` link to a
+folder and a link with another scheme do nothing. A link to a file opens it in the editor at its
+line: `path`,
 `path:12`, `path:12:5`, `path:12-20`, `path#L12` or `path#L12-L20`, absolute, or relative to the
 conversation's checkout and then to the project. A `file:` URI of one is read too (`file:///path`,
 `file://host/path` with the host left out, `file:/path`; `file:///C:/path` is `C:/path`), and `%`

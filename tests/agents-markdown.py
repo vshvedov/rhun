@@ -248,6 +248,35 @@ class AgentsMarkdown(unittest.TestCase):
         self.command('wait 50')
         self.assertIn('No such file: missing/file.c:2', self.command('print-toast'))
 
+    def links_at(self, n):
+        where = {}
+        for line in self.row(n)[1]:
+            match = re.match(r'link (.*) -> (.*) at (-?\d+) (-?\d+)$', line)
+            if match:
+                where[match.group(1)] = (int(match.group(3)), int(match.group(4)))
+        return where
+
+    def test_file_uris_open_the_file(self):
+        main = (self.project / 'src/main.c').as_posix()
+        notes = (self.project / 'notes.txt').as_posix()
+        spaced = self.project / 'a b.txt'
+        spaced.write_text('x\ny\n', encoding='utf-8')
+        reply = ('See [at a line](file://%s#L12), [whole](file://%s), [spaced](file://%s:2) and '
+                 '[on a host](file://localhost%s#L4).'
+                 % (main, notes, spaced.as_posix().replace(' ', '%20'), main))
+        self.session('s1', [('user', 'where?'), ('assistant', reply)])
+        self.start()
+        self.open('s1')
+        where = self.links_at(2)
+        self.assertEqual(len(where), 4, where)
+        for name, path, line in (('at a line', 'main.c', 12), ('whole', 'notes.txt', 1),
+                                 ('spaced', 'a b.txt', 2), ('on a host', 'main.c', 4)):
+            self.command('click %d %d' % where[name])
+            self.command('wait 50')
+            state = self.command('print-state')
+            self.assertIn(' active=%s line=%d ' % (path, line), state, name)
+            self.command('cmd focus_agents')
+
     def test_a_width_change_lays_the_rows_out_again(self):
         self.session('s1', [('user', 'go'), ('assistant', REPLY + '\n\n' + 'a long line of words ' * 30)])
         self.start()

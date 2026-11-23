@@ -5326,7 +5326,8 @@ draw_msg:
 
 # reply_click(msg, link): a link of a reply was clicked. A code block's Copy and links with a scheme
 #   go as the Markdown preview follows them (http and https in the browser, others nowhere) at once;
-#   rhun:// links and files after the frame (reply_follow), as opening one may change what is drawn
+#   rhun:// links, files and file: URIs after the frame (reply_follow), as opening one may change what
+#   is drawn
 reply_click:
     PROLOGUE
     mov rbx, rdi
@@ -5378,8 +5379,8 @@ reply_click:
     call md_open_link
 9:  EPILOGUE
 
-# link_scheme(ptr, len) -> eax 0 none (a path), 1 rhun://, 2 another scheme: letters, digits, + . -
-#   from a letter, two at least, then ':' and something not a digit (PATH:12 is a path)
+# link_scheme(ptr, len) -> eax 0 none (a path), 1 rhun://, 2 another scheme, 3 file: (any case): letters,
+#   digits, + . - from a letter, two at least, then ':' and something not a digit (PATH:12 is a path)
 link_scheme:
     xor eax, eax
     test rsi, rsi
@@ -5419,7 +5420,15 @@ link_scheme:
     sub edx, '0'
     cmp edx, 9
     jbe 9f
-    mov eax, 2
+    cmp rcx, 4
+    jne 4f
+    mov edx, [rdi]
+    or edx, 0x20202020
+    cmp edx, 0x656c6966                 # "file"
+    jne 4f
+    mov eax, 3
+    ret
+4:  mov eax, 2
     cmp rsi, 7
     jb 9f
     cmp dword ptr [rdi], 0x6e756872     # "rhun"
@@ -5431,7 +5440,8 @@ link_scheme:
     mov eax, 1
 9:  ret
 
-# reply_follow(): the link reply_click kept, followed: rhun:// as rhun opens it, else a file
+# reply_follow(): the link reply_click kept, followed: rhun:// as rhun opens it, else a file (a path,
+#   a file: URI)
 reply_follow:
     PROLOGUE
     mov rbx, [rip + pend_link]
@@ -5460,24 +5470,44 @@ reply_follow:
 9:  EPILOGUE
 
 # follow_file(target, cwd or 0): a reply's link to a file, opened in the editor at its line. The
-#   target is PATH, PATH:L, PATH:L-M, PATH:L:C, PATH#LL or PATH#LL-LM (file:// before it left out,
-#   %XX decoded), absolute or relative to the conversation's checkout, then to the project. Only
-#   the first line of a range is gone to. A toast when it names no file
+#   target is PATH, PATH:L, PATH:L-M, PATH:L:C, PATH#LL or PATH#LL-LM, or a file: URI of one (file:///P,
+#   file://HOST/P with the host left out, file:/P; file:///C:/P is C:/P), %XX decoded, absolute or
+#   relative to the conversation's checkout, then to the project. Only the first line of a range is
+#   gone to. A toast when it names no file
 follow_file:
     PROLOGUE 32
     mov rbx, rdi
     mov r12, rsi
-    xor eax, eax                # "file://" left out
-    lea rcx, [rip + .Lfile_scheme]
-11: movzx edx, byte ptr [rcx + rax]
-    test edx, edx
+    mov rdi, rbx
+    call strlen
+    mov rsi, rax
+    mov rdi, rbx
+    call link_scheme
+    xor ecx, ecx
+    cmp eax, 3
+    jne 12f
+    mov ecx, 5                  # "file:" left out
+    cmp word ptr [rbx + 5], 0x2f2f      # "//": an authority (a host, or none) up to the path's "/"
+    jne 11f
+    mov ecx, 7
+10: movzx eax, byte ptr [rbx + rcx]
+    test eax, eax
     jz 12f
-    cmp dl, [rbx + rax]
-    jne 13f
-    inc eax
-    jmp 11b
-13: xor eax, eax
-12: lea rsi, [rbx + rax]
+    cmp eax, '/'
+    je 11f
+    inc ecx
+    jmp 10b
+11: cmp byte ptr [rbx + rcx], '/'   # "/C:/..." is a drive's path
+    jne 12f
+    movzx eax, byte ptr [rbx + rcx + 1]
+    or eax, 0x20
+    sub eax, 'a'
+    cmp eax, 25
+    ja 12f
+    cmp byte ptr [rbx + rcx + 2], ':'
+    jne 12f
+    inc ecx
+12: lea rsi, [rbx + rcx]
     lea rdi, [rip + lk_buf]
     lea r8, [rdi + 4000]
 2:  movzx eax, byte ptr [rsi]
@@ -5923,7 +5953,6 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lago: .asciz " ago"
 .Lyou: .asciz "You"
 .Lno_file: .asciz "No such file: "
-.Lfile_scheme: .asciz "file://"
 .Lrow_n: .asciz "row="
 .Lrow_role: .asciz " role="
 .Lrow_height: .asciz " height="

@@ -2966,6 +2966,86 @@ class ReviewProtocolTest(ModelCase):
         self.assertEqual(self.prompts()[-1], 'a' * 50000 + '\n\n' + marker)
         self.assertNotIn('50,000', self.command('print-toast'))
 
+    # ---- the second round (2026-11-23, on the fixes) ----
+
+    def last_start(self):
+        """order() from the last initialize on: what the latest process read."""
+        order = self.order()
+        if 'initialize' not in order:
+            return []
+        return order[len(order) - 1 - order[::-1].index('initialize'):]
+
+    def wake(self):
+        return re.search(r' wake=(\S+)', self.command('print-agent-live')).group(1)
+
+    def test_stop_during_the_settings_wait_leaves_no_clock(self):
+        # R8 (R3's second half): Stop while the prompts wait for get_settings: the wait's clock goes with the
+        # start (no wake-up for it), and nothing is written to the process afterwards (the late answer comes)
+        self.start(env={'FAKE_CLAUDE_MODELS': 'ultra', 'FAKE_CLAUDE_SETTINGS_MS': '1500'})
+        self.command('agent-cfg-set ultra 1')
+        self.chat('hello')
+        self.released()
+        self.command('agent-prompt again')
+        self.command('agent-model sonnet')              # a pick waiting for the settings' answer
+        self.until(lambda: 'get_settings' in self.last_start(), 'get_settings asked')
+        self.assertRegex(self.wake(), r'^\d+$')         # the wait's bound is the loop's next wake-up
+        self.command('agent-stop')
+        self.assertIn('state=off ', self.live())
+        self.assertEqual(self.wake(), '-')
+        written = len(self.stdin())
+        time.sleep(2)                                   # past the late answer and past the bound
+        self.assertEqual(len(self.stdin()), written)
+        self.assertNotIn('user again', self.order())
+        self.assertEqual(self.wake(), '-')
+
+    def test_a_plan_whose_start_was_stopped_asks_nothing_later(self):
+        # R2: /plan in plan mode starts the program for the plan; Stop during that start: a later start for
+        # an ordinary prompt shows no plan and asks for none
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '800'})
+        self.chat('hello', ms=15000)
+        self.command('agent-mode plan')
+        self.until(lambda: self.mode() == 'plan', 'plan mode')
+        self.released()
+        self.command('agent-prompt /plan')
+        self.assertIn('state=starting ', self.live())
+        self.command('agent-stop')
+        self.assertIn('state=off ', self.live())
+        self.until_gone()
+        self.command('agent-mode default')
+        self.command('agent-prompt again')
+        self.command('wait-agent ready 10000')
+        self.command('wait 300')
+        self.assertEqual(self.requests('get_plan'), [])
+        self.assertNotIn("info Couldn't show the plan", self.thread())
+
+    def test_a_late_settings_answer_still_applies_ultracode(self):
+        # R3: get_settings answers after the bound: the prompt went at the bound, and the late answer still
+        # asks for the project's Ultracode (it differs from what the process reports)
+        self.start(env={'FAKE_CLAUDE_MODELS': 'ultra', 'FAKE_CLAUDE_SETTINGS_MS': '1500'})
+        self.command('agent-cfg-set ultra 1')
+        self.command('agent-timing settings=300')
+        self.chat('hello')
+        self.until(lambda: {'ultracode': True} in self.flags(), 'Ultracode asked once the answer came')
+        order = self.order()
+        self.assertLess(order.index('user hello'), order.index('apply_flag_settings'))
+
+    def test_a_refused_write_before_the_prompts_fails_the_start(self):
+        # R9: the process started in bypass (the user's own default) and rhun's gate is shut: default must be
+        # asked before any prompt. That write refused (the queue full, the connection up): the start fails
+        # with its words, the prompt is back in the box, nothing was sent. agent-timing queue=90 lets the
+        # 82-byte get_settings line through and refuses the 106-byte set_permission_mode one
+        self.start(env={'FAKE_CLAUDE_MODE': 'bypassPermissions', 'FAKE_CLAUDE_INIT_MS': '800'})
+        self.command('agent-new claude')
+        self.command('agent-prompt hello')
+        self.until(lambda: 'initialize' in self.order(), 'initialize written')
+        self.command('agent-timing queue=90')
+        self.command('wait-agent failed 10000')
+        self.command('agent-timing queue=%d' % (16 << 20))
+        self.assertEqual(self.order(), ['initialize', 'get_settings'])
+        self.assertIn('report=Claude Code took no more input before the conversation', self.command('print-agent-live'))
+        self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
+        self.assertNotIn('user hello', self.thread())
+
     def test_a_long_resolved_id_is_cut(self):
         # 2.1: a model's resolvedModel is kept at most 63 bytes, in memory and in the state file
         self.start(env={'FAKE_CLAUDE_MODELS': 'longresolved'})

@@ -132,7 +132,7 @@ class ChatCase(unittest.TestCase):
         """print-agent-live without the controls the driver reports (tests/claude-controls.py reads those)
         and the thread's scroll fields (EdgeTest reads those)."""
         return re.sub(r' model=\S+ effort=\S+ ultra=\S+ think=\S+ fast=\S+ held=\d+ ctx=\S+ cache=\S+ '
-                      r'suggest=[01]| scroll=\d+ max=\d+ follow=[01]', '', self.command('print-agent-live'))
+                      r'suggest=[01] wake=\S+| scroll=\d+ max=\d+ follow=[01]', '', self.command('print-agent-live'))
 
     def quit(self):
         """End rhun the way the user does (it writes its config if a setting changed), and wait."""

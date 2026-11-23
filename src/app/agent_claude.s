@@ -3448,6 +3448,7 @@ claude_drv:
     .quad claude_set_thinking, claude_reply, claude_action
     .quad claude_menu
     .quad .Lhint                # DRV_hint
+    .quad claude_ended          # DRV_ended (claude_session.s)
 cl_types:
     .quad .Lv_stream_event, h_stream, .Lv_assistant, h_assistant, .Lv_system, h_system
     .quad .Lv_result, h_result, .Lv_control_request, h_request, .Lv_control_response, h_response

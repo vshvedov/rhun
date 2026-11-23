@@ -240,24 +240,35 @@ FN agent_live_state
 1:  ret
 
 # FN agent_state_set(AL*, state): AL_state, and AS_state as the list and the box read it; a turn starting
-#   (WORKING) takes the agent's suggestion away
+#   (WORKING) takes the agent's suggestion away. OFF or FAILED ends whatever start or run there was (a Stop,
+#   a failed start, a process gone, a held start given up): the driver lets go of what it kept for it
+#   (DRV_ended), the one place that does
 FN agent_state_set
-    mov [rdi + AL_state], esi
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov [rbx + AL_state], esi
     lea rax, [rip + ags_of]
-    mov eax, [rax + rsi*4]
-    mov rcx, [rdi + AL_as]
+    mov eax, [rax + r12*4]
+    mov rcx, [rbx + AL_as]
     mov [rcx + AS_state], eax
     mov dword ptr [rip + g_dirty], 1
-    cmp esi, ALS_WORKING        # a turn starts: the agent's suggestion goes
+    cmp r12d, ALS_WORKING       # a turn starts: the agent's suggestion goes
     jne 1f
-    cmp qword ptr [rdi + AL_suggest], 0
-    je 1f
-    push rdi
-    mov rdi, [rdi + AL_suggest]
+    mov rdi, [rbx + AL_suggest]
+    test rdi, rdi
+    jz 9f
     call mem_free
-    pop rdi
-    mov qword ptr [rdi + AL_suggest], 0
-1:  ret
+    mov qword ptr [rbx + AL_suggest], 0
+    jmp 9f
+1:  cmp r12d, ALS_OFF
+    je 2f
+    cmp r12d, ALS_FAILED
+    jne 9f
+2:  mov rdi, rbx
+    mov rax, [rbx + AL_drv]
+    call [rax + DRV_ended]
+9:  EPILOGUE
 
 # live_free(AL*): the program ends (conn_close), everything the record owns goes, AS_live is 0
 live_free:
@@ -2913,7 +2924,8 @@ FN agent_live_dump
 9:  EPILOGUE
 
 # live_controls_dump(sb, AL* or 0): " model=V effort=E ultra=0|1|- think=0|1 fast=off|on|cooldown held=N
-#   ctx=N|- cache=Nm|cold|- suggest=0|1" ("-" for what is not known)
+#   ctx=N|- cache=Nm|cold|- suggest=0|1 wake=MS|-" ("-" for what is not known; wake: the drivers' next
+#   wake-up of the loop, agent_drv_timeout, whichever record it is for)
 live_controls_dump:
     PROLOGUE
     mov rbx, rdi
@@ -3034,6 +3046,19 @@ live_controls_dump:
     setne sil
 84: mov rdi, rbx
     call sb_push_u64
+    mov rdi, rbx                # the drivers' next wake-up of the loop (agent_drv_timeout), "-" none
+    lea rsi, [rip + .Ld_wake]
+    call sb_push_cstr
+    call agent_drv_timeout
+    test eax, eax
+    jns 85f
+    mov rdi, rbx
+    mov esi, '-'
+    call sb_push_byte
+    EPILOGUE
+85: mov rdi, rbx
+    mov esi, eax
+    call sb_push_u64
     EPILOGUE
 
 # push_or_dash(sb, cstr or 0): the text, or "-" when it is empty
@@ -3097,6 +3122,7 @@ ext_drv:
     .quad ext_none, ext_none, ext_none, ext_none, ext_none, ext_none, ext_none, ext_none
     .quad ext_none              # DRV_menu: no command menu (agentpop.s)
     .quad 0                     # DRV_hint: the box's own placeholder
+    .quad ext_none              # DRV_ended: it keeps nothing per start
 kind_names: .quad .Lk_claude, .Lk_codex, .Lk_grok, .Lk_opencode
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 state_names: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
@@ -3165,6 +3191,7 @@ opts_failed: .quad .Lo_terminal
 .Ld_cache: .asciz " cache="
 .Ld_cold: .asciz "cold"
 .Ld_suggest: .asciz " suggest="
+.Ld_wake: .asciz " wake="
 .Lfs_off: .asciz "off"
 .Lfs_on: .asciz "on"
 .Lfs_cooldown: .asciz "cooldown"

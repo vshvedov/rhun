@@ -68,6 +68,8 @@
 .equ CLP_UNBYPASS, 65536        #   in bypass without rhun's gate (default is asked first); AL_dpend is a pick
 .equ CLP_PEND, 131072           #   made while it started, asked once initialize is answered (claude_init_ask);
 .equ CLP_PLANWAIT, 262144       #   /plan without a program: get_plan once it is up (prompts_go)
+.equ CLP_RUN, CLP_MODEWAIT | CLP_WAITMODEL | CLP_WAITEFFORT | CLP_FIRST | CLP_WAITTHINK | CLP_PROMPTS | CLP_UNBYPASS | CLP_PEND | CLP_PLANWAIT | CLP_PREV | CLP_FLMODEL
+                                # what a start or a run keeps: claude_ended lets go of it
 .equ SETTINGS_WAIT_MS, 3000     # the prompts wait this long at most for the first get_settings answer
 
 .data
@@ -681,6 +683,8 @@ FN claude_settings_answer
     mov esi, r14d               #   yet, then the prompts that waited go
     mov edx, r15d
     call apply_kept
+    test eax, eax
+    jz 9f                       # (a write refused: the start failed)
     mov rdi, rbx
     call prompts_go
 9:  EPILOGUE
@@ -711,9 +715,11 @@ FN claude_settings_answer
     xor esi, esi
     xor edx, edx
     call apply_kept
+    test eax, eax
+    jz 9f
     mov rdi, rbx
     call prompts_go
-    EPILOGUE
+9:  EPILOGUE
 
 # prompts_go(AL*): the prompts that waited for the first get_settings answer (CLP_PROMPTS) go now, once
 #   (ev_ready), while the start is still under way and the connection up; then a /plan that started it
@@ -724,10 +730,10 @@ prompts_go:
     test dword ptr [rbx + AL_cfg], CLP_PROMPTS
     jz 9f
     and dword ptr [rbx + AL_cfg], ~CLP_PROMPTS
-    cmp dword ptr [rbx + AL_state], ALS_STARTING
-    jne 9f
-    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
-    jne 9f
+    call starting_up
+    test eax, eax
+    jz 9f
+    mov rdi, rbx
     call ev_ready
     test dword ptr [rbx + AL_cfg], CLP_PLANWAIT
     jz 9f
@@ -750,8 +756,9 @@ FN claude_prompts_wait
     mov [rbx + AL_dwait], rax
     EPILOGUE
 
-# FN claude_settings_tick(): a get_settings that does not answer in time: the kept choices are written
-#   without its word and the prompts go
+# FN claude_settings_tick(): a get_settings that does not answer in time: the picks made while it started
+#   are written without its word and the prompts go; its answer, when it comes, still settles what needs
+#   it (the project's Ultracode: CLP_FIRST stays). Only for a start still under way (starting_up)
 FN claude_settings_tick
     PROLOGUE
 1:  xor ebx, ebx
@@ -763,19 +770,24 @@ FN claude_settings_tick
     mov r12, rax
     test dword ptr [r12 + AL_cfg], CLP_PROMPTS
     jz 2b
+    mov rdi, r12
+    call starting_up
+    test eax, eax
+    jz 2b
     call time_ms
     cmp rax, [r12 + AL_dwait]
     jl 2b
     mov rdi, r12
-    xor esi, esi
-    xor edx, edx
-    call apply_kept
+    call kept_picks
+    test eax, eax
+    jz 1b                       # (a write refused: the start failed)
     mov rdi, r12
     call prompts_go
     jmp 1b                      # (what went may have changed the list)
 9:  EPILOGUE
 
 # FN claude_settings_timeout() -> eax ms until a get_settings answer's wait ends (0: now), -1 when none waits
+#   (a start still under way: starting_up)
 FN claude_settings_timeout
     PROLOGUE
     mov r13, -1
@@ -787,6 +799,10 @@ FN claude_settings_timeout
     inc ebx
     mov r12, rax
     test dword ptr [r12 + AL_cfg], CLP_PROMPTS
+    jz 1b
+    mov rdi, r12
+    call starting_up
+    test eax, eax
     jz 1b
     call time_ms
     mov rcx, [r12 + AL_dwait]
@@ -1557,18 +1573,19 @@ FN claude_init_mode
 9:  EPILOGUE
 
 # FN claude_init_ask(AL*): before any prompt: default when it started in bypass without the gate, then the
-#   pick claude_init_mode kept (through the gate)
+#   pick claude_init_mode kept (through the gate). A write refused fails the start (start_refused): no prompt
+#   goes before them
 FN claude_init_ask
     PROLOGUE
     mov rbx, rdi
     test dword ptr [rbx + AL_cfg], CLP_UNBYPASS
     jz 1f
     and dword ptr [rbx + AL_cfg], ~CLP_UNBYPASS
-    mov rdi, rbx                # (its answer shows the mode: claude_mode_answer)
+    mov rdi, rbx                # (its answer shows the mode: claude_mode_quiet's, claude_mode_answer)
     lea rsi, [rip + .Lv_default]
     call claude_mode_quiet
     test eax, eax
-    jz 9f
+    jz 8f
 1:  test dword ptr [rbx + AL_cfg], CLP_PEND
     jz 9f
     and dword ptr [rbx + AL_cfg], ~CLP_PEND
@@ -1585,6 +1602,10 @@ FN claude_init_ask
     mov rdi, rbx
     lea rsi, [rbx + AL_dpend]
     call cl_set_mode
+    test eax, eax
+    jnz 9f
+8:  mov rdi, rbx
+    call start_refused
 9:  EPILOGUE
 
 # ---- model, effort, Ultracode, thinking (task 6) ----
@@ -1890,18 +1911,61 @@ FN claude_started
     mov [rbx + AL_think], ecx
     EPILOGUE
 
-# apply_kept(AL*, Ultracode offered, on): the first get_settings answer of a process (or its refusal, or the
-#   wait's end: nothing offered): a model, an effort level and thinking picked while it started are asked
-#   for now, and the project's Ultracode when it differs from the one in effect
-apply_kept:
+# FN claude_ended(AL*): DRV_ended: the record went OFF or FAILED (agent_state_set): a Stop during the start,
+#   a start that failed, a process gone. What a start or a run kept goes (CLP_RUN: the picks waiting for
+#   it, the prompts' wait for the settings, the first settings answer awaited, a /plan waiting for it, a
+#   mode or a model asked and not answered): nothing is written for it later, no clock waits for it, and
+#   the next start begins clean
+FN claude_ended
+    and dword ptr [rdi + AL_cfg], ~CLP_RUN
+    ret
+
+# starting_up(AL*) -> eax 1 while its start is under way with its program up (STARTING, connected): what
+#   the start waits for may be written
+starting_up:
+    xor eax, eax
+    cmp dword ptr [rdi + AL_state], ALS_STARTING
+    jne 9f
+    cmp dword ptr [rdi + AL_cn + CN_state], CN_UP
+    jne 9f
+    inc eax
+9:  ret
+
+# start_refused(AL*): a write the start needs before any prompt (a kept choice, the mode out of bypass) was
+#   refused by a connection still up (its queue full: the program reads nothing): the start fails with
+#   its words, the prompts back in the box, and the program goes (as a refused initialize does). A write
+#   that broke the connection has had its close already
+start_refused:
     PROLOGUE
     mov rbx, rdi
-    mov r14d, esi
-    mov r15d, edx
-    test dword ptr [rbx + AL_cfg], CLP_FIRST
-    jz 9f
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
+    cmp dword ptr [rbx + AL_state], ALS_STARTING
+    jne 9f
+    lea rdi, [rip + .Le_refused]
+    call strlen
+    mov rdi, rbx
+    lea rsi, [rip + .Le_refused]
+    mov rdx, rax
+    call ev_failed
+    lea rdi, [rbx + AL_cn]
+    call conn_stop
+9:  EPILOGUE
+
+# kept_picks(AL*) -> eax 1 to go on, 0 when the start failed: a model, an effort level and thinking picked
+#   while it started are asked for now, before any prompt (once: their flags go). A write refused fails the
+#   start (start_refused); none is written unless the start is still under way
+kept_picks:
+    PROLOGUE
+    mov rbx, rdi
     mov r12d, [rbx + AL_cfg]
-    and dword ptr [rbx + AL_cfg], ~(CLP_FIRST | CLP_WAITMODEL | CLP_WAITEFFORT | CLP_WAITTHINK)
+    and dword ptr [rbx + AL_cfg], ~(CLP_WAITMODEL | CLP_WAITEFFORT | CLP_WAITTHINK)
+    test r12d, CLP_WAITMODEL | CLP_WAITEFFORT | CLP_WAITTHINK
+    jz 8f
+    mov rdi, rbx
+    call starting_up
+    test eax, eax
+    jz 8f
     mov edi, AG_CLAUDE
     call agentcfg_get
     mov r13, rax
@@ -1916,7 +1980,7 @@ apply_kept:
     lea rcx, [r13 + AGC_model]
     call cl_apply
     test eax, eax
-    jz 9f
+    jz 7f
 1:  test r12d, CLP_WAITEFFORT
     jz 2f
     cmp byte ptr [r13 + AGC_effort], 0
@@ -1927,9 +1991,9 @@ apply_kept:
     lea rcx, [r13 + AGC_effort]
     call cl_apply
     test eax, eax
-    jz 9f
+    jz 7f
 2:  test r12d, CLP_WAITTHINK    # thinking switched while it started
-    jz 21f
+    jz 8f
     xor esi, esi
     cmp dword ptr [r13 + AGC_think], 0
     setne sil
@@ -1939,25 +2003,69 @@ apply_kept:
     mov rdi, rbx
     call cl_thinking
     test eax, eax
+    jz 7f
+8:  mov eax, 1
+    EPILOGUE
+7:  mov rdi, rbx
+    call start_refused
+    xor eax, eax
+    EPILOGUE
+
+# apply_kept(AL*, Ultracode offered, on) -> eax 1 to go on, 0 when the start failed: a get_settings answer
+#   (or its refusal: nothing offered). The picks made while it started that are still to ask (kept_picks:
+#   the wait's end may have asked them), then, on the process's first answer only (CLP_FIRST, which the
+#   wait's end leaves: a late answer still settles it), the project's Ultracode when it differs from the
+#   one in effect; nothing is written unless the program still starts or runs
+apply_kept:
+    PROLOGUE
+    mov rbx, rdi
+    mov r14d, esi
+    mov r15d, edx
+    call kept_picks
+    test eax, eax
     jz 9f
-21: test r14d, r14d
+    mov eax, 1
+    test dword ptr [rbx + AL_cfg], CLP_FIRST
     jz 9f
+    and dword ptr [rbx + AL_cfg], ~CLP_FIRST
+    test r14d, r14d
+    jz 9f
+    mov rdi, rbx
+    call starting_up
+    mov r12d, eax               # (1: a refusal fails the start)
+    test eax, eax
+    jnz 1f
+    mov rdi, rbx
+    call live_up
+    test eax, eax
+    jz 8f
+1:  mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov r13, rax
     mov eax, [r13 + AGC_ultra]
     test eax, eax
-    js 9f
+    js 8f
     cmp eax, r15d
-    je 9f
+    je 8f
     and dword ptr [rbx + AL_cfg], ~CLP_ULON
     test eax, eax
     jz 22f
     or dword ptr [rbx + AL_cfg], CLP_ULON
-22: mov eax, [r13 + AGC_ultra]
+22: mov r8d, [r13 + AGC_ultra]
     mov rdi, rbx
     mov esi, CLF_ULTRA
     lea rdx, [rip + .Lk_ultra]
     xor ecx, ecx
-    mov r8d, eax
     call cl_apply
+    test eax, eax
+    jnz 8f
+    test r12d, r12d
+    jz 8f
+    mov rdi, rbx
+    call start_refused
+    xor eax, eax
+    EPILOGUE
+8:  mov eax, 1
 9:  EPILOGUE
 
 # FN claude_flags_answer(AL*, control_response's response, kind CLF_*): apply_flag_settings' or
@@ -4428,6 +4536,7 @@ local_cmds:
 .Lf_ultra_off: .asciz "Failed to turn Ultracode off: "
 .Lf_think: .asciz "Failed to set thinking: "
 .Le_settings: .asciz "Couldn't read Claude Code's settings: "
+.Le_refused: .asciz "Claude Code took no more input before the conversation's settings went to it; nothing was sent."
 .Lk_rate_info: .asciz "rate_limit_info"
 .Lk_status: .asciz "status"
 .Lk_rate_type: .asciz "rateLimitType"

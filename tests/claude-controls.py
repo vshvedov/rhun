@@ -2474,5 +2474,211 @@ class SeamWordsTest(unittest.TestCase):
         self.assertEqual(found, [])
 
 
+# ---- the phase 2 reviews' findings, interface side (notes/claude-chat-phase2-review-findings.md) ----
+TRUNCATED = '[Message truncated - exceeded 50,000 character limit]'
+
+
+class ReviewControlsTest(NoticeCase):
+    """The review findings S2 (= A3), A4, A7, A8, A9, S5b; the command menu's entries and /login, /logout
+    (checklist rows 1.24, 1.25; nothing here starts the real claude: the sign-in commands are only put in rhun's
+    terminal prompt and left there); the CLI's truncation marker drawn muted (row 1.13)."""
+
+    def pick(self, label):
+        """The command menu's row of that label, as Enter takes it (the menu opened with the label as filter)."""
+        self.command('agent-menu ' + label)
+        n = next(int(m.group(1)) for m in re.finditer(r'^row (\d+) (.*?)\t', self.menu(), re.M)
+                 if m.group(2) == label)
+        self.command(f'agent-menu-pick {n}')
+
+    def open_sid(self, sid):
+        """Back to the list, then the conversation with that id (opening one may reorder the list: each row is
+        tried more than once)."""
+        for _ in range(3):
+            self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+            rows = [line for line in self.command('print-agents').splitlines() if line.startswith('Claude')]
+            for n in range(1, len(rows) + 1):
+                self.command(f'print-agents {n}')
+                self.command('wait 50')
+                if self.sid() == sid:
+                    return
+                self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        self.fail('no conversation ' + sid)
+
+    def test_clear_leaves_no_text_in_its_conversation(self):
+        """S2: /clear typed in a conversation: "/clear" is not kept as its draft, the new draft gets the text a
+        new conversation left (as + Claude Code would give it), and the conversation's box is empty again."""
+        self.start()
+        self.chat('first')
+        first = self.sid()
+        self.chat('second')
+        second = self.sid()
+        self.command('agent-new claude')
+        self.command('agent-type kept draft')       # a new conversation left before its first prompt
+        self.open_sid(second)
+        self.until(lambda: len(self.listed()) == 2, 'the draft left goes')
+        self.open_sid(second)
+        self.assertEqual(self.box(), '')
+        self.command('agent-prompt /clear')
+        self.assertIn(' new=claude ', self.command('print-agent-input'))
+        self.assertEqual(self.box(), 'kept draft')
+        self.open_sid(first)                        # another conversation, then the one /clear left
+        self.open_sid(second)
+        self.assertEqual(self.box(), '')
+        self.assertEqual(self.prompts(), ['first', 'second'])
+
+    def test_a_drafts_local_command_makes_no_conversation(self):
+        """A4: a new draft's local command (/model, /copy) or a prompt the composer refuses makes no
+        conversation; its prompt, sent, makes one."""
+        self.start()
+        self.chat('hello')
+        self.command('agent-new claude')
+        self.command('agent-prompt /model')
+        head = self.head()
+        self.assertEqual((head['popup'], head['owner']), ('models', '-'))
+        self.command('key Escape')
+        self.command('agent-prompt /copy')
+        self.assertEqual(self.command('print-toast').strip(), 'toast=No assistant message to copy')
+        self.command('agent-prompt a\u200bb')
+        self.assertEqual(self.command('print-toast').strip(),
+                         'toast=Removed 1 invisible character \u00b7 review and press Enter to send')
+        self.assertTrue(self.command('print-agent-input').startswith('input=ab '))
+        self.assertIn(' new=claude ', self.command('print-agent-input'))
+        self.assertEqual(len(self.listed()), 1)
+        self.command('agent-focus box')
+        self.command('key Return')
+        self.command('wait-agent ready')
+        self.assertEqual(self.prompts(), ['hello', 'ab'])
+        self.assertEqual(len(self.listed()), 2)
+
+    def test_a_drafts_pickers_stay_open_and_make_nothing(self):
+        """A7: in a new draft the effort row of the models picker steps the project's level: the picker stays
+        open and no conversation is made; a model picked there is the project's choice."""
+        self.start(env={'FAKE_CLAUDE_MODELS': 'effort,noeffort'})
+        self.chat('hello')
+        self.command('agent-new claude')
+        self.command('agent-models')
+        self.assertEqual(self.head()['owner'], '-')
+        self.assertEqual(self.rows()[-1][4], 'levels=-')            # the project has no level of its own yet
+        self.command('agent-menu-pick 3')           # the effort row: the next level round, the first
+        self.assertTrue(self.menu().startswith('popup=models '), self.menu())
+        self.assertEqual(self.rows()[-1][4], 'levels=low')
+        self.command('key Right')
+        self.assertTrue(self.menu().startswith('popup=models '))
+        self.assertEqual(self.rows()[-1][4], 'levels=medium')
+        self.assertTrue(self.choices().startswith('model=- effort=medium '), self.choices())
+        self.command('agent-menu-pick 2')           # Sonnet: the picker closes, the draft stays one
+        self.assertTrue(self.choices().startswith('model=sonnet '), self.choices())
+        self.assertIn(' new=claude ', self.command('print-agent-input'))
+        self.assertEqual(len(self.listed()), 1)
+        self.assertEqual(len(self.starts()), 1)
+
+    def test_the_pie_sends_one_compact_at_a_time(self):
+        """S5b: clicks on the context pie while its /compact is held or runs send nothing more."""
+        self.start(env={'FAKE_CLAUDE_CONTEXT': str(WINDOW * 70 // 100)})
+        self.chat('hello')
+        x, y = self.foot()['ctx_at'].split(',')
+        self.command('agent-prompt slow')
+        self.command('wait-agent working')
+        for _ in range(3):
+            self.command(f'click {x} {y}')
+        self.assertEqual(self.command('print-agents').count('queued /compact'), 1)
+        self.until(lambda: '/compact' in self.prompts(), '/compact written')
+        self.command('wait-agent ready 20000')
+        self.until(lambda: self.command('print-agents').count('queued') == 0, 'all ran')
+        self.assertEqual(self.prompts().count('/compact'), 1)
+
+    def test_the_menu_is_built_once_for_many_frames(self):
+        """A8: the open command menu's rows are made when what they come from changes, not each frame."""
+        self.start()
+        self.chat('hello')
+        self.command('agent-type /co')
+        builds = int(self.head()['builds'])
+        self.command('print-frames')
+        for i in range(10):
+            self.command(f'move {600 + i * 3} 300')
+            self.command('wait 20')
+        self.assertGreaterEqual(int(self.command('print-frames').split('=')[1]), 5)
+        self.assertEqual(int(self.head()['builds']), builds)
+        self.command('agent-type m')                # the filter changed: made again, once
+        self.assertEqual(int(self.head()['builds']), builds + 1)
+        self.assertEqual(self.labels()[0], '/compact')
+
+    def test_the_painted_word_is_found_once_per_text(self):
+        """A9: the box's painted word is looked for when the text changes, not on every frame."""
+        self.start(env={'FAKE_CLAUDE_ULTRATHINK': '1'})
+        self.chat('hello')
+        self.command('agent-type ' + 'words ' * 5000 + 'ultrathink')
+        self.command('wait 50')
+        scans = int(ComposerTest.composer(self)['scans'])
+        self.command('print-frames')
+        for i in range(10):
+            self.command(f'move {600 + i * 3} 300')
+            self.command('wait 20')
+        self.assertGreaterEqual(int(self.command('print-frames').split('=')[1]), 5)
+        self.assertEqual(int(ComposerTest.composer(self)['scans']), scans)
+        self.assertEqual(ComposerTest.composer(self)['paint'], '30000-30010')
+
+    def test_menu_entries_without_a_test_before(self):
+        """Checklist row 1.24: New conversation, Switch mode…, Open Claude in Terminal, General config…,
+        Switch account, Sign out, View help docs, each run from the menu."""
+        self.start()
+        self.chat('hello')
+        self.pick('New conversation')
+        self.assertIn(' new=claude ', self.command('print-agent-input'))
+        self.command('print-agents 1')
+        self.pick('Switch mode\u2026')
+        self.assertTrue(self.menu().startswith('popup=modes '), self.menu())
+        self.command('key Escape')
+        for label, field in (('Open Claude in Terminal', f'field={chat.FAKE}'),
+                             ('Switch account', f'field={chat.FAKE} auth login'),
+                             ('Sign out', f'field={chat.FAKE} auth logout')):
+            self.pick(label)
+            self.assertEqual(self.command('print-palette').splitlines()[:2], [chat.TERM_PROMPT, field], label)
+            self.command('key Escape')              # left unrun: the terminal's prompt closes
+        self.pick('View help docs')
+        self.assertEqual(self.command('print-palette').splitlines()[0],
+                         'choose=Claude Code wants to open code.claude.com in your browser: '
+                         'https://code.claude.com/docs/en/vs-code')
+        self.command('key Escape')
+        self.pick('General config\u2026')
+        self.assertIn('*Settings', self.command('print-tabs'))
+        self.assertEqual(self.prompts(), ['hello'])
+        self.assertEqual(len(self.starts()), 1)
+
+    def test_login_and_logout_typed(self):
+        """Checklist row 1.25: /login and /logout put the CLI's sign-in and sign-out in rhun's terminal prompt
+        (not run), and send nothing to the program."""
+        self.start()
+        self.chat('hello')
+        self.command('agent-prompt /login')
+        self.assertEqual(self.command('print-palette').splitlines()[:2],
+                         [chat.TERM_PROMPT, f'field={chat.FAKE} auth login'])
+        self.command('key Escape')
+        self.command('print-agents 1')
+        self.command('agent-prompt /logout')
+        self.assertEqual(self.command('print-palette').splitlines()[:2],
+                         [chat.TERM_PROMPT, f'field={chat.FAKE} auth logout'])
+        self.command('key Escape')
+        self.assertEqual(self.prompts(), ['hello'])
+        self.assertEqual(self.box(), '')
+
+    def test_the_truncation_marker_is_muted(self):
+        """Checklist row 1.13: a user row whose text holds the CLI's truncation marker draws it muted."""
+        folder = self.work / '.claude/projects' / chat.slug(self.project)
+        folder.mkdir(parents=True)
+        user = 'Fix it\n\n' + TRUNCATED
+        (folder / 's1.jsonl').write_text('\n'.join(json.dumps(r) for r in [
+            {'type': 'user', 'message': {'role': 'user', 'content': user}, 'cwd': str(self.project),
+             'sessionId': 's1'},
+            {'type': 'user', 'message': {'role': 'user', 'content': 'plain'}, 'cwd': str(self.project),
+             'sessionId': 's1'}]) + '\n', encoding='utf-8')
+        self.start()
+        self.open_listed()
+        self.command('wait 50')
+        head = self.command('print-agent-row 1').splitlines()[0]
+        self.assertIn(' muted=%d' % len('Fix it\n\n'), head)
+        self.assertIn(' muted=-', self.command('print-agent-row 2').splitlines()[0])
+
+
 if __name__ == '__main__':
     unittest.main()

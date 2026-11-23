@@ -5457,9 +5457,9 @@ link_scheme:
     mov eax, 1
 9:  ret
 
-# reply_follow(): the link reply_click kept, followed: a rhun://file/ link to a file as rhun opens it
-#   (a model wrote it: no other rhun:// link, which may install an extension or open a project, and no
-#   folder), else a file (a path, a file: URI)
+# reply_follow(): the link reply_click kept, followed: a model wrote it, so it only ever opens a file's text
+#   in a tab (lk_try: no folder, no workspace file made the project, no extension installed): a
+#   rhun://file/ link's path, a path, a file: URI (follow_file); other rhun:// links do nothing
 reply_follow:
     PROLOGUE
     mov rbx, [rip + pend_link]
@@ -5484,12 +5484,23 @@ reply_follow:
     call memeq
     test eax, eax
     jz 2f
-    mov rdi, rbx
-    call app_path_is_dir
-    test eax, eax
-    jnz 2f
-    mov rdi, rbx
-    call app_open_path
+    mov rdi, rbx                # decoded, and opened only as a file's text in a tab (lk_try): never
+    lea rsi, [rip + lk_buf]     #   app_open_path, which makes a folder or a workspace file the project
+    mov edx, 4000
+    call rhun_url
+    test rax, rax
+    jle 2f
+    mov r13d, edx               # (lk_try's line and column)
+    mov r14d, ecx
+    lea rdi, [rip + lk_buf]
+    call path_normalize
+    lea rdi, [rip + lk_buf]
+    call strlen
+    lea rdi, [rip + lk_buf]
+    mov rsi, rax
+    call mem_dup
+    mov rdi, rax
+    call lk_try                 # (a folder, or no such file: nothing)
     jmp 2f
 1:  mov rdi, rbx
     mov rsi, r12

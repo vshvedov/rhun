@@ -623,6 +623,34 @@ class ChatTest(DrivenCase):
     def test_a_relative_inherited_config_dir_is_not_passed_on(self):
         self.relative_dir_dropped(env={'CLAUDE_CONFIG_DIR': 'rel/dir'})
 
+    def test_a_reply_link_to_a_workspace_file_opens_only_its_text(self):
+        # a model writes the replies: whatever form a link to a .rhun-workspace file has, a click opens
+        # its text in a tab; the project stays and the conversation's program runs on
+        other = self.work / 'other'
+        other.mkdir()
+        ws = self.project / 'team.rhun-workspace'
+        ws.write_text(f'[folders]\npath = {other}\n', encoding='utf-8')
+        self.start()
+        project = self.command('print-project')
+        self.chat(f'see [one](rhun://file{ws}) [two]({ws}) [three](file://{ws})')
+        pid = self.starts()[0]['pid']
+        n = len(self.thread())
+        lines = self.command(f'print-agent-row {n}').splitlines()
+        where = {}
+        for line in lines:
+            match = re.match(r'link (.*) -> (.*) at (-?\d+) (-?\d+)$', line)
+            if match:
+                where[match.group(1)] = (int(match.group(3)), int(match.group(4)))
+        self.assertEqual(sorted(where), ['one', 'three', 'two'], lines)
+        for name in ('one', 'two', 'three'):
+            self.command('click %d %d' % where[name])
+            self.command('wait 50')
+            self.assertEqual(self.command('print-project'), project, name)
+            self.assertIn(' active=team.rhun-workspace ', self.command('print-state'), name)
+            self.assertTrue(alive(pid), name)
+            self.assertTrue(self.live().startswith('state=ready pid=1 '), self.live())
+            self.command('cmd focus_agents')
+
     def test_text_streams_into_one_row(self):
         self.start()
         self.chat('slow', 'working')

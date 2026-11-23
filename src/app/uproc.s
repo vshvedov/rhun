@@ -25,6 +25,9 @@
 #                                             group now, SIGKILL at the deadline, reaped here
 #   uproc_env_failed() -> 1 when the login shell could not tell its environment (rhun's own is used)
 #   uproc_env_ready() -> 1 once uproc_envp() would not block (asks the login shell when nobody has)
+#   uproc_env_known() -> 1 once the environment programs start from is settled (asks nobody)
+#   uproc_env_get(name) -> rax a variable's value in it (borrowed) or 0: the login shell's once known,
+#                                             rhun's own before (asks nobody, never blocks)
 .include "rhun.inc"
 
 .equ UP_MAX, 128
@@ -407,6 +410,48 @@ FN uproc_env_ready
     EPILOGUE
 .endif
 8:  mov eax, 1
+    EPILOGUE
+
+# FN uproc_env_known() -> eax 1 once the environment programs start from is settled: the login shell's
+#   known, given up on, or not needed (started from a terminal)
+FN uproc_env_known
+    xor eax, eax
+    cmp dword ptr [rip + env_state], 2
+    sete al
+    ret
+
+# FN uproc_env_get(name cstr) -> rax the variable's value (borrowed) or 0: in the login environment once
+#   it is known, else in rhun's own (what a program started now would get once the shell answers may
+#   differ: uproc_env_known says when it cannot any more)
+FN uproc_env_get
+    PROLOGUE
+    mov rbx, rdi
+    cmp dword ptr [rip + env_state], 2
+    jne 8f
+    mov r12, [rip + env_list]
+    test r12, r12
+    jz 8f
+    mov rdi, rbx
+    call strlen
+    mov r13, rax
+1:  mov r14, [r12]
+    test r14, r14
+    jz 7f
+    add r12, 8
+    mov rdi, r14
+    mov rsi, rbx
+    mov rdx, r13
+    call memeq
+    test eax, eax
+    jz 1b
+    cmp byte ptr [r14 + r13], '='
+    jne 1b
+    lea rax, [r14 + r13 + 1]
+    EPILOGUE
+7:  xor eax, eax
+    EPILOGUE
+8:  mov rdi, rbx
+    call getenv
     EPILOGUE
 
 # uproc_envp() -> the environment programs start from: the login shell's once known (waiting for the

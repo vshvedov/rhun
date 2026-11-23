@@ -22,8 +22,11 @@
 #   claude_mode() -> rax the --permission-mode value of [claude] initial_mode, or 0 (the CLI's own)
 #   claude_mode_alias(ptr, len) -> rax ptr, rdx len: the initial_mode value config.s looks up
 #   claude_dir(sb) -> eax 1: appended, the first of an absolute env.CLAUDE_CONFIG_DIR, the environment's
-#                   CLAUDE_CONFIG_DIR (not empty), "$HOME/.claude"; 0 without any. The one source for
-#                   the driver, the holder check and discovery
+#                   CLAUDE_CONFIG_DIR (not empty), "$HOME/.claude"; 0 without any. The environment is
+#                   the one claude gets (uproc_env_get): the login shell's once known, rhun's own until
+#                   then. The one source for the driver, the holder check and discovery
+#   claude_dir_moved() -> eax 1 once, when the login environment has become known and gives another
+#                   folder than the one discovery last ran with: discovery runs again (agents_tick)
 #   claude_slug(sb, path) -> rax bytes appended: the folder name Claude Code gives a working directory
 #   claude_transcript(sb, cwd, sid) -> eax 1: <claude dir>/projects/<slug>/<sid>.jsonl appended. The
 #                   CLI slugs its working directory with symbolic links resolved
@@ -47,6 +50,11 @@
 pairs: .zero VEC_SIZE           # owned "NAME=value" cstrs, 8-byte slots, in the file's order
 index_env: .quad 0              # claude_index_envp's last array
 xsb: .zero SB_SIZE              # a path with "~/" expanded
+idx_dir: .zero SB_SIZE          # the folder discovery last ran with (claude_index_envp), "" none yet
+idx_pair: .zero SB_SIZE         # "CLAUDE_CONFIG_DIR=" and it, for the worker
+idx_set: .zero 16               # the worker's sets: idx_pair's text, 0
+dir_now: .zero SB_SIZE          # claude_dir_moved's
+dir_checked: .long 0            # claude_dir_moved looked once the login environment was known
 rpath: .zero 4096 + 16          # a resolved working directory
 
 .text
@@ -529,8 +537,8 @@ FN claude_dir
     lea r12, [rax + CONFIG_DIR_LEN]
     xor r13d, r13d
     jmp 3f
-1:  lea rdi, [rip + .Lconfig_dir]
-    call getenv
+1:  lea rdi, [rip + .Lconfig_dir]   # the environment claude gets
+    call uproc_env_get
     test rax, rax
     jz 2f
     cmp byte ptr [rax], 0
@@ -539,7 +547,7 @@ FN claude_dir
     xor r13d, r13d
     jmp 3f
 2:  lea rdi, [rip + .Lhome]
-    call getenv
+    call uproc_env_get
     test rax, rax
     jz 8f
     mov r12, rax
@@ -652,25 +660,73 @@ FN claude_transcript
     mov eax, 1
 9:  EPILOGUE
 
-# claude_index_envp() -> the discovery worker's environment (see the top of the file)
+# claude_index_envp() -> the discovery worker's environment (see the top of the file): rhun's own with
+#   CLAUDE_CONFIG_DIR the folder claude_dir gives now (kept in idx_dir for claude_dir_moved)
 FN claude_index_envp
-    PROLOGUE 16
+    PROLOGUE
     mov rdi, [rip + index_env]
     call mem_free
     mov qword ptr [rip + index_env], 0
     cmp dword ptr [rip + g_remote], 0       # remote hosts: the host's own folder
     jne 8f
-    call config_dir_pair
-    test rax, rax
+    lea rdi, [rip + idx_dir]
+    call sb_clear
+    lea rdi, [rip + idx_dir]
+    call claude_dir
+    test eax, eax
     jz 8f
-    mov [rsp], rax
-    mov qword ptr [rsp + 8], 0
-    lea rdi, [rsp]
+    lea rdi, [rip + idx_pair]
+    call sb_clear
+    lea rdi, [rip + idx_pair]
+    lea rsi, [rip + .Lconfig_dir_eq]
+    mov edx, CONFIG_DIR_LEN
+    call sb_push
+    lea rdi, [rip + idx_pair]
+    mov rsi, [rip + idx_dir + SB_ptr]
+    mov rdx, [rip + idx_dir + SB_len]
+    call sb_push
+    lea rdi, [rip + idx_pair]
+    xor esi, esi
+    call sb_push_byte
+    mov rax, [rip + idx_pair + SB_ptr]
+    mov [rip + idx_set], rax
+    mov qword ptr [rip + idx_set + 8], 0
+    lea rdi, [rip + idx_set]
     call env_make
     mov [rip + index_env], rax
     EPILOGUE
 8:  mov rax, [rip + g_envp]
     EPILOGUE
+
+# FN claude_dir_moved() -> eax 1 once: the login environment became known and claude_dir differs from the
+#   folder discovery last ran with (a discovery that has not run yet will use the right one)
+FN claude_dir_moved
+    PROLOGUE
+    xor eax, eax
+    cmp dword ptr [rip + dir_checked], 0
+    jne 9f
+    call uproc_env_known
+    test eax, eax
+    jz 9f
+    mov dword ptr [rip + dir_checked], 1
+    xor eax, eax
+    cmp qword ptr [rip + idx_dir + SB_len], 0
+    je 9f
+    lea rdi, [rip + dir_now]
+    call sb_clear
+    lea rdi, [rip + dir_now]
+    call claude_dir
+    mov rax, [rip + dir_now + SB_len]
+    cmp rax, [rip + idx_dir + SB_len]
+    jne 8f
+    mov rdi, [rip + dir_now + SB_ptr]
+    mov rsi, [rip + idx_dir + SB_ptr]
+    mov rdx, rax
+    call memeq
+    xor eax, 1
+    EPILOGUE
+8:  mov eax, 1
+9:  EPILOGUE
 
 # ---- headless control commands: fn(out, rest, rest len) -> rax 0 ok, -1 error ----
 

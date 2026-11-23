@@ -534,6 +534,29 @@ class ChatTest(DrivenCase):
         transcript = self.work / '.claude/projects' / slug(self.project) / (sid + '.jsonl')
         self.assertTrue(transcript.exists())
 
+    def test_the_login_environment_names_the_claude_folder(self):
+        # rhun started without a terminal: claude gets the login shell's environment, whose
+        # CLAUDE_CONFIG_DIR rhun's own lacks; the transcript, the list and the re-read all use that folder
+        folder = self.work / 'login-claude'
+        shell = self.work / 'login-shell'
+        shell.write_text('#!/bin/sh\nexport CLAUDE_CONFIG_DIR=%s\nfor last; do :; done\nexec /bin/sh -c "$last"\n'
+                         % folder, encoding='utf-8')
+        shell.chmod(0o755)
+        del self.env['TERM']
+        self.env['SHELL'] = str(shell)
+        self.start()
+        self.command('cmd focus_agents')
+        self.chat('hello')
+        sid = self.sid()
+        transcript = folder / 'projects' / slug(self.project) / (sid + '.jsonl')
+        self.assertTrue(transcript.exists())
+        self.assertEqual(self.command(f'print-claude-path {self.project} {sid}'), f'{transcript}\n')
+        self.command('agent-release')
+        self.command('wait-agent off')
+        self.until_gone()
+        self.assertRegex(self.live(), r' new=0\b')     # its file was found where claude wrote it
+        self.assertEqual(self.thread(), ['user hello', REPLY + 'ok: hello'])
+
     def test_text_streams_into_one_row(self):
         self.start()
         self.chat('slow', 'working')

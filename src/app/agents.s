@@ -2790,7 +2790,11 @@ FN agents_tick
     call time_ms
     mov [rip + last_scan], rax
     call index_dirty
-7:  cmp qword ptr [rip + g_project], 0
+7:  call claude_dir_moved      # the login environment names another Claude folder: discovery again
+    test eax, eax
+    jz 71f
+    call agents_scan
+71: cmp qword ptr [rip + g_project], 0
     je 9f
     cmp dword ptr [rip + g_show_agents], 0
     jne 0f

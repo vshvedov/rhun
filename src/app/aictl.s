@@ -549,6 +549,16 @@ c_print_agent_row:
     xor eax, eax
     EPILOGUE
 
+# print-agents-box: the prompt row's layout at every panel size and width (agentext_box_dump)
+c_print_agents_box:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agentext_box_dump
+    xor eax, eax
+    EPILOGUE
+
 # print-agents-metrics: the agents panel's text size and what follows from it (agentfont.s)
 c_print_agents_metrics:
     PROLOGUE
@@ -574,6 +584,7 @@ c_agent_test_append:
 .section .rodata
 .Lc_print_agent_row: .asciz "print-agent-row"
 .Lc_print_agents_metrics: .asciz "print-agents-metrics"
+.Lc_print_agents_box: .asciz "print-agents-box"
 .Lc_agent_test_append: .asciz "agent-test-append"
 .Lc_agents_source: .asciz "agents-source"
 .Lc_agent_new: .asciz "agent-new"
@@ -631,7 +642,7 @@ ai_ctl:
     .quad .Lc_wait_agent, c_wait_agent, .Lc_print_agent_live, c_print_agent_live
     .quad .Lc_agent_timing, c_agent_timing
     .quad .Lc_print_agent_row, c_print_agent_row, .Lc_agent_test_append, c_agent_test_append
-    .quad .Lc_print_agents_metrics, c_print_agents_metrics
+    .quad .Lc_print_agents_metrics, c_print_agents_metrics, .Lc_print_agents_box, c_print_agents_box
     .quad .Lc_print_holder, c_print_holder
     .quad 0, 0
 holder_names: .quad .Lh_none, .Lh_other, .Lh_unknown

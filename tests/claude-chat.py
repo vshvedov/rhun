@@ -1024,6 +1024,32 @@ class RequestTest(DrivenCase):
         self.assertIn('info Claude Code ended before the request was answered.', self.thread())
 
 
+class BoxLayoutTest(DrivenCase):
+    """The prompt row in a narrow panel at a large text size: the box keeps its room."""
+
+    def test_the_box_keeps_its_room_at_every_size_and_width(self):
+        self.start()
+        self.chat('hello')
+        self.assertIn(' mode=default ', self.live())     # the mode label takes its room
+        rows = [{k: int(v) for k, v in (f.split('=') for f in line.split())}
+                for line in self.command('print-agents-box').splitlines()]
+        self.assertEqual(len(rows), 25 * 34)            # sizes 8 to 32, widths 240 to 900 by 20
+        for r in rows:
+            what = repr(r)
+            self.assertGreaterEqual(r['min'], 60, what)
+            self.assertGreaterEqual(r['box'], r['min'], what)
+            self.assertLessEqual(r['x'] + r['box'], r['w'], what)
+            self.assertLessEqual(r['btn_x'] + r['btn_w'], r['w'], what)
+            self.assertGreater(r['btn_w'], 0, what)
+            if not r['below']:
+                self.assertGreaterEqual(r['btn_x'], r['x'] + r['box'], what)
+        at = {(r['size'], r['w']): r for r in rows}
+        self.assertEqual((at[13, 380]['mode'], at[13, 380]['below']), (1, 0))   # the default: all in a row
+        self.assertEqual(at[32, 380]['mode'], 0)                                # the label goes first
+        self.assertEqual(at[32, 240]['below'], 1)                               # then Send under the box
+        self.assertGreater(at[32, 240]['h'], at[32, 900]['h'])
+
+
 def alive(pid):
     """Whether the process runs (or is a zombie nobody reaped yet)."""
     try:

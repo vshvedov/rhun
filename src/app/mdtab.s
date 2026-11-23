@@ -8,8 +8,9 @@
 # Its owner (MDO, rhun.inc) may take comments: with a selection a **Comment** button shows at the end of the
 # selection's last line (Ctrl+Enter does the same); it copies the selected text at once (md_sel_text) and
 # opens the palette's prompt PROMPT_MD_COMMENT "Comment on the selection"; Enter there gives the owner
-# MDO_comment(ctx, quote, text), Escape drops it. Closing the tab tells the owner (MDO_closed); the owner
-# dropping it (mdtab_drop) closes the tab and a comment prompt open for it, and tells it nothing.
+# MDO_comment(ctx, quote, text) -> eax 1 taken (refused: the selection stays), Escape drops it. Closing the
+# tab tells the owner (MDO_closed); the owner dropping it (mdtab_drop) closes the tab and a comment prompt
+# open for it, and tells it nothing.
 #
 #   mdtab_open(title cstr, ptr, len, MDO* or 0, ctx) -> rax its tab's index, -1 none (MT_MAX are open)
 #     ctx (not 0) names the owner's tab: opened again it is shown; without an owner, a tab of the same
@@ -742,8 +743,8 @@ comment_begin:
 9:  mov eax, r13d
     EPILOGUE
 
-# give(slot, text ptr, len) -> eax 1 when the owner got the comment (the quote in cm_sb); the selection
-#   goes
+# give(slot, text ptr, len) -> eax 1 when the owner took the comment (the quote in cm_sb): the selection
+#   goes; one it refused (a card full of comments says why) keeps its selection
 give:
     PROLOGUE
     mov ebx, edi
@@ -766,8 +767,6 @@ give:
     call takes_comments
     test eax, eax
     jz 9f
-    mov rdi, [r14 + MT_md]
-    call md_sel_clear
     mov rax, [r14 + MT_mdo]
     mov r10, [rax + MDO_comment]
     mov rdi, [r14 + MT_ctx]
@@ -776,8 +775,12 @@ give:
     mov rcx, r12
     mov r8, r13
     call r10
-    mov r15d, 1
     mov dword ptr [rip + g_dirty], 1
+    test eax, eax
+    jz 9f
+    mov r15d, 1
+    mov rdi, [r14 + MT_md]
+    call md_sel_clear
 9:  mov eax, r15d
     EPILOGUE
 
@@ -805,9 +808,9 @@ FN mdtab_prompt_done
     call give
 9:  EPILOGUE
 
-# FN mdtab_key(keysym, cp, mods) -> eax 1 when the active Markdown tab took the key: Ctrl+Enter is Comment;
-#   without Ctrl, Alt or Super the arrows, Page Up/Down, Space, Home, End scroll, Tab and Shift+Tab move
-#   between links, Enter follows one
+# FN mdtab_key(keysym, cp, mods) -> eax 1 when the active Markdown tab took the key: Ctrl+Enter is Comment
+#   (a tab that takes comments); without Ctrl, Alt or Super the arrows, Page Up/Down, Space, Home, End
+#   scroll, Tab and Shift+Tab move between links, Enter follows the focused one (none: not taken)
 FN mdtab_key
     PROLOGUE
     mov r12d, edi
@@ -828,6 +831,10 @@ FN mdtab_key
     jne 2f
 1:  test r14d, MOD_CTRL | MOD_SUPER
     jz 2f
+    mov rdi, r15                # Comment: only a tab that takes comments has it, else the key goes on
+    call takes_comments
+    test eax, eax
+    jz 8f
     mov edi, ebx
     call comment_begin
     jmp 7f
@@ -918,10 +925,10 @@ FN mdtab_key
     add eax, [rip + g_mt + 4*MI_48]
 163:mov [r15 + MT_scroll], eax
     jmp 7f
-17: mov rdi, r13
+17: mov rdi, r13                # Enter follows the focused link; without one it goes on
     call md_focus
     test eax, eax
-    js 7f
+    js 8b
     mov rdi, r15
     mov esi, eax
     call follow

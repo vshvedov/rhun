@@ -1261,11 +1261,11 @@ class DialogTest(CardCase):
         self.command('wait-agent ready')
         self.assertEqual(self.card(), (None, []))
         self.assertTrue(self.thread()[-1].endswith(' continued'), self.thread())
-        # no title and no paragraphs: the extension's own words; Escape is the last button, Stop
+        # no title and no paragraphs: the extension's own words (Escape is not Stop here: ReviewCardsTest)
         head, lines = self.dialog('dialog-auto empty')
         self.assertEqual(head['title'], '')
         self.assertEqual(lines, ['detail ' + AUTO_DEFAULT, 'link ' + AUTO_HELP, 'button 1 Continue', 'button 2 Stop'])
-        self.keys('Escape')
+        self.keys('2')
         self.assertEqual(self.answered(2), {'behavior': 'completed', 'result': 'interrupt'})
         self.command('wait-agent ready')
         # a help link off claude.com and anthropic.com is not shown; a card without a × ignores "close"
@@ -1460,6 +1460,243 @@ class DialogTest(CardCase):
             if fh <= room:
                 self.assertTrue(scroll <= fy and fy + fh <= scroll + room, head)
         self.command('agent-card close')
+        self.until_answered()
+
+
+# ---- the phase 2 reviews' findings, interface side (notes/claude-chat-phase2-review-findings.md) ----
+SIZED = '[agents]\nfont_size = 13\n[ui]\nagents_width = 380\n'
+
+
+class ReviewCardsTest(CardCase):
+    """The review findings S1, S3, S4, S5a, S5d, A1, A2, A5, A6, A10 (cards, plan tabs, dialogs). Nothing here
+    saves a rule: every answer is a Yes without a rule, a No, a question's answer or a dialog's."""
+
+    def fit_items(self, size, width):
+        """print-agent-card-fit's items at that size and width: (kind, n, x, y, w, h)."""
+        line = next(l for l in self.command('print-agent-card-fit').splitlines()
+                    if l.startswith(f'size={size} w={width} '))
+        return [(m.group(1), int(m.group(2) or 0), *map(int, m.group(3).split(',')))
+                for m in re.finditer(r'([a-zA-Z])(\d*):([\d,]+);', line)]
+
+    def click_item(self, kind, n=0):
+        """A click in the middle of the card's item (as drawn last: at the panel's size 13 and width 380)."""
+        self.command('wait 50')
+        ax, ay = map(int, self.head()['at'].split(','))
+        _, _, x, y, w, h = next(i for i in self.fit_items(13, 380) if i[0] == kind and i[1] == n)
+        self.command(f'click {ax + x + w // 2} {ay + y + h // 2}')
+
+    def copy(self, text):
+        """text in the clipboard: typed in a new file, copied, the file closed unsaved."""
+        self.command('key ' + chat.MOD + '+n')
+        self.command('type ' + text)
+        self.command('key ' + chat.MOD + '+a')
+        self.command('key ' + chat.MOD + '+c')
+        self.command('key ' + chat.MOD + '+w')
+        self.command('key Escape')
+
+    def test_a_click_answers_a_card_while_the_box_has_text(self):
+        """S1: a click on a card's button answers inside the drawing; the line "Waiting for…" under it, drawn
+        while the box has text, must not read the card the answer freed."""
+        for prompt, kind, n, claude in (('tool', 'b', 3, None), ('ask3', 'x', 0, None),
+                                        ('plan', 'b', 3, self.claude_section('initial_mode = plan\n')),
+                                        ('dialog-auto', 'b', 1, None)):
+            self.ask(prompt, claude=claude, extra=SIZED)
+            self.command('agent-focus box')
+            self.command('agent-type hi')
+            self.assertTrue(self.lines('waiting'), prompt)
+            self.click_item(kind, n)
+            self.until_answered()
+            self.assertEqual(self.card(), (None, []), prompt)
+            self.assertTrue(self.command('print-agent-input').startswith('input=hi '), prompt)
+            self.stop()
+            self.fake_log.unlink()
+
+    def test_a_card_without_room_takes_no_keys(self):
+        """S5a: a window so short that the bottom area has no room for the card: it is not drawn, and the keys
+        do not answer it; with room again they do."""
+        self.ask('tool')
+        self.command('agent-focus panel')
+        self.assertEqual(self.head()['keys'], '1')
+        self.command('resize 1280 150')
+        self.command('wait 100')
+        self.assertEqual(self.head()['keys'], '0')
+        self.keys('3', 'Return')                    # (Escape is the panel's: Stop while the turn waits)
+        time.sleep(0.3)
+        self.assertEqual(self.answers(), [])
+        self.assertIn(' requests=1 ', self.live())
+        self.command('resize 1280 800')
+        self.command('wait 100')
+        self.command('agent-focus panel')
+        self.assertEqual(self.head()['keys'], '1')
+        self.keys('3')
+        self.assertEqual(self.until_answered()[0]['behavior'], 'deny')
+
+    def test_escape_leaves_a_dialog_without_a_close_button_unanswered(self):
+        """A2: the auto-mode card has no ×: Escape is not its last button (Stop); it does what Escape does in the
+        panel without a card (here, with the turn running: Stop, which withdraws the dialog unanswered)."""
+        self.ask('dialog-auto')
+        self.assertEqual(self.head()['keys'], '1')
+        self.keys('Escape')
+        self.until(lambda: self.card() == (None, []), 'the dialog withdrawn')
+        self.until(lambda: {'subtype': 'interrupt'} in [m.get('request') for m in self.control()], 'Stop')
+        time.sleep(0.3)
+        self.assertEqual(self.answers(), [])
+        self.assertEqual([m for m in self.control() if m.get('type') == 'control_response'
+                          and m['response'].get('response', {}).get('behavior') == 'completed'], [])
+
+    def test_a_tab_chosen_during_the_advance_stays(self):
+        """A6: a single choice arms the move to the next question; a tab chosen within the 300 ms is not undone
+        when they pass."""
+        self.ask('ask3')
+        self.command('agent-timing advance=300')
+        self.command('agent-card 1')                # Sidebar: the move to Checks is armed
+        self.keys('Right', 'Right')                 # Size, at once
+        time.sleep(0.6)
+        tabs = [re.match(r'\d+ (.*) answered=\d current=(\d)$', l).groups() for l in self.lines('tab')]
+        self.assertEqual([h for h, cur in tabs if cur == '1'], ['Size'])
+        self.command('agent-card close')
+        self.until_answered()
+
+    def test_the_thumb_stays_in_a_short_room(self):
+        """A1: at font 32 in a short window the card's room is less than the thumb's minimum: the thumb stays in
+        the room, scrolled to the end or not."""
+        self.ask('mixed', extra='[agents]\nfont_size = 32\n[ui]\nagents_width = 240\n')
+        self.command('agent-focus panel')
+        short = 0
+        for height in range(640, 380, -3):
+            self.command(f'resize 1280 {height}')
+            self.keys('4')                          # the field: the card scrolls to its end
+            self.command('wait 30')
+            head = self.head()
+            if head['keys'] == '0':                 # no room at all: not drawn
+                continue
+            room, scroll = int(head['room']), int(head['scroll'])
+            ty, th = map(int, head['thumb'].split(','))
+            self.assertTrue(th > 0 and 0 <= ty and ty + th <= room, (height, head))
+            if room < 39 and scroll:                # less than the thumb's minimum (MI_16 at size 32)
+                short += 1
+        self.assertGreater(short, 0)
+        self.command('resize 1280 800')
+        self.command('agent-card 3')
+        self.until_answered()
+
+    def test_a_card_too_big_for_its_items_keeps_its_buttons(self):
+        """A10: at 240 px and font 32 a card with many lines (the Details open, long labels, many paragraphs)
+        and a question card with the most questions and options: every button, field and row is laid out."""
+        self.ask('bigcard')
+        self.command('agent-card details')
+        items = self.fit_items(32, 240)
+        kinds = [i[0] for i in items]
+        self.assertGreater(len(items), 200)
+        self.assertEqual(sorted({i[1] for i in items if i[0] == 'b'}), [1, 2, 3])
+        self.assertEqual(kinds.count('F'), 1)
+        self.assertEqual(kinds[-1], 't')            # "Esc to cancel", the last
+        self.command('agent-card 3')
+        self.until_answered()
+        self.command('wait-agent ready')
+        self.command('agent-prompt askmax')
+        self.command('wait-agent waiting')
+        kinds = [i[0] for i in self.fit_items(32, 240)]        # (about 150 items: under the old cap too)
+        self.assertEqual((kinds.count('T'), kinds.count('o'), kinds.count('b')), (16, 17, 1))
+        self.command('agent-card close')
+        self.until_answered(2)
+
+    def plan_tab_x(self, n):
+        """The middle of the strip's tab n (from 0), as print-tabs-at puts it."""
+        return self.command('print-tabs-at').split()[n].split(',')
+
+    def test_the_tab_menu_acts_on_the_tab_it_was_opened_for(self):
+        """S3: two plan tabs (TAB_MDDOC, no document): the menu of the second pins and closes the second."""
+        claude = self.claude_section('initial_mode = plan\n')
+        self.ask('plan', claude=claude)
+        self.command('agent-new claude')
+        self.command('agent-prompt plan')
+        self.command('wait-agent waiting')
+        self.until(lambda: len(PlanTest.tabs(self)) == 2, 'two plan tabs')
+        self.assertEqual(self.command('print-tabs').strip(), 'tabs=Plan | *Plan')
+        x, y = self.plan_tab_x(1)
+        self.command(f'click {x} {y} right')
+        self.command('menu-pick Pin Tab')
+        self.assertEqual(self.command('print-tabs').strip(), 'tabs=^*Plan | Plan')
+        x, y = self.plan_tab_x(0)
+        self.command(f'click {x} {y} right')
+        self.command('menu-pick Unpin Tab')
+        self.assertEqual(self.command('print-tabs').strip(), 'tabs=*Plan | Plan')
+        # Close Tab on the second conversation's tab (first since its pin): it goes, the first's stays
+        x, y = self.plan_tab_x(0)
+        self.command(f'click {x} {y} right')
+        self.command('menu-pick Close Tab')
+        self.assertEqual(len(PlanTest.tabs(self)), 1)
+        self.command('agent-card 3')                # the open (second) conversation's No: no tab of its left
+        self.until_answered()
+        time.sleep(0.2)
+        self.assertEqual(len(PlanTest.tabs(self)), 1)
+
+    def test_the_seventeenth_comment_keeps_its_selection(self):
+        """S4: a plan takes 16 comments; the 17th is refused with a notice and its text stays selected."""
+        self.ask('plan', claude=self.claude_section('initial_mode = plan\n'))
+        for i in range(16):
+            PlanTest.comment(self, 'Add the', f'comment {i + 1}')
+        self.assertEqual(len(self.lines('comment')), 16)
+        self.command('mdtab-select Test it')
+        self.command('mdtab-comment one too many')
+        self.assertEqual(len(self.lines('comment')), 16)
+        self.assertEqual(PlanTest.tabs(self)[0]['selected'], 'Test it')
+        self.assertEqual(self.command('print-toast').strip(), 'toast=A plan takes 16 comments')
+        self.command('agent-card 1')
+        self.until_answered()
+
+    def test_a_plan_open_tab_lets_enter_through(self):
+        """S5d: a tab /plan open opened takes no comments: Ctrl+Enter, and Enter without a link, go on to the
+        keys' bindings."""
+        self.ask('plan', claude=self.claude_section('initial_mode = plan\n'),
+                 extra='[keys]\nctrl+Enter = rhun.toggle_sidebar\nEnter = rhun.toggle_sidebar\n')
+        self.command('agent-card-text field later')
+        self.command('agent-card 3')
+        self.command('wait-agent ready')
+        self.command('agent-prompt /plan open')
+        self.until(lambda: PlanTest.tabs(self), 'the plan in a tab')
+        self.command('agent-focus editor')
+        self.assertIn('explorer=0', self.command('print-panels'))
+        self.keys('ctrl+Return')
+        self.assertIn('explorer=1', self.command('print-panels'))
+        self.keys('Return')
+        self.assertIn('explorer=0', self.command('print-panels'))
+
+    def test_paste_reaches_a_cards_fields(self):
+        """A5: Ctrl/Cmd+V in the reject field, the editable command, a question's Other and the plan's field,
+        cleaned as the box cleans a paste; characters an input method commits reach them too."""
+        self.ask('tool')
+        self.copy('x​y')
+        self.command('agent-focus panel')
+        self.keys('4')                              # the reject field
+        self.assertEqual(self.head()['focus'], 'field')
+        self.keys(chat.MOD + '+v')
+        self.command('type é✓한')
+        self.assertEqual(self.lines('field'), ['xyé✓한'])
+        self.keys('Up', 'Up', 'Up', 'Up')           # No, Yes with the rule, Yes, the command
+        self.assertEqual(self.head()['focus'], 'edit')
+        self.keys('End', chat.MOD + '+v')
+        self.assertEqual(self.lines('edit'), ['touch approved.txtxy'])
+        self.command('agent-card 3')
+        self.until_answered()
+        self.command('wait-agent ready')
+        self.command('agent-prompt ask3')
+        self.command('wait-agent waiting')
+        self.command('agent-focus panel')
+        self.command('agent-card 4')                # Other: its field has the keys
+        self.keys(chat.MOD + '+v')
+        self.assertEqual(self.lines('other'), ['xy'])
+        self.command('agent-card close')
+        self.until_answered(2)
+        self.stop()
+        self.ask('plan', claude=self.claude_section('initial_mode = plan\n'))
+        self.copy('more⁠ tests')
+        self.command('agent-focus panel')
+        self.keys('4')
+        self.keys(chat.MOD + '+v')
+        self.assertEqual(self.lines('field'), ['more tests'])
+        self.command('agent-card 3')
         self.until_answered()
 
 

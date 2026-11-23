@@ -2032,6 +2032,34 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
 SCENARIOS.update({'plan2': s_plan2, 'planwithdraw': s_planwithdraw})    # plan review (task 11)
 
 
+def s_bigcard(prompt):
+    """a Bash call whose card has many lines (review finding A10): a long command, a description of 60
+    paragraphs, a hook's reason of 20, and the rule with its directory and mode lines"""
+    command = 'git log --format=%H ' + ' '.join('path/number/%d/of/a/long/list' % i for i in range(30))
+    rules = [{'type': 'addRules', 'rules': [{'toolName': 'Bash', 'ruleContent': command}], 'behavior': 'allow',
+              'destination': 'localSettings'},
+             {'type': 'addDirectories', 'directories': [os.path.join(CWD, 'lib')], 'destination': 'session'},
+             {'type': 'setMode', 'mode': 'plan', 'destination': 'session'}]
+    extra = {'description': '\n'.join('Paragraph %d of the description' % i for i in range(60))}
+    request = {'decision_reason': '\n'.join('Reason %d of the hook' % i for i in range(20)),
+               'decision_reason_type': 'hook'}
+    if bash(command, extra=extra, rules=rules, request=request):
+        final('done')
+
+
+def s_askmax(prompt):
+    """the question card at its limits (review finding A10): 16 questions of 16 options, long labels and
+    descriptions"""
+    s_ask(prompt, [{'question': 'Question %d asks about something at some length?' % q, 'header': 'Q%d' % q,
+                    'multiSelect': q % 2 == 1,
+                    'options': [{'label': 'Option %d of question %d with a long label' % (o, q),
+                                 'description': 'What option %d of question %d means, at some length' % (o, q)}
+                                for o in range(16)]} for q in range(16)])
+
+
+SCENARIOS.update({'bigcard': s_bigcard, 'askmax': s_askmax})     # the phase 2 reviews' findings
+
+
 # three of 2.1.330's commands, as its initialize lists them (finding 22; the real list has every built-in,
 # skill and plugin command)
 COMMANDS = [{'name': 'compact', 'description': 'Clear history but keep a summary', 'argumentHint': ''},

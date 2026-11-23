@@ -1741,6 +1741,20 @@ class EdgeTest(DrivenCase):
         self.assertIsNone(self.card())
         self.assertEqual(self.thread(), ['user hello', REPLY + 'ok: hello'])
 
+    def test_sign_in_uses_the_configured_folder(self):
+        # env.CLAUDE_CONFIG_DIR goes before the command (quoted); no other pair does (it may be a key)
+        folder = self.work / "claude's config"
+        folder.mkdir()
+        self.start(self.claude_section(f'env.CLAUDE_CONFIG_DIR = {folder}\nenv.ANTHROPIC_API_KEY = sk-test\n'),
+                   env={'FAKE_CLAUDE_AUTH': 'out'})
+        self.chat('hello', 'failed')
+        self.assertEqual(self.card(), SIGN_IN_CARD)
+        self.command('agent-card 1')
+        quoted = "'" + str(folder).replace("'", "'\\''") + "'"
+        self.assertEqual(self.command('print-palette').splitlines()[:2],
+                         [TERM_PROMPT, f'field=CLAUDE_CONFIG_DIR={quoted} {FAKE} auth login'])
+        self.command('key Escape')
+
     def test_signed_in_starts(self):
         self.start()
         self.chat('hello')

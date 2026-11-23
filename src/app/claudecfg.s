@@ -28,6 +28,7 @@
 #                   CLI slugs its working directory with symbolic links resolved
 #                   (tests/data/claude-shapes/README.txt, decision 6), so cwd is resolved first; a slug
 #                   over 200 bytes is cut to 200 (the CLI adds a hash then: the path is provisional)
+#   claude_config_dir_value() -> rax env.CLAUDE_CONFIG_DIR's value, or 0 (the terminal's sign-in)
 #   claude_index_envp() -> rax the environment the discovery worker starts with: rhun's own, with an
 #                   absolute env.CLAUDE_CONFIG_DIR in it (borrowed until the next call)
 #   claude_ctl: print-claude-exe, print-claude-path (control.s)
@@ -274,6 +275,26 @@ config_dir_pair:
     EPILOGUE
 3:  mov rax, r12
     EPILOGUE
+
+# FN claude_config_dir_value() -> rax the value of [claude] env.CLAUDE_CONFIG_DIR (a cstr, borrowed until
+#   the config is read again), or 0 when it is not set
+FN claude_config_dir_value
+    PROLOGUE
+    xor ebx, ebx
+1:  xor eax, eax
+    cmp rbx, [rip + pairs + VEC_len]
+    jae 9f
+    mov rax, [rip + pairs + VEC_ptr]
+    mov r12, [rax + rbx*8]
+    inc rbx
+    mov rdi, r12
+    lea rsi, [rip + .Lconfig_dir_eq]
+    mov edx, CONFIG_DIR_LEN
+    call memeq
+    test eax, eax
+    jz 1b
+    lea rax, [r12 + CONFIG_DIR_LEN]
+9:  EPILOGUE
 
 # claude_env() -> envp (see the top of the file)
 FN claude_env

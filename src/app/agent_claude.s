@@ -750,24 +750,42 @@ FN claude_auth_end
 9:  EPILOGUE
 
 # cl_terminal(AL*, what): claude in rhun's terminal prompt (it runs when the user presses Enter there): the
-#   configured program (or "claude", found on the terminal's PATH), with "auth login" for what 1
+#   configured program (or "claude", found on the terminal's PATH), with "auth login" for what 1. When
+#   [claude] env.CLAUDE_CONFIG_DIR is set, it goes before the command, so the sign-in lands where rhun's
+#   claude looks (no other pair: their values may be keys, and the line ends up in the shell's history).
+#   For the shell rhun's terminal starts: a POSIX shell, PowerShell on Windows
 cl_terminal:
     PROLOGUE
     mov r12d, esi
     lea rdi, [rip + psb]
     call sb_clear
-    mov rsi, [rip + cfg_claude_executable]
+    call claude_config_dir_value
+    test rax, rax
+    jz 1f
+    mov r13, rax
+    lea rdi, [rip + psb]
+    lea rsi, [rip + .Lw_dir_head]
+    call sb_push_cstr
+    lea rdi, [rip + psb]
+    mov rsi, r13
+    xor edx, edx
+    call sh_word
+    lea rdi, [rip + psb]
+    lea rsi, [rip + .Lw_dir_tail]
+    call sb_push_cstr
+1:  mov rsi, [rip + cfg_claude_executable]
     cmp byte ptr [rsi], 0
-    jne 1f
+    jne 2f
     lea rsi, [rip + .Lw_claude]
-1:  lea rdi, [rip + psb]
+2:  lea rdi, [rip + psb]
+    mov edx, 1
     call sh_word
     test r12d, r12d
-    jz 2f
+    jz 3f
     lea rdi, [rip + psb]
     lea rsi, [rip + .Lw_login]
     call sb_push_cstr
-2:  mov rdi, [rip + psb + SB_ptr]
+3:  mov rdi, [rip + psb + SB_ptr]
     mov rsi, [rip + psb + SB_len]
     call extproto_own_term
     test eax, eax
@@ -776,12 +794,14 @@ cl_terminal:
     call app_toast
 9:  EPILOGUE
 
-# sh_word(sb, cstr): the word for a shell: as it is when it has only letters, digits and / . _ - + ~ : , @,
-#   else in single quotes (a quote in it as '\'')
+# sh_word(sb, cstr, head): the word for the terminal's shell: as it is when it has only letters, digits
+#   and .Lsh_plain's bytes, else in single quotes: a quote in it as '\'' (POSIX), or doubled, and a
+#   command (head 1) after "& " (PowerShell, where a quoted word is a string, not a command)
 sh_word:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    mov r14d, edx
     xor ecx, ecx
 1:  movzx eax, byte ptr [r12 + rcx]
     test eax, eax
@@ -803,6 +823,14 @@ sh_word:
     sub eax, '0'
     cmp eax, 9
     jbe 1b
+.ifdef WINDOWS
+    test r14d, r14d
+    jz 31f
+    mov rdi, rbx
+    lea rsi, [rip + .Lsh_call]
+    call sb_push_cstr
+31:
+.endif
     mov rdi, rbx                # quoted
     mov esi, 39
     call sb_push_byte
@@ -2536,8 +2564,19 @@ cl_flags:
 .Lk_loggedIn: .asciz "loggedIn"
 .Lw_claude: .asciz "claude"
 .Lw_login: .asciz " auth login"
+.ifdef WINDOWS
+# PowerShell, the terminal's shell: "," would make an array and "@" splat; "~" and "+" are kept out too
+.Lsh_plain: .asciz "/._-:\\"
+.Lsh_quote: .asciz "''"
+.Lsh_call: .asciz "& "
+.Lw_dir_head: .asciz "$env:CLAUDE_CONFIG_DIR="
+.Lw_dir_tail: .asciz "; "
+.else
 .Lsh_plain: .asciz "/._-+~:,@"
 .Lsh_quote: .asciz "'\\''"
+.Lw_dir_head: .asciz "CLAUDE_CONFIG_DIR="
+.Lw_dir_tail: .asciz " "
+.endif
 .Lr_prompt_busy: .asciz "Close the open prompt first."
 .La_w1: .asciz "authentication_error"
 .La_w2: .asciz "Please run /login"

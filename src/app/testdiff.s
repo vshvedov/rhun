@@ -242,7 +242,7 @@ line_out:
     pop rbx
     ret
 
-# testdiff_open(title cstr, a, alen, b, blen): a read-only diff tab of expected (a) against actual (b)
+# testdiff_open(title cstr, a, alen, b, blen) -> rax DOC*: a read-only diff tab of expected (a) against actual (b)
 FN testdiff_open
     PROLOGUE
     mov r15, rdi
@@ -291,9 +291,10 @@ FN testdiff_open
     mov rdx, [rip + ud + SB_len]
     xor ecx, ecx
     call diffview_answer
+    mov rax, rbx                # the document (a row's text finds its tab again by its DOC_id)
     EPILOGUE
 
-# testdiff_output(title cstr, ptr, len): a read-only tab holding the text (an item's output)
+# testdiff_output(title cstr, ptr, len) -> rax DOC*: a read-only tab holding the text (an item's output)
 FN testdiff_output
     PROLOGUE
     mov r12, rdi
@@ -317,6 +318,7 @@ FN testdiff_output
     mov rdi, rbx
     mov esi, TAB_DOC
     call app_add_tab
+    mov rax, rbx                # the document
     EPILOGUE
 
 .section .rodata

@@ -365,5 +365,140 @@ class KeysTest(ThreadCase):
         self.assertIn(' focus=0 ', self.command('print-agent-input'))    # the panel's keys, not the box's
 
 
+class TypedEngineTest(ThreadCase):
+    """The engine with typed rows (agentrows.s): calls by id, rows cut, a reread, a fork."""
+
+    def test_100k_calls_without_results(self):
+        self.open_seeded(turns(2))
+        began = time.monotonic()
+        self.command('agent-test-tool c name=Bash second=ls repeat=100000')
+        took = time.monotonic() - began
+        e = self.engine()
+        self.assertEqual((e['calls'], e['rows']), (100000, 100004), e)
+        self.assert_walked(e, '100,000 calls')
+        self.assertLess(took, 30, took)
+        self.command('agent-test-tool c-99999 out=done state=ok done=1')
+        self.assertEqual(self.engine()['calls'], 99999)
+
+    def test_resync_under_everything(self):
+        self.start()
+        self.chat('hello')
+        self.command('agent-test-tool t1 name=Bash out=' + '\\n'.join('l%d' % i for i in range(9)) + ' state=ok')
+        n = self.engine()['rows'] - 1
+        self.command('cmd focus_agents')
+        self.command('key Up')                       # the focus on the call's row
+        self.assertEqual(self.engine()['focus'], n)
+        self.command('agent-row-click %d out' % (n + 1))  # a tab from its text
+        self.command('cmd focus_agents')
+        self.command('agent-row-click %d out' % (n + 1))  # and a click waiting for the frame's end
+        rows = [r for r in self.thread() if not r.startswith(('tool', 'result'))]
+        self.command('agent-release')
+        self.command('wait-agent off')
+        self.until_gone()
+        e = self.engine()
+        self.assertIsNone(e['focus'], e)
+        self.assertEqual(self.thread(), rows)
+        self.assertEqual(e['calls'], 0, e)
+
+    def test_truncate_cuts_chunks_and_folds(self):
+        self.open_seeded(turns(100))
+        for i in range(30):
+            self.command('agent-test-row meta note %d' % i)
+        before = self.engine()
+        self.command('agent-test-truncate 150')
+        e = self.engine()
+        self.assertEqual((e['rows'], e['chunks']), (150, 3), e)
+        self.command('key Home')
+        self.command('key End')
+        e = self.engine()
+        total = 0
+        for n in range(e['rows']):
+            total += int(self.row(n + 1)['height'])
+        self.assertLess(e['content'], before['content'])
+
+
+
+class TypedKeysTest(ThreadCase):
+    """The row focus and its actions."""
+
+    def calls(self):
+        self.open_seeded(turns(3))
+        self.command('agent-test-tool a name=Bash out=' + 'x' * 300 + ' state=ok')
+        self.command('agent-test-row meta between')
+        self.command('agent-test-tool b name=Bash out=short state=ok')
+        self.command('agent-test-tool c name=Read second=notes.txt link=notes.txt title=Read notes note=Read 9 '
+                     'lines out=' + '\\n'.join('l%d' % i for i in range(9)) + ' state=ok')
+        self.command('cmd focus_agents')
+        return self.engine()['rows']
+
+    def test_up_down_walk_the_rows_with_actions(self):
+        rows = self.calls()
+        self.command('key Up')
+        self.assertEqual(self.engine()['focus'], rows - 1)
+        self.command('key Up')                       # past the short call and the meta line
+        self.assertEqual(self.engine()['focus'], rows - 4)
+        self.command('key Down')
+        self.assertEqual(self.engine()['focus'], rows - 1)
+
+    def test_enter_opens_the_text_in_a_tab(self):
+        rows = self.calls()
+        self.command('key Up')
+        self.command('key Up')
+        self.command('key Return')
+        state = self.command('print-state')
+        self.assertIn(' active=Bash tool output ', state)
+        self.assertTrue(self.command('print-doc').startswith('x' * 300))
+
+    def test_a_second_click_finds_the_tab(self):
+        rows = self.calls()
+        tabs = lambda: len([n for n in self.command('print-tabs').strip()[len('tabs='):].split(' | ') if n])
+        start = tabs()
+        self.command('agent-row-click %d out' % (rows - 3))
+        self.assertEqual(tabs(), start + 1)
+        self.command('cmd focus_agents')
+        self.command('agent-row-click %d out' % (rows - 3))
+        self.assertEqual(tabs(), start + 1)
+        self.command('cmd close_tab')
+        self.assertEqual(tabs(), start)
+        self.command('cmd focus_agents')
+        self.command('agent-row-click %d out' % (rows - 3))
+        self.assertEqual(tabs(), start + 1)
+
+    def test_keys_with_a_card_up_go_to_the_card(self):
+        self.start()
+        self.command('agent-timing card=0')         # (a new card's lock)
+        self.chat('hello')
+        self.command('agent-test-tool a name=Bash out=' + 'x' * 300 + ' state=ok')
+        self.command('agent-prompt tool')
+        self.command('wait-agent waiting')
+        self.command('cmd focus_agents')
+        for key in ('Up', 'Down', 'Up', 'Return'):
+            self.command('key ' + key)
+            self.assertIsNone(self.engine()['focus'], key)     # the card's, never a row's
+        self.command('agent-card 1')
+        self.command('wait-agent ready')
+        self.assertIsNone(self.engine()['focus'])
+        self.assertNotIn('Bash tool output', self.command('print-tabs'))
+
+    def test_escape_stops_the_turn_before_it_drops_the_focus(self):
+        self.start()
+        self.chat('hello')
+        self.command('agent-test-tool a name=Bash out=' + 'x' * 300 + ' state=ok')
+        self.command('cmd focus_agents')
+        self.command('key Up')
+        n = self.engine()['focus']
+        self.assertIsNotNone(n)
+        self.command('agent-prompt slow')
+        self.command('wait-agent working')
+        self.command('cmd focus_agents')
+        self.command('key Escape')                   # the turn stops first
+        self.command('wait-agent ready 20000')
+        self.assertEqual(self.engine()['focus'], n)
+        self.command('key Escape')                   # then the focus goes
+        self.assertIsNone(self.engine()['focus'])
+        self.command('key Escape')                   # then the conversation closes
+        self.assertNotIn('rows=', self.command('print-agent-thread'))
+
+
 if __name__ == '__main__':
     unittest.main()

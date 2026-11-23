@@ -7429,7 +7429,13 @@ draw_msg:
     lea r8, [rip + .Lqueued]    # not started yet: "queued", its text muted (below)
 11: COLOR r9d, T_MUTED
     jmp 2f
-1:  lea r8, [rip + .Lagent]
+1:  mov edi, r15d               # a reply: its muted dot in the pad before its label (agentrows.s)
+    mov esi, r12d
+    add esi, [rip + g_pmt + 4*MI_4]
+    PM edx, MI_20
+    COLOR ecx, T_MUTED
+    call agrow_dot
+    lea r8, [rip + .Lagent]
     COLOR r9d, T_ACCENT
 2:  mov rdi, [rip + ag_fsmall]
     mov esi, r15d

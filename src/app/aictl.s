@@ -3,6 +3,15 @@
 # and print their state for tests
 .include "rhun.inc"
 
+.equ TK_UP, 0                   # agent-test-tool's keys (tt_keys)
+.equ TK_STATE, 14
+.equ TK_ITEM, 19
+.equ TK_SRC, 20
+.equ TK_READY, 21
+.equ TK_DONE, 22
+.equ TK_REPEAT, 23
+.equ TT_MAX, 64                 # keys given at most
+
 .bss
 .p2align 3
 args_p: .quad 0
@@ -1008,6 +1017,502 @@ row_opt:
 8:  xor eax, eax
     EPILOGUE
 
+
+# print-agent-rows [content] [FROM [N]]: the open conversation's rows from FROM (0) on, N of them (all): a row
+#   a line with its kind's fields and parts (agrow_dump); content: what a reread must give again
+c_print_agent_rows:
+    PROLOGUE 32
+    call ai_set
+    call agents_viewed
+    mov rbx, rax
+    xor r12d, r12d              # content
+    xor r13d, r13d              # from
+    mov r14, -1                 # n
+    call ai_arg
+    test rdx, rdx
+    jz 3f
+    cmp byte ptr [rax], 'c'
+    jne 1f
+    mov r12d, 1
+    call ai_arg
+    test rdx, rdx
+    jz 3f
+1:  mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov r13, rax
+    call ai_arg
+    test rdx, rdx
+    jz 3f
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov r14, rax
+3:  call ai_out
+    mov rdi, rax
+    mov rsi, rbx
+    mov rdx, r13
+    mov rcx, r14
+    mov r8d, r12d
+    call agrow_dump
+    xor eax, eax
+    EPILOGUE
+
+# print-agent-rows-fit: the typed rows laid out at every panel size and width (agrow_fit_dump)
+c_print_agent_rows_fit:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agrow_fit_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-row-click N [PART]: as a click on that part of row N (from 1, as print-agent-row) of the open
+#   conversation (link, in, out, pre, diff, note, toggle, copy, kids, more, stop, bg; none: the part Enter
+#   runs), followed after the frame the command ends with
+c_agent_row_click:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    test rax, rax
+    jz 8f
+    lea r12, [rax - 1]
+    xor r13d, r13d
+    call ai_arg
+    test rdx, rdx
+    jz 1f
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + part_words]
+    call ai_opt_word
+    test eax, eax
+    js 8f
+    lea rcx, [rip + part_nums]
+    mov r13d, [rcx + rax*4]
+1:  mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    call agrow_click
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# agent-test-tool ID [up=ID] [name=T] [second=T] [link=T] [tail=T] [desc=T] [note=T] [in=T] [out=T] [a=T]
+#   [b=T] [title=T] [find=T] [aux=T] [state=S] [flags=N] [l0=N] [l1=N] [nkids=N] [item=STATE:T]...
+#   [ready=1] [done=1] [repeat=N]: a typed row made (or changed: a call of that id)
+#   on the open conversation through agrow_* alone. A value runs to the next " KEY=" of these keys ("\n",
+#   "\t" in it); STATE of an item pending, active or done. repeat=N: N calls, ID-0 to ID-(N-1), alike.
+#   No driver and no reader is asked
+c_agent_test_tool:
+    PROLOGUE 48
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 8f
+    mov [rsp], rax
+    call ai_arg                 # the id
+    test rdx, rdx
+    jz 8f
+    mov [rsp + 8], rax
+    mov [rsp + 16], rdx
+    call ai_arg_rest
+    mov rdi, rax
+    mov rsi, rdx
+    call trim
+    mov [rip + tt_rest], rax
+    mov [rip + tt_len], rdx
+    call tt_split                # the keys' places
+    mov qword ptr [rsp + 24], 0  # repeat
+    mov edi, TK_REPEAT
+    call tt_value
+    test rax, rax
+    jz 1f
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov [rsp + 24], rax
+1:  cmp qword ptr [rsp + 24], 0
+    jne 2f
+    mov rdi, [rsp]              # one call, ID
+    mov rsi, [rsp + 8]
+    mov rdx, [rsp + 16]
+    call tt_one
+    jmp 7f
+2:  mov dword ptr [rip + tt_many], 1
+    xor r15d, r15d              # ID-0 .. ID-(N-1)
+3:  cmp r15, [rsp + 24]
+    jae 7f
+    lea rdi, [rip + tt_id]
+    call sb_clear
+    lea rdi, [rip + tt_id]
+    mov rsi, [rsp + 8]
+    mov rdx, [rsp + 16]
+    call sb_push
+    lea rdi, [rip + tt_id]
+    mov esi, '-'
+    call sb_push_byte
+    lea rdi, [rip + tt_id]
+    mov rsi, r15
+    call sb_push_u64
+    mov rdi, [rsp]
+    mov rsi, [rip + tt_id + SB_ptr]
+    mov rdx, [rip + tt_id + SB_len]
+    call tt_one
+    inc r15
+    jmp 3b
+7:  mov dword ptr [rip + tt_many], 0
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# tt_split(): agent-test-tool's keys in tt_rest: where each "KEY=" starts (at the start or after a blank), in
+#   tt_at (key, value start), tt_n of them
+tt_split:
+    PROLOGUE
+    mov dword ptr [rip + tt_n], 0
+    xor r12d, r12d
+1:  cmp r12, [rip + tt_len]
+    jae 9f
+    test r12, r12
+    jz 2f
+    mov rax, [rip + tt_rest]
+    cmp byte ptr [rax + r12 - 1], ' '
+    jne 3f
+2:  mov rdi, [rip + tt_rest]
+    add rdi, r12
+    mov rsi, [rip + tt_len]
+    sub rsi, r12
+    lea rdx, [rip + tt_keys]
+    call ai_opt
+    test eax, eax
+    js 3f
+    mov ecx, [rip + tt_n]
+    cmp ecx, TT_MAX
+    jae 9f
+    lea r8, [rip + tt_at]
+    shl rcx, 4
+    mov [r8 + rcx], rax         # the key
+    sub rdx, [rip + tt_rest]
+    mov [r8 + rcx + 8], rdx     # its value's start
+    inc dword ptr [rip + tt_n]
+3:  inc r12
+    jmp 1b
+9:  EPILOGUE
+
+# tt_entry(i) -> rax the value's ptr, rdx its length (to the next key's blank), ecx the key
+tt_entry:
+    mov rax, rdi
+    shl rax, 4
+    lea r8, [rip + tt_at]
+    mov ecx, [r8 + rax]
+    mov r9, [r8 + rax + 8]      # its start
+    mov rdx, [rip + tt_len]
+    lea r10, [rdi + 1]
+    cmp r10d, [rip + tt_n]
+    jae 1f
+    shl r10, 4
+    mov rdx, [r8 + r10 + 8]     # the next key's start, less its key and the blank before it
+    mov r11d, [r8 + r10]
+    push rcx
+    push rdx
+    push r9
+    push r11
+    lea rax, [rip + tt_keys]
+    mov rdi, [rax + r11*8]
+    call strlen
+    pop r11
+    pop r9
+    pop rdx
+    pop rcx
+    sub rdx, rax
+    sub rdx, 2
+1:  sub rdx, r9
+    jns 2f
+    xor edx, edx
+2:  mov rax, [rip + tt_rest]
+    add rax, r9
+    ret
+
+# tt_value(key) -> rax ptr, rdx len of that key's (first) value, rax 0 when it is not given
+tt_value:
+    PROLOGUE
+    mov ebx, edi
+    xor r12d, r12d
+1:  cmp r12d, [rip + tt_n]
+    jae 8f
+    mov edi, r12d
+    call tt_entry
+    cmp ecx, ebx
+    je 9f
+    inc r12d
+    jmp 1b
+8:  xor eax, eax
+    xor edx, edx
+9:  EPILOGUE
+
+# tt_one(AS*, id ptr, len): agent-test-tool's call of that id, made or changed with every key given
+tt_one:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    cmp dword ptr [rip + tt_many], 0
+    je 0f
+    call agrow_find             # repeat=N: new calls (a row's own id is not looked for)
+    jmp 01f
+0:  call agrow_by_id
+01:
+    mov r14, rax
+    test r14, r14
+    jnz 1f
+    mov edi, TK_UP              # made: under its parent when one is named
+    call tt_value
+    mov rcx, rax
+    mov r8, rdx
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call agrow_tool
+    mov r14, rax
+    test r14, r14
+    jz 9f
+1:
+2:  xor r15d, r15d
+3:  cmp r15d, [rip + tt_n]
+    jae 6f
+    mov edi, r15d
+    call tt_entry
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    mov [rsp + 16], ecx
+    lea rax, [rip + tt_atx]     # a text part
+    mov eax, [rax + rcx*4]
+    test eax, eax
+    js 4f
+    mov [rsp + 20], eax
+    mov rdi, [rsp]
+    mov rsi, [rsp + 8]
+    lea rdx, [rip + tr_text]
+    call ai_unescape
+    mov rdi, r14
+    mov esi, [rsp + 20]
+    mov rdx, [rip + tr_text + SB_ptr]
+    mov rcx, [rip + tr_text + SB_len]
+    test rdx, rdx
+    jnz 31f
+    lea rdx, [rip + .Lempty_str]
+31: call agrow_set
+    cmp dword ptr [rsp + 20], ATX_SECOND    # the row's summary: its second text
+    jne 5f
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, [rip + tr_text + SB_ptr]
+    mov rcx, [rip + tr_text + SB_len]
+    call agrow_summary
+    jmp 5f
+4:  mov rdi, rbx                # a number, a state, an item
+    mov rsi, r14
+    mov edx, [rsp + 16]
+    mov rcx, [rsp]
+    mov r8, [rsp + 8]
+    call tt_num
+5:  inc r15d
+    jmp 3b
+6:  mov edi, TK_READY
+    call tt_value
+    test rax, rax
+    jz 61f
+    mov rdi, rbx
+    mov rsi, r14
+    call agrow_ready
+61: mov edi, TK_DONE
+    call tt_value
+    test rax, rax
+    jz 62f
+    mov rdi, rbx
+    mov rsi, r14
+    call agrow_done
+62: mov rdi, rbx
+    mov rsi, r14
+    call agrow_touch
+9:  EPILOGUE
+
+# tt_num(AS*, AT*, key, value ptr, len): state=S, flags=N, l0=N, l1=N, nkids=N, item=STATE:T
+tt_num:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov r14, rcx
+    mov r15, r8
+    cmp r13d, TK_STATE
+    jne 1f
+    mov rdi, r14
+    mov rsi, r15
+    lea rdx, [rip + state_words]
+    call ai_opt_word
+    test eax, eax
+    js 9f
+    mov rdi, r12
+    mov edx, eax
+    mov esi, ATV_STATE
+    call agrow_num
+    jmp 9f
+1:  cmp r13d, TK_ITEM
+    je 5f
+    lea rax, [rip + tt_atv]     # a number
+    mov eax, [rax + r13*4]
+    test eax, eax
+    js 9f
+    mov [rsp], eax
+    mov rdi, r14
+    mov rsi, r15
+    call parse_u64
+    mov rdi, r12
+    mov esi, [rsp]
+    mov edx, eax
+    call agrow_num
+    jmp 9f
+5:  xor ecx, ecx                # item=STATE:T
+6:  cmp rcx, r15
+    jae 9f
+    cmp byte ptr [r14 + rcx], ':'
+    je 7f
+    inc rcx
+    jmp 6b
+7:  mov [rsp], rcx
+    mov rdi, r14
+    mov rsi, rcx
+    lea rdx, [rip + todo_words]
+    call ai_opt_word
+    test eax, eax
+    jns 71f
+    xor eax, eax
+71: mov [rsp + 8], eax
+    mov rcx, [rsp]
+    lea rdi, [r14 + rcx + 1]
+    mov rsi, r15
+    sub rsi, rcx
+    dec rsi
+    lea rdx, [rip + tr_text]
+    call ai_unescape
+    mov rdi, r12
+    mov rsi, [rip + tr_text + SB_ptr]
+    mov rdx, [rip + tr_text + SB_len]
+    test rsi, rsi
+    jnz 72f
+    lea rsi, [rip + .Lempty_str]
+72: mov ecx, [rsp + 8]
+    call agrow_item
+9:  EPILOGUE
+
+# agent-test-truncate N: the open conversation's rows from N on go (agents_rows_cut: the chunks, folds and
+#   calls after them with them), as an extension's shorter transcript cuts them
+c_agent_test_truncate:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov rdi, rbx
+    mov rsi, rax
+    call agents_rows_cut
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+.bss
+.p2align 3
+tt_rest: .quad 0                # agent-test-tool: its keys and values, where each key's value starts
+tt_len: .quad 0
+tt_n: .long 0
+tt_many: .long 0                # repeat=N runs
+.p2align 3
+tt_at: .zero 16 * TT_MAX
+tt_id: .zero SB_SIZE
+.section .rodata
+.Lk_up: .asciz "up"
+.Lk_name: .asciz "name"
+.Lk_second: .asciz "second"
+.Lk_link: .asciz "link"
+.Lk_tail: .asciz "tail"
+.Lk_desc: .asciz "desc"
+.Lk_note: .asciz "note"
+.Lk_in: .asciz "in"
+.Lk_out: .asciz "out"
+.Lk_a: .asciz "a"
+.Lk_b: .asciz "b"
+.Lk_title: .asciz "title"
+.Lk_find: .asciz "find"
+.Lk_aux: .asciz "aux"
+.Lk_state: .asciz "state"
+.Lk_flags: .asciz "flags"
+.Lk_l0: .asciz "l0"
+.Lk_l1: .asciz "l1"
+.Lk_nkids: .asciz "nkids"
+.Lk_item: .asciz "item"
+.Lk_src: .asciz "src"
+.Lk_ready: .asciz "ready"
+.Lk_done: .asciz "done"
+.Lk_repeat: .asciz "repeat"
+.Ls_running: .asciz "running"
+.Ls_ok: .asciz "ok"
+.Ls_denied: .asciz "denied"
+.Ls_stopped: .asciz "stopped"
+.Lt_pending: .asciz "pending"
+.Lt_active: .asciz "active"
+.Lp_link: .asciz "link"
+.Lp_in: .asciz "in"
+.Lp_out: .asciz "out"
+.Lp_pre: .asciz "pre"
+.Lp_diff: .asciz "diff"
+.Lp_note: .asciz "note"
+.Lp_toggle: .asciz "toggle"
+.Lp_copy: .asciz "copy"
+.Lp_kids: .asciz "kids"
+.Lp_more: .asciz "more"
+.Lp_stop: .asciz "stop"
+.Lp_bg: .asciz "bg"
+.Lc_print_agent_rows: .asciz "print-agent-rows"
+.Lc_print_agent_rows_fit: .asciz "print-agent-rows-fit"
+.Lc_agent_test_tool: .asciz "agent-test-tool"
+.Lc_agent_row_click: .asciz "agent-row-click"
+.Lc_agent_test_truncate: .asciz "agent-test-truncate"
+.p2align 3
+tt_keys: .quad .Lk_up, .Lk_name, .Lk_second, .Lk_link, .Lk_tail, .Lk_desc, .Lk_note, .Lk_in, .Lk_out
+    .quad .Lk_a, .Lk_b, .Lk_title, .Lk_find, .Lk_aux, .Lk_state, .Lk_flags, .Lk_l0, .Lk_l1, .Lk_nkids
+    .quad .Lk_item, .Lk_src, .Lk_ready, .Lk_done, .Lk_repeat, 0
+tt_atx: .long -1, ATX_NAME, ATX_SECOND, ATX_LINK, ATX_TAIL, ATX_DESC, ATX_NOTE, ATX_IN, ATX_OUT, ATX_A, ATX_B
+    .long ATX_TITLE, ATX_FIND, ATX_AUX, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1
+tt_atv: .long -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, ATV_SET, ATV_L0, ATV_L1, ATV_NKIDS
+    .long -1, -1, -1, -1, -1
+.p2align 3
+state_words: .quad .Ls_running, .Ls_ok, .Ls_failed, .Ls_denied, .Ls_stopped, 0
+todo_words: .quad .Lt_pending, .Lt_active, .Lk_done, 0
+part_words: .quad .Lp_link, .Lp_in, .Lp_out, .Lp_pre, .Lp_diff, .Lp_note, .Lp_toggle, .Lp_copy, .Lp_kids
+    .quad .Lp_more, .Lp_stop, .Lp_bg, 0
+part_nums: .long PART_LINK, PART_IN, PART_OUT, PART_PRE, PART_DIFF, PART_NOTE, PART_TOGGLE, PART_COPY
+    .long PART_KIDS, PART_MORE, PART_STOP, PART_BG
+.text
+
 # box_kind() -> eax the built-in driver kind the box belongs to: the open conversation's, else the new
 #   one's being written; 0 none (an extension's)
 box_kind:
@@ -1801,6 +2306,9 @@ ai_ctl:
     # the thread's engine and rows (agents.s, agentrows.s: phase 3)
     .quad .Lc_print_agent_thread, c_print_agent_thread, .Lc_agent_test_row, c_agent_test_row
     .quad .Lc_agent_test_view, c_agent_test_view
+    .quad .Lc_print_agent_rows, c_print_agent_rows, .Lc_print_agent_rows_fit, c_print_agent_rows_fit
+    .quad .Lc_agent_test_tool, c_agent_test_tool, .Lc_agent_row_click, c_agent_row_click
+    .quad .Lc_agent_test_truncate, c_agent_test_truncate
     .quad .Lc_print_agents_metrics, c_print_agents_metrics, .Lc_print_agents_box, c_print_agents_box
     .quad .Lc_print_agent_placeholder, c_print_agent_placeholder, .Lc_print_sh_quote, c_print_sh_quote
     .quad .Lc_print_holder, c_print_holder

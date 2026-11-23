@@ -153,6 +153,7 @@ python3 tests/fake-claude.py || fail=1   # the fake Claude Code against the reco
 python3 tests/claude-chat.py || fail=1   # Claude Code's chat against the fake
 python3 tests/claude-controls.py || fail=1   # its controls: settings, lists, menus, modes, models
 python3 tests/claude-cards.py || fail=1   # its cards: permission, questions, plan, dialogs
+python3 tests/claude-transcript.py || fail=1   # the typed rows: a call's parts, text that opens in a tab (phase 3)
 python3 tests/claude-thread.py || fail=1   # the thread's engine: heights, the view's anchor, keys (phase 3)
 python3 tests/ext-agents.py || fail=1
 python3 tests/ext-review.py || fail=1

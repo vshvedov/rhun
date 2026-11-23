@@ -1110,7 +1110,7 @@ c_agent_row_click:
 
 # agent-test-tool ID [up=ID] [name=T] [second=T] [link=T] [tail=T] [desc=T] [note=T] [in=T] [out=T] [a=T]
 #   [b=T] [title=T] [find=T] [aux=T] [state=S] [flags=N] [l0=N] [l1=N] [nkids=N] [item=STATE:T]...
-#   [ready=1] [done=1] [repeat=N]: a typed row made (or changed: a call of that id)
+#   [src=FILE:OFFSET:LENGTH] [ready=1] [done=1] [repeat=N]: a typed row made (or changed: a call of that id)
 #   on the open conversation through agrow_* alone. A value runs to the next " KEY=" of these keys ("\n",
 #   "\t" in it); STATE of an item pending, active or done. repeat=N: N calls, ID-0 to ID-(N-1), alike.
 #   No driver and no reader is asked
@@ -1271,9 +1271,9 @@ tt_one:
     cmp dword ptr [rip + tt_many], 0
     je 0f
     call agrow_find             # repeat=N: new calls (a row's own id is not looked for)
-    jmp 01f
+    jmp 8f
 0:  call agrow_by_id
-01:
+8:
     mov r14, rax
     test r14, r14
     jnz 1f
@@ -1288,7 +1288,13 @@ tt_one:
     mov r14, rax
     test r14, r14
     jz 9f
-1:
+1:  mov edi, TK_SRC             # its place first: the texts keep a preview then
+    call tt_value
+    test rax, rax
+    jz 2f
+    mov rdi, r14
+    mov rsi, rax
+    call tt_src
 2:  xor r15d, r15d
 3:  cmp r15d, [rip + tt_n]
     jae 6f
@@ -1347,6 +1353,43 @@ tt_one:
 62: mov rdi, rbx
     mov rsi, r14
     call agrow_touch
+9:  EPILOGUE
+
+# tt_src(AT*, "FILE:OFFSET:LENGTH")
+tt_src:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, r13                # the last ':'
+1:  test r14, r14
+    jz 9f
+    dec r14
+    cmp byte ptr [r12 + r14], ':'
+    jne 1b
+    lea rdi, [r12 + r14 + 1]
+    mov rsi, r13
+    sub rsi, r14
+    dec rsi
+    call parse_u64
+    mov [rsp], rax              # the length
+    mov r15, r14                # the ':' before it
+2:  test r15, r15
+    jz 9f
+    dec r15
+    cmp byte ptr [r12 + r15], ':'
+    jne 2b
+    lea rdi, [r12 + r15 + 1]
+    mov rsi, r14
+    sub rsi, r15
+    dec rsi
+    call parse_u64
+    mov rcx, rax
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r15
+    mov r8, [rsp]
+    call agrow_place
 9:  EPILOGUE
 
 # tt_num(AS*, AT*, key, value ptr, len): state=S, flags=N, l0=N, l1=N, nkids=N, item=STATE:T

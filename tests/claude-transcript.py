@@ -185,6 +185,27 @@ class RowTest(RowCase):
         last = [l for l in doc.splitlines() if l.strip()][-2]
         self.assertRegex(last, r'^… \d+ more lines$')
 
+    def test_full_text_from_a_line(self):
+        self.codex()
+        line = json.dumps({'id': 'r1', 'output': 'the whole text ' * 200})
+        src = self.work / 'records.jsonl'
+        src.write_text('{"first": 1}\n' + line + '\n', encoding='utf-8')
+        offset = len('{"first": 1}\n')
+        self.tool('r1 name=Bash out=%s state=ok src=%s:%d:%d' % ('the whole text ' * 200, src, offset,
+                                                                    len(line.encode())))
+        head, parts = self.row_line(self.base)
+        out = [p for p in parts if p.startswith('out ')][0]
+        self.assertIn(' kept=600 ', out)                              # a row with a place keeps a preview
+        self.command('agent-row-click %d out' % (self.base + 1))
+        self.assertNotIn(CHANGED, self.command('print-toast'))
+        self.assertIn('the whole text', self.command('print-doc'))
+        self.command('cmd focus_agents')
+        src.write_text('{"first": 2, "x": 1}\n' + line + '\n', encoding='utf-8')   # its line moved
+        self.command('cmd close_tab')                # (a second click would find its tab)
+        self.command('cmd focus_agents')
+        self.command('agent-row-click %d out' % (self.base + 1))
+        self.assertIn(CHANGED, self.command('print-toast'))
+
     def test_output_is_cleaned(self):
         self.codex()
         self.tool('d name=Bash out=\\e[31mred\\e[0m \\e]0;title\\a bell\\a crlf\\r\\nc1\\xc2\\x85 '

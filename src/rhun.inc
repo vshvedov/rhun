@@ -2939,8 +2939,8 @@ F AT_in, SB_SIZE        # what is kept: a preview, or what streamed
 F AT_out, SB_SIZE
 F AT_a, SB_SIZE
 F AT_b, SB_SIZE
-F AT_size, 8 * 4        # each part's whole bytes, by ATX_IN..ATX_B
-F AT_lines, 4 * 4       # and its lines
+F AT_size, 32           # each part's whole bytes, by ATX_IN..ATX_B
+F AT_lines, 16          # and its lines
 F AT_file, 8            # owned path of the file its records are in, 0 the session's
 F AT_uoff, 8            # the call's line there, -1 none
 F AT_ulen, 8

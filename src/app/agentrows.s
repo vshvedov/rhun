@@ -47,7 +47,8 @@ ENDSTRUCT RW_SIZE
 .equ TABS_KEPT, 32              # the tabs a row's text opened, remembered (found again by DOC_id)
 .equ ERR_CHARS, 2000            # an error's text in the row (the extension's): then "…"
 .equ BIG_UNITS, 250             # a text longer (UTF-16 units) or of more than 3 lines is a button (V7)
-.equ ERR_LINES, 10              # an error's clip when it is a button: 10 lines of its face
+.equ ERR_LINES, 10
+.equ UNSUPPORTED_LEN, 26        # .Lunsupported's bytes              # an error's clip when it is a button: 10 lines of its face
 
 .data
 .p2align 3
@@ -1695,10 +1696,20 @@ line_lay:
     mov edx, r14d
     add edx, [rip + g_pmt + 4*MI_4]
     mov ecx, [rsp + RW_SIZE + 16]
-    lea r8, [rip + .Lunsupported]
-    COLOR r9d, T_MUTED
-    call ui_text_c
+    lea r8, [rip + .Lunsupported]   # cut at the row's width
+    mov r9d, UNSUPPORTED_LEN
+    COLOR r10d, T_MUTED
+    mov r11d, r15d
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
     mov [rsp + RW_SIZE + 20], eax
+    mov ecx, r13d               # the type: in the room left
+    add ecx, r15d
+    sub ecx, eax
+    cmp ecx, [rip + g_pmt + 4*MI_8]
+    jl 9f
     call agrow_code_face
     mov rdi, rax
     mov esi, [rsp + RW_SIZE + 20]
@@ -3211,14 +3222,111 @@ follow_link:
     call ed_set_cursor
 9:  EPILOGUE
 
-# FN agrow_full(AS*, AT*, ATX_IN..ATX_B, sb) -> eax 1 the whole text, 0 only what was kept: what is kept and,
-#   when that was cut, "… N more lines" (a call with a place in a file reads its line again: next)
+# FN agrow_full(AS*, AT*, ATX_IN..ATX_B, sb) -> eax 1 the whole text, 0 only what was kept. A call with a place
+#   in a file: its line read again (at most AT_REREAD_MAX), checked to be a whole line that names the call's
+#   id, parsed and given to the reader's text function; a file changed underneath gives what was kept and the
+#   toast. Else, and when the reader has nothing, what was kept and, when that was cut, "… N more lines"
 FN agrow_full
     PROLOGUE 48
     mov rbx, rdi
     mov r12, rsi
     mov r13d, edx
     mov r14, rcx
+    mov rax, [r12 + AT_uoff]    # the line: the call's, or for OUT its result's
+    mov rcx, [r12 + AT_ulen]
+    cmp r13d, ATX_OUT
+    jne 1f
+    mov rax, [r12 + AT_roff]
+    mov rcx, [r12 + AT_rlen]
+1:  mov [rsp], rax
+    mov [rsp + 8], rcx
+    test rax, rax
+    js .Lfull_kept
+    test rcx, rcx
+    jz .Lfull_kept
+    cmp rcx, AT_REREAD_MAX
+    ja .Lfull_kept
+    mov rdi, [r12 + AT_file]
+    test rdi, rdi
+    jnz 2f
+    mov rdi, [rbx + AS_path]
+    test rdi, rdi
+    jz .Lfull_kept
+2:  mov rdx, [rsp]              # the line and the bytes around it: a line feed before (or the file's
+    xor eax, eax                #   start) and after
+    test rdx, rdx
+    jz 21f
+    dec rdx
+    mov eax, 1
+21: mov [rsp + 16], eax
+    mov rsi, [rsp + 8]
+    add rsi, rax
+    inc rsi
+    call agent_read_window
+    mov [rsp + 24], rax
+    test rax, rax
+    jz .Lfull_changed
+    mov ecx, [rsp + 16]
+    mov r8, [rsp + 8]
+    lea r9, [r8 + rcx + 1]
+    cmp rdx, r9
+    jb .Lfull_freed_changed     # the file is shorter now
+    test ecx, ecx
+    jz 22f
+    cmp byte ptr [rax], 10
+    jne .Lfull_freed_changed
+22: add rax, rcx
+    cmp byte ptr [rax + r8], 10
+    jne .Lfull_freed_changed
+    mov [rsp + 32], rax         # the line
+    mov rdi, rax                # it names the call
+    mov rsi, r8
+    mov rdx, [r12 + AT_id]
+    push rdx
+    push rdx
+    mov rdi, rdx
+    call strlen
+    mov rcx, rax
+    pop rdx
+    pop rdx
+    mov rdi, [rsp + 32]
+    mov rsi, [rsp + 8]
+    call str_find
+    test rax, rax
+    js .Lfull_freed_changed
+    mov rdi, [rsp + 32]
+    mov rsi, [rsp + 8]
+    call json_parse
+    test rax, rax
+    jz .Lfull_freed_changed
+    mov r15, rax
+    mov edi, [rbx + AS_kind]    # the reader gives the part's whole text
+    mov esi, 1
+    call agent_reader
+    test rax, rax
+    jz .Lfull_freed_kept
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    mov rcx, r15
+    mov r8, r14
+    call rax
+    test eax, eax
+    jz .Lfull_freed_kept
+    mov rdi, [rsp + 24]
+    call mem_free
+    mov eax, 1
+    EPILOGUE
+.Lfull_freed_changed:
+    mov rdi, [rsp + 24]
+    call mem_free
+.Lfull_changed:
+    lea rdi, [rip + .Lchanged]
+    call app_toast
+    jmp .Lfull_kept
+.Lfull_freed_kept:
+    mov rdi, [rsp + 24]
+    call mem_free
 .Lfull_kept:
     mov eax, r13d               # what is kept
     sub eax, ATX_IN
@@ -3479,6 +3587,31 @@ FN agrow_by_id
 8:  xor eax, eax
 9:  EPILOGUE
 
+# FN agrow_place(AT*, file ptr, len, offset, length): where its records are (agent-test-tool src=): the file
+#   (0: the session's), the call's line and its result's
+FN agrow_place
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rcx
+    mov r13, r8
+    mov rdi, [rbx + AT_file]
+    push rsi
+    push rdx
+    call mem_free
+    pop rsi
+    pop rdi
+    mov qword ptr [rbx + AT_file], 0
+    test rdi, rdi
+    jz 1f
+    test rsi, rsi
+    jz 1f
+    call mem_dup
+    mov [rbx + AT_file], rax
+1:  mov [rbx + AT_uoff], r12
+    mov [rbx + AT_ulen], r13
+    mov [rbx + AT_roff], r12
+    mov [rbx + AT_rlen], r13
+    EPILOGUE
 
 # ---------------- dumps ----------------
 

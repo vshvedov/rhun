@@ -1038,6 +1038,44 @@ def s_long(prompt):
     final(''.join('Paragraph %d of a long reply.\n\n' % i for i in range(120)), 0.05)
 
 
+def s_stream(prompt):
+    """stream [PIECES [MS]]: a tool that runs without asking, then a Markdown reply (headings, lists, code
+    blocks) of PIECES deltas (default 2000), MS milliseconds apart (default 5): a long, fast stream"""
+    words = prompt.split()
+    pieces = int(words[1]) if len(words) > 1 else 2000
+    delay = (int(words[2]) if len(words) > 2 else 5) / 1000
+    if not bash('ls src', ask=False):
+        return
+    parts = []
+    for i in range(pieces):
+        section = i // 40
+        step = i % 40
+        if step == 0:
+            parts.append('## Part %d\n\n' % section)
+        elif step < 12:
+            parts.append('the reader keeps each row ' if step % 2 else 'and measures it once. ')
+        elif step == 12:
+            parts.append('\n\n- a **list** item\n')
+        elif step < 16:
+            parts.append('- item %d of part %d\n' % (step, section))
+        elif step == 16:
+            parts.append('\n```python\n')
+        elif step < 24:
+            parts.append('def f%d_%d(x):\n    return x * %d\n' % (section, step, step))
+        elif step == 24:
+            parts.append('```\n\n')
+        else:
+            parts.append('more `code` text ' if step % 3 else 'and a sentence. ')
+        if step == 39:
+            parts.append('\n\n')
+    mid = message_start()
+    if text(mid, 0, parts, delay):
+        message_end()
+        result(''.join(parts))
+    else:
+        cut_off()
+
+
 def s_wait(prompt):
     """a reply after a second"""
     time.sleep(1)
@@ -1124,7 +1162,8 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'wait': s_wait, 'many': s_many, 'ran': s_ran, 'fails': s_fails, 'early': s_early,
              'replay': s_replay, 'mcp': s_mcp, 'noid': s_noid, 'askx': s_askx, 'deep': s_deep,
              'withdraw': s_withdraw, 'unsaved': s_unsaved, 'unknown': s_unknown, 'unhandled': s_unhandled,
-             'mute': s_mute, 'orphan': s_orphan, 'autherr': s_autherr, 'long': s_long, 'gone': s_gone}
+             'mute': s_mute, 'orphan': s_orphan, 'autherr': s_autherr, 'long': s_long, 'gone': s_gone,
+             'stream': s_stream}
 
 
 COMMANDS = [{'name': 'compact', 'description': 'Clear history but keep a summary', 'argumentHint': ''}]

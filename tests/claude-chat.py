@@ -532,7 +532,8 @@ class ChatTest(DrivenCase):
         self.assertIsNone(starts[0]['env']['CLAUDECODE'])
         self.assertEqual(self.stdin()[0], {'type': 'control_request', 'request_id': 'r1',
                                            'request': {'subtype': 'initialize', 'hooks': None,
-                                                       'promptSuggestions': True, 'supportedDialogKinds': []}})
+                                                       'promptSuggestions': True, 'supportedDialogKinds': [
+                                                           'fable_overage_consent_prompt', 'auto_mode_server_fallback']}})
         # then what is in effect (tests/claude-controls.py), then the prompt, with its uuid (phase 2)
         self.assertEqual(self.stdin()[1], {'type': 'control_request', 'request_id': 'r2',
                                            'request': {'subtype': 'get_settings'}})

@@ -31,6 +31,7 @@
 #   claude_card_build(AL*, AQ*, request jv)  the card (AQ_card), AQ_sugg, AQ_flags
 #   claude_card_show(AL*, AQ*) -> eax 1 shown   its first place, then ev_card
 #   claude_reply(AL*, AQ*, CD*) -> eax 1 written (or the card gone with its request)
+#   (the dialog cards, at the end: claude_dialog_kinds, claude_dialog)
 .include "rhun.inc"
 
 .equ LINE_VALUES, 1000000       # json_parse_lim's limits (agent_claude.s's)
@@ -59,6 +60,28 @@
 .equ PLS_TABBED, 1              # plan review: AQ_state of a plan (the driver's): its tab was opened once
 .equ PLS_MODEWAIT, 2            #   its Yes waits for set_permission_mode auto's answer
 .equ PL_INFO, 6                 #   agents.s's R_INFO: an info row
+.equ DR_CONTINUE, 0             # the dialog cards: a button's result (CBA_DIALOG + n, dlg_results)
+.equ DR_INTERRUPT, 1
+.equ DR_CONSENT, 2              #   "Continue with …": consent, then the toast
+.equ DR_SWITCH, 3
+.equ DR_ADMIN, 4
+.equ DR_BUY, 5                  #   "Buy usage credits on claude.ai": consent, claude.ai's page asked about
+.equ DR_COUNT, 6
+.equ DG_TEXT_MAX, 4000          #   a title's or a paragraph's bytes at most (cut at a character's start)
+.equ DG_PARAS, 20               #   paragraphs at most
+.equ DG_URL_MAX, 2000
+.equ DG_LABEL_MAX, 200          #   a greyed button's label
+.equ DG_NAME_MAX, 60            #   a model's name
+.equ LO_PLAN, 1                 #   leftOutOf
+.equ LO_SEAT, 2
+.equ EO_NONE, 0                 #   endedOn: absent or not a date, false or null, a date
+.equ EO_FALSE, 1
+.equ EO_DATE, 2
+.equ PR_NONE, 0                 #   the second button: none, the admin, buy, consent, greyed
+.equ PR_ADMIN, 1
+.equ PR_BUY, 2
+.equ PR_CONSENT, 3
+.equ PR_GREYED, 4
 
 .bss
 .p2align 3
@@ -1833,7 +1856,14 @@ FN claude_reply
     mov [rip + al_now], rbx
     cmp dword ptr [r12 + AQ_kind], AQK_PLAN     # plan review: a plan's answers
     je .Lcr_plan
-    mov eax, [r13 + CD_chosen]
+    cmp dword ptr [r12 + AQ_kind], AQK_DIALOG   # the dialog cards' answers (dialog_reply)
+    jne 0f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call dialog_reply
+    EPILOGUE
+0:  mov eax, [r13 + CD_chosen]
     cmp eax, CBA_YES
     je .Lcr_yes
     cmp eax, CBA_RULE
@@ -3108,3 +3138,1503 @@ dest_rank: .long 2, 0, 1, 3     # the four's width (the extension's SPn: user, p
 .Lv_success: .asciz "success"
 .p2align 3
 plan_mdo: .quad plan_on_comment, plan_on_closed     # its tab's owner (MDO, mdtab.s)
+
+# ---------------------------------------------------------------- the dialog cards
+#
+# request_user_dialog {subtype, dialog_kind, payload, tool_use_id?}, answered {behavior "completed", result} or
+# {behavior "cancelled"} (README.txt finding 25: the CLI binary's schemas; no run produced one, so every
+# payload shape below is the schema's and the extension's readers', none recorded). rhun declares in
+# initialize.supportedDialogKinds only the kinds it shows (dlg_kinds); the CLI sends no other, and one of any
+# other kind gets the caller's error reply, never "cancelled", which would count as the user dismissing it.
+# Each kind is a CDK_DIALOG card (agentcard.s) made as the extension's readers make it (webview index.js):
+#   auto_mode_server_fallback (YPe @3423169, the card FMt @5561231): the title trimmed, the paragraphs that are
+#   strings and not blank, the extension's own words (XPe) when there is neither; helpUrl only as an https URL
+#   on claude.com or anthropic.com (YUt), shown as "Learn more" (the extension puts it in the paragraph that
+#   names it, else under them; rhun always under them); "Continue" (continue), "Stop" (interrupt); no ×.
+#   fable_overage_consent_prompt (oOe, aOe, que, eOe, nOe @3426000-3429000, the card zMt @5563262): the
+#   title, the body and the second button aOe composes, the body followed by "Learn more" (lOe, the support
+#   article); "Switch to the default model and continue" (switch_default), then "Request usage credits from
+#   your admin" (request_admin), "Buy usage credits on claude.ai" (consent, then claude.ai's usage page, ij
+#   @3595371, asked about before it opens) or "Continue with NAME" (consent, then the pill "Now using usage
+#   credits for NAME"), or a greyed button; the × (cancelled). A payload oOe refuses (overagesEnabled not a
+#   boolean) is dismissed at once, as the card's own t.cancel() does.
+# Buttons are dead for the card's first 500 ms (agentcard.s), the × too. switch_default also clears rhun's own
+# per-project model choice (agentcfg AGF_MODEL: the next start passes no --model; Claude Code's settings are
+# never written) and asks get_settings what is in effect now.
+#
+#   claude_dialog_kinds()                     the declared kinds, as strings in claude_cw's open array
+#   claude_dialog(AL*, record, request) -> rax AQ* (its card made: it waits), 1 (answered at once), 0 (not a
+#     dialog rhun shows: the caller's error reply)
+
+# FN claude_dialog_kinds(): initialize's supportedDialogKinds, into the array claude_cw has open
+FN claude_dialog_kinds
+    PROLOGUE
+    lea rbx, [rip + dlg_kinds]
+1:  mov rsi, [rbx]
+    test rsi, rsi
+    jz 9f
+    lea rdi, [rip + claude_cw]
+    call jw_cstr
+    add rbx, 16
+    jmp 1b
+9:  EPILOGUE
+
+# FN claude_dialog(AL*, record, request jv) -> rax the request (AQK_DIALOG, its card made) to wait; 1 when it was
+#   answered at once (a payload its reader refuses); 0 when it is not request_user_dialog of a declared kind,
+#   or AQ_MAX wait already
+FN claude_dialog
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, r13
+    lea rsi, [rip + .Lk_subtype_d]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_dialog_req]
+    call json_is
+    test eax, eax
+    jz 8f
+    mov rdi, r13
+    lea rsi, [rip + .Lk_dialog_kind]
+    call json_get
+    mov r14, rax
+    lea r15, [rip + dlg_kinds]
+1:  mov rsi, [r15]
+    test rsi, rsi
+    jz 8f
+    mov rdi, r14
+    call json_is
+    test eax, eax
+    jnz 2f
+    add r15, 16
+    jmp 1b
+2:  cmp qword ptr [rbx + AL_reqs + VEC_len], AQ_MAX
+    jae 8f
+    mov edi, AQ_SIZE
+    call mem_alloc
+    mov r14, rax
+    mov dword ptr [r14 + AQ_kind], AQK_DIALOG
+    lea rdi, [rip + dg_tmp]     # the id, as it came
+    call jw_begin
+    mov rdi, r12
+    lea rsi, [rip + .Lk_request_id_d]
+    call json_get
+    lea rdi, [rip + dg_tmp]
+    mov rsi, rax
+    call jw_jv
+    mov rdi, [rip + dg_tmp + SB_ptr]
+    mov rsi, [rip + dg_tmp + SB_len]
+    call mem_dup
+    mov [r14 + AQ_id], rax
+    mov rdi, [r15]
+    call strlen
+    mov rdi, [r15]
+    mov rsi, rax
+    call mem_dup
+    mov [r14 + AQ_dkind], rax
+    mov [rip + al_now], rbx
+    mov edi, CDK_DIALOG
+    call agentcard_new
+    mov [r14 + AQ_card], rax
+    mov [rax + CD_token], r14
+    mov [rip + cd_now], rax
+    mov rdi, r13
+    lea rsi, [rip + .Lk_payload]
+    call json_get
+    mov rdi, r14
+    mov rsi, rax
+    call [r15 + 8]
+    test eax, eax
+    jz 3f
+    mov rax, r14
+    EPILOGUE
+3:  mov rdi, rbx                # refused by its reader: dismissed at once (the extension's t.cancel())
+    mov rsi, r14
+    xor edx, edx
+    call dialog_write
+    mov rdi, r14                # not in AL_reqs: a close the write caused did not free it
+    call agent_aq_free
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# dialog_write(AL*, AQ*, result cstr or 0) -> eax 1 written: {"behavior":"completed","result":R}, or
+#   {"behavior":"cancelled"} without a result
+dialog_write:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    call claude_reply_begin
+    lea rdi, [rip + claude_cw]
+    lea rsi, [rip + .Lk_behavior]
+    call jw_key
+    lea rdi, [rip + claude_cw]
+    lea rsi, [rip + .Lv_cancelled_d]
+    test r13, r13
+    jz 1f
+    lea rsi, [rip + .Lv_completed]
+1:  call jw_cstr
+    test r13, r13
+    jz 2f
+    lea rdi, [rip + claude_cw]
+    lea rsi, [rip + .Lk_result]
+    call jw_key
+    lea rdi, [rip + claude_cw]
+    mov rsi, r13
+    call jw_cstr
+2:  mov rdi, rbx
+    mov rsi, r12
+    call claude_reply_end
+    EPILOGUE
+
+# dialog_reply(AL*, AQ*, CD*) -> eax 1 handled (claude_reply's for a dialog), 0 when the card has no button
+#   with the action chosen (the auto-mode card's "close", a greyed button). The answer, then (when it went and
+#   the request is still there) what follows it: the pill, claude.ai's page asked about, rhun's model choice
+#   cleared and get_settings; then the request goes (claude_req_after: refused, the card shows again)
+dialog_reply:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14d, [r13 + CD_chosen]
+    test r14d, r14d
+    jz 8f
+    xor ecx, ecx
+1:  cmp rcx, [r13 + CD_btns + VEC_len]
+    jae 8f
+    imul rdx, rcx, CDB_SIZE
+    add rdx, [r13 + CD_btns + VEC_ptr]
+    inc rcx
+    cmp [rdx + CDB_act], r14d
+    jne 1b
+    xor edx, edx                # the ×: cancelled
+    mov r15d, -1
+    cmp r14d, CBA_NO
+    je 2f
+    lea eax, [r14 - CBA_DIALOG]
+    cmp eax, DR_COUNT
+    jae 8f
+    mov r15d, eax
+    lea rcx, [rip + dlg_results]
+    mov rdx, [rcx + rax*8]
+2:  mov rdi, rbx
+    mov rsi, r12
+    call dialog_write
+    test eax, eax
+    jz 7f                       # refused: shown again
+    mov rdi, rbx
+    mov rsi, r12
+    call claude_req_kept
+    test eax, eax
+    jz 6f                       # the write broke the connection: the request went with it
+    cmp r15d, DR_CONSENT
+    je 3f
+    cmp r15d, DR_BUY
+    je 4f
+    cmp r15d, DR_SWITCH
+    jne 5f
+    mov edi, AG_CLAUDE          # switch_default: rhun's own model choice goes (the next start: no --model)
+    call agentcfg_get
+    mov r14, rax
+    mov rdi, rax
+    call agentcfg_need
+    cmp byte ptr [r14 + AGC_model], 0
+    je 21f
+    mov rdi, r14
+    mov esi, AGF_MODEL
+    lea rdx, [rip + .Lv_none_d]
+    xor ecx, ecx
+    call agentcfg_set
+    mov rdi, r14
+    call agentcfg_save
+21: mov rdi, rbx                # what is in effect now (the pill follows it)
+    call claude_get_settings
+    jmp 5f
+3:  lea rdi, [rip + dg_tmp]     # consent: the credits are in use
+    call sb_clear
+    lea rdi, [rip + dg_tmp]
+    lea rsi, [rip + .Lp_credits]
+    call sb_push_cstr
+    mov rsi, [r12 + AQ_q]
+    test rsi, rsi
+    jz 31f
+    lea rdi, [rip + dg_tmp]
+    call sb_push_cstr
+31: mov rdi, rbx
+    mov rsi, [rip + dg_tmp + SB_ptr]
+    mov rdx, [rip + dg_tmp + SB_len]
+    call ev_pill
+    jmp 5f
+4:  lea rdi, [rip + .Lv_buy_url]    # consent from "Buy usage credits on claude.ai": the page, asked about
+    call strlen
+    lea rdi, [rip + .Lv_who_d]
+    lea rsi, [rip + .Lv_buy_url]
+    mov rdx, rax
+    call agents_web_link
+    mov dword ptr [rip + g_dirty], 1
+5:  mov eax, 1
+7:  mov rdi, rbx
+    mov rsi, r12
+    mov edx, eax
+    call claude_req_after
+6:  mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# card_btn(label cstr, act, flags): a button of the card being made
+card_btn:
+    mov ecx, edx
+    mov edx, esi
+    mov rsi, rdi
+    mov rdi, [rip + cd_now]
+    jmp agentcard_btn
+
+# ---- auto_mode_server_fallback
+
+# dlg_auto(AQ*, payload jv) -> eax 1 (the reader takes any payload). Locals: [rsp] a paragraph, +8 its length
+dlg_auto:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    lea rdi, [rip + dg_body]
+    call sb_clear
+    mov rdi, r12                # the title, trimmed
+    lea rsi, [rip + .Lk_title_d]
+    call in_str
+    mov rdi, rax
+    mov rsi, rdx
+    call trim
+    test rdx, rdx
+    jz 1f
+    mov r13, rax
+    mov rdi, rdx
+    mov rsi, rax
+    mov edx, DG_TEXT_MAX
+    call utf8_cut
+    mov rdx, rax
+    mov rsi, r13
+    mov edi, CDT_TITLE
+    call card_text
+1:  mov rdi, r12                # the paragraphs that are strings and not blank
+    lea rsi, [rip + .Lk_paragraphs]
+    call json_get
+    mov r13, rax
+    xor r14d, r14d
+    xor r15d, r15d              # kept
+2:  mov rdi, r13
+    call json_len
+    cmp r14d, eax
+    jae 4f
+    cmp r15d, DG_PARAS
+    jae 4f
+    mov rdi, r13
+    mov esi, r14d
+    inc r14d
+    call json_at
+    mov rdi, rax
+    call json_str
+    test rax, rax
+    jz 2b
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    mov rdi, rax
+    mov rsi, rdx
+    call trim
+    test rdx, rdx
+    jz 2b
+    mov rdi, [rsp + 8]
+    mov rsi, [rsp]
+    mov edx, DG_TEXT_MAX
+    call utf8_cut
+    mov [rsp + 8], rax
+    test r15d, r15d
+    jz 3f
+    lea rdi, [rip + dg_body]
+    mov esi, 10
+    call sb_push_byte
+3:  inc r15d
+    lea rdi, [rip + dg_body]
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call sb_push
+    jmp 2b
+4:  test r15d, r15d             # neither a title nor a paragraph: the extension's own words (XPe)
+    jnz 5f
+    mov rax, [rip + cd_now]
+    cmp qword ptr [rax + CD_title], 0
+    jne 5f
+    lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_auto_default]
+    call sb_push_cstr
+5:  mov edi, CDT_DETAIL
+    mov rsi, [rip + dg_body + SB_ptr]
+    mov rdx, [rip + dg_body + SB_len]
+    call card_text
+    mov rdi, r12                # the help link (YUt)
+    lea rsi, [rip + .Lk_helpUrl]
+    call in_str
+    test rdx, rdx
+    jz 6f
+    cmp rdx, DG_URL_MAX
+    ja 6f
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    mov rdi, rax
+    mov rsi, rdx
+    call help_url_ok
+    test eax, eax
+    jz 6f
+    mov edi, CDT_LINK
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call card_text
+6:  lea rdi, [rip + .Lb_continue]
+    mov esi, CBA_DIALOG + DR_CONTINUE
+    xor edx, edx
+    call card_btn
+    lea rdi, [rip + .Lb_stop]
+    mov esi, CBA_DIALOG + DR_INTERRUPT
+    xor edx, edx
+    call card_btn
+    mov eax, 1
+    EPILOGUE
+
+# help_url_ok(ptr, len) -> eax 1 when the help URL may show (YUt: new URL(), protocol "https:", the hostname
+#   claude.com or anthropic.com or a name under them). rhun's reading: "https://" in any case, no space or
+#   control character anywhere, the host the part before the first "/", "?", "#" or "\" after the last "@",
+#   without ":port", compared in lower case; a URL new URL() would read otherwise (percent-escapes, IP forms)
+#   is not shown
+help_url_ok:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor ecx, ecx
+1:  cmp rcx, r12
+    jae 2f
+    movzx eax, byte ptr [rbx + rcx]
+    cmp eax, 0x20
+    jbe 8f
+    cmp eax, 0x7f
+    je 8f
+    inc rcx
+    jmp 1b
+2:  cmp r12, 8
+    jb 8f
+    xor ecx, ecx
+3:  cmp ecx, 8
+    jae 4f
+    movzx eax, byte ptr [rbx + rcx]
+    cmp eax, 'A'
+    jb 31f
+    cmp eax, 'Z'
+    ja 31f
+    or eax, 0x20
+31: lea rdx, [rip + .Ld_https]
+    movzx edx, byte ptr [rdx + rcx]
+    cmp eax, edx
+    jne 8f
+    inc ecx
+    jmp 3b
+4:  mov r13d, 8                 # the host's start
+    mov r14d, 8                 # the authority's end
+5:  cmp r14, r12
+    jae 6f
+    movzx eax, byte ptr [rbx + r14]
+    cmp eax, '/'
+    je 6f
+    cmp eax, '?'
+    je 6f
+    cmp eax, '#'
+    je 6f
+    cmp eax, '\\'
+    je 6f
+    cmp eax, '@'
+    jne 51f
+    lea r13d, [r14 + 1]
+51: inc r14d
+    jmp 5b
+6:  mov r15d, r13d              # its end: before ":port"
+61: cmp r15d, r14d
+    jae 62f
+    cmp byte ptr [rbx + r15], ':'
+    je 62f
+    inc r15d
+    jmp 61b
+62: mov ecx, r15d
+    sub ecx, r13d
+    jz 8f
+    cmp ecx, 255
+    ja 8f
+    lea rsi, [rbx + r13]
+    lea rdi, [rip + dg_host]
+    xor edx, edx
+63: cmp edx, ecx
+    jae 64f
+    movzx eax, byte ptr [rsi + rdx]
+    cmp eax, 'A'
+    jb 631f
+    cmp eax, 'Z'
+    ja 631f
+    or eax, 0x20
+631:mov [rdi + rdx], al
+    inc edx
+    jmp 63b
+64: mov byte ptr [rdi + rdx], 0
+    mov r12d, ecx               # the host's length
+    lea r14, [rip + help_domains]
+7:  mov rsi, [r14]
+    test rsi, rsi
+    jz 8f
+    mov rdi, rsi
+    call strlen
+    mov r15, rax
+    cmp r12, r15
+    jb 72f
+    lea rdi, [rip + dg_host]
+    add rdi, r12
+    sub rdi, r15
+    mov r13, rdi                # its last bytes
+    mov rsi, [r14]
+    call strcmp_eq
+    test eax, eax
+    jz 72f
+    cmp r12, r15
+    je 9f
+    cmp byte ptr [r13 - 1], '.'
+    je 9f
+72: add r14, 8
+    jmp 7b
+9:  mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# ---- fable_overage_consent_prompt
+
+# dlg_overage(AQ*, payload jv) -> eax 1 its card made, 0 refused (oOe: overagesEnabled not a boolean). The
+#   payload's members as oOe keeps them (dg_*), the model's name into AQ_q (the pill's), then aOe's title, body
+#   and second button. Locals: [rsp] a string, +8 its length
+dlg_overage:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, r12
+    lea rsi, [rip + .Lk_overages]
+    call json_get
+    mov rdi, rax
+    call json_bool
+    test edx, edx
+    jz .Ldo_refused
+    mov [rip + dg_t], eax
+    mov rdi, r12                # modelName: one of the names (r$), else "Fable"
+    lea rsi, [rip + .Lk_modelName]
+    call in_str
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    mov rdi, rax
+    mov rsi, rdx
+    call model_name_ok
+    test eax, eax
+    jnz 1f
+    lea rax, [rip + .Ld_fable]
+    mov [rsp], rax
+    mov qword ptr [rsp + 8], 5
+1:  mov rdi, [rsp]
+    mov rsi, [rsp + 8]
+    call mem_dup
+    mov [rbx + AQ_q], rax
+    mov [rip + dg_s], rax
+    mov rax, [rsp + 8]
+    mov [rip + dg_sn], rax
+    xor ecx, ecx                # QN: its first word
+    mov rdx, [rip + dg_s]
+11: cmp rcx, rax
+    jae 12f
+    cmp byte ptr [rdx + rcx], ' '
+    je 12f
+    inc rcx
+    jmp 11b
+12: mov [rip + dg_qn], rcx
+    mov dword ptr [rip + dg_lo], 0  # leftOutOf: "plan" or "seat"
+    mov rdi, r12
+    lea rsi, [rip + .Lk_leftOutOf]
+    call json_get
+    mov r13, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lv_plan_d]
+    call json_is
+    test eax, eax
+    jz 13f
+    mov dword ptr [rip + dg_lo], LO_PLAN
+13: mov rdi, r13
+    lea rsi, [rip + .Lv_seat]
+    call json_is
+    test eax, eax
+    jz 14f
+    mov dword ptr [rip + dg_lo], LO_SEAT
+14: mov dword ptr [rip + dg_eo], EO_NONE    # endedOn (tVt): false or null, a date, else none
+    mov rdi, r12
+    lea rsi, [rip + .Lk_endedOn]
+    call json_get
+    mov r13, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_FALSE
+    je 15f
+    cmp eax, JT_NULL
+    jne 16f
+15: mov dword ptr [rip + dg_eo], EO_FALSE
+    jmp 17f
+16: mov rdi, r13
+    call json_str
+    mov rdi, rax
+    mov rsi, rdx
+    call ended_date
+    test eax, eax
+    jz 17f
+    mov dword ptr [rip + dg_eo], EO_DATE
+17: mov rdi, r12                # member: true
+    lea rsi, [rip + .Lk_member]
+    call in_true
+    mov [rip + dg_member], eax
+    mov dword ptr [rip + dg_req], 0 # request: an object whose greyed is absent ({}) or a string
+    mov rdi, r12
+    lea rsi, [rip + .Lk_request_d]
+    call json_get
+    mov r13, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_OBJ
+    je 18f
+    cmp eax, JT_ARR             # (an array is an object to the reader, without a greyed)
+    jne 19f
+18: mov rdi, r13
+    lea rsi, [rip + .Lk_greyed]
+    call json_get
+    test rax, rax
+    jnz 181f
+    mov dword ptr [rip + dg_req], 1
+    jmp 19f
+181:mov r13, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_STR
+    jne 19f
+    mov rdi, r13
+    call json_str
+    mov [rip + dg_gp], rax
+    mov rdi, rdx
+    mov rsi, rax
+    mov edx, DG_LABEL_MAX
+    call utf8_cut
+    mov [rip + dg_gn], rax
+    mov dword ptr [rip + dg_req], 2
+19: mov rdi, r12                # balanceCents: a number, else null
+    lea rsi, [rip + .Lk_balance]
+    call json_get
+    mov rdi, rax
+    call cents_of
+    mov [rip + dg_bal], rax
+    mov [rip + dg_hasbal], edx
+    mov [rip + dg_balpos], ecx
+    mov rdi, r12                # currency: a string, else null (USD)
+    lea rsi, [rip + .Lk_currency]
+    call in_str
+    mov rdi, rax
+    mov rsi, rdx
+    call currency_of
+    # aOe
+    lea rdi, [rip + dg_title]
+    call sb_clear
+    lea rdi, [rip + dg_body]
+    call sb_clear
+    lea rdi, [rip + dg_label]
+    call sb_clear
+    mov r14d, 1                 # c: no credits to use
+    cmp dword ptr [rip + dg_t], 0
+    je 2f
+    cmp dword ptr [rip + dg_hasbal], 0
+    je 21f
+    cmp dword ptr [rip + dg_balpos], 0
+    je 2f
+21: xor r14d, r14d
+2:  mov r15d, PR_NONE
+    cmp dword ptr [rip + dg_lo], 0  # left out of the plan or seat, a member, no credits: ask the admin
+    je 3f
+    cmp dword ptr [rip + dg_member], 0
+    je 3f
+    test r14d, r14d
+    jz 3f
+    call title_l
+    lea rdi, [rip + dg_body]
+    call push_q
+    lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_purchased]
+    call sb_push_cstr
+    cmp dword ptr [rip + dg_req], 1
+    jne 22f
+    mov r15d, PR_ADMIN
+    jmp .Ldo_card
+22: cmp dword ptr [rip + dg_req], 2
+    jne .Ldo_card
+    cmp qword ptr [rip + dg_gn], 0
+    je .Ldo_card                # an empty greyed label: no button (the extension's `&&`)
+    mov r15d, PR_GREYED
+    lea rdi, [rip + dg_label]
+    mov rsi, [rip + dg_gp]
+    mov rdx, [rip + dg_gn]
+    call sb_push
+    jmp .Ldo_card
+3:  cmp dword ptr [rip + dg_t], 0   # no usage credits at all
+    jne 4f
+    call title_l
+    mov r15d, PR_BUY
+    cmp dword ptr [rip + dg_lo], 0
+    je 31f
+    lea rdi, [rip + dg_body]
+    xor esi, esi
+    call push_que
+    jmp .Ldo_card
+31: lea rdi, [rip + dg_body]
+    call push_s
+    lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_billed_none]
+    call sb_push_cstr
+    jmp .Ldo_card
+4:  test r14d, r14d             # credits, none left
+    jz 5f
+    call title_l
+    mov r15d, PR_BUY
+    lea rdi, [rip + dg_body]
+    call push_s
+    lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_have]
+    call sb_push_cstr
+    lea rdi, [rip + dg_body]
+    xor esi, esi
+    call push_money
+    lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_in_credits_end]
+    call sb_push_cstr
+    jmp .Ldo_card
+5:  mov r15d, PR_CONSENT        # credits to use: continue with them?
+    cmp dword ptr [rip + dg_lo], 0
+    je 51f
+    call title_l
+    lea rdi, [rip + dg_body]
+    mov esi, 1
+    call push_que
+    lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_if_continue]
+    call sb_push_cstr
+    lea rdi, [rip + dg_body]
+    call push_q
+    lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_without_asking]
+    call sb_push_cstr
+    lea rdi, [rip + dg_label]
+    lea rsi, [rip + .Lb_with_credits]
+    call sb_push_cstr
+    jmp .Ldo_card
+51: lea rdi, [rip + dg_title]
+    lea rsi, [rip + .Ld_continue_on]
+    call sb_push_cstr
+    lea rdi, [rip + dg_title]
+    call push_s
+    lea rdi, [rip + dg_title]
+    lea rsi, [rip + .Ld_with_credits_q]
+    call sb_push_cstr
+    lea rdi, [rip + dg_body]
+    call push_s
+    lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_runs_on]
+    call sb_push_cstr
+    cmp dword ptr [rip + dg_hasbal], 0
+    je 52f
+    lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_dot_have]
+    call sb_push_cstr
+    lea rdi, [rip + dg_body]
+    mov rsi, [rip + dg_bal]
+    call push_money
+    lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_in_credits]
+    call sb_push_cstr
+    jmp 53f
+52: lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_billed]
+    call sb_push_cstr
+53: lea rdi, [rip + dg_body]
+    lea rsi, [rip + .Ld_others]
+    call sb_push_cstr
+    lea rdi, [rip + dg_label]
+    lea rsi, [rip + .Lb_continue_with]
+    call sb_push_cstr
+    lea rdi, [rip + dg_label]
+    call push_s
+.Ldo_card:
+    lea rdi, [rip + dg_label]   # (a cstr)
+    xor esi, esi
+    call sb_push_byte
+    mov edi, CDT_TITLE
+    mov rsi, [rip + dg_title + SB_ptr]
+    mov rdx, [rip + dg_title + SB_len]
+    call card_text
+    mov edi, CDT_DETAIL
+    mov rsi, [rip + dg_body + SB_ptr]
+    mov rdx, [rip + dg_body + SB_len]
+    call card_text
+    lea rdi, [rip + .Lv_learn_url]
+    call strlen
+    mov edi, CDT_LINK
+    lea rsi, [rip + .Lv_learn_url]
+    mov rdx, rax
+    call card_text
+    lea rdi, [rip + .Lb_switch]
+    mov esi, CBA_DIALOG + DR_SWITCH
+    xor edx, edx
+    call card_btn
+    cmp r15d, PR_ADMIN
+    jne 61f
+    lea rdi, [rip + .Lb_admin]
+    mov esi, CBA_DIALOG + DR_ADMIN
+    xor edx, edx
+    call card_btn
+    jmp 7f
+61: cmp r15d, PR_BUY
+    jne 62f
+    lea rdi, [rip + .Lb_buy]
+    mov esi, CBA_DIALOG + DR_BUY
+    xor edx, edx
+    call card_btn
+    jmp 7f
+62: cmp r15d, PR_CONSENT
+    jne 63f
+    mov rdi, [rip + dg_label + SB_ptr]
+    mov esi, CBA_DIALOG + DR_CONSENT
+    xor edx, edx
+    call card_btn
+    jmp 7f
+63: cmp r15d, PR_GREYED
+    jne 7f
+    mov rdi, [rip + dg_label + SB_ptr]
+    xor esi, esi
+    mov edx, CDBF_OFF
+    call card_btn
+7:  lea rdi, [rip + .Lb_close]  # the ×, last (Escape is the last button's action)
+    mov esi, CBA_NO
+    mov edx, CDBF_CLOSE
+    call card_btn
+    mov eax, 1
+    EPILOGUE
+.Ldo_refused:
+    xor eax, eax
+    EPILOGUE
+
+# title_l(): dg_title is aOe's `l`: "Q now runs on usage credits" when left out of a plan or seat, else "S
+#   requires usage credits"
+title_l:
+    PROLOGUE
+    cmp dword ptr [rip + dg_lo], 0
+    je 1f
+    lea rdi, [rip + dg_title]
+    call push_q
+    lea rsi, [rip + .Ld_now_runs]
+    jmp 2f
+1:  lea rdi, [rip + dg_title]
+    call push_s
+    lea rsi, [rip + .Ld_requires_t]
+2:  lea rdi, [rip + dg_title]
+    call sb_push_cstr
+    EPILOGUE
+
+# push_s(sb), push_q(sb): the model's name (s), its first word (QN)
+push_s:
+    mov rsi, [rip + dg_s]
+    mov rdx, [rip + dg_sn]
+    jmp sb_push
+push_q:
+    mov rsi, [rip + dg_s]
+    mov rdx, [rip + dg_qn]
+    jmp sb_push
+
+# push_que(sb, runs): que(s, endedOn, n, leftOutOf) (@3426526): for a model that is not Fable, "Q runs on usage
+#   credits, purchased separately from your plan." (a seat) or "S runs on your|requires usage credits.";
+#   endedOn false: "S runs on|requires usage credits."; else "Fable was included in standard seats|Pro as a
+#   promotion until MONTH D|for a limited time, and now runs on your|requires usage credits."
+push_que:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    cmp qword ptr [rip + dg_sn], 5
+    jb 1f
+    mov rdi, [rip + dg_s]
+    lea rsi, [rip + .Ld_fable]
+    mov edx, 5
+    call memeq
+    test eax, eax
+    jnz 3f
+1:  cmp dword ptr [rip + dg_lo], LO_SEAT
+    jne 2f
+    mov rdi, rbx
+    call push_q
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_purchased]
+    call sb_push_cstr
+    EPILOGUE
+2:  mov rdi, rbx
+    call push_s
+    lea rsi, [rip + .Ld_sp_requires]
+    test r12d, r12d
+    jz 21f
+    lea rsi, [rip + .Ld_sp_runs_your]
+21: mov rdi, rbx
+    call sb_push_cstr
+    jmp 8f
+3:  cmp dword ptr [rip + dg_eo], EO_FALSE
+    jne 4f
+    mov rdi, rbx
+    call push_s
+    lea rsi, [rip + .Ld_sp_requires]
+    test r12d, r12d
+    jz 31f
+    lea rsi, [rip + .Ld_sp_runs]
+31: mov rdi, rbx
+    call sb_push_cstr
+    jmp 8f
+4:  mov rdi, rbx
+    lea rsi, [rip + .Ld_included]
+    call sb_push_cstr
+    lea rsi, [rip + .Ld_seats]
+    cmp dword ptr [rip + dg_lo], LO_SEAT
+    je 41f
+    lea rsi, [rip + .Ld_pro]
+    cmp dword ptr [rip + dg_lo], LO_PLAN
+    je 41f
+    lea rsi, [rip + .Ld_your_plan]
+41: mov rdi, rbx
+    call sb_push_cstr
+    cmp dword ptr [rip + dg_eo], EO_DATE
+    je 42f
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_limited]
+    call sb_push_cstr
+    jmp 43f
+42: mov rdi, rbx
+    lea rsi, [rip + .Ld_promotion]
+    call sb_push_cstr
+    mov eax, [rip + dg_mon]
+    lea rcx, [rip + month_names_d]
+    mov rsi, [rcx + rax*8 - 8]
+    mov rdi, rbx
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, [rip + dg_day]
+    call sb_push_u64
+43: mov rdi, rbx
+    lea rsi, [rip + .Ld_and_now]
+    call sb_push_cstr
+    lea rsi, [rip + .Ld_requires_w]
+    test r12d, r12d
+    jz 44f
+    lea rsi, [rip + .Ld_runs_your]
+44: mov rdi, rbx
+    call sb_push_cstr
+8:  mov rdi, rbx
+    lea rsi, [rip + .Ld_usage_credits]
+    call sb_push_cstr
+    EPILOGUE
+
+# ended_date(ptr, len) -> eax 1 when it is "202[67]-MM-DD" naming a day of the calendar (tVt), its month and
+#   day in dg_mon, dg_day
+ended_date:
+    xor eax, eax
+    cmp rsi, 10
+    jne 9f
+    cmp dword ptr [rdi], 0x36323032     # "2026" / "2027": "202" then 6 or 7
+    je 1f
+    cmp dword ptr [rdi], 0x37323032
+    jne 9f
+1:  cmp byte ptr [rdi + 4], '-'
+    jne 9f
+    cmp byte ptr [rdi + 7], '-'
+    jne 9f
+    movzx ecx, byte ptr [rdi + 5]
+    movzx edx, byte ptr [rdi + 6]
+    sub ecx, '0'
+    sub edx, '0'
+    cmp ecx, 9
+    ja 9f
+    cmp edx, 9
+    ja 9f
+    imul ecx, ecx, 10
+    add ecx, edx                # the month
+    jz 9f
+    cmp ecx, 12
+    ja 9f
+    movzx r8d, byte ptr [rdi + 8]
+    movzx edx, byte ptr [rdi + 9]
+    sub r8d, '0'
+    sub edx, '0'
+    cmp r8d, 9
+    ja 9f
+    cmp edx, 9
+    ja 9f
+    imul r8d, r8d, 10
+    add r8d, edx                # the day
+    jz 9f
+    lea rdx, [rip + month_days]
+    movzx edx, byte ptr [rdx + rcx - 1]     # (neither year is a leap year)
+    cmp r8d, edx
+    ja 9f
+    mov [rip + dg_mon], ecx
+    mov [rip + dg_day], r8d
+    mov eax, 1
+9:  ret
+
+# model_name_ok(ptr or 0, len) -> eax 1 when the name is one the extension's r$ (@3425985) takes: Fable,
+#   Haiku, Mythos, Opus or Sonnet, alone or followed by a space and a number (num_ok), DG_NAME_MAX bytes at most
+model_name_ok:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    test rbx, rbx
+    jz 8f
+    cmp r12, DG_NAME_MAX
+    ja 8f
+    lea r13, [rip + model_families]
+1:  mov r14, [r13]
+    test r14, r14
+    jz 8f
+    add r13, 8
+    mov rdi, r14
+    call strlen
+    mov r15, rax
+    cmp r12, r15
+    jb 1b
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, r15
+    call memeq
+    test eax, eax
+    jz 1b
+    cmp r12, r15
+    je 9f
+    cmp byte ptr [rbx + r15], ' '
+    jne 1b
+    lea rdi, [rbx + r15 + 1]
+    mov rsi, r12
+    sub rsi, r15
+    dec rsi
+    call num_ok
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+9:  mov eax, 1
+    EPILOGUE
+
+# num_ok(ptr, len) -> eax 1 when Number(text) is finite and the text has no space round it: a sign, digits
+#   with at most one ".", an exponent; or 0x, 0o, 0b digits (an exponent too big for a double is taken too)
+num_ok:
+    xor eax, eax
+    test rsi, rsi
+    jz 9f
+    cmp rsi, 2
+    jbe 1f
+    cmp byte ptr [rdi], '0'
+    jne 1f
+    movzx ecx, byte ptr [rdi + 1]
+    or ecx, 0x20
+    mov r8d, 16
+    cmp ecx, 'x'
+    je 2f
+    mov r8d, 8
+    cmp ecx, 'o'
+    je 2f
+    mov r8d, 2
+    cmp ecx, 'b'
+    jne 1f
+2:  mov ecx, 2                  # 0x, 0o, 0b and their digits
+21: cmp rcx, rsi
+    jae 8f
+    movzx edx, byte ptr [rdi + rcx]
+    sub edx, '0'
+    cmp edx, 9
+    jbe 22f
+    movzx edx, byte ptr [rdi + rcx]
+    or edx, 0x20
+    sub edx, 'a' - 10
+    cmp edx, 10
+    jb 9f
+22: cmp edx, r8d
+    jae 9f
+    inc rcx
+    jmp 21b
+1:  xor ecx, ecx                # decimal
+    movzx edx, byte ptr [rdi]
+    cmp edx, '+'
+    je 11f
+    cmp edx, '-'
+    jne 12f
+11: inc ecx
+12: xor r8d, r8d                # digits
+13: cmp rcx, rsi
+    jae 16f
+    movzx edx, byte ptr [rdi + rcx]
+    cmp edx, '.'
+    je 14f
+    sub edx, '0'
+    cmp edx, 9
+    ja 16f
+    inc r8d
+    inc rcx
+    jmp 13b
+14: inc rcx                     # the fraction
+15: cmp rcx, rsi
+    jae 16f
+    movzx edx, byte ptr [rdi + rcx]
+    sub edx, '0'
+    cmp edx, 9
+    ja 16f
+    inc r8d
+    inc rcx
+    jmp 15b
+16: test r8d, r8d
+    jz 9f
+    cmp rcx, rsi
+    jae 8f
+    movzx edx, byte ptr [rdi + rcx] # the exponent
+    or edx, 0x20
+    cmp edx, 'e'
+    jne 9f
+    inc rcx
+    cmp rcx, rsi
+    jae 9f
+    movzx edx, byte ptr [rdi + rcx]
+    cmp edx, '+'
+    je 17f
+    cmp edx, '-'
+    jne 18f
+17: inc rcx
+18: xor r8d, r8d
+19: cmp rcx, rsi
+    jae 20f
+    movzx edx, byte ptr [rdi + rcx]
+    sub edx, '0'
+    cmp edx, 9
+    ja 9f
+    inc r8d
+    inc rcx
+    jmp 19b
+20: test r8d, r8d
+    jz 9f
+8:  mov eax, 1
+9:  ret
+
+# cents_of(jv) -> rax the balance in its currency's minor unit (rounded half away from zero), edx 1 when it is
+#   a number, ecx 1 when it is above 0. A number with an exponent or past 15 digits counts as none (null): no
+#   CLI writes cents so
+cents_of:
+    PROLOGUE
+    mov rbx, rdi
+    call json_int
+    test edx, edx
+    jz 1f
+    xor ecx, ecx
+    test rax, rax
+    setg cl
+    EPILOGUE
+1:  mov rdi, rbx
+    call json_num_text
+    test rdx, rdx
+    jz 8f
+    mov rsi, rax                # -?digits.digits
+    mov r8, rdx
+    xor ecx, ecx
+    xor r9d, r9d                # negative
+    cmp byte ptr [rsi], '-'
+    jne 2f
+    mov r9d, 1
+    inc ecx
+2:  xor eax, eax                # the whole part
+    xor r10d, r10d              # its digits
+    xor r11d, r11d              # a digit above 0 anywhere
+3:  cmp rcx, r8
+    jae 8f
+    movzx edx, byte ptr [rsi + rcx]
+    cmp edx, '.'
+    je 4f
+    sub edx, '0'
+    cmp edx, 9
+    ja 8f
+    or r11d, edx
+    imul rax, rax, 10
+    add rax, rdx
+    inc r10d
+    cmp r10d, 15
+    ja 8f
+    inc rcx
+    jmp 3b
+4:  inc rcx
+    cmp rcx, r8
+    jae 8f
+    movzx edx, byte ptr [rsi + rcx]  # the first decimal rounds
+    sub edx, '0'
+    cmp edx, 9
+    ja 8f
+    xor r10d, r10d
+    cmp edx, 5
+    setae r10b
+    add rax, r10
+5:  cmp rcx, r8                 # the rest: digits only
+    jae 6f
+    movzx edx, byte ptr [rsi + rcx]
+    sub edx, '0'
+    cmp edx, 9
+    ja 8f
+    or r11d, edx
+    inc rcx
+    jmp 5b
+6:  xor ecx, ecx
+    test r9d, r9d
+    jnz 7f
+    test r11d, r11d
+    setnz cl
+    mov edx, 1
+    EPILOGUE
+7:  neg rax
+    mov edx, 1
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    xor ecx, ecx
+    EPILOGUE
+
+# currency_of(ptr or 0, len): the currency's code for nOe (@3427600): none, "USD"; a string, upper-cased
+#   (ASCII); dg_code (a cstr), dg_codeok 1 when it is three letters (Intl takes it), dg_whole 1 for JPY, KRW and
+#   VND (no minor unit)
+currency_of:
+    PROLOGUE
+    mov dword ptr [rip + dg_codeok], 0
+    mov dword ptr [rip + dg_whole], 0
+    test rdi, rdi
+    jnz 1f
+    lea rdi, [rip + .Ld_usd]
+    mov esi, 3
+1:  cmp rsi, 3
+    jne 9f
+    xor ecx, ecx
+2:  cmp ecx, 3
+    jae 3f
+    movzx eax, byte ptr [rdi + rcx]
+    cmp eax, 'a'
+    jb 21f
+    cmp eax, 'z'
+    ja 21f
+    sub eax, 0x20
+21: cmp eax, 'A'
+    jb 9f
+    cmp eax, 'Z'
+    ja 9f
+    lea rdx, [rip + dg_code]
+    mov [rdx + rcx], al
+    inc ecx
+    jmp 2b
+3:  mov byte ptr [rip + dg_code + 3], 0
+    mov dword ptr [rip + dg_codeok], 1
+    lea rbx, [rip + whole_codes]
+4:  mov rsi, [rbx]
+    test rsi, rsi
+    jz 9f
+    add rbx, 8
+    lea rdi, [rip + dg_code]
+    call strcmp_eq
+    test eax, eax
+    jz 4b
+    mov dword ptr [rip + dg_whole], 1
+9:  EPILOGUE
+
+# push_money(sb, amount in the minor unit, at least 0): nOe as Intl.NumberFormat("en-US", {style: "currency"})
+#   writes it: the code's en-US symbol (money_symbols), else the code and a no-break space; the amount with
+#   thousands separators, and two decimals unless the currency has none (JPY, KRW, VND); a code Intl refuses:
+#   "$" and the amount with two decimals, no separators (Intl's own digits for other currencies without minor
+#   units or with three, CLP or BHD, are not copied: rhun writes two)
+push_money:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    cmp dword ptr [rip + dg_codeok], 0
+    jne 1f
+    mov esi, '$'
+    call sb_push_byte
+    mov rax, r12
+    xor edx, edx
+    mov ecx, 100
+    div rcx
+    mov r13, rdx
+    mov rdi, rbx
+    mov rsi, rax
+    call sb_push_u64
+    jmp 6f
+1:  lea r13, [rip + money_symbols]
+2:  mov rsi, [r13]
+    test rsi, rsi
+    jz 3f
+    lea rdi, [rip + dg_code]
+    call strcmp_eq
+    test eax, eax
+    jnz 4f
+    add r13, 16
+    jmp 2b
+3:  mov rdi, rbx
+    lea rsi, [rip + dg_code]
+    call sb_push_cstr
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_nbsp]
+    call sb_push_cstr
+    jmp 5f
+4:  mov rdi, rbx
+    mov rsi, [r13 + 8]
+    call sb_push_cstr
+5:  mov rax, r12
+    xor r13d, r13d
+    cmp dword ptr [rip + dg_whole], 0
+    jne 51f
+    xor edx, edx
+    mov ecx, 100
+    div rcx
+    mov r13, rdx
+51: mov rdi, rbx
+    mov rsi, rax
+    call push_grouped
+    cmp dword ptr [rip + dg_whole], 0
+    jne 9f
+6:  mov rdi, rbx                # the two decimals
+    mov esi, '.'
+    call sb_push_byte
+    mov rax, r13
+    xor edx, edx
+    mov ecx, 10
+    div rcx
+    mov r12, rdx
+    lea esi, [rax + '0']
+    mov rdi, rbx
+    call sb_push_byte
+    lea esi, [r12 + '0']
+    mov rdi, rbx
+    call sb_push_byte
+9:  EPILOGUE
+
+# push_grouped(sb, n): n in decimal with a "," every three digits from the right. Locals: [rsp] the digits
+push_grouped:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov rax, rsi
+    xor r12d, r12d              # the digits, last first
+    mov ecx, 10
+1:  xor edx, edx
+    div rcx
+    add edx, '0'
+    mov [rsp + r12], dl
+    inc r12d
+    test rax, rax
+    jnz 1b
+2:  dec r12d
+    js 9f
+    movzx esi, byte ptr [rsp + r12]
+    mov rdi, rbx
+    call sb_push_byte
+    test r12d, r12d
+    jz 9f
+    mov eax, r12d
+    xor edx, edx
+    mov ecx, 3
+    div ecx
+    test edx, edx
+    jnz 2b
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    jmp 2b
+9:  EPILOGUE
+
+.section .rodata
+.p2align 3
+dlg_kinds:                      # the declared kinds, their card's maker (-> eax 1 made, 0 refused)
+    .quad .Lv_kind_overage, dlg_overage
+    .quad .Lv_kind_auto, dlg_auto
+    .quad 0, 0
+dlg_results:                    # DR_*
+    .quad .Lv_continue, .Lv_interrupt, .Lv_consent, .Lv_switch_default, .Lv_request_admin, .Lv_consent
+help_domains: .quad .Ld_claude_com, .Ld_anthropic_com, 0
+model_families: .quad .Ld_fable, .Ld_haiku, .Ld_mythos, .Ld_opus, .Ld_sonnet, 0
+whole_codes: .quad .Ld_jpy, .Ld_krw, .Ld_vnd, 0
+money_symbols:                  # Intl's en-US symbols of the common codes
+    .quad .Ld_usd, .Ls_usd, .Ld_eur, .Ls_eur, .Ld_gbp, .Ls_gbp, .Ld_jpy, .Ls_jpy, .Ld_krw, .Ls_krw
+    .quad .Ld_vnd, .Ls_vnd, .Ld_cad, .Ls_cad, .Ld_aud, .Ls_aud, .Ld_nzd, .Ls_nzd, .Ld_hkd, .Ls_hkd
+    .quad .Ld_inr, .Ls_inr, .Ld_brl, .Ls_brl, .Ld_mxn, .Ls_mxn, .Ld_cny, .Ls_cny, .Ld_twd, .Ls_twd
+    .quad .Ld_ils, .Ls_ils, .Ld_php, .Ls_php, 0, 0
+month_names_d:
+    .quad .Lm_1, .Lm_2, .Lm_3, .Lm_4, .Lm_5, .Lm_6, .Lm_7, .Lm_8, .Lm_9, .Lm_10, .Lm_11, .Lm_12
+month_days: .byte 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
+.Lv_kind_overage: .asciz "fable_overage_consent_prompt"
+.Lv_kind_auto: .asciz "auto_mode_server_fallback"
+.Lv_dialog_req: .asciz "request_user_dialog"
+.Lk_subtype_d: .asciz "subtype"
+.Lk_dialog_kind: .asciz "dialog_kind"
+.Lk_request_id_d: .asciz "request_id"
+.Lk_payload: .asciz "payload"
+.Lk_result: .asciz "result"
+.Lv_completed: .asciz "completed"
+.Lv_cancelled_d: .asciz "cancelled"
+.Lv_continue: .asciz "continue"
+.Lv_interrupt: .asciz "interrupt"
+.Lv_consent: .asciz "consent"
+.Lv_switch_default: .asciz "switch_default"
+.Lv_request_admin: .asciz "request_admin"
+.Lv_none_d: .asciz ""
+.Lv_who_d: .asciz "Claude Code"
+.Lv_buy_url: .asciz "https://claude.ai/settings/usage"
+.Lv_learn_url: .asciz "https://support.claude.com/en/articles/12429409-extra-usage-for-paid-claude-plans"
+.Lk_title_d: .asciz "title"
+.Lk_paragraphs: .asciz "paragraphs"
+.Lk_helpUrl: .asciz "helpUrl"
+.Lk_overages: .asciz "overagesEnabled"
+.Lk_modelName: .asciz "modelName"
+.Lk_leftOutOf: .asciz "leftOutOf"
+.Lk_endedOn: .asciz "endedOn"
+.Lk_member: .asciz "member"
+.Lk_request_d: .asciz "request"
+.Lk_greyed: .asciz "greyed"
+.Lk_balance: .asciz "balanceCents"
+.Lk_currency: .asciz "currency"
+.Lv_plan_d: .asciz "plan"
+.Lv_seat: .asciz "seat"
+.Ld_https: .ascii "https://"
+.Ld_claude_com: .asciz "claude.com"
+.Ld_anthropic_com: .asciz "anthropic.com"
+.Ld_fable: .asciz "Fable"
+.Ld_haiku: .asciz "Haiku"
+.Ld_mythos: .asciz "Mythos"
+.Ld_opus: .asciz "Opus"
+.Ld_sonnet: .asciz "Sonnet"
+# the extension's words (webview index.js @3423169-3429000)
+.Ld_auto_default: .asciz "Auto mode is using Claude Code's built-in classifier in this session, and those classifier requests are billed. Continue to keep going in auto mode, or Stop to end this turn."
+.Lb_continue: .asciz "Continue"
+.Lb_stop: .asciz "Stop"
+.Lb_switch: .asciz "Switch to the default model and continue"
+.Lb_buy: .asciz "Buy usage credits on claude.ai"
+.Lb_admin: .asciz "Request usage credits from your admin"
+.Lb_continue_with: .asciz "Continue with "
+.Lb_with_credits: .asciz "Continue with usage credits"
+.Lb_close: .asciz "Close"
+.Lp_credits: .asciz "Now using usage credits for "
+.Ld_now_runs: .asciz " now runs on usage credits"
+.Ld_requires_t: .asciz " requires usage credits"
+.Ld_purchased: .asciz " runs on usage credits, purchased separately from your plan."
+.Ld_billed_none: .asciz " runs on usage credits, billed separately from your plan. You don't have usage credits yet."
+.Ld_have: .asciz " runs on usage credits. You have "
+.Ld_in_credits_end: .asciz " in credits."
+.Ld_continue_on: .asciz "Continue on "
+.Ld_with_credits_q: .asciz " with usage credits?"
+.Ld_runs_on: .asciz " runs on usage credits"
+.Ld_dot_have: .asciz ". You have "
+.Ld_in_credits: .asciz " in credits"
+.Ld_billed: .asciz ", billed separately from your plan"
+.Ld_others: .asciz ". Your other models remain included in your plan."
+.Ld_if_continue: .asciz " If you continue, "
+.Ld_without_asking: .asciz " will use credits without asking again."
+.Ld_sp_requires: .asciz " requires"
+.Ld_sp_runs_your: .asciz " runs on your"
+.Ld_sp_runs: .asciz " runs on"
+.Ld_usage_credits: .asciz " usage credits."
+.Ld_included: .asciz "Fable was included in "
+.Ld_seats: .asciz "standard seats "
+.Ld_pro: .asciz "Pro "
+.Ld_your_plan: .asciz "your plan "
+.Ld_limited: .asciz "for a limited time"
+.Ld_promotion: .asciz "as a promotion until "
+.Ld_and_now: .asciz ", and now "
+.Ld_requires_w: .asciz "requires"
+.Ld_runs_your: .asciz "runs on your"
+.Ld_nbsp: .asciz "\302\240"
+.Ld_usd: .asciz "USD"
+.Ld_eur: .asciz "EUR"
+.Ld_gbp: .asciz "GBP"
+.Ld_jpy: .asciz "JPY"
+.Ld_krw: .asciz "KRW"
+.Ld_vnd: .asciz "VND"
+.Ld_cad: .asciz "CAD"
+.Ld_aud: .asciz "AUD"
+.Ld_nzd: .asciz "NZD"
+.Ld_hkd: .asciz "HKD"
+.Ld_inr: .asciz "INR"
+.Ld_brl: .asciz "BRL"
+.Ld_mxn: .asciz "MXN"
+.Ld_cny: .asciz "CNY"
+.Ld_twd: .asciz "TWD"
+.Ld_ils: .asciz "ILS"
+.Ld_php: .asciz "PHP"
+.Ls_usd: .asciz "$"
+.Ls_eur: .asciz "\342\202\254"
+.Ls_gbp: .asciz "\302\243"
+.Ls_jpy: .asciz "\302\245"
+.Ls_krw: .asciz "\342\202\251"
+.Ls_vnd: .asciz "\342\202\253"
+.Ls_cad: .asciz "CA$"
+.Ls_aud: .asciz "A$"
+.Ls_nzd: .asciz "NZ$"
+.Ls_hkd: .asciz "HK$"
+.Ls_inr: .asciz "\342\202\271"
+.Ls_brl: .asciz "R$"
+.Ls_mxn: .asciz "MX$"
+.Ls_cny: .asciz "CN\302\245"
+.Ls_twd: .asciz "NT$"
+.Ls_ils: .asciz "\342\202\252"
+.Ls_php: .asciz "\342\202\261"
+.Lm_1: .asciz "January"
+.Lm_2: .asciz "February"
+.Lm_3: .asciz "March"
+.Lm_4: .asciz "April"
+.Lm_5: .asciz "May"
+.Lm_6: .asciz "June"
+.Lm_7: .asciz "July"
+.Lm_8: .asciz "August"
+.Lm_9: .asciz "September"
+.Lm_10: .asciz "October"
+.Lm_11: .asciz "November"
+.Lm_12: .asciz "December"
+
+.bss
+.p2align 3
+dg_tmp: .zero SB_SIZE           # an id, the pill's text
+dg_title: .zero SB_SIZE         # the card's title, body, second button's label as they are made
+dg_body: .zero SB_SIZE
+dg_label: .zero SB_SIZE
+dg_s: .quad 0                   # the model's name (AQ_q's bytes) and its length, its first word's length
+dg_sn: .quad 0
+dg_qn: .quad 0
+dg_bal: .quad 0                 # balanceCents, rounded
+dg_gp: .quad 0                  # request.greyed's bytes and length
+dg_gn: .quad 0
+dg_t: .long 0                   # overagesEnabled
+dg_lo: .long 0                  # LO_*
+dg_eo: .long 0                  # EO_*
+dg_mon: .long 0
+dg_day: .long 0
+dg_member: .long 0
+dg_req: .long 0                 # request: 0 none, 1 {}, 2 greyed
+dg_hasbal: .long 0
+dg_balpos: .long 0
+dg_codeok: .long 0
+dg_whole: .long 0
+dg_code: .zero 8
+dg_host: .zero 256              # a help URL's host, lower-cased
+.text

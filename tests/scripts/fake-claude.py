@@ -391,7 +391,7 @@ def effective():
 
 def current_model():
     """The resolved model this process uses: apply_flag_settings, --model, the settings' model, default."""
-    value = FLAG_SETTINGS.get('model') or option('--model') or effective().get('model') or 'default'
+    value = FALLBACK[0] or FLAG_SETTINGS.get('model') or option('--model') or effective().get('model') or 'default'
     return resolve(value)
 
 
@@ -1933,6 +1933,81 @@ def c_fast(prompt):
     synthetic('fast', 'Fast mode %s' % FAST[0].upper(), local='fast')
 
 
+# the dialog cards (task 12): request_user_dialog {subtype, dialog_kind, payload, tool_use_id?}, answered
+# {behavior "completed", result} or {behavior "cancelled"} (README.txt finding 25). No recording has one: the
+# CLI asks for these only when a server or an account says so, which a test cannot provoke cheaply. The
+# payloads below follow the CLI binary's schemas; their wording is the fake's own.
+AUTO_DIALOGS = {
+    'full': {'gatewayHost': 'gateway.example.com', 'title': 'Auto mode is using a fallback',
+             'paragraphs': ['The auto mode service could not be reached from this network.',
+                            'Claude Code checks each tool call with its own classifier for now.'],
+             'helpUrl': 'https://code.claude.com/docs/en/permission-modes'},
+    'empty': {'title': '  ', 'paragraphs': ['', '   ', 7], 'helpUrl': 'https://code.claude.com/docs/en/permission-modes'},
+    'badurl': {'title': 'Auto mode is using a fallback', 'paragraphs': ['A paragraph.'],
+               'helpUrl': 'http://claude.com.example.net/help'},
+}
+OVERAGE_DIALOGS = {
+    'consent': {'overagesEnabled': True, 'modelName': 'Fable', 'model': 'fable', 'balanceCents': 1234,
+                'currency': 'USD'},
+    'nobalance': {'overagesEnabled': True, 'modelName': 'Fable', 'model': 'fable'},
+    'disabled': {'overagesEnabled': False, 'modelName': 'Fable', 'model': 'fable', 'balanceCents': None},
+    'empty': {'overagesEnabled': True, 'balanceCents': 0, 'currency': 'eur'},
+    'admin': {'overagesEnabled': False, 'modelName': 'Fable', 'leftOutOf': 'seat', 'member': True, 'request': {}},
+    'greyed': {'overagesEnabled': False, 'modelName': 'Fable', 'leftOutOf': 'seat', 'member': True,
+               'request': {'greyed': 'Request sent'}},
+    'plan': {'overagesEnabled': True, 'modelName': 'Fable', 'leftOutOf': 'plan', 'endedOn': '2026-11-30',
+             'balanceCents': 123456, 'currency': 'USD'},
+    'seat': {'overagesEnabled': False, 'leftOutOf': 'seat', 'endedOn': 'soon'},
+    'ended': {'overagesEnabled': True, 'leftOutOf': 'plan', 'endedOn': False},
+    'opus': {'overagesEnabled': True, 'modelName': 'Opus 5', 'balanceCents': 150000, 'currency': 'JPY'},
+    'other': {'overagesEnabled': True, 'modelName': 'GPT', 'balanceCents': 99, 'currency': 'chf'},
+    'odd': {'overagesEnabled': True, 'modelName': 'Fable', 'balanceCents': 250, 'currency': 'dollars'},
+    'bad': {'overagesEnabled': 'yes', 'modelName': 'Fable'},
+}
+FALLBACK = [None]                   # the model a switch_default answer moved this process to
+
+
+def dialog(kind, payload):
+    """Sends a request_user_dialog and waits for its answer (logged; None: withdrawn or stdin closed)."""
+    answer = ask_request(request_id(), {'subtype': 'request_user_dialog', 'dialog_kind': kind, 'payload': payload})
+    if answer is not None:
+        log(answer=answer)
+    return answer
+
+
+def s_dialog_auto(prompt):
+    """dialog-auto [full|empty|badurl]: auto_mode_server_fallback; "continue" goes on, "interrupt" ends the turn"""
+    words = prompt.split()
+    answer = dialog('auto_mode_server_fallback', AUTO_DIALOGS[words[1] if len(words) > 1 else 'full'])
+    if answer is not None:
+        final('stopped' if answer.get('result') == 'interrupt' else 'continued')
+
+
+def s_dialog_overage(prompt):
+    """dialog-overage [VARIANT]: fable_overage_consent_prompt with OVERAGE_DIALOGS[VARIANT]; switch_default moves
+    the process to the default model and says so as system/model_consent_fallback (the schema's record)"""
+    words = prompt.split()
+    payload = OVERAGE_DIALOGS[words[1] if len(words) > 1 else 'consent']
+    answer = dialog('fable_overage_consent_prompt', payload)
+    if answer is None:
+        return
+    choice = answer.get('result') if answer.get('behavior') == 'completed' else 'cancelled'
+    if choice in ('switch_default', 'cancelled'):
+        original = current_model()
+        FALLBACK[0] = 'default'
+        emit({'type': 'system', 'subtype': 'model_consent_fallback', 'choice': choice, 'original_model': original,
+              'original_model_name': payload.get('modelName') or 'Fable', 'fallback_model': current_model(),
+              'persisted_as_default': False, 'content': 'Switched to your default model.',
+              'uuid': str(uuid.uuid4()), 'session_id': SID})
+    final('answered ' + str(choice))
+
+
+def s_dialog_other(prompt):
+    """dialog-other: a dialog kind initialize did not declare (the extension's Remote Control offer)"""
+    dialog('send_to_project_remote_control_offer', {'title': 'Remote Control is off'})
+    final('done')
+
+
 # commands the CLI answers itself (finding 22): no requesting status, no replay of the prompt; all but /compact
 # send system/init first, as every turn does
 LOCAL_COMMANDS = {'/context': c_context, '/cost': c_usage, '/usage': c_usage, '/status': c_status,
@@ -1952,7 +2027,8 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'mixed': s_mixed, 'sessiononly': s_sessiononly, 'bypass': s_bypass, 'pwsh': s_pwsh, 'net': s_net,
              'skill': s_skill, 'project': s_project, 'glob': s_glob, 'grep': s_grep, 'websearch': s_websearch,
              'other': s_other,
-             'ask3': s_ask3}
+             'ask3': s_ask3,
+             'dialog-auto': s_dialog_auto, 'dialog-overage': s_dialog_overage, 'dialog-other': s_dialog_other}
 SCENARIOS.update({'plan2': s_plan2, 'planwithdraw': s_planwithdraw})    # plan review (task 11)
 
 

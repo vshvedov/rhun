@@ -3274,7 +3274,10 @@ ENDSTRUCT CDB_SIZE
 .equ CBA_SUBMIT, 7
 .equ CBA_DIALOG, 16             # + n: a dialog's result n
 .equ CDBF_DEST, 1               # the label ends with the place
-.equ CDBF_HIDE, 2               # plan review: not shown now (a plan card's buttons follow its comments)
+.equ CDBF_HIDE, 8               # plan review: not shown now (a plan card's buttons follow its comments)
+.equ CDBF_CLOSE, 2              # the dialog cards: the card's × (drawn at its top right, not as a button)
+.equ CDBF_OFF, 4                #   a greyed button: drawn dimmed, no action, no focus stop
+.equ CD_LINK, -5                #   CD_focus on the card's link (CD_link, "Learn more")
 STRUCT
 F CDD_id, 8
 F CDD_label, 8

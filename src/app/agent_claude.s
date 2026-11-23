@@ -285,11 +285,12 @@ cl_start:
     lea rdi, [rip + cw]
     mov esi, [rip + cfg_claude_prompt_suggestions]
     call jw_bool
-    lea rdi, [rip + cw]         # the dialog kinds rhun can show: none yet (a request of any other kind
-    lea rsi, [rip + .Lk_dialog_kinds]   #   gets an error reply, finding 25)
+    lea rdi, [rip + cw]         # the dialog kinds rhun can show (claude_cards.s: the dialog cards; a
+    lea rsi, [rip + .Lk_dialog_kinds]   #   request of any other kind gets an error reply, finding 25)
     call jw_key
     lea rdi, [rip + cw]
     call jw_arr
+    call claude_dialog_kinds
     lea rdi, [rip + cw]
     call jw_end_arr
     mov rdi, rbx                # a child gone already breaks the connection here: its close reports the
@@ -2106,8 +2107,9 @@ find_one:
 
 # ---- Claude's requests ----
 
-# h_request(AL*, record): a request of Claude's. can_use_tool waits for the user (h_can_use); any other
-#   kind gets an error reply, its id echoed as it came (a string or a number), so Claude never waits
+# h_request(AL*, record): a request of Claude's. can_use_tool waits for the user (h_can_use); a dialog of
+#   a kind rhun declared waits on its card (claude_dialog, claude_cards.s); any other kind gets an error
+#   reply, its id echoed as it came (a string or a number), so Claude never waits
 h_request:
     PROLOGUE
     mov rbx, rdi
@@ -2129,7 +2131,25 @@ h_request:
     mov rdx, r13
     call h_can_use
     EPILOGUE
-1:  mov rdi, r12
+1:  mov rdi, rbx                # the dialog cards: one rhun shows waits as the others do
+    mov rsi, r12
+    mov rdx, r13
+    call claude_dialog
+    cmp rax, 1
+    je 9f                       # answered at once
+    test rax, rax
+    jz 2f
+    mov r14, rax
+    lea rdi, [rbx + AL_reqs]
+    mov esi, 8
+    call vec_push
+    mov [rax], r14
+    cmp qword ptr [rbx + AL_reqs + VEC_len], 1
+    jne 9f
+    mov rdi, rbx                # nothing else waits: its card shows
+    call req_show
+9:  EPILOGUE
+2:  mov rdi, r12
     lea rsi, [rip + .Lk_request_id]
     call json_get
     mov rdi, rbx

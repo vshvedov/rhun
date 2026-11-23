@@ -286,10 +286,10 @@ c_agent_release:
 9:  xor eax, eax
     EPILOGUE
 
-# agent-card N | fold | details | dest | submit | close: option N (from 1) of the open session's card (a
-#   rich card's button N once its lock is over, agentcard.s; the question card's row N of the question it
+# agent-card N | fold | details | dest | submit | close | link: option N (from 1) of the open session's card
+#   (a rich card's button N once its lock is over, agentcard.s; the question card's row N of the question it
 #   shows); a rich card's fold button, its Details, a click on its place; the question card's Submit
-#   answers and its ×
+#   answers and its × (a dialog card's × too); a dialog card's "Learn more"
 c_agent_card:
     PROLOGUE
     call ai_set
@@ -1137,13 +1137,13 @@ c_agent_test_band:
 # ---- the rich cards (agentcard.s) ----
 
 # card_word(ptr, len) -> eax agentcard_toggle's what for "fold", "details", "dest", "submit", "close",
-#   else -1
+#   "link", else -1
 card_word:
     PROLOGUE
     mov r12, rdi
     mov r13, rsi
     xor ebx, ebx
-1:  cmp ebx, 5
+1:  cmp ebx, 6
     jae 8f
     lea rax, [rip + card_words]
     mov rdx, [rax + rbx*8]
@@ -1373,6 +1373,7 @@ c_agent_card_uncomment:
 .Lw_card_dest: .asciz "dest"
 .Lw_card_submit: .asciz "submit"
 .Lw_card_close: .asciz "close"
+.Lw_card_link: .asciz "link"
 .Lw_card_other: .asciz "other"
 .Lw_focus_editor: .asciz "editor"
 .Lw_focus_panel: .asciz "panel"
@@ -1498,6 +1499,7 @@ ai_ctl:
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's
+    .quad .Lw_card_link                                            # the dialog cards'
 focus_words:                    # agent-focus's words and their focus
     .quad .Lw_focus_editor
     .long FOCUS_EDITOR, 0

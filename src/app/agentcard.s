@@ -90,6 +90,14 @@
 .equ FIELD_ROWS, 3
 .equ LABEL_LINES, 12
 .equ STOPS_MAX, 20
+# the dialog cards (dc_*, at the end)
+.equ LK_DLINK, 8                # its layout items (item_letters): the link
+.equ LK_DCLOSE, 9               #   the ×
+.equ LK_DOFF, 10                #   a greyed button's frame (its label: muted text lines)
+.equ DID_LINK, 0x500            # ID_AGCARD + : the link, the ×
+.equ DID_CLOSE, 0x501
+.equ DLG_LINES, 24              # a paragraph's lines at most
+.equ LEARN_LEN, 10              # "Learn more"
 # the question card
 .equ QID_TAB, 0x200             # ID_AGCARD + : a tab (+ its question, 16)
 .equ QID_CLOSE, 0x210           #   the ×
@@ -111,7 +119,7 @@
 .equ QC_BESIDE_W, 480           # a card this wide (2 x 240) shows the preview beside the rows, else under
 # plan review (task 11): the plan card's comments
 .equ CID_UNC, 0x100             # ID_AGCARD + : comment i's × (0x100 + i)
-.equ LK_UNC, 8                  # a comment's × (LI_idx: the comment)
+.equ LK_UNC, 11                 # a comment's × (LI_idx: the comment); 8..10 are the dialog cards'
 .equ CMT_MAX, 16                # comments a card takes
 .equ QUOTE_CHARS, 80            # a quote shown is cut to this many characters and "…"
 .equ QBUF, 400                  # a quote shown, with its quotes (qbuf: one per comment)
@@ -702,8 +710,8 @@ FN agentcard_set_text
 8:  xor eax, eax
     EPILOGUE
 
-# FN agentcard_toggle(AS*, what 0 fold | 1 the Details | 2 the place | 3 Submit answers | 4 the ×) -> eax 1
-#   done (as a click on it)
+# FN agentcard_toggle(AS*, what 0 fold | 1 the Details | 2 the place | 3 Submit answers | 4 the × | 5 the
+#   link) -> eax 1 done (as a click on it)
 FN agentcard_toggle
     PROLOGUE
     mov rbx, rdi
@@ -712,7 +720,14 @@ FN agentcard_toggle
     test rax, rax
     jz 8f
     mov r13, rax
-    cmp r12d, 3                 # the question card's Submit answers and ×
+    cmp r12d, 5                 # the dialog cards' link, as a click on it
+    jne 5f
+    mov rdi, rbx
+    mov rsi, r13
+    call dc_open_link
+    mov eax, 1
+    EPILOGUE
+5:  cmp r12d, 3                 # the question card's Submit answers and ×
     jb 0f
     mov esi, CBA_SUBMIT
     je 4f
@@ -794,6 +809,9 @@ FN agentcard_waiting
     call tf_text
     test rdx, rdx
     jz 8f
+    lea rax, [rip + .Lwaiting_q]    # the dialog cards' as the question card's
+    cmp dword ptr [r12 + CD_kind], CDK_DIALOG
+    je 9f
     lea rax, [rip + .Lwaiting]
     cmp dword ptr [r12 + CD_kind], CDK_QUESTIONS
     jne 9f
@@ -1485,7 +1503,7 @@ bc_draw:
     mov [rsp + 24], eax
     mov rdi, r12
     mov esi, [rsp + 8]
-    call bc_layout
+    call kind_layout            # (bc_layout, or the dialog card's dc_layout)
     mov r13d, eax               # its height
     # the scroll: the wheel's over it, else the focused control in view
     xor eax, eax
@@ -1622,6 +1640,15 @@ bc_draw:
     je .Lbd_details
     cmp eax, LK_UNC             # plan review: a comment's ×
     je .Lbd_unc
+    cmp eax, LK_DLINK           # the dialog cards' link, × and greyed buttons (dc_item)
+    jb .Lbd_item
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r15
+    mov ecx, [rsp]
+    mov r8d, [rsp + 4]
+    mov r9d, [rsp + 20]
+    call dc_item
     jmp .Lbd_item
 .Lbd_text:
     mov edi, [r15 + LI_idx]
@@ -2063,7 +2090,7 @@ bc_key:
     test esi, esi
     jnz 11f
     mov esi, 400
-11: call bc_layout
+11: call kind_layout            # (the dialog card's own stops: dc_layout)
     mov rdi, r12
     call agentcard_live
     test eax, eax
@@ -2358,6 +2385,9 @@ FN agentcard_dump
     je 3f
     lea rsi, [rip + .Lw_options]    # the question card's rows
     cmp eax, CD_OPTS
+    je 3f
+    lea rsi, [rip + .Lw_link]       # the dialog card's link
+    cmp eax, CD_LINK
     je 3f
     mov rdi, rbx                # plan review: a button's number among those shown, a comment's × "xN"
     mov rsi, r13
@@ -2670,7 +2700,8 @@ FN agentcard_input_line
 #   32 and width 240 to 900 in steps of 20, a line each: "size=S w=W h=H frame=X,Y,W,H items=K:X,Y,W,H;..."
 #   (K: t a text line, f the fold button, e the command, b a button, l a line of a button's label (with
 #   its button's number: l2), F the field, d Details; the question card's T a tab, x its ×, o a row, k a
-#   line in a row (with the row's number), p the preview). The setting is the user's again after it
+#   line in a row (with the row's number), p the preview; the dialog cards' L the link, x the ×, B a greyed
+#   button). The setting is the user's again after it
 FN agentcard_fit_dump
     PROLOGUE 32
     mov rbx, rdi
@@ -3366,7 +3397,7 @@ kinds:
     .quad bc_h, bc_draw, bc_key, bc_dump        # CDK_PERMISSION
     .quad qc_layout, qc_draw, qc_key, qc_dump   # CDK_QUESTIONS: the question card
     .quad bc_h, bc_draw, pc_key, pc_dump        # CDK_PLAN (plan review: its comments)
-    .quad bc_h, bc_draw, bc_key, bc_dump        # CDK_DIALOG
+    .quad dc_layout, bc_draw, dc_key, dc_dump   # CDK_DIALOG: the dialog cards (bc_draw draws their layout)
 # the text styles: the face's variable, its colour's theme slot, the line's leading (a metric)
 style_tbl:
     .quad ag_fui
@@ -3385,8 +3416,8 @@ kind_names: .quad .Lk_permission, .Lk_questions, .Lk_plan, .Lk_dialog
 # agentcard_text's fields (CDT_*): their CD offsets (-1: CDT_EDIT has none)
 .p2align 2
 text_slots: .long CD_title, CD_hint, CD_detail, CD_desc, CD_note, CD_json, CD_link, -1, CD_ph
-item_letters: .byte '?', 't', 'f', 'e', 'b', 'l', 'F', 'd', 'x'    # (x: plan review's ×)
-    .byte '?', '?', '?', '?', '?', '?', '?', 'T', 'x', 'o', 'k', 'p'     # 9..15 unused; the question card's
+item_letters: .byte '?', 't', 'f', 'e', 'b', 'l', 'F', 'd'
+    .byte 'L', 'x', 'B', 'x', '?', '?', '?', '?', 'T', 'x', 'o', 'k', 'p'     # the dialog cards' 8..10; plan review's × 11; the question card's 16..
 .Lk_permission: .asciz "permission"
 .Lk_questions: .asciz "questions"
 .Lk_plan: .asciz "plan"
@@ -5698,3 +5729,509 @@ qsb: .zero SB_SIZE              # an answer (qc_complete), a caption
 fsb: .zero SB_SIZE              # a preview as it is shown (q_fence)
 q_ptab: .long 0                 # a click on a tab (its question + 1), on a row (the row + 1), after the drawing
 q_prow: .long 0
+
+# ---------------------------------------------------------------- the dialog cards
+#
+# A CDK_DIALOG card (ext-webview-ui.md 2.21, 4.14; webview index.js FMt and zMt @5561231-5564700): the header
+# (CD_title) with, at its right, the × when one of its buttons is CDBF_CLOSE (that button is the ×, never a row;
+# the driver adds it last, so Escape, the last button's action, is the ×), else the fold button; the body
+# (CD_detail, a paragraph per line feed, DLG_LINES lines each); "Learn more" (CD_link: a focus stop; a click,
+# Enter or Space asks before the URL opens: agents_web_link, named by the conversation's driver); the buttons,
+# numbered, a CDBF_OFF one drawn dimmed with no action and no focus stop. No reject field, no "Esc to cancel".
+# Its layout is dc_layout's; bc_draw draws it (the link, the × and the greyed frames through dc_item) and
+# bc_key takes its keys after dc_key: a digit past the numbered buttons or on a greyed one does nothing, Enter
+# or Space on the link asks to open it. The 500 ms lock holds for the buttons, their keys and the ×, not for
+# the link.
+
+.text
+
+# dc_close(CD*) -> eax the index of its × (its CDBF_CLOSE button), -1 none
+dc_close:
+    xor ecx, ecx
+1:  cmp rcx, [rdi + CD_btns + VEC_len]
+    jae 8f
+    imul rdx, rcx, CDB_SIZE
+    add rdx, [rdi + CD_btns + VEC_ptr]
+    test dword ptr [rdx + CDB_flags], CDBF_CLOSE
+    jnz 2f
+    inc rcx
+    jmp 1b
+2:  mov eax, ecx
+    ret
+8:  mov eax, -1
+    ret
+
+# dc_open_link(AS*, CD*): its link, asked about once the frame is drawn (agents_web_link), named by the
+#   conversation's driver; nothing without one
+dc_open_link:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rsi + CD_link]
+    test r12, r12
+    jz 9f
+    lea r13, [rip + .Ldc_agent]
+    mov rdi, rbx
+    call agent_drv_of
+    test rax, rax
+    jz 1f
+    mov r13, [rax + DRV_name]
+1:  mov rdi, r12
+    call strlen
+    mov rdi, r13
+    mov rsi, r12
+    mov rdx, rax
+    call agents_web_link
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# dc_layout(CD*, w) -> eax the card's height at width w; lis/nlis its items from its top left, foc_y and foc_h
+#   the focused control's place, stops/nstops its focus stops (the link, the buttons but the greyed ones)
+dc_layout:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12d, esi
+    mov dword ptr [rip + nlis], 0
+    mov dword ptr [rip + nstops], 0
+    mov dword ptr [rip + foc_y], 0
+    mov dword ptr [rip + foc_h], 0
+    PM eax, MI_16               # the frame MI_8 in, the content MI_8 in from it (as bc_layout)
+    mov [rip + lx], eax
+    mov eax, r12d
+    sub eax, [rip + g_pmt + 4*MI_16]
+    sub eax, [rip + g_pmt + 4*MI_16]
+    cmp eax, 16
+    jge 1f
+    mov eax, 16
+1:  mov [rip + lw], eax
+    PM eax, MI_6
+    add eax, [rip + g_pmt + 4*MI_10]
+    mov [rip + ly], eax
+    # the × (else the fold button), right of the header's first line
+    mov edi, TS_TITLE
+    call st_lineh
+    mov r13d, eax
+    mov rdi, rbx
+    call dc_close
+    mov edi, LK_DCLOSE
+    test eax, eax
+    jns 2f
+    mov edi, LK_FOLD
+2:  xor esi, esi
+    call li_new
+    mov ecx, [rip + lx]
+    add ecx, [rip + lw]
+    sub ecx, r13d
+    mov [rax + LI_x], ecx
+    mov ecx, [rip + ly]
+    mov [rax + LI_y], ecx
+    mov [rax + LI_w], r13d
+    mov [rax + LI_h], r13d
+    # the header beside it
+    mov eax, [rip + lw]
+    mov [rsp], eax
+    sub eax, r13d
+    sub eax, [rip + g_pmt + 4*MI_4]
+    cmp eax, 8
+    jge 3f
+    mov eax, 8
+3:  mov [rip + lw], eax
+    mov edx, TITLE_LINES
+    test dword ptr [rbx + CD_flags], CDF_FOLDED
+    jz 4f
+    mov edx, 1
+4:  mov rdi, [rbx + CD_title]
+    mov esi, TS_TITLE
+    call lay_cstr
+    mov eax, [rsp]
+    mov [rip + lw], eax
+    mov eax, [rip + g_pmt + 4*MI_6]
+    add eax, [rip + g_pmt + 4*MI_10]
+    add eax, r13d
+    cmp [rip + ly], eax
+    jge 5f
+    mov [rip + ly], eax         # an empty header still has its line
+5:  test dword ptr [rbx + CD_flags], CDF_FOLDED
+    jnz .Ldl_end
+    mov eax, [rip + g_pmt + 4*MI_4]
+    add [rip + ly], eax
+    mov rdi, [rbx + CD_detail]  # the body
+    mov esi, TS_BODY
+    mov edx, DLG_LINES
+    call lay_paras
+    cmp qword ptr [rbx + CD_link], 0    # "Learn more"
+    je 6f
+    mov eax, [rip + g_pmt + 4*MI_4]
+    add [rip + ly], eax
+    mov edi, TS_LINK
+    call st_lineh
+    mov r14d, eax
+    mov edi, TS_LINK
+    call st_face
+    mov rdi, rax
+    lea rsi, [rip + .Ldc_learn]
+    mov edx, LEARN_LEN
+    call text_width
+    cmp eax, [rip + lw]
+    jle 51f
+    mov eax, [rip + lw]
+51: mov r15d, eax
+    mov edi, LK_DLINK
+    xor esi, esi
+    call li_new
+    mov ecx, [rip + lx]
+    mov [rax + LI_x], ecx
+    mov [rax + LI_w], r15d
+    mov ecx, [rip + ly]
+    mov [rax + LI_y], ecx
+    mov [rax + LI_h], r14d
+    mov edi, CD_LINK
+    call stop_add
+    cmp dword ptr [rbx + CD_focus], CD_LINK
+    jne 52f
+    mov edi, [rip + ly]
+    mov esi, r14d
+    call set_focus_rect
+52: add [rip + ly], r14d
+6:  mov eax, [rip + g_pmt + 4*MI_8]
+    add [rip + ly], eax
+    xor r14d, r14d              # the buttons, the × not among them
+7:  cmp r14, [rbx + CD_btns + VEC_len]
+    jae .Ldl_end
+    mov rax, [rbx + CD_btns + VEC_ptr]
+    imul rcx, r14, CDB_SIZE
+    test dword ptr [rax + rcx + CDB_flags], CDBF_CLOSE
+    jnz 8f
+    mov rdi, rbx
+    mov esi, r14d
+    call dc_lay_btn
+8:  inc r14
+    jmp 7b
+.Ldl_end:
+    mov eax, [rip + ly]
+    add eax, [rip + g_pmt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_2]
+    mov [rip + lay_total], eax
+    EPILOGUE
+
+# dc_lay_btn(CD*, i): button i at lx, ly, lw as bc_layout lays one (its label wrapping in ag_fsmall after its
+#   number's room, MI_32 high at least, a focus stop); a CDBF_OFF one is an LK_DOFF frame with its label as
+#   muted text lines and no stop. ly moves under it. Locals: [rsp] the label's bytes left, +8 the label, +16
+#   its text's x, +20 a line's height, +24 the next line's y, +28 CDBF_OFF, +32 the button's item
+dc_lay_btn:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r14d, esi
+    mov rax, [rbx + CD_btns + VEC_ptr]
+    imul rcx, r14, CDB_SIZE
+    mov eax, [rax + rcx + CDB_flags]
+    and eax, CDBF_OFF
+    mov [rsp + 28], eax
+    mov rdi, rbx
+    mov esi, r14d
+    call compose
+    mov [rsp + 8], rax
+    mov [rsp], rdx
+    mov rdi, rbx
+    call btn_inset
+    mov ecx, [rip + lx]
+    add ecx, eax
+    mov [rsp + 16], ecx
+    mov r13d, [rip + lw]        # the text's width
+    sub r13d, eax
+    sub r13d, [rip + g_pmt + 4*MI_6]
+    cmp r13d, 8
+    jge 1f
+    mov r13d, 8
+1:  mov edi, LK_BTN             # the button, its height to come
+    cmp dword ptr [rsp + 28], 0
+    je 2f
+    mov edi, LK_DOFF
+2:  mov esi, r14d
+    call li_new
+    mov [rsp + 32], rax
+    mov ecx, [rip + lx]
+    mov [rax + LI_x], ecx
+    mov ecx, [rip + lw]
+    mov [rax + LI_w], ecx
+    mov ecx, [rip + ly]
+    mov [rax + LI_y], ecx
+    cmp dword ptr [rsp + 28], 0
+    jne 3f
+    mov edi, r14d
+    call stop_add
+3:  mov edi, TS_SMALL
+    call st_lineh
+    mov [rsp + 20], eax
+    mov eax, [rip + ly]
+    add eax, [rip + g_pmt + 4*MI_6]
+    mov [rsp + 24], eax
+    xor r15d, r15d              # its lines
+4:  cmp qword ptr [rsp], 0
+    je 7f
+    cmp r15d, LABEL_LINES
+    jae 7f
+    inc r15d
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rsp + 8]
+    mov rdx, [rsp]
+    mov ecx, r13d
+    call wrap_one
+    mov r12, rdx
+    mov rcx, rax
+    cmp r15d, LABEL_LINES       # the last line it may have: the rest (cut when drawn)
+    jb 5f
+    mov rcx, [rsp]
+5:  push rcx
+    push rcx
+    mov edi, LK_BLINE
+    mov esi, r14d
+    cmp dword ptr [rsp + 16 + 28], 0
+    je 6f
+    mov edi, LK_TEXT            # a greyed one's: muted text
+    mov esi, TS_MUTED
+6:  call li_new
+    pop rcx
+    pop rcx
+    mov rdx, [rsp + 8]
+    mov [rax + LI_ptr], rdx
+    mov [rax + LI_len], rcx
+    mov ecx, [rsp + 16]
+    mov [rax + LI_x], ecx
+    mov [rax + LI_w], r13d
+    mov ecx, [rsp + 24]
+    mov [rax + LI_y], ecx
+    mov ecx, [rsp + 20]
+    mov [rax + LI_h], ecx
+    add [rsp + 24], ecx
+    add [rsp + 8], r12
+    sub [rsp], r12
+    jmp 4b
+7:  mov eax, [rsp + 24]         # its height: its lines and their padding, MI_32 at least
+    sub eax, [rip + ly]
+    add eax, [rip + g_pmt + 4*MI_6]
+    cmp eax, [rip + g_pmt + 4*MI_32]
+    jge 8f
+    mov eax, [rip + g_pmt + 4*MI_32]
+8:  mov rcx, [rsp + 32]
+    mov [rcx + LI_h], eax
+    mov r15d, eax
+    cmp dword ptr [rsp + 28], 0
+    jne 9f
+    cmp r14d, [rbx + CD_focus]
+    jne 9f
+    mov edi, [rip + ly]
+    mov esi, r15d
+    call set_focus_rect
+9:  add [rip + ly], r15d
+    mov eax, [rip + g_pmt + 4*MI_6]
+    add [rip + ly], eax
+    EPILOGUE
+
+# dc_item(AS*, CD*, LI*, x, y, live): bc_draw's part for a dialog card's own items, at the card's x and its
+#   scrolled top: the link (accent, underlined while hovered or focused; a click asks to open it), the × (a
+#   click, once live, is its button's action after the drawing: pend_act), a greyed button's frame.
+#   Locals: [rsp] x, +4 y, +8 live, +12 the link's UB bits
+dc_item:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r15, rdx
+    mov [rsp], ecx
+    mov [rsp + 4], r8d
+    mov [rsp + 8], r9d
+    mov r13d, ecx
+    add r13d, [r15 + LI_x]
+    mov r14d, r8d
+    add r14d, [r15 + LI_y]
+    mov eax, [r15 + LI_kind]
+    cmp eax, LK_DCLOSE
+    je .Ldi_close
+    cmp eax, LK_DOFF
+    je .Ldi_off
+    cmp eax, LK_DLINK
+    jne 9f
+    mov edi, ID_AGCARD + DID_LINK
+    mov esi, r13d
+    mov edx, r14d
+    mov ecx, [r15 + LI_w]
+    mov r8d, [r15 + LI_h]
+    call ui_btn
+    mov [rsp + 12], eax
+    test eax, UB_CLICK
+    jz 1f
+    mov rdi, rbx
+    mov rsi, r12
+    call dc_open_link
+1:  mov edi, TS_LINK
+    call st_face
+    mov rdi, rax
+    mov esi, r13d
+    mov edx, r14d
+    mov ecx, [r15 + LI_h]
+    lea r8, [rip + .Ldc_learn]
+    mov r9d, LEARN_LEN
+    mov eax, [r15 + LI_w]
+    push rax
+    COLOR eax, T_ACCENT
+    push rax
+    call ui_text_v_fit
+    add rsp, 16
+    test dword ptr [rsp + 12], UB_HOVER
+    jnz 2f
+    cmp dword ptr [r12 + CD_focus], CD_LINK
+    jne 9f
+2:  mov edi, r13d               # underlined
+    mov esi, r14d
+    add esi, [r15 + LI_h]
+    sub esi, [rip + g_pmt + 4*MI_3]
+    mov edx, [r15 + LI_w]
+    PM ecx, MI_1
+    COLOR r8d, T_ACCENT
+    call gfx_fill
+    jmp 9f
+.Ldi_close:
+    mov edi, ID_AGCARD + DID_CLOSE
+    mov esi, r13d
+    mov edx, r14d
+    mov ecx, [r15 + LI_w]
+    mov r8d, [r15 + LI_h]
+    mov r9d, IC_CLOSE
+    call ag_icon_btn
+    test eax, UB_CLICK
+    jz 9f
+    cmp dword ptr [rsp + 8], 0
+    je 9f
+    mov rdi, r12
+    call dc_close
+    test eax, eax
+    js 9f
+    mov rcx, [r12 + CD_btns + VEC_ptr]
+    imul rax, rax, CDB_SIZE
+    mov eax, [rcx + rax + CDB_act]
+    mov [rip + pend_act], eax
+    jmp 9f
+.Ldi_off:
+    mov edi, r13d
+    mov esi, r14d
+    mov edx, [r15 + LI_w]
+    mov ecx, [r15 + LI_h]
+    PM r8d, MI_RADIUS
+    COLOR r9d, T_BORDER
+    COLOR eax, T_PANEL
+    push rax
+    push rax
+    call gfx_frame
+    add rsp, 16
+9:  EPILOGUE
+
+# dc_key(AS*, CD*, keysym, cp, mods) -> eax 1 taken: Enter or Space on the link asks to open it; a digit that
+#   names no numbered button (the ×, a greyed one, none) is swallowed; the rest is bc_key's
+dc_key:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov r14d, ecx
+    mov r15d, r8d
+    test dword ptr [r12 + CD_flags], CDF_FOLDED
+    jnz 8f
+    mov rdi, r12
+    call agentcard_live
+    test eax, eax
+    jz 8f                       # locked: bc_key swallows it
+    test r15d, MOD_CTRL | MOD_ALT | MOD_SUPER
+    jnz 8f
+    cmp dword ptr [r12 + CD_focus], CD_LINK
+    jne 2f
+    cmp r13d, KEY_RETURN
+    je 1f
+    cmp r13d, KEY_KP_ENTER
+    je 1f
+    cmp r13d, ' '
+    jne 2f
+1:  mov rdi, rbx
+    mov rsi, r12
+    call dc_open_link
+    jmp 7f
+2:  mov eax, r14d               # the character, else the key (a digit's keysym is its character)
+    test eax, eax
+    jnz 3f
+    mov eax, r13d
+3:  sub eax, '1'
+    cmp eax, 8
+    ja 8f
+    movsxd rcx, eax
+    cmp rcx, [r12 + CD_btns + VEC_len]
+    jae 7f
+    imul rcx, rcx, CDB_SIZE
+    add rcx, [r12 + CD_btns + VEC_ptr]
+    test dword ptr [rcx + CDB_flags], CDBF_CLOSE | CDBF_OFF
+    jnz 7f
+8:  mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    mov ecx, r14d
+    mov r8d, r15d
+    call bc_key
+    EPILOGUE
+7:  and dword ptr [r12 + CD_flags], ~CDF_WHEEL
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+
+# dc_dump(sb, CD*): the dialog card's lines: detail (a paragraph each), link URL, button N LABEL (a greyed one
+#   as off N LABEL), close (it has a ×)
+dc_dump:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    lea rsi, [rip + .Lw_detail]
+    mov rdx, [r12 + CD_detail]
+    call push_paras
+    mov rdi, rbx
+    lea rsi, [rip + .Lw_link]
+    mov rdx, [r12 + CD_link]
+    call push_line
+    xor r13d, r13d
+1:  cmp r13, [r12 + CD_btns + VEC_len]
+    jae 4f
+    imul r14, r13, CDB_SIZE
+    add r14, [r12 + CD_btns + VEC_ptr]
+    inc r13
+    test dword ptr [r14 + CDB_flags], CDBF_CLOSE
+    jnz 1b
+    lea rsi, [rip + .Ldc_off]
+    test dword ptr [r14 + CDB_flags], CDBF_OFF
+    jnz 2f
+    lea rsi, [rip + .Lw_button]
+2:  mov rdi, rbx
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r13d
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, [r14 + CDB_label]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    jmp 1b
+4:  mov rdi, r12
+    call dc_close
+    test eax, eax
+    js 9f
+    mov rdi, rbx
+    lea rsi, [rip + .Ldc_closew]
+    call sb_push_cstr
+9:  EPILOGUE
+
+.section .rodata
+.Ldc_learn: .asciz "Learn more"
+.Ldc_agent: .asciz "The agent"
+.Ldc_off: .asciz "off "
+.Ldc_closew: .asciz "close\n"
+.Lw_link: .asciz "link"
+.text

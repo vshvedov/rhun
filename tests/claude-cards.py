@@ -1193,5 +1193,275 @@ class PlanTest(CardCase):
         self.answer()
 
 
+# the dialog cards: the bundle's strings (webview index.js: YPe and XPe @3423169, oOe, aOe, que, eOe, nOe, sOe,
+# iOe, lOe @3426000-3429000, the cards FMt and zMt @5561231-5564700, ij @3595371)
+DIALOG_KINDS = ['fable_overage_consent_prompt', 'auto_mode_server_fallback']
+SWITCH = 'Switch to the default model and continue'
+BUY = 'Buy usage credits on claude.ai'
+LEARN = 'https://support.claude.com/en/articles/12429409-extra-usage-for-paid-claude-plans'
+AUTO_HELP = 'https://code.claude.com/docs/en/permission-modes'
+AUTO_DEFAULT = ("Auto mode is using Claude Code's built-in classifier in this session, and those classifier requests "
+                "are billed. Continue to keep going in auto mode, or Stop to end this turn.")
+OVERAGE = {     # variant: title, body, buttons (the fake's payloads: tests/scripts/fake-claude.py OVERAGE_DIALOGS)
+    'consent': ('Continue on Fable with usage credits?', 'Fable runs on usage credits. You have $12.34 in credits. '
+                'Your other models remain included in your plan.', [SWITCH, 'Continue with Fable']),
+    'nobalance': ('Continue on Fable with usage credits?', 'Fable runs on usage credits, billed separately from your '
+                  'plan. Your other models remain included in your plan.', [SWITCH, 'Continue with Fable']),
+    'disabled': ('Fable requires usage credits', "Fable runs on usage credits, billed separately from your plan. You "
+                 "don't have usage credits yet.", [SWITCH, BUY]),
+    'empty': ('Fable requires usage credits', 'Fable runs on usage credits. You have €0.00 in credits.', [SWITCH, BUY]),
+    'admin': ('Fable now runs on usage credits', 'Fable runs on usage credits, purchased separately from your plan.',
+              [SWITCH, 'Request usage credits from your admin']),
+    'plan': ('Fable now runs on usage credits', 'Fable was included in Pro as a promotion until November 30, and now '
+             'runs on your usage credits. If you continue, Fable will use credits without asking again.',
+             [SWITCH, 'Continue with usage credits']),
+    'seat': ('Fable now runs on usage credits', 'Fable was included in standard seats for a limited time, and now '
+             'requires usage credits.', [SWITCH, BUY]),
+    'ended': ('Fable now runs on usage credits', 'Fable runs on usage credits. If you continue, Fable will use '
+              'credits without asking again.', [SWITCH, 'Continue with usage credits']),
+    'opus': ('Continue on Opus 5 with usage credits?', 'Opus 5 runs on usage credits. You have ¥150,000 in credits. '
+             'Your other models remain included in your plan.', [SWITCH, 'Continue with Opus 5']),
+    'other': ('Continue on Fable with usage credits?', 'Fable runs on usage credits. You have CHF 0.99 in '
+              'credits. Your other models remain included in your plan.', [SWITCH, 'Continue with Fable']),
+    'odd': ('Continue on Fable with usage credits?', 'Fable runs on usage credits. You have $2.50 in credits. Your '
+            'other models remain included in your plan.', [SWITCH, 'Continue with Fable']),
+}
+
+
+class DialogTest(CardCase):
+    """Task 12: the CLI's dialogs (ext-webview-ui.md 2.21 and 4.14; README.txt finding 25: the payloads and
+    results are the CLI binary's schemas, no run produced one, so the fake's dialog scenarios have no recording
+    behind them). Nothing here saves a setting: the model a switch_default answer clears is rhun's own choice."""
+
+    def dialog(self, prompt):
+        self.command('agent-prompt ' + prompt)
+        self.command('wait-agent waiting')
+        return self.card()
+
+    def answered(self, n):
+        return self.until_answered(n)[n - 1]
+
+    def test_only_pinned_kinds_are_declared(self):
+        self.start()
+        self.chat('hello')
+        self.assertEqual([r['initialize']['supportedDialogKinds'] for r in self.records() if 'initialize' in r],
+                         [DIALOG_KINDS])
+
+    def test_auto_mode_fallback_card(self):
+        self.ask('dialog-auto')
+        head, lines = self.card()
+        self.assertEqual((head['kind'], head['title'], head['live'], head['focus'], head['keys']),
+                         ('dialog', 'Auto mode is using a fallback', '1', '1', '1'))
+        self.assertEqual(lines, ['detail The auto mode service could not be reached from this network.',
+                                 'detail Claude Code checks each tool call with its own classifier for now.',
+                                 'link ' + AUTO_HELP, 'button 1 Continue', 'button 2 Stop'])
+        self.assertIn(' options=Continue|Stop', self.command('print-agent-input'))
+        self.command('agent-card 1')
+        self.assertEqual(self.answered(1), {'behavior': 'completed', 'result': 'continue'})
+        self.command('wait-agent ready')
+        self.assertEqual(self.card(), (None, []))
+        self.assertTrue(self.thread()[-1].endswith(' continued'), self.thread())
+        # no title and no paragraphs: the extension's own words; Escape is the last button, Stop
+        head, lines = self.dialog('dialog-auto empty')
+        self.assertEqual(head['title'], '')
+        self.assertEqual(lines, ['detail ' + AUTO_DEFAULT, 'link ' + AUTO_HELP, 'button 1 Continue', 'button 2 Stop'])
+        self.keys('Escape')
+        self.assertEqual(self.answered(2), {'behavior': 'completed', 'result': 'interrupt'})
+        self.command('wait-agent ready')
+        # a help link off claude.com and anthropic.com is not shown; a card without a × ignores "close"
+        head, lines = self.dialog('dialog-auto badurl')
+        self.assertEqual(lines, ['detail A paragraph.', 'button 1 Continue', 'button 2 Stop'])
+        self.command('agent-card close')
+        time.sleep(0.3)
+        self.assertEqual(len(self.answers()), 2)
+        self.keys('2')
+        self.assertEqual(self.answered(3), {'behavior': 'completed', 'result': 'interrupt'})
+
+    def test_overage_consent_variants(self):
+        self.start()
+        self.command('agent-timing card=0')
+        self.chat('hello')
+        n = 0
+        for variant, (title, body, buttons) in OVERAGE.items():
+            head, lines = self.dialog('dialog-overage ' + variant)
+            self.assertEqual((head['kind'], head['title']), ('dialog', title), variant)
+            self.assertEqual(lines, ['detail ' + body, 'link ' + LEARN] +
+                             ['button %d %s' % (i + 1, b) for i, b in enumerate(buttons)] + ['close'], variant)
+            self.command('agent-card close')
+            n += 1
+            self.assertEqual(self.answered(n), {'behavior': 'cancelled'}, variant)
+            self.command('wait-agent ready')
+        # consent: the toast says the credits are in use
+        self.dialog('dialog-overage consent')
+        self.command('agent-card 2')
+        n += 1
+        self.assertEqual(self.answered(n), {'behavior': 'completed', 'result': 'consent'})
+        self.command('wait-agent ready')
+        pills = [l[5:] for l in self.command('print-agents').splitlines() if l.startswith('pill ')]
+        self.assertEqual(pills, ['Now using usage credits for Fable'])
+        # an admin's member asks the admin
+        self.dialog('dialog-overage admin')
+        self.keys('2')
+        n += 1
+        self.assertEqual(self.answered(n), {'behavior': 'completed', 'result': 'request_admin'})
+        self.command('wait-agent ready')
+        # a request already sent: its button is greyed and does nothing
+        head, lines = self.dialog('dialog-overage greyed')
+        self.assertEqual(lines[-3:], ['button 1 ' + SWITCH, 'off 2 Request sent', 'close'])
+        self.command('agent-card 2')
+        self.keys('2')
+        time.sleep(0.3)
+        self.assertEqual(len(self.answers()), n)
+        self.keys('Down')                                   # round to "Learn more": the greyed button is no stop
+        self.assertEqual(self.head()['focus'], 'link')
+        self.command('agent-card close')
+        n += 1
+        self.assertEqual(self.answered(n), {'behavior': 'cancelled'})
+        self.command('wait-agent ready')
+        self.assertEqual(len(pills), 1)
+
+    def test_buying_asks_before_claude_ai_opens(self):
+        opened = self.work / 'opened'
+        opener = self.work / 'opener.sh'
+        opener.write_text(f'#!/bin/sh\necho "$1" >> {opened}\n', encoding='utf-8')
+        opener.chmod(0o755)
+        self.ask('dialog-overage disabled', env={'RHUN_OPEN_URL': str(opener)})
+        self.command('agent-card 2')
+        self.assertEqual(self.answered(1), {'behavior': 'completed', 'result': 'consent'})
+        self.command('wait 50')
+        palette = self.command('print-palette').splitlines()
+        self.assertEqual(palette[0], 'choose=Claude Code wants to open claude.ai in your browser: '
+                                     'https://claude.ai/settings/usage')
+        self.command('key Escape')
+        self.command('wait-agent ready')
+        self.assertFalse(opened.exists())
+        self.assertNotIn('pill Now using usage credits for Fable', self.command('print-agents'))
+
+    def test_switch_to_the_default_model_clears_rhuns_choice(self):
+        self.start()
+        self.command('agent-timing card=0')
+        self.command('agent-cfg-set model sonnet')
+        self.chat('hello')
+        self.assertIn('--model=sonnet', self.starts()[-1]['argv'])
+        self.dialog('dialog-overage consent')
+        self.command('agent-card 1')
+        self.assertEqual(self.answered(1), {'behavior': 'completed', 'result': 'switch_default'})
+        self.command('wait-agent ready')
+        self.assertIn('project model=- ', self.command('print-agent-cfg'))     # rhun's own choice, cleared
+        subtypes = [m['request']['subtype'] for m in self.stdin() if m.get('type') == 'control_request']
+        self.assertEqual(subtypes[-1], 'get_settings')       # what is in effect now: the pill follows it
+        self.assertNotIn('update_settings', subtypes)        # Claude Code's own settings are never asked to change
+        self.until(lambda: ' model=claude-opus-5-5 ' in self.command('print-agent-live'), 'the default model')
+        self.chat('again')                                   # a new conversation starts without --model
+        self.assertEqual([a for a in self.starts()[-1]['argv'] if a.startswith('--model')], [])
+
+    def test_unknown_dialog_kind_gets_an_error_reply(self):
+        self.start()
+        self.chat('dialog-other')
+        self.assertEqual(self.answers(), [{'behavior': 'error', 'message': 'not supported by rhun yet'}])
+        self.assertEqual(self.thread(), ['user dialog-other', chat.REPLY + 'done'])
+        self.assertEqual(self.card(), (None, []))
+        # a payload the extension's reader refuses is dismissed at once, as its card does: no card shows
+        self.command('agent-prompt dialog-overage bad')
+        self.assertEqual(self.answered(2), {'behavior': 'cancelled'})
+        self.command('wait-agent ready')
+        self.assertEqual(self.card(), (None, []))
+
+    def test_close_sends_cancelled(self):
+        self.ask('dialog-overage consent')
+        self.assertEqual(self.card()[1][-1], 'close')
+        self.command('agent-card close')                     # the ×: the user dismissed it
+        self.assertEqual(self.answered(1), {'behavior': 'cancelled'})
+        self.command('wait-agent ready')
+        self.dialog('dialog-overage consent')
+        self.keys('Escape')                                  # Escape is the ×
+        self.assertEqual(self.answered(2), {'behavior': 'cancelled'})
+
+    def test_dialog_buttons_locked(self):
+        self.ask('dialog-overage consent', lock=1500)
+        self.assertEqual(self.head()['live'], '0')
+        self.command('agent-card close')
+        self.keys('2', 'Escape', 'Return')
+        time.sleep(0.2)
+        self.assertEqual(self.answers(), [])
+        self.until(lambda: self.head()['live'] == '1', 'the lock ends')
+        self.keys('2')
+        self.assertEqual(self.answered(1), {'behavior': 'completed', 'result': 'consent'})
+        self.command('wait-agent ready')
+        self.command('agent-prompt dialog-auto')
+        self.command('wait-agent waiting')
+        self.assertEqual(self.head()['live'], '0')
+        self.command('agent-card 1')                         # headless: once the lock is over, as a click then
+        self.assertEqual(self.answered(2), {'behavior': 'completed', 'result': 'continue'})
+
+    def test_learn_more_asks_before_opening(self):
+        opened = self.work / 'opened'
+        opener = self.work / 'opener.sh'
+        opener.write_text(f'#!/bin/sh\necho "$1" >> {opened}\n', encoding='utf-8')
+        opener.chmod(0o755)
+        self.ask('dialog-overage consent', env={'RHUN_OPEN_URL': str(opener)})
+        self.command('agent-card link')                      # a click on "Learn more"
+        self.command('wait 50')
+        palette = self.command('print-palette').splitlines()
+        self.assertEqual(palette[0], 'choose=Claude Code wants to open support.claude.com in your browser: ' + LEARN)
+        self.command('key Escape')
+        self.command('wait 200')
+        self.assertFalse(opened.exists())                    # nothing opens without Open
+        self.assertEqual(self.answers(), [])                 # and the card still waits
+        self.assertEqual(self.head()['kind'], 'dialog')
+        self.command('agent-focus panel')
+        self.keys('Up')                                      # the keyboard reaches it too: Up from the first button
+        self.assertEqual(self.head()['focus'], 'link')
+        self.keys('Return')
+        self.command('wait 50')
+        self.assertEqual(self.command('print-palette').splitlines()[0],
+                         'choose=Claude Code wants to open support.claude.com in your browser: ' + LEARN)
+        self.command('key Return')                           # Open
+        self.until(lambda: opened.exists() and opened.read_text(encoding='utf-8').strip() == LEARN, 'the page opened')
+        self.assertEqual(self.answers(), [])
+
+    def test_dialog_card_fits(self):
+        for prompt, close in (('dialog-overage plan', 1), ('dialog-auto', 0)):
+            self.ask(prompt)
+            buttons = len(self.buttons())
+            for line in self.command('print-agent-card-fit').splitlines():
+                size, width, h = map(int, re.match(r'size=(\d+) w=(\d+) h=(\d+) ', line).groups())
+                fx, fy, fw, fh = map(int, re.search(r' frame=([\d,]+)', line).group(1).split(','))
+                items = [(m.group(1), int(m.group(2) or 0), *map(int, m.group(3).split(',')))
+                         for m in re.finditer(r'([a-zA-Z])(\d*):([\d,]+);', line)]
+                what = f'{prompt} size {size} width {width}'
+                for kind, n, x, y, w, ih in items:
+                    self.assertTrue(fx <= x and x + w <= fx + fw and fy <= y and y + ih <= fy + fh,
+                                    (what, kind, n, x, y, w, ih))
+                    self.assertGreaterEqual(w, 8, (what, kind, n))
+                boxes = [i for i in items if i[0] not in 'lt']
+                for i, a in enumerate(boxes):
+                    for b in boxes[i + 1:]:
+                        apart = (a[2] + a[4] <= b[2] or b[2] + b[4] <= a[2] or a[3] + a[5] <= b[3] or
+                                 b[3] + b[5] <= a[3])
+                        self.assertTrue(apart, (what, a, b))
+                for kind, n, x, y, w, ih in items:
+                    if kind == 'l':
+                        box = next(i for i in items if i[0] == 'b' and i[1] == n)
+                        self.assertTrue(box[2] <= x and x + w <= box[2] + box[4] and
+                                        box[3] <= y and y + ih <= box[3] + box[5], (what, kind, n))
+                kinds = [i[0] for i in items]
+                self.assertEqual((kinds.count('b'), kinds.count('x'), kinds.count('f'), kinds.count('L')),
+                                 (buttons, close, 1 - close, 1), what)
+            self.command('agent-card close' if close else 'agent-card 1')
+            self.until_answered()
+            self.stop()
+        # the largest text in the narrowest panel: the card scrolls, the keys keep the focused control in view
+        self.ask('dialog-overage plan', extra='[agents]\nfont_size = 32\n[ui]\nagents_width = 240\n')
+        for key in ('Up', 'Up', 'Down', 'Down'):
+            self.keys(key)
+            head = self.head()
+            scroll, room, fy, fh = (int(head[k]) for k in ('scroll', 'room', 'fy', 'fh'))
+            if fh <= room:
+                self.assertTrue(scroll <= fy and fy + fh <= scroll + room, head)
+        self.command('agent-card close')
+        self.until_answered()
+
+
 if __name__ == '__main__':
     unittest.main()

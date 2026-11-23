@@ -21,6 +21,7 @@ chat = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(chat)
 
 LEVELS = 'low:Low,medium:Medium,high:High'
+DIALOG_KINDS = ['fable_overage_consent_prompt', 'auto_mode_server_fallback']    # the pinned ones (finding 25)
 
 
 class CfgCase(chat.DrivenCase):
@@ -451,7 +452,7 @@ class QueueTest(CfgCase):
         self.assertIn('--max-thinking-tokens=31999', argv)
         self.assertEqual([a for a in argv if a.startswith(('--model', '--effort', '--thinking', '--allow-'))], [])
         self.assertEqual(start['env']['CLAUDE_CODE_QUESTION_PREVIEW_FORMAT'], 'markdown')
-        self.assertEqual(self.initialize(), [{'promptSuggestions': True, 'supportedDialogKinds': []}])
+        self.assertEqual(self.initialize(), [{'promptSuggestions': True, 'supportedDialogKinds': DIALOG_KINDS}])
         # the project's choices, the remembered default mode and the bypass setting at the next start
         self.command('agent-cfg-set model sonnet')
         self.command('agent-cfg-set effort low')
@@ -488,7 +489,7 @@ class QueueTest(CfgCase):
     def test_suggestions_off_in_initialize(self):
         self.start(self.claude_section('prompt_suggestions = false\n'))
         self.chat('hello')
-        self.assertEqual(self.initialize(), [{'promptSuggestions': False, 'supportedDialogKinds': []}])
+        self.assertEqual(self.initialize(), [{'promptSuggestions': False, 'supportedDialogKinds': DIALOG_KINDS}])
 
 
 SECTIONS = ['Context', 'Model', 'Customize', 'Settings', 'Support', 'Slash Commands']

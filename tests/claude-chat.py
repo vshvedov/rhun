@@ -2065,6 +2065,32 @@ class EdgeTest(DrivenCase):
                          [TERM_PROMPT, f'field=CLAUDE_CONFIG_DIR={quoted} {FAKE} auth login'])
         self.command('key Escape')
 
+    def test_sign_in_uses_the_home_of_an_env_home_pair(self):
+        # env.HOME (no CLAUDE_CONFIG_DIR): the terminal's claude gets that HOME, not a CLAUDE_CONFIG_DIR
+        # (Claude Code names its stored sign-in after the folder only when CLAUDE_CONFIG_DIR is set)
+        home = self.work / 'other home'
+        home.mkdir()
+        self.start(self.claude_section(f'env.HOME = {home}\n'), env={'FAKE_CLAUDE_AUTH': 'out'})
+        self.chat('hello', 'failed')
+        self.command('agent-card 1')
+        self.assertEqual(self.command('print-palette').splitlines()[:2],
+                         [TERM_PROMPT, f"field=HOME='{home}' {FAKE} auth login"])
+        self.command('key Escape')
+
+    def test_sign_in_uses_the_conversations_own_folder(self):
+        # the configured folder changed after the conversation started: Sign In names the folder its
+        # program uses
+        a, b = self.work / 'A', self.work / 'B'
+        self.start(self.claude_section(f'env.CLAUDE_CONFIG_DIR = {a}\n'))
+        self.chat('autherr')
+        self.assertEqual(self.card(), SIGN_IN_CARD)
+        self.config.write_text(self.BASE + self.claude_section(f'env.CLAUDE_CONFIG_DIR = {b}\n'), encoding='utf-8')
+        self.until(lambda: self.command(f'print-claude-path {self.project} x').startswith(str(b)), 'the reload')
+        self.command('agent-card 1')
+        self.assertEqual(self.command('print-palette').splitlines()[:2],
+                         [TERM_PROMPT, f'field=CLAUDE_CONFIG_DIR={a} {FAKE} auth login'])
+        self.command('key Escape')
+
     def test_sign_in_expands_the_home_folder(self):
         # executable = ~/my bin/claude: the start finds it; the terminal's command names it in full
         program = self.work / 'my bin/claude'

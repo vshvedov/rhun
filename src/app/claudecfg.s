@@ -37,7 +37,8 @@
 #                   CLI slugs its working directory with symbolic links resolved
 #                   (tests/data/claude-shapes/README.txt, decision 6), so cwd is resolved first; a slug
 #                   over 200 bytes is cut to 200 (the CLI adds a hash then: the path is provisional)
-#   claude_config_dir_value() -> rax env.CLAUDE_CONFIG_DIR's value, or 0 (the terminal's sign-in)
+#   claude_term_env(folder or 0) -> eax 0, 1 CLAUDE_CONFIG_DIR, 2 HOME, rdx its value: what the terminal's
+#                   claude needs to use a conversation's profile (Sign In, Run claude in Terminal)
 #   claude_index_envp() -> rax the environment the discovery worker starts with: rhun's own, with an
 #                   absolute env.CLAUDE_CONFIG_DIR in it (borrowed until the next call)
 #   claude_ctl: print-claude-exe, print-claude-path (control.s)
@@ -299,15 +300,82 @@ config_dir_pair:
 3:  mov rax, r12
     EPILOGUE
 
-# FN claude_config_dir_value() -> rax the value of [claude] env.CLAUDE_CONFIG_DIR (a cstr, borrowed until
-#   the config is read again), or 0 when it is not set or not absolute (claude does not get it then)
-FN claude_config_dir_value
+# FN claude_term_env(folder cstr or 0) -> eax what the terminal's claude must be given to use the same
+#   profile as a conversation's program, rdx its value (borrowed): 0 nothing, 1 CLAUDE_CONFIG_DIR, 2 HOME.
+#   folder: the conversation's own (agent_claude.s live_dir), 0 for the configuration's. Its program gets
+#   CLAUDE_CONFIG_DIR = folder when that is not claude_dir's now (claude_env_dir), else an absolute
+#   env.CLAUDE_CONFIG_DIR, else the environment's absolute one; without any, HOME from an env.HOME pair or
+#   the environment. The terminal has the environment (the login shell's, as far as rhun knows it): what
+#   differs is named, CLAUDE_CONFIG_DIR first. HOME only when claude gets no CLAUDE_CONFIG_DIR: its stored
+#   sign-in is named after the folder only when CLAUDE_CONFIG_DIR is set (Claude Code 2.1.330), so
+#   CLAUDE_CONFIG_DIR=HOME/.claude would not be the same sign-in as HOME=...
+FN claude_term_env
     PROLOGUE
-    call config_dir_pair
+    mov rbx, rdi
+    lea rdi, [rip + dir_now]
+    call sb_clear
+    lea rdi, [rip + dir_now]
+    call claude_dir
+    test rbx, rbx
+    jz 1f
+    test eax, eax
+    jz 2f
+    mov rdi, rbx
+    mov rsi, [rip + dir_now + SB_ptr]
+    call strcmp_eq
+    test eax, eax
+    jz 2f                       # the folder the configuration names now is another: it gets its own
+1:  call config_dir_pair
     test rax, rax
-    jz 9f
-    add rax, CONFIG_DIR_LEN
-9:  EPILOGUE
+    jz 11f
+    lea rbx, [rax + CONFIG_DIR_LEN]
+    jmp 2f
+11: lea rdi, [rip + .Lconfig_dir]
+    call uproc_env_get
+    xor ebx, ebx
+    test rax, rax
+    jz 2f
+    PATH_ABSOLUTE rax, 12f
+    jmp 2f
+12: mov rbx, rax
+2:  lea rdi, [rip + .Lconfig_dir]   # what the terminal has
+    call uproc_env_get
+    mov r12, rax
+    test rbx, rbx
+    jz 5f
+    test r12, r12               # claude gets CLAUDE_CONFIG_DIR: named unless the terminal has the same
+    jz 3f
+    mov rdi, rbx
+    mov rsi, r12
+    call strcmp_eq
+    test eax, eax
+    jnz 8f
+3:  mov eax, 1
+    mov rdx, rbx
+    EPILOGUE
+5:  lea rdi, [rip + .Lhome_eq]   # none: an env.HOME pair the terminal's HOME is not
+    mov esi, 5
+    call pair_value
+    test rax, rax
+    jz 8f
+    cmp byte ptr [rax], 0
+    je 8f
+    mov rbx, rax
+    lea rdi, [rip + .Lhome]
+    call uproc_env_get
+    test rax, rax
+    jz 6f
+    mov rdi, rbx
+    mov rsi, rax
+    call strcmp_eq
+    test eax, eax
+    jnz 8f
+6:  mov eax, 2
+    mov rdx, rbx
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    EPILOGUE
 
 # pair_value(name_eq, len) -> rax the value of the [claude] env pair "NAME=" (len bytes with its '='
 #   names it), or 0

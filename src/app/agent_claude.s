@@ -944,30 +944,52 @@ FN claude_auth_end
 
 # cl_terminal(AL*, what): claude in rhun's terminal prompt (it runs when the user presses Enter there): the
 #   configured program ("~/" expanded as the start does; the wrapper is not used there) or "claude",
-#   found on the terminal's PATH, with "auth login" for what 1. When
-#   [claude] env.CLAUDE_CONFIG_DIR is set, it goes before the command, so the sign-in lands where rhun's
-#   claude looks (no other pair: their values may be keys, and the line ends up in the shell's history).
-#   For the shell rhun's terminal starts: a POSIX shell, PowerShell on Windows
+#   found on the terminal's PATH, with "auth login" for what 1. Before it, what the terminal's claude needs
+#   to use the same profile as this conversation's program (claude_term_env: its CLAUDE_CONFIG_DIR, else
+#   an env.HOME pair's HOME, when the terminal's differs); never anything else (values may be keys, and
+#   the line ends up in the shell's history). For the shell rhun's terminal starts: a POSIX shell,
+#   PowerShell on Windows
 cl_terminal:
     PROLOGUE
+    mov rbx, rdi
     mov r12d, esi
-    lea rdi, [rip + psb]
+    xor r14d, r14d              # the conversation's folder, without fixing it (live_dir would): its own,
+    mov rdi, [rbx + AL_cdir]    #   or where its file is (an existing one)
+    test rdi, rdi
+    jnz 0f
+    test dword ptr [rbx + AL_flags], ALF_NEW
+    jnz 0f
+    mov rax, [rbx + AL_as]
+    mov rdi, [rax + AS_path]
+    call path_folder
+    mov r14, rax                # (freed below)
+    mov rdi, rax
+0:  call claude_term_env
+    mov r15, rdx
+    lea r13, [rip + .Lw_dir_head]
+    cmp eax, 1
+    je 4f
+    lea r13, [rip + .Lw_home_head]
+    cmp eax, 2
+    jne 1f
+4:  lea rdi, [rip + psb]
     call sb_clear
-    call claude_config_dir_value
-    test rax, rax
-    jz 1f
-    mov r13, rax
-    lea rdi, [rip + psb]
-    lea rsi, [rip + .Lw_dir_head]
-    call sb_push_cstr
     lea rdi, [rip + psb]
     mov rsi, r13
+    call sb_push_cstr
+    lea rdi, [rip + psb]
+    mov rsi, r15
     xor edx, edx
     call sh_word
     lea rdi, [rip + psb]
     lea rsi, [rip + .Lw_dir_tail]
     call sb_push_cstr
-1:  mov rdi, [rip + cfg_claude_executable]
+    jmp 5f
+1:  lea rdi, [rip + psb]
+    call sb_clear
+5:  mov rdi, r14
+    call mem_free
+    mov rdi, [rip + cfg_claude_executable]
     lea rsi, [rip + .Lw_claude]
     cmp byte ptr [rdi], 0
     je 2f
@@ -2774,11 +2796,13 @@ cl_flags:
 .Lsh_quote: .asciz "''"
 .Lsh_call: .asciz "& "
 .Lw_dir_head: .asciz "$env:CLAUDE_CONFIG_DIR="
+.Lw_home_head: .asciz "$env:HOME="
 .Lw_dir_tail: .asciz "; "
 .else
 .Lsh_plain: .asciz "/._-+~:,@"
 .Lsh_quote: .asciz "'\\''"
 .Lw_dir_head: .asciz "CLAUDE_CONFIG_DIR="
+.Lw_home_head: .asciz "HOME="
 .Lw_dir_tail: .asciz " "
 .endif
 .Lr_prompt_busy: .asciz "Close the open prompt first."

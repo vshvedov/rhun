@@ -1909,11 +1909,8 @@ FN ev_dropped
     je 1f
     dec qword ptr [rbx + AL_turns]
     jnz 9f
-1:  cmp dword ptr [rbx + AL_state], ALS_WORKING
-    jne 9f
-    mov rdi, rbx                # nothing runs now
-    mov esi, ALS_READY
-    call agent_state_set
+1:  mov rdi, rbx                # every message written has ended now: as at a turn's end
+    call turns_over
 9:  EPILOGUE
 
 # FN ev_text(al, key ptr, key len, ptr, len, replace) -> rax the row's index (-1 none): reply text of a
@@ -2403,11 +2400,22 @@ FN ev_turn_end
     je 3f
     dec qword ptr [rbx + AL_turns]
     jnz 9f
+3:  mov rdi, rbx
+    call turns_over
+9:  EPILOGUE
+
+# turns_over(al): every message written has had its end (the last turn's end, or a held one the program
+#   dropped: ev_turn_end, ev_dropped): one still held ran without a word that it started (a command the
+#   program answers itself, without lifecycle or replay) and its row joins now; requests the turns left
+#   behind go with their card; READY
+turns_over:
+    PROLOGUE
+    mov rbx, rdi
 3:  cmp qword ptr [rbx + AL_held + VEC_len], 0
     je 32f
-    mov r15, [rbx + AL_held + VEC_ptr]  # every message written has ended: one still held ran without a
-    lea rdi, [r15 + AH_uuid]    #   word that it started (a command the program answers itself, without
-    call strlen                 #   lifecycle or replay): its row joins now
+    mov r15, [rbx + AL_held + VEC_ptr]
+    lea rdi, [r15 + AH_uuid]
+    call strlen
     mov rdi, rbx
     lea rsi, [r15 + AH_uuid]
     mov rdx, rax

@@ -3059,6 +3059,26 @@ class ReviewProtocolTest(ModelCase):
         self.assertTrue(self.choices().startswith('model=sonnet '), self.choices())
         self.assertEqual(self.pills(), ['Switched to Sonnet'])
 
+    def test_a_drop_that_ends_the_last_turn_lets_an_unreported_command_join(self):
+        # R10: a turn runs; /context (no lifecycle, no replay: FAKE_CLAUDE_NO_LIFECYCLE=local) and p2 are held;
+        # the turn ends, /context runs and ends unreported, the CLI discards p2: /context is a row, nothing is
+        # queued, p2 is back in the box, and the conversation is idle (its idle stop puts nothing back)
+        self.start(env={'FAKE_CLAUDE_NO_LIFECYCLE': 'local', 'FAKE_CLAUDE_DISCARD_HELD': 'p2'})
+        self.chat('held', 'working')
+        self.command('agent-prompt /context')
+        self.command('agent-prompt p2')
+        self.until(lambda: self.held_count() == 2, 'both held')
+        self.until(lambda: [r for r in self.records() if 'discarded' in r], 'the discard')
+        self.command('wait-agent ready 20000')
+        self.command('wait 100')
+        self.assertIn('user /context', self.thread())
+        self.assertEqual(self.held_count(), 0)
+        self.assertEqual([l for l in self.command('print-agents').splitlines() if l.startswith('queued ')], [])
+        self.assertTrue(self.command('print-agent-input').startswith('input=p2 '))
+        self.command('agent-timing idle=300')
+        self.until_gone()
+        self.assertTrue(self.command('print-agent-input').startswith('input=p2 '))
+
     def test_a_long_resolved_id_is_cut(self):
         # 2.1: a model's resolvedModel is kept at most 63 bytes, in memory and in the state file
         self.start(env={'FAKE_CLAUDE_MODELS': 'longresolved'})

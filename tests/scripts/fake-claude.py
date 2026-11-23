@@ -62,8 +62,10 @@ the system/commands_changed that follows initialize lists these instead, the kno
 them, claude-api as the real skill with line ends in its description (finding 26), the others as skills
 "Skill NAME", as the real list has skills initialize lacks); FAKE_CLAUDE_REFUSE_HELD (the first message written
 with a uuid while another waits or runs is refused: lifecycle refused, never run, logged {"refused": UUID});
-FAKE_CLAUDE_DISCARD_HELD (the first such message is queued, then, when its turn would start, lifecycle
-discarded, never run, logged {"discarded": UUID}); FAKE_CLAUDE_NO_LIFECYCLE (no command_lifecycle at all:
+FAKE_CLAUDE_DISCARD_HELD (the first such message, or with a value other than 1 the held message of that text,
+is queued, then, when its turn would start, lifecycle
+discarded, never run, logged {"discarded": UUID}); FAKE_CLAUDE_NO_LIFECYCLE (no command_lifecycle at all
+("local": none for a command the CLI answers itself, LOCAL_COMMANDS, only):
 only the replay says a message started); FAKE_CLAUDE_ULTRATHINK (system/init says ultrathink_available true:
 unrecorded, 2.1.330 said false on this account); FAKE_CLAUDE_REFUSE_AUTO (set_permission_mode auto is answered
 with an error: unrecorded, the plan review's fallback to acceptEdits);
@@ -2132,8 +2134,10 @@ def prompt_text(message):
 def lifecycle(uid, state):
     """command_lifecycle (finding 17): a message written with a uuid is queued at once, started when its turn
     starts, completed, or cancelled when an interrupt ended its turn; without a uuid, none.
-    FAKE_CLAUDE_NO_LIFECYCLE (unrecorded): none at all, so only the replay says a message started."""
-    if ENV.get('FAKE_CLAUDE_NO_LIFECYCLE'):
+    FAKE_CLAUDE_NO_LIFECYCLE (unrecorded): none at all, so only the replay says a message started; "local":
+    none for the commands the CLI answers itself (QUIET), which then have neither lifecycle nor replay."""
+    knob = ENV.get('FAKE_CLAUDE_NO_LIFECYCLE')
+    if knob and (knob != 'local' or uid in QUIET):
         return
     emit({'type': 'command_lifecycle', 'command_uuid': uid, 'state': state, 'uuid': str(uuid.uuid4()),
           'session_id': SID})
@@ -2346,6 +2350,7 @@ SCENARIOS.update({'rules': s_rules, 'planagain': s_planagain, 'manydialog': s_ma
 
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already
 DISCARDED = [False]                 # FAKE_CLAUDE_DISCARD_HELD: one held message was marked to be discarded
+QUIET = set()                       # FAKE_CLAUDE_NO_LIFECYCLE=local: the uuids of the CLI's own commands
 
 
 def handle(message):
@@ -2463,7 +2468,11 @@ def handle(message):
                 log(refused=uid)
                 lifecycle(uid, 'refused')
                 return
-            if uid and ENV.get('FAKE_CLAUDE_DISCARD_HELD') and (BUSY[0] or QUEUE) and not DISCARDED[0]:
+            words = entry['text'].split()
+            if uid and words and words[0] in LOCAL_COMMANDS:
+                QUIET.add(uid)
+            if uid and ENV.get('FAKE_CLAUDE_DISCARD_HELD') in ('1', entry['text']) and (BUSY[0] or QUEUE) \
+                    and not DISCARDED[0]:
                 DISCARDED[0] = True         # unrecorded: queued now, discarded when its turn would start
                 entry['discard'] = True
             QUEUE.append(entry)

@@ -19,7 +19,11 @@ A Claude conversation open in the panel (an old one, nothing started) is measure
 --chat adds what needs the chat (a build that has it), with tests/scripts/fake-claude.py as the CLI:
 loop passes once a process ran and was released, and the time from a key in the prompt box to the
 frame that shows it (control `key`: sent, handled, then the command's frame, then `ok`) while the
-fake streams a long Markdown reply (scenario `stream`) and with nothing streaming.
+fake streams a long Markdown reply (scenario `stream`) and with nothing streaming; with a process running,
+the time from a new conversation's first prompt to its answer (a cold start: the process, initialize,
+get_settings, the turn) and the wake-ups of a ready conversation and of a permission request waiting; on a
+build with phase 2's controls (it knows print-agent-cfg), the wake-ups of a band with a warm prompt-cache
+clock and of the open command menu, and the command menu's open time with 500 cached commands.
 """
 import argparse
 import json
@@ -83,10 +87,11 @@ class Bench:
         """ms per step: (setup + n steps) less setup alone"""
         return (self.median(target, setup + step * n, **kwargs) - self.median(target, setup, **kwargs)) / n * 1000
 
-    def controlled(self, target, home, agents, body, chat=False):
+    def controlled(self, target, home, agents, body, chat=False, env=None):
         """body(command) on a window on TARGET driven through the control socket; command(line) sends one
-        command and returns its output (an error answer raises). The window is quit at the end."""
-        env = self.environment(home, agents, True, chat)
+        command and returns its output (an error answer raises). The window is quit at the end. env: more
+        variables (the fake's knobs)."""
+        env = dict(self.environment(home, agents, True, chat), **(env or {}))
         # a socket's path is short (104 bytes on macOS): its own folder under /tmp
         with tempfile.TemporaryDirectory(prefix='rhun-perf-', dir='/tmp') as sockets:
             control = Path(sockets) / 'control'
@@ -350,7 +355,115 @@ def measure(exe, work, chat=False):
         results['key to frame while a reply streams, worst (ms)'] = max(streaming)
         results['key to frame, nothing streaming, median (ms)'] = statistics.median(quiet)
         results['key to frame, nothing streaming, worst (ms)'] = max(quiet)
+        results.update(chat_live(b, work))
     return results
+
+
+def chat_live(b, work):
+    """--chat with a process running: a cold start's first answer, wake-ups of a ready conversation, of a
+    permission request waiting (its card after its 500 ms lock), and, on a build with phase 2's controls
+    (print-agent-cfg), of a band with a warm prompt-cache clock and of the open command menu; the command
+    menu's open time with 500 cached commands"""
+    results = {}
+    home, project = claude_project(work, 'first')
+
+    def first(command):
+        command('wait-agents')
+        out = []
+        for _ in range(5):                      # each a new conversation: a new process, its first prompt
+            command('agent-new claude')
+            start = time.perf_counter()
+            command('agent-prompt hello')
+            command('wait-agent ready 20000')
+            out.append((time.perf_counter() - start) * 1000)
+            command('agent-release')
+            command('wait-agent off 20000')
+        return out
+    times = b.controlled([project], home, True, first, chat=True)
+    FIRST.setdefault(b.exe, []).append(times)
+    results['first prompt to its answer at a cold start, median of 5 (ms)'] = statistics.median(times)
+
+    def chatted(prompt, wait, *more):
+        def setup(command):
+            command('wait-agents')
+            command('print-agents 1')
+            command('agent-prompt ' + prompt)
+            command('wait-agent %s 20000' % wait)
+            for line in more:
+                command(line)
+        return setup
+    home, project = claude_project(work, 'ready')
+    results['idle loop passes in 10 s, a conversation ready, its process running'] = b.idle_passes(
+        [project], home, True, setup=chatted('hello', 'ready'), chat=True)
+    home, project = claude_project(work, 'card')
+    results['idle loop passes in 10 s, a permission request waiting'] = b.idle_passes(
+        [project], home, True, setup=chatted('tool', 'waiting'), chat=True)
+    if not has_controls(b, work):
+        return results
+    home, project = claude_project(work, 'band')
+    results['idle loop passes in 10 s, a band and a warm cache clock shown'] = b.idle_passes(
+        [project], home, True, setup=chatted('usage', 'ready', 'agent-test-band notice A notice that stays'),
+        chat=True)
+    home, project = claude_project(work, 'menu')
+    results['idle loop passes in 10 s, the command menu open'] = b.idle_passes(
+        [project], home, True, setup=chatted('hello', 'ready', 'agent-menu /'), chat=True)
+    home, project = claude_project(work, 'commands')
+
+    def menu(command):
+        def timed(line):
+            start = time.perf_counter()
+            command(line)
+            return (time.perf_counter() - start) * 1000
+        command('wait-agents')
+        path = Path(dict(w.split('=', 1) for w in command('print-agent-cfg').splitlines()[0].split(' '))['path'])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(commands_record(500), encoding='utf-8')
+        command('print-agents 1')
+        opened = timed('agent-menu /')          # the first: the record read from the file
+        rows = [line for line in command('print-agent-menu').splitlines() if line.startswith('row ')]
+        if sum(' /cmd' in row for row in rows) != 500:
+            raise RuntimeError('the menu does not list the 500 commands: %d rows' % len(rows))
+        command('key Escape')
+        again, keys, frames = [], [], []
+        for i in range(20):
+            again.append(timed('agent-menu /'))
+            keys.append(timed('agent-type c'))  # a key in the filter: every command still matches
+            command('key Escape')
+            frames.append(timed('key a'))       # a frame of the box alone, for reference
+            command('key BackSpace')
+        return opened, again, keys, frames
+    opened, again, keys, frames = b.controlled([project], home, True, menu, chat=True)
+    results['open the command menu of 500 cached commands, first (reads the file) (ms)'] = opened
+    results['open the command menu of 500 cached commands, again, median (ms)'] = statistics.median(again)
+    results['open the command menu of 500 cached commands, again, worst (ms)'] = max(again)
+    results['a key in the filter of 500 commands, median (ms)'] = statistics.median(keys)
+    results['a key in the box, the menu closed, median (ms)'] = statistics.median(frames)
+    return results
+
+
+def commands_record(n):
+    """the project's Claude record (agentcfg.s) with N commands, as the state file holds it"""
+    return 'agentcfg\t1\nversion\t2.1.330\n' + ''.join(
+        'cmd\tcmd%d\tCommand number %d does something with the files of the project\t\t\t\t0\t2\n'
+        % (i + 1, i + 1) for i in range(n))
+
+
+FIRST = {}                                  # every cold start's time of the --chat runs, by build
+CONTROLS = {}                               # whether a build has phase 2's controls, by build
+
+
+def has_controls(b, work):
+    """whether b's build has phase 2's bands, menu and cards (it knows print-agent-cfg)"""
+    if b.exe not in CONTROLS:
+        def probe(command):
+            try:
+                command('print-agent-cfg')
+                return True
+            except RuntimeError:
+                return False
+        home, project = claude_project(work, 'probe2')
+        CONTROLS[b.exe] = b.controlled([project], home, True, probe, chat=True)
+    return CONTROLS[b.exe]
 
 
 KEYS = {}                                   # every key's time of the --chat runs, by build
@@ -395,7 +508,7 @@ def main():
     parser.add_argument('--binary', action='append', help='rhun to time (repeat to compare)')
     parser.add_argument('--runs', type=int, default=5)
     parser.add_argument('--json', help='write the results here')
-    parser.add_argument('--samples', help="write every round's value here (and every key's time)")
+    parser.add_argument('--samples', help="write every round's value here (and every key's and cold start's time)")
     parser.add_argument('--chat', action='store_true', help="measure Claude Code's chat too (the fake CLI)")
     args = parser.parse_args()
     binaries = args.binary or [str(ROOT / 'build/rhun')]
@@ -416,7 +529,8 @@ def main():
                  for exe in binaries}
         if args.samples:
             Path(args.samples).write_text(json.dumps(
-                {names[exe]: {'rounds': samples[exe], 'keys': KEYS.get(exe, [])} for exe in binaries},
+                {names[exe]: {'rounds': samples[exe], 'keys': KEYS.get(exe, []), 'first': FIRST.get(exe, [])}
+                 for exe in binaries},
                 indent=1) + '\n', encoding='utf-8')
     names = list(dict.fromkeys(name for column in table.values() for name in column))  # a build without the chat
     width = max(map(len, names))                                                      # has no chat rows

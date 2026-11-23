@@ -2957,6 +2957,18 @@ class ReviewProtocolTest(ModelCase):
         self.assertEqual(self.prompts()[-1], 'a' * 50000 + '\n\n' + marker)
         self.assertNotIn('50,000', self.command('print-toast'))
 
+    def test_a_long_resolved_id_is_cut(self):
+        # 2.1: a model's resolvedModel is kept at most 63 bytes, in memory and in the state file
+        self.start(env={'FAKE_CLAUDE_MODELS': 'longresolved'})
+        self.chat('hello')
+        self.released()
+        self.assertNotEqual(self.head_cfg()['path'], '-')
+        lines = [l for l in Path(self.head_cfg()['path']).read_text(encoding='utf-8').splitlines() if l.startswith('model\tlong\t')]
+        self.assertEqual(len(lines), 1, lines)
+        resolved = lines[0].split('\t')[6]
+        self.assertTrue(resolved.startswith('claude-xxx'), resolved)
+        self.assertLessEqual(len(resolved.encode('utf-8')), 63)
+
 
 if __name__ == '__main__':
     unittest.main()

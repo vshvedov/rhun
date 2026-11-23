@@ -622,9 +622,11 @@ FN agentcfg_lists_end
     call sb_clear
     lea rdi, [rip + csb1]
     lea rsi, [rbx + AGC_omodels]
+    mov edx, -1
     call models_text
     lea rdi, [rip + csb2]
     lea rsi, [rbx + AGC_models]
+    mov edx, -1
     call models_text
     call csb_differ
     or r13d, eax
@@ -733,6 +735,7 @@ FN agentcfg_resolved
     test rbx, rbx
     jz 9f
     mov rdi, rsi
+    mov esi, VALUE_MAX          # cut as a value is (AL_model's room)
     call cut_dup0
     mov r12, rax
     mov rdi, [rbx + AMO_resolved]
@@ -1462,6 +1465,7 @@ file_text:
     jmp 4b
 5:  mov rdi, rbx
     lea rsi, [r12 + AGC_models]
+    mov edx, FILE_MAX - 1
     call models_text
     mov rdi, rbx
     lea rsi, [r12 + AGC_cmds]
@@ -1469,17 +1473,21 @@ file_text:
     call cmds_text
     EPILOGUE
 
-# models_text(sb, VEC* of AMO*): their "model" lines
+# models_text(sb, VEC* of AMO*, edx max bytes of sb): their "model" lines, until sb would pass max (as
+#   cmds_text)
 models_text:
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, rdi
     mov r12, rsi
+    movsxd r15, edx
     xor r13d, r13d
 1:  cmp r13, [r12 + VEC_len]
     jae 9f
     mov rax, [r12 + VEC_ptr]
     mov r14, [rax + r13*8]
     inc r13
+    mov rax, [rbx + SB_len]     # where this line starts: it goes again when it would pass max
+    mov [rsp], rax
     mov rdi, rbx
     lea rsi, [rip + .Lw_model]
     call sb_push_cstr
@@ -1509,7 +1517,10 @@ models_text:
     call put_field
 2:  mov rdi, rbx
     call put_nl
-    jmp 1b
+    cmp [rbx + SB_len], r15
+    jbe 1b
+    mov rax, [rsp]              # past the file's room: this line and the rest are left out
+    mov [rbx + SB_len], rax
 9:  EPILOGUE
 
 # levels_text(sb, AMO*, plain): "ID:LABEL,ID:LABEL" (plain 0: escaped for the file; levels whose id or

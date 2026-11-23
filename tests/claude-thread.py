@@ -772,6 +772,30 @@ class SpinnerTest(SpinnerCase):
         self.command('wait-agent ready 10000')
         still('after the turn')
 
+    def test_a_waiting_request_stops_the_tick(self):
+        """While a request waits for the user nothing moves (the extension hides its spinner while a permission
+        request is pending, index.js @5944989 `visiblyBusy && !permissionRequests.length`): the line keeps its
+        room, blank; a running call's dot is still; the loop's passes are the idle count. The tick comes back
+        once the answer lets the turn run on."""
+        self.start()
+        self.chat('hello')
+        self.command('agent-prompt asklinger 30')
+        self.command('wait-agent waiting')
+        self.command('agent-test-tool a name=Bash second=sleep 9')    # a running call while the card waits
+        time.sleep(0.3)
+        self.command('print-frames')
+        spin = self.spin()
+        self.assertEqual((spin['shown'], spin['waiting'], spin['timeout'], spin['y'], spin['blink']),
+                         ('1', '1', None, None, None), spin)
+        time.sleep(3)                                # settled, as tools/perf-baseline.py measures it
+        self.assertLessEqual(self.wakeups(10), 14)   # the idle count (13 in phase 2's baseline), no tick
+        self.command('agent-card 1')                 # allowed: the turn works on
+        self.command('wait-agent working')
+        self.command('print-frames')
+        spin = self.until(lambda: (lambda s: s if s['timeout'] is not None else None)(self.spin()), 'the tick again')
+        self.assertEqual(spin['waiting'], '0', spin)
+        self.assertGreaterEqual(self.wakeups(), 8)
+
     def test_no_spinner_without_verbs(self):
         """An extension's session that says it works (tests/ext-prompts.py's fixture): no spinner line, no tick,
         the loop's passes as without it."""
@@ -950,6 +974,24 @@ class TimeTest(ThreadCase):
         self.assertEqual(self.stamps(4), ('12:05 PM', '2026-11-20 12:05:00 UTC', None))
         h1, h4 = int(self.row(1)['height']), int(self.row(4)['height'])
         self.assertGreater(h1, h4)                   # the first has the day pill too
+
+    def test_a_reply_shows_its_time_once_whole(self):
+        """The extension stamps a reply only once its message is complete (s4 @3697600: not while partial); its
+        time sits on the label line, so the row's height does not change when it appears."""
+        self.start(env={'TZ': 'UTC'})
+        self.chat('hello')
+        self.command('agent-prompt pause 3')
+        self.until(lambda: self.thread()[-1].endswith('it is whole.'), 'the text streamed')
+        n = self.engine()['rows']
+        self.command('print-frames')
+        self.assertIsNone(self.stamps(n)[0], 'streaming: no time')
+        self.assertIsNotNone(self.stamps(n - 1)[0], 'its prompt has one')
+        before = int(self.row(n)['height'])
+        y = int(self.row(n)['y'])
+        self.command('wait-agent ready 10000')
+        self.command('print-frames')
+        self.assertRegex(self.stamps(n)[0], r'^\d{1,2}:\d\d [AP]M$')
+        self.assertEqual((int(self.row(n)['height']), int(self.row(n)['y'])), (before, y))
 
     def test_live_rows_get_the_clock(self):
         self.start(env={'TZ': 'UTC'})

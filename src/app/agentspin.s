@@ -18,7 +18,8 @@
 #   agspin_seen()                   something drawn this frame moves: the tick goes on
 #   agspin_phase() -> eax           the tick's count
 #   agspin_blink(AS*) -> eax        a running dot of that session: 1 draw it, 0 not now (the blink: 4 ticks on,
-#                                   4 off, only in a conversation rhun drives whose turn runs; else 1, still)
+#                                   4 off, only in a conversation rhun drives whose turn runs and where no
+#                                   request waits for the user; else 1, still)
 #   agspin_color(AS*) -> eax argb   the spinner's and a running dot's colour: the open mode's, the driver's
 #                                   own in the default mode (DRV_brand), else the accent
 #   agspin_timeout() -> eax ms|-1   the time to the next tick, -1 none
@@ -108,6 +109,24 @@ works:
     je 9f
 1:  mov eax, 1
 9:  ret
+
+# moving(AS*) -> eax 1 when its turn runs and no request waits for the user: while a permission, question,
+#   plan or dialog card waits nothing moves (the extension hides its spinner while a permission request is
+#   pending, index.js @5944989 `visiblyBusy && !permissionRequests.length`; a card can wait for hours)
+moving:
+    PROLOGUE
+    mov rbx, rdi
+    call works
+    test eax, eax
+    jz 9f
+    mov rcx, [rbx + AS_live]
+    xor eax, eax
+    cmp dword ptr [rcx + AL_state], ALS_WAITING
+    je 9f
+    cmp qword ptr [rcx + AL_reqs + VEC_len], 0
+    jne 9f
+    mov eax, 1
+9:  EPILOGUE
 
 # shown(AS*) -> eax 1 when the line shows for it: a driver with verbs, a turn that runs
 shown:
@@ -511,6 +530,10 @@ FN agspin_draw
     call shown
     test eax, eax
     jz 9f
+    mov rdi, rbx                # a request waits: the line keeps its room, blank (the extension's empty row)
+    call moving
+    test eax, eax
+    jz 9f
     call line_h
     mov [rsp + 12], eax
     mov eax, [rsp + 4]          # in view?
@@ -612,7 +635,7 @@ FN agspin_phase
 #   it is still (a reader adds no wake-up)
 FN agspin_blink
     PROLOGUE
-    call works
+    call moving
     test eax, eax
     jnz 1f
     mov eax, 1
@@ -639,7 +662,7 @@ FN agspin_timeout
     je 8f
     call agents_viewed
     mov rdi, rax
-    call works
+    call moving
     test eax, eax
     jz 8f
     call time_ms
@@ -705,7 +728,8 @@ FN agspin_step
 9:  EPILOGUE
 
 # FN agspin_dump(sb): print-agent-spinner: "shown=0|1 frame=N verb=T label=T static=0|1 tick=MS color=RRGGBB
-#   seen=0|1 timeout=MS|- verbs=N y=Y|- blink=on|off|-" for the open conversation (spaces in verb and label as
+#   seen=0|1 timeout=MS|- verbs=N waiting=0|1 y=Y|- blink=on|off|-" for the open conversation (waiting: a
+#   request waits for the user, the line is blank and nothing ticks) (spaces in verb and label as
 #   "_"; label without its trailing spaces; y and blink: in the last frame of the thread drawn)
 FN agspin_dump
     PROLOGUE
@@ -803,6 +827,18 @@ FN agspin_dump
     mov esi, edx
     call sb_push_u64
     mov rdi, r15
+    lea rsi, [rip + .Ls_waiting]
+    call sb_push_cstr
+    xor esi, esi
+    test r12d, r12d
+    jz 31f
+    mov rdi, rbx
+    call moving
+    xor eax, 1
+    mov esi, eax
+31: mov rdi, r15
+    call sb_push_u64
+    mov rdi, r15
     lea rsi, [rip + .Ls_y]
     call sb_push_cstr
     mov esi, -1
@@ -882,6 +918,7 @@ push_under_n:
 .Ls_seen: .asciz " seen="
 .Ls_timeout: .asciz " timeout="
 .Ls_verbs: .asciz " verbs="
+.Ls_waiting: .asciz " waiting="
 .Ls_y: .asciz " y="
 .Ls_blink: .asciz " blink="
 .Ls_dash: .asciz "-"

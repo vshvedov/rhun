@@ -78,7 +78,8 @@ initialize's perTaskStopAffordance and forwardNestedSubagentToolCalls are logged
 --include-hook-events is taken. FAKE_CLAUDE_TASKS (the task tools in place of TodoWrite); FAKE_CLAUDE_HOOKS
 (comma-separated: start, prompt, block, stop, post; see HOOKS_ON); FAKE_CLAUDE_BG_MS (how long `bg` runs
 before it ends, default 3000); FAKE_CLAUDE_PRESERVED (/compact sends the last assistant record again, as
-20-compact recorded). Task 5: `linger [S]` (a turn that works S seconds); FAKE_CLAUDE_HOOK_MS (a hook's
+20-compact recorded). Task 5: `linger [S]` (a turn that works S seconds), `asklinger [S]` (a call
+that asks, then S seconds of work), `pause [S]` (a reply whole only S seconds after its text streamed); FAKE_CLAUDE_HOOK_MS (a hook's
 hook_response comes that long after its hook_started); FAKE_CLAUDE_COMPACT_MS (how long /compact's compacting
 status lasts, default 200).
 FAKE_CLAUDE_ECHO_ENV (comma-separated names whose values the log's start record shows, besides
@@ -3219,7 +3220,32 @@ def s_linger(prompt):
         final('ok: ' + prompt)
 
 
-SCENARIOS.update({'linger': s_linger})
+def s_asklinger(prompt):
+    """asklinger [S]: a Bash call that asks first (a card waits), then the turn works S seconds (default 20)"""
+    if not bash('touch spin.txt'):
+        return
+    s_linger('linger ' + (prompt.split()[1] if len(prompt.split()) > 1 else '20'))
+
+
+def s_pause(prompt):
+    """pause [S]: a reply whose text has all streamed but whose message is whole only S seconds later (its
+    assistant record, the block's stop and message_stop then; default 3)"""
+    words = prompt.split()
+    seconds = float(words[1]) if len(words) > 1 else 3.0
+    mid = message_start()
+    stream_event({'type': 'content_block_start', 'index': 0, 'content_block': {'type': 'text', 'text': ''}})
+    sent = ''
+    for piece in ('A reply that ', 'waits before ', 'it is whole.'):
+        stream_event({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'text_delta', 'text': piece}})
+        sent += piece
+    time.sleep(seconds)
+    assistant(mid, {'type': 'text', 'text': sent})
+    stream_event({'type': 'content_block_stop', 'index': 0})
+    message_end()
+    result(sent)
+
+
+SCENARIOS.update({'linger': s_linger, 'asklinger': s_asklinger, 'pause': s_pause})
 
 
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already

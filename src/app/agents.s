@@ -6465,7 +6465,8 @@ msg_height:
 # ---- times on rows (UI 3.18, 3.19: LRe @5641013, zg @5948148) ----
 
 # stamp_kind(AM*) -> eax where its time shows with [agents] timestamps: 0 nowhere, 1 a prompt's line of its
-#   own above it, 2 the right end of a reply's label line (a reply that does not follow a reply)
+#   own above it, 2 the right end of a reply's label line (a reply that does not follow a reply, once its
+#   message is whole: not while the stream writes it, AL_row and AL_rowkey, nor while AMF_LIVE)
 stamp_kind:
     xor eax, eax
     cmp dword ptr [rip + cfg_agents_timestamps], 0
@@ -6488,15 +6489,36 @@ stamp_kind:
     jz 2f
     mov rcx, [rdx + AS_msgs + VEC_ptr]
     cmp rdi, rcx
-    jbe 2f
+    jb 2f
     mov r8, [rdx + AS_msgs + VEC_len]
     imul r8, r8, AM_SIZE
     add r8, rcx
     cmp rdi, r8
     jae 2f
+    mov r8, [rdx + AS_live]     # the row the stream still writes: its message is not whole yet (the
+    test r8, r8                 #   extension's s4: no time while partial)
+    jz 1f
+    cmp byte ptr [r8 + AL_rowkey], 0
+    je 1f
+    mov rax, rdi
+    sub rax, rcx
+    push rdx
+    xor edx, edx
+    mov r9d, AM_SIZE
+    div r9
+    pop rdx
+    cmp rax, [r8 + AL_row]
+    mov eax, 0
+    je 9f
+1:  cmp rdi, rcx                # the first row follows nothing
+    je 2f
     cmp dword ptr [rdi - AM_SIZE + AM_role], R_ASSIST
     je 9f
-2:  mov eax, 2
+2:  test dword ptr [rdi + AM_flags], AMF_LIVE
+    jnz 8f
+    mov eax, 2
+    ret
+8:  xor eax, eax
 9:  ret
 
 # row_index_id(rbx AM*, of th_as) -> eax the id of its time's tip (ID_AG_TIME + its index & 4095)

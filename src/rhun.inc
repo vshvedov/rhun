@@ -2937,10 +2937,16 @@ F AGU_cache_at, 8       # time_ms the prompt cache was last written, 0 unknown
 F AGU_cache_ttl, 8      # its lifetime in ms
 F AGU_cold, 4           # CCOLD_*
 F AGU_pad, 4
+F AGU_key, 8            # the driver's: which message the cache numbers came from (a hash), 0 none
+F AGU_asked, 8          # the driver's: time_ms its last request went out, 0 none (the cache's clock starts there)
 ENDSTRUCT AGU_SIZE
 .equ CCOLD_NONE, 0
 .equ CCOLD_EXPIRED, 1
 .equ CCOLD_COMPACTED, 2
+.equ CACHE_NONE, 0              # agent_cache_state (agentfoot.s): no clock, warm, expired, compacted away
+.equ CACHE_WARM, 1
+.equ CACHE_EXPIRED, 2
+.equ CACHE_COMPACTED, 3
 .equ BK_ERROR, 0                # the bands above the box (AL_bands, ev_band), by kind
 .equ BK_SETTINGS, 1
 .equ BK_AUTH, 2
@@ -2990,6 +2996,7 @@ F AL_usage, AGU_SIZE    # the context and cache numbers
 F AL_bands, 8*BK_COUNT      # owned cstr or 0 per band kind (BK_*)
 F AL_word, 16           # cstr: the word the box paints, "" none
 F AL_keyed, 8           # time_ms of the box's last key (the card focus rule)
+F AL_blinks, 8*BK_COUNT # owned "LABEL\0URL\0" or 0 per band kind: the band's link (ev_band_link)
 ENDSTRUCT AL_SIZE
 .equ TE_DONE, 0                 # ev_turn_end's reasons
 .equ TE_ERROR, 1

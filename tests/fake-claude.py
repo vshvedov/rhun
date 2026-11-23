@@ -1121,9 +1121,20 @@ class Phase2(Base):
                                                'cache_read_input_tokens', 'output_tokens')), 600000)
         self.assertEqual((rate['status'], rate['unifiedWindows']['five_hour']['utilization']), ('allowed_warning', 0.85))
         fake.prompt('usage')
+        message = fake.until(is_type('assistant'))['message']          # the message reports its cache too
+        self.assertEqual(message['usage']['cache_creation']['ephemeral_1h_input_tokens'], 2000)
         result = fake.until(is_type('result'))
         self.assertEqual(result['usage']['cache_creation'], {'ephemeral_1h_input_tokens': 2000,
                                                              'ephemeral_5m_input_tokens': 0})
+        for kind, status, window in (('weekly', 'allowed_warning', 'seven_day'), ('paused', 'rejected', 'five_hour'),
+                                     ('spend', 'rejected', 'overage'), ('allowed', 'allowed', 'five_hour')):
+            before = len(fake.records)
+            fake.prompt('rate ' + kind)
+            info = fake.until(is_type('rate_limit_event'))['rate_limit_info']
+            self.assertEqual((info['status'], info['rateLimitType']), (status, window), kind)
+            fake.until(is_type('result'))
+            events = [r for r in fake.records[before:] if is_type('rate_limit_event')(r)]
+            self.assertEqual(len(events), 1, kind)                  # FAKE_CLAUDE_RATE's is not sent too
         self.assertEqual(list(result['modelUsage'].values())[0]['cacheCreationEphemeral1hInputTokens'], 2000)
         fake.finish()
         unrecorded(fake, 'unavailable_models', 'auth_conflict')

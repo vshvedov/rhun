@@ -8,35 +8,45 @@
 #                                       text changes (AL_bandoff)
 #   bands_dump(sb, AS* or 0)            print-agent-bands: "band KIND lines=N close=X,Y TEXT" a line each
 #                                       (KIND error, settings, auth, rate, notice; as drawn last; a line
-#                                       break in the text as \n), then "room=R drawn=D" when one shows: the
+#                                       break in the text as \n), after it "link KIND X,Y LABEL\tURL" for a
+#                                       band with a link (ev_band_link: a line of its own under the text,
+#                                       asked before it opens), then "room=R drawn=D" when one shows: the
 #                                       room bands_h gives them at the last width, and the room drawn
 #   foot_h(AS* or 0, w) -> eax          the footer's room under the box: a row when the box's driver has
-#                                       permission modes (DRVC_MODES; 0: a built-in driver's draft), else 0
+#                                       permission modes (DRVC_MODES; 0: a built-in driver's draft), two at
+#                                       stage 2, else 0
 #   foot_draw(AS* or 0, x, y, w)        the footer row: the mode button (a dot of the mode's colour, its
 #                                       label cut with "…" to the room left; a click opens the modes
 #                                       picker; tooltip "DESCRIPTION. Click to change, or press Shift+Tab
 #                                       to cycle."), the model pill ("NAME · EFFORT · Ultracode"; title
 #                                       "Switch model (NAME)"; a click opens the models picker), then at the
-#                                       right the fast mark (a spark while fast mode is on or cooling down)
-#                                       and the command menu's button "/" (title "Show command menu (/)").
-#                                       Send keeps its place beside the box (box_fit). Short of room the
-#                                       pill and the label are cut, then the pill and the dot go (the
-#                                       footer's stages are task 8's)
+#                                       right the context pie (2.15: less than half the window left; a
+#                                       click sends /compact), the prompt cache's clock (2.17), the fast mark
+#                                       (a spark while fast mode is on or cooling down) and the command
+#                                       menu's button "/" (title "Show command menu (/)"). Send keeps its
+#                                       place beside the box (box_fit). It fits in three stages (2.23,
+#                                       layout): 0 all of it, 1 the clock goes and the label is cut, 2 the
+#                                       pill on a row of its own. A warm clock asks the panel to redraw the
+#                                       second its minutes change (agents_label_due): no timer of its own
 #   foot_ring(AS* or 0) -> eax          the box's frame colour in the current mode: a theme slot + 1 (TF_ring)
 #   foot_mode_set(AS* or 0, id) -> eax 1   a mode the user picked (the picker, agent-mode): only one the
 #                                       driver offers now (bypass only through its gate); a draft becomes its
 #                                       conversation first (nothing starts)
 #   foot_mode_cycle() -> eax 1 taken    Shift+Tab in the box: the next mode offered, wrapping
-#   foot_dump(sb)                       print-agents-foot: "mode=ID ring=N mode_at=X,Y menu_at=X,Y
-#                                       pill_at=X,Y fast_at=X,Y fast=off|on|cooldown label=LABEL\tpill=TEXT
-#                                       \ttitle=TITLE" (the open conversation's, as drawn last; at 0,0: not
-#                                       drawn), then for every panel size 8 to 32 and width 240 to 900 (step
-#                                       20) "size=S w=W h=H send_x= send_y= send_w= send_h= mode_x= mode_y=
-#                                       mode_w= mode_h= menu_x= menu_y= menu_w= menu_h= pill_x= pill_y=
-#                                       pill_w= pill_h= pill_text= fast_x= fast_y= fast_w= fast_h=
-#                                       label=SHOWN" (from the panel's left and the prompt row's top; H the
-#                                       prompt row and the footer; pill_w, fast_w 0: not shown; pill_text the
-#                                       width of its text as shown)
+#   agent_ctx_used(AGU*) -> eax %, edx known; agent_cache_state(AGU*) -> eax CACHE_*, rdx ms (left or idle)
+#   foot_dump(sb, every)                print-agents-foot: "mode=ID ring=N mode_at=X,Y menu_at=X,Y
+#                                       pill_at=X,Y fast_at=X,Y ctx_at=X,Y cache_at=X,Y fast=off|on|cooldown
+#                                       clock=Nm|cold|- stage=N label=LABEL\tpill=TEXT\ttitle=TITLE" (the open
+#                                       conversation's, as drawn last; at 0,0: not drawn), then for every
+#                                       panel size 8 to 32 and width 240 to 900 (step 20) "size=S w=W h=H
+#                                       send_x= send_y= send_w= send_h= mode_x= mode_y= mode_w= mode_h=
+#                                       menu_x= menu_y= menu_w= menu_h= pill_x= pill_y= pill_w= pill_h=
+#                                       pill_text= fast_x= fast_y= fast_w= fast_h= ctx_x= ctx_y= ctx_w= ctx_h=
+#                                       cache_x= cache_y= cache_w= cache_h= stage=N [combo=N] label=SHOWN
+#                                       \tpill=SHOWN" (from the panel's left and the prompt row's top; H the
+#                                       prompt row and the footer; a width 0: not shown; pill_text the
+#                                       width of its text as shown); every: those lines for each combination
+#                                       of the extras (combo bits: 1 fast, 2 the pie, 4 a warm clock)
 .include "rhun.inc"
 
 .equ BAND_LINES, 4
@@ -44,6 +54,12 @@
 .equ FOOT_MENU, 1               #   the command menu's button
 .equ FOOT_PILL, 2               #   the model pill
 .equ FOOT_FAST, 3               #   the fast mark
+.equ FOOT_CTX, 4                #   the context pie
+.equ FOOT_CACHE, 5              #   the prompt cache's clock
+.equ BAND_LINK, 8               # ID_AGBAND + BAND_LINK + kind: a band's link
+
+.data
+fl_force: .long -1              # print-agents-foot every: the extras as a mask (extras), -1 the conversation's
 
 .bss
 .p2align 3
@@ -55,6 +71,7 @@ band_w: .long 0                 # the width and the room the last draw took (ban
 band_room: .long 0
 tsb: .zero SB_SIZE              # the mode button's tooltip
 lsb: .zero SB_SIZE              # its label as shown
+lsb2: .zero SB_SIZE             # a band's link as shown
 fl_row: .long 0                 # layout(): the row's height, the mode button's x and width, whether its dot
 fl_mx: .long 0                  #   shows, the label's x and room, the menu button's x and width (from the
 fl_mw: .long 0                  #   panel's left)
@@ -67,6 +84,27 @@ fl_px: .long 0                  #   the pill's x and width (0: none), the fast m
 fl_pw: .long 0
 fl_fx: .long 0
 fl_fw: .long 0
+fl_ix: .long 0                  #   the context pie's x and width (0: none), the clock's
+fl_iw: .long 0
+fl_cx: .long 0
+fl_cw: .long 0
+fl_py: .long 0                  #   the pill's y from the footer's top (stage 2: the row under the first)
+fl_stage: .long 0               #   the stage (2.23): 0, 1, 2
+fl_hfast: .long 0               # extras(): the fast mark, the pie, the clock's state, its minutes, the share in
+fl_hctx: .long 0                #   use (percent)
+fl_cstate: .long 0
+fl_cmin: .long 0
+fl_pct: .long 0
+fd_stage: .long 0               # as drawn last: the stage, the pie's centre, the clock's, each band's link's
+fd_ctx: .long 0
+fd_ctx_y: .long 0
+fd_cache: .long 0
+fd_cache_y: .long 0
+band_lx: .zero 4 * BK_COUNT
+band_ly: .zero 4 * BK_COUNT
+.p2align 3
+fl_cms: .quad 0                 #   a warm clock's ms left, a cold one's idle ms
+csb: .zero SB_SIZE              # the clock's minutes as shown ("Nm")
 fd_mode: .long 0                # as drawn last: the buttons' centres
 fd_mode_y: .long 0
 fd_menu: .long 0
@@ -97,6 +135,18 @@ band_text:
     jnz 9f
     mov eax, esi
     mov rax, [rdi + AL_bands + rax*8]
+9:  ret
+
+# band_link(AS* or 0, kind) -> rax the band's link ("LABEL\0URL\0", ev_band_link) or 0
+band_link:
+    xor eax, eax
+    test rdi, rdi
+    jz 9f
+    mov rdi, [rdi + AS_live]
+    test rdi, rdi
+    jz 9f
+    mov eax, esi
+    mov rax, [rdi + AL_blinks + rax*8]
 9:  ret
 
 # text_w(w) -> eax the width a band's text wraps at, in a panel w wide
@@ -231,7 +281,14 @@ FN bands_h
     mov rdi, rax
     mov esi, r14d
     call band_count
-    mov edi, eax
+    mov r15d, eax
+    mov rdi, rbx                # its link: a line of its own
+    lea esi, [r12 - 1]
+    call band_link
+    test rax, rax
+    jz 2f
+    inc r15d
+2:  mov edi, r15d
     call band_h
     add r13d, eax
     add r13d, [rip + g_pmt + 4*MI_8]
@@ -271,8 +328,18 @@ FN bands_draw
     mov [rsp + 20], edx         # cut
     lea r10, [rip + band_lines]
     mov [r10 + r12*4], eax
-    mov edi, eax
-    call band_h
+    lea r10, [rip + band_lx]
+    mov dword ptr [r10 + r12*4], 0
+    lea r10, [rip + band_ly]
+    mov dword ptr [r10 + r12*4], 0
+    mov rdi, rbx
+    mov esi, r12d
+    call band_link
+    mov edi, [rsp + 16]
+    test rax, rax
+    jz 1f
+    inc edi                     # its link's line
+1:  call band_h
     mov [rsp + 24], eax         # h
     mov eax, [rsp + 4]
     add eax, [rip + g_pmt + 4*MI_8]
@@ -346,6 +413,24 @@ FN bands_draw
     inc r15d
     jmp .Lbd_line
 .Lbd_x:
+    mov rdi, rbx                # the link, on the line under the text
+    mov esi, r12d
+    call band_link
+    test rax, rax
+    jz .Lbd_close
+    mov rdi, rax
+    mov esi, [rsp]
+    add esi, [rip + g_pmt + 4*MI_12]
+    add esi, [rip + g_pmt + 4*MI_8]
+    mov rax, [rip + ag_fsmall]
+    mov edx, [rax + FACE_lineh]
+    imul edx, [rsp + 16]
+    add edx, [rsp + 4]
+    add edx, [rip + g_pmt + 4*MI_6]
+    mov ecx, r12d
+    mov r8d, [rsp + 12]
+    call link_draw
+.Lbd_close:
     PM ecx, MI_20               # the x, at the top right
     mov esi, [rsp]
     add esi, [rsp + 8]
@@ -395,6 +480,96 @@ FN bands_draw
     mov eax, [rsp + 4]
     sub eax, [rsp + 28]
     mov [rip + band_room], eax
+    EPILOGUE
+
+# link_draw(link "LABEL\0URL\0", x, y, kind, maxw): a band's link: its label in the accent colour (cut to
+#   maxw), underlined while hovered; a click asks before the URL opens, named by the conversation's driver
+#   (agents_web_link: after the frame, links_ask_open)
+link_draw:
+    PROLOGUE 32
+    mov r12, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
+    mov rdi, r12
+    mov esi, r8d
+    call cut_line_fit           # lsb2: the label as shown, eax its width
+    mov [rsp + 12], eax
+    mov edi, [rsp + 8]
+    add edi, ID_AGBAND + BAND_LINK
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, eax
+    mov rax, [rip + ag_fsmall]
+    mov r8d, [rax + FACE_lineh]
+    call ui_btn
+    mov r13d, eax
+    mov ecx, [rsp + 8]          # its centre, for the dump
+    mov eax, [rsp + 12]
+    shr eax, 1
+    add eax, [rsp]
+    lea r10, [rip + band_lx]
+    mov [r10 + rcx*4], eax
+    mov rax, [rip + ag_fsmall]
+    mov eax, [rax + FACE_lineh]
+    shr eax, 1
+    add eax, [rsp + 4]
+    lea r10, [rip + band_ly]
+    mov [r10 + rcx*4], eax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rdi + FACE_lineh]
+    mov r8, [rip + lsb2 + SB_ptr]
+    mov r9, [rip + lsb2 + SB_len]
+    COLOR eax, T_ACCENT
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    test r13d, UB_HOVER
+    jz 1f
+    mov edi, [rsp]              # underlined while hovered
+    mov rax, [rip + ag_fsmall]
+    mov esi, [rax + FACE_lineh]
+    add esi, [rsp + 4]
+    sub esi, [rip + g_pmt + 4*MI_2]
+    mov edx, [rsp + 12]
+    PM ecx, MI_1
+    COLOR r8d, T_ACCENT
+    call gfx_fill
+1:  test r13d, UB_CLICK
+    jz 9f
+    call agentext_box_owner     # the band's conversation: its driver names who asks
+    mov rdi, rax
+    lea rbx, [rip + .Lt_agent]
+    test rdi, rdi
+    jz 2f
+    call agent_drv_of
+    test rax, rax
+    jz 2f
+    mov rbx, [rax + DRV_name]
+2:  mov rdi, r12                # the URL after the label
+    call strlen
+    lea r14, [r12 + rax + 1]
+    mov rdi, r14
+    call strlen
+    mov rdx, rax
+    mov rdi, rbx
+    mov rsi, r14
+    call agents_web_link
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# cut_line_fit(cstr, maxw) -> eax its width as shown: lsb2 = the text when it fits, else cut with "…"
+cut_line_fit:
+    PROLOGUE
+    lea rdx, [rip + lsb2]
+    call cut_into
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rip + lsb2 + SB_ptr]
+    mov rdx, [rip + lsb2 + SB_len]
+    call text_width
     EPILOGUE
 
 # cut_line(ptr, maxw): bsb = as much of the text as fits at maxw with "…" after it
@@ -497,7 +672,51 @@ FN bands_dump
 4:  mov rdi, rbx
     mov esi, 10
     call sb_push_byte
-    inc r15d
+    mov rdi, r12                # "link KIND X,Y LABEL\tURL"
+    mov esi, r13d
+    call band_link
+    test rax, rax
+    jz 6f
+    mov r14, rax
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_link]
+    call sb_push_cstr
+    lea rax, [rip + band_names]
+    mov rsi, [rax + r13*8]
+    mov rdi, rbx
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, rbx
+    lea r10, [rip + band_lx]
+    mov esi, [r10 + r13*4]
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    mov rdi, rbx
+    lea r10, [rip + band_ly]
+    mov esi, [r10 + r13*4]
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, r14
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, 9
+    call sb_push_byte
+    mov rdi, r14
+    call strlen
+    lea rsi, [r14 + rax + 1]
+    mov rdi, rbx
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+6:  inc r15d
 7:  inc r13d
     jmp 1b
 9:  test r15d, r15d
@@ -579,14 +798,26 @@ row_h:
     cmovl eax, ecx
     ret
 
-# FN foot_h(AS* or 0, w) -> eax the footer's room: its row and MI_8 under it; 0 without a driver with modes
+# FN foot_h(AS* or 0, w) -> eax the footer's room: its row and MI_8 under it, and at stage 2 the pill's row
+#   and MI_4 above it; 0 without a driver with modes
 FN foot_h
     PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
     call foot_drv
     test rax, rax
     jz 9f
-    call row_h
+    mov rdi, rbx
+    mov esi, r12d
+    call layout
+    mov eax, [rip + fl_row]
     add eax, [rip + g_pmt + 4*MI_8]
+    cmp dword ptr [rip + fl_stage], 2
+    jne 9f
+    cmp dword ptr [rip + fl_pw], 0
+    je 9f
+    add eax, [rip + fl_row]
+    add eax, [rip + g_pmt + 4*MI_4]
 9:  EPILOGUE
 
 # FN foot_ring(AS* or 0) -> eax the box's frame colour in the current mode: its theme slot + 1, 0 for none
@@ -607,16 +838,20 @@ mode_label:
     mov rax, [rdi + AMD_label]
 1:  ret
 
-# layout(AS* or 0, w): the footer row's parts in fl_* (from the panel's left): the menu button square at the
-#   right end of the prompt row (where Send's right edge is); MI_8 before it the fast mark's square while fast
-#   mode is on or cooling down (when two rows' worth stays for the mode button); from the box's left the
-#   mode button: MI_6 in, its dot (MI_8) and MI_6, its
-#   label, MI_6; then, MI_4 after it, the model pill (a driver with models): MI_8 in, its text (pill_text),
-#   MI_8. Short of room for both, the mode button keeps half the room at least and the pill takes the rest,
-#   each cut with "…"; with less than two rows' worth for the pill it goes. Without room for the dot and two
-#   characters' worth of label the dot goes. lsb: the label as shown, psb2: the pill's (pill_text first)
+# layout(AS* or 0, w): the footer's parts in fl_* (from the panel's left, the footer row's top): the menu
+#   button square at the right end of the prompt row (where Send's right edge is); MI_8 before it, right to
+#   left with MI_4 between them, the fast mark's square while fast mode is on or cooling down, the prompt
+#   cache's clock (an icon, and "Nm" while it is warm), the context pie's square while less than half the
+#   window is left; from the box's left the mode button: MI_6 in, its dot (MI_8) and MI_6, its label, MI_6;
+#   then, MI_4 after it, the model pill (a driver with models): MI_8 in, its text, MI_8. The stage (2.23),
+#   measured in the panel's faces: 0 all of it at its natural width; 1 the clock goes and the mode button's
+#   label is cut to what the pill at its natural width leaves (two characters' worth at least); 2 the pill
+#   goes to a row of its own under the first (cut to that row only when even it is too narrow), the label
+#   cut to what is left. A mode button left less than the menu button's width takes the fast mark's room,
+#   then the pie's. Without room for the dot and two characters' worth of label the dot goes. lsb: the
+#   label as shown, psb2: the pill's whole text, psb3: as shown
 layout:
-    PROLOGUE 32
+    PROLOGUE 48
     mov rbx, rdi
     mov r12d, esi
     call row_h
@@ -628,35 +863,44 @@ layout:
     add r13d, [rip + g_pmt + 4*MI_12]
     sub r13d, eax
     mov [rip + fl_nx], r13d
-    sub r13d, [rip + g_pmt + 4*MI_8]
-    mov dword ptr [rip + fl_fw], 0      # the fast mark, when the mode button keeps two rows' worth
-    mov dword ptr [rip + fl_fx], 0
-    mov rdi, rbx
-    call fast_state
-    cmp eax, FS_OFF
-    je 11f
-    mov eax, [rip + fl_row]
+    mov rdi, rbx                # what comes and goes: fl_hfast, fl_hctx, fl_cstate (csb)
+    call extras
+    xor eax, eax                # the clock's width
+    cmp dword ptr [rip + fl_cstate], CACHE_NONE
+    je 1f
+    mov eax, [rip + g_pmt + 4*MI_6]
+    shl eax, 1
+    add eax, [rip + g_pmt + 4*MI_16]
+    cmp dword ptr [rip + fl_cstate], CACHE_WARM
+    jne 1f
+    mov [rsp + 40], eax
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rip + csb + SB_ptr]
+    mov rdx, [rip + csb + SB_len]
+    call text_width
+    add eax, [rsp + 40]
+    add eax, [rip + g_pmt + 4*MI_4]
+1:  mov [rip + fl_cw], eax
+    mov eax, [rip + fl_row]     # the right limit, without the clock and with it
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov [rsp + 44], eax         # an extra square and its gap
     mov ecx, r13d
+    sub ecx, [rip + g_pmt + 4*MI_8]
+    cmp dword ptr [rip + fl_hfast], 0
+    je 2f
     sub ecx, eax
+2:  cmp dword ptr [rip + fl_hctx], 0
+    je 3f
+    sub ecx, eax
+3:  mov [rsp + 24], ecx         # xr1
+    mov edx, [rip + fl_cw]
+    test edx, edx
+    jz 4f
+    sub ecx, edx
     sub ecx, [rip + g_pmt + 4*MI_4]
-    sub ecx, [rip + g_pmt + 4*MI_12]
-    mov edx, eax
-    shl edx, 1
-    cmp ecx, edx
-    jl 11f
-    sub r13d, eax
-    mov [rip + fl_fx], r13d
-    mov [rip + fl_fw], eax
-    sub r13d, [rip + g_pmt + 4*MI_4]
-11: PM r14d, MI_12              # the mode button's left
+4:  mov [rsp + 28], ecx         # xr0
+    PM r14d, MI_12              # the mode button's left
     mov [rip + fl_mx], r14d
-    sub r13d, r14d              # the room of the mode button and the pill
-    cmp r13d, 1
-    jge 1f
-    mov r13d, 1
-1:  mov [rsp + 8], r13d
-    mov dword ptr [rip + fl_pw], 0
-    mov dword ptr [rip + fl_px], 0
     mov rdi, rbx
     call foot_cur
     mov rdi, rax
@@ -669,65 +913,105 @@ layout:
     mov rsi, r15
     call text_width
     mov [rsp], eax              # the label's width
-    mov rdi, rbx                # the pill: its text's natural width, and whether it has room
+    mov ecx, [rip + g_pmt + 4*MI_6]
+    imul ecx, ecx, 3
+    add ecx, [rip + g_pmt + 4*MI_8]
+    add ecx, eax
+    mov [rsp + 12], ecx         # the mode button's natural width
+    mov dword ptr [rsp + 4], 0  # the pill's natural width (0: none)
+    mov rdi, rbx
     call pill_drv
     test rax, rax
-    jz 13f
-    mov eax, [rsp + 8]
-    shr eax, 1
-    mov ecx, [rip + fl_row]
-    shl ecx, 1
-    cmp eax, ecx
-    jl 13f
+    jz 5f
     mov rdi, [rip + ag_fsmall]
     mov rsi, [rip + psb2 + SB_ptr]
     mov rdx, [rip + psb2 + SB_len]
     call text_width
     add eax, [rip + g_pmt + 4*MI_8]
     add eax, [rip + g_pmt + 4*MI_8]
-    mov [rsp + 4], eax          # the pill's natural width
-    mov ecx, [rip + g_pmt + 4*MI_6]     # the mode button's: MI_6, the dot and MI_6, the label, MI_6
-    imul ecx, ecx, 3
-    add ecx, [rip + g_pmt + 4*MI_8]
-    add ecx, [rsp]
-    mov eax, [rsp + 8]          # its room: min(natural, max(room - MI_4 - pill, room / 2))
-    sub eax, [rip + g_pmt + 4*MI_4]
-    sub eax, [rsp + 4]
-    mov edx, [rsp + 8]
-    shr edx, 1
-    cmp eax, edx
-    cmovl eax, edx
+    mov [rsp + 4], eax
+5:  mov eax, [rsp + 12]         # all of it on the row: stage 0
+    mov ecx, [rsp + 4]
+    test ecx, ecx
+    jz 6f
+    add eax, ecx
+    add eax, [rip + g_pmt + 4*MI_4]
+6:  mov ecx, [rsp + 28]
+    sub ecx, r14d
+    mov dword ptr [rip + fl_stage], 0
+    mov r13d, [rsp + 12]
     cmp eax, ecx
-    cmovg eax, ecx
-    mov r13d, eax
-    mov dword ptr [rip + fl_pw], 1      # (placed below, after the mode button)
-13: mov ecx, [rip + g_pmt + 4*MI_6]     # the room besides the label: MI_6, the dot and MI_6, MI_6
+    jle .Lly_mode
+    mov dword ptr [rip + fl_cw], 0      # the clock goes
+    mov dword ptr [rip + fl_stage], 1
+    mov ecx, [rsp + 24]
+    sub ecx, r14d               # room1
+    mov eax, [rsp + 4]
+    test eax, eax
+    jz 7f
+    mov edx, ecx                # the pill at its natural width, the label cut to what it leaves
+    sub edx, eax
+    sub edx, [rip + g_pmt + 4*MI_4]
+    mov eax, [rip + g_pmt + 4*MI_6]
+    imul eax, eax, 3
+    add eax, [rip + g_pmt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_16]
+    cmp edx, eax
+    jl 8f
+    mov ecx, edx
+    jmp 7f
+8:  mov dword ptr [rip + fl_stage], 2   # too little: the pill on a row of its own
+7:  cmp r13d, ecx
+    cmovg r13d, ecx
+    cmp r13d, [rip + fl_row]    # still less than the menu button: the fast mark's room, then the pie's
+    jge .Lly_mode
+    cmp dword ptr [rip + fl_hfast], 0
+    je 9f
+    mov dword ptr [rip + fl_hfast], 0
+    add ecx, [rsp + 44]
+    mov r13d, [rsp + 12]
+    cmp r13d, ecx
+    cmovg r13d, ecx
+    cmp r13d, [rip + fl_row]
+    jge .Lly_mode
+9:  cmp dword ptr [rip + fl_hctx], 0
+    je .Lly_mode
+    mov dword ptr [rip + fl_hctx], 0
+    add ecx, [rsp + 44]
+    mov r13d, [rsp + 12]
+    cmp r13d, ecx
+    cmovg r13d, ecx
+.Lly_mode:
+    cmp r13d, 1
+    jge 10f
+    mov r13d, 1
+10: mov ecx, [rip + g_pmt + 4*MI_6]     # the room besides the label: MI_6, the dot and MI_6, MI_6
     imul ecx, ecx, 3
     add ecx, [rip + g_pmt + 4*MI_8]
     mov dword ptr [rip + fl_dot], 1
     mov eax, r13d
     sub eax, ecx
     cmp eax, [rip + g_pmt + 4*MI_16]    # the dot keeps two characters' worth of label at least
-    jge 2f
+    jge 11f
     mov eax, [rsp]
     add eax, ecx
     cmp eax, r13d               # or the whole label beside it
-    jle 2f
+    jle 11f
     mov dword ptr [rip + fl_dot], 0
     mov ecx, [rip + g_pmt + 4*MI_6]
     shl ecx, 1
-2:  mov eax, [rip + g_pmt + 4*MI_6]  # the label's x
+11: mov eax, [rip + g_pmt + 4*MI_6]  # the label's x
     cmp dword ptr [rip + fl_dot], 0
-    je 3f
+    je 12f
     add eax, [rip + g_pmt + 4*MI_8]
     add eax, [rip + g_pmt + 4*MI_6]
-3:  add eax, r14d
+12: add eax, r14d
     mov [rip + fl_lx], eax
     mov eax, r13d               # the label's room, and the button's width
     sub eax, ecx
-    jns 4f
+    jns 13f
     xor eax, eax
-4:  mov edx, [rsp]
+13: mov edx, [rsp]
     cmp edx, eax
     cmovl eax, edx
     mov [rip + fl_lw], eax
@@ -738,29 +1022,198 @@ layout:
     mov rdi, r15                # lsb: what shows of the label
     mov esi, [rip + fl_lw]
     call label_cut
-    cmp dword ptr [rip + fl_pw], 0
-    je 9f
-    mov eax, [rip + fl_mx]      # the pill: after the mode button, what the room leaves (its natural width
-    add eax, [rip + fl_mw]      #   at most), its text cut to it
+    mov dword ptr [rip + fl_pw], 0      # the pill: after the mode button, or on the row under it
+    mov dword ptr [rip + fl_px], 0
+    mov dword ptr [rip + fl_py], 0
+    mov ecx, [rsp + 4]
+    test ecx, ecx
+    jz .Lly_right
+    mov eax, [rip + fl_mx]
+    add eax, [rip + fl_mw]
     add eax, [rip + g_pmt + 4*MI_4]
-    mov [rip + fl_px], eax
-    mov ecx, [rsp + 8]
-    sub ecx, [rip + fl_mw]
-    sub ecx, [rip + g_pmt + 4*MI_4]
-    mov edx, [rsp + 4]
+    cmp dword ptr [rip + fl_stage], 2
+    jne 14f
+    mov eax, [rip + fl_row]
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov [rip + fl_py], eax
+    mov eax, r14d
+    mov edx, [rip + fl_nx]      # that row ends where the menu button does
+    add edx, [rip + fl_nw]
+    sub edx, eax
     cmp ecx, edx
     cmovg ecx, edx
+14: mov [rip + fl_px], eax
     mov [rip + fl_pw], ecx
     sub ecx, [rip + g_pmt + 4*MI_8]
     sub ecx, [rip + g_pmt + 4*MI_8]
-    jg 5f
+    jg 15f
     mov dword ptr [rip + fl_pw], 0
     mov dword ptr [rip + fl_px], 0
-    jmp 9f
-5:  mov rdi, [rip + psb2 + SB_ptr]
+    mov dword ptr [rip + fl_py], 0
+    jmp .Lly_right
+15: mov rdi, [rip + psb2 + SB_ptr]
     mov esi, ecx
     call label_cut2
+.Lly_right:                     # right to left from the menu button
+    mov ecx, [rip + fl_nx]
+    sub ecx, [rip + g_pmt + 4*MI_8]
+    mov edx, [rip + fl_row]
+    xor eax, eax
+    mov [rip + fl_fx], eax
+    mov [rip + fl_fw], eax
+    mov [rip + fl_ix], eax
+    mov [rip + fl_iw], eax
+    mov [rip + fl_cx], eax
+    cmp dword ptr [rip + fl_hfast], 0
+    je 16f
+    sub ecx, edx
+    mov [rip + fl_fx], ecx
+    mov [rip + fl_fw], edx
+    sub ecx, [rip + g_pmt + 4*MI_4]
+16: mov eax, [rip + fl_cw]
+    test eax, eax
+    jz 17f
+    sub ecx, eax
+    mov [rip + fl_cx], ecx
+    sub ecx, [rip + g_pmt + 4*MI_4]
+17: cmp dword ptr [rip + fl_hctx], 0
+    je 18f
+    sub ecx, edx
+    mov [rip + fl_ix], ecx
+    mov [rip + fl_iw], edx
+18: EPILOGUE
+
+# extras(AS* or 0): fl_hfast (fast mode on or cooling down), fl_hctx (the pie: less than half the window
+#   left), fl_cstate (CACHE_*) and fl_cmin (a warm cache's minutes left; csb "Nm"), fl_cms (its ms left),
+#   fl_pct (the share in use, in percent), from the conversation's live record; fl_force (print-agents-foot
+#   every) puts each of them in its stead: bit 1 the fast mark, 2 the pie at 60 %, 4 a warm clock of 60m
+extras:
+    PROLOGUE
+    mov rbx, rdi
+    xor eax, eax
+    mov [rip + fl_hfast], eax
+    mov [rip + fl_hctx], eax
+    mov [rip + fl_cstate], eax
+    mov [rip + fl_pct], eax
+    lea rdi, [rip + csb]
+    call sb_clear
+    mov eax, [rip + fl_force]
+    test eax, eax
+    js 1f
+    mov ecx, eax
+    and ecx, 1
+    mov [rip + fl_hfast], ecx
+    mov ecx, eax
+    shr ecx, 1
+    and ecx, 1
+    mov [rip + fl_hctx], ecx
+    mov dword ptr [rip + fl_pct], 60
+    test eax, 4
+    jz 9f
+    mov dword ptr [rip + fl_cstate], CACHE_WARM
+    mov eax, 60
+    mov rdx, 3600000
+    jmp 5f
+1:  test rbx, rbx
+    jz 9f
+    mov r12, [rbx + AS_live]
+    test r12, r12
+    jz 9f
+    cmp dword ptr [r12 + AL_fast], FS_OFF
+    setne al
+    movzx eax, al
+    mov [rip + fl_hfast], eax
+    lea rdi, [r12 + AL_usage]
+    call agent_ctx_used
+    test edx, edx
+    jz 2f
+    mov [rip + fl_pct], eax
+    mov rax, [r12 + AL_usage + AGU_used]    # less than half left: used more than half
+    shl rax, 1
+    cmp rax, [r12 + AL_usage + AGU_window]
+    seta al
+    movzx eax, al
+    mov [rip + fl_hctx], eax
+2:  lea rdi, [r12 + AL_usage]
+    call agent_cache_state
+    mov [rip + fl_cstate], eax
+    mov [rip + fl_cms], rdx
+    cmp eax, CACHE_WARM
+    jne 9f
+    lea rax, [rdx + 59999]      # minutes left, rounded up
+    mov r13, rdx
+    xor edx, edx
+    mov ecx, 60000
+    div rcx
+    mov rdx, r13
+5:  mov [rip + fl_cmin], eax
+    mov [rip + fl_cms], rdx
+    lea rdi, [rip + csb]
+    mov esi, eax
+    call sb_push_u64
+    lea rdi, [rip + csb]
+    mov esi, 'm'
+    call sb_push_byte
 9:  EPILOGUE
+
+# FN agent_ctx_used(AGU*) -> eax the share of the context window in use, in percent (rounded, 100 at most),
+#   edx 1 when the window is known
+FN agent_ctx_used
+    xor eax, eax
+    xor edx, edx
+    mov rcx, [rdi + AGU_window]
+    test rcx, rcx
+    jz 9f
+    mov rax, [rdi + AGU_used]
+    cmp rax, rcx
+    jae 1f
+    imul rax, rax, 100
+    mov r8, rcx
+    shr r8, 1
+    add rax, r8
+    xor edx, edx
+    div rcx
+    mov edx, 1
+    ret
+1:  mov eax, 100
+    mov edx, 1
+9:  ret
+
+# FN agent_cache_state(AGU*) -> eax CACHE_NONE (no clock: no cache written or its lifetime unknown),
+#   CACHE_WARM (rdx the ms left, the lifetime at most), CACHE_EXPIRED (rdx idle ms), CACHE_COMPACTED (the
+#   conversation was compacted since: rdx idle ms) (the extension's lj, index.js @3601560)
+FN agent_cache_state
+    push rbx
+    mov rbx, rdi
+    call time_ms
+    mov rcx, rax
+    mov rdx, rcx
+    sub rdx, [rbx + AGU_cache_at]
+    cmp dword ptr [rbx + AGU_cold], CCOLD_COMPACTED
+    jne 1f
+    mov eax, CACHE_COMPACTED
+    pop rbx
+    ret
+1:  xor eax, eax
+    cmp qword ptr [rbx + AGU_cache_at], 0
+    je 9f
+    mov r8, [rbx + AGU_cache_ttl]
+    test r8, r8
+    jz 9f
+    mov rax, [rbx + AGU_cache_at]
+    add rax, r8
+    sub rax, rcx                # ms left
+    cmp rax, r8
+    cmovg rax, r8
+    test rax, rax
+    jle 2f
+    mov rdx, rax
+    mov eax, CACHE_WARM
+    pop rbx
+    ret
+2:  mov eax, CACHE_EXPIRED     # rdx: idle since it was written
+9:  pop rbx
+    ret
 
 # label_cut(cstr, maxw): lsb = the text when it fits in maxw (the small face), else as much as fits with "…"
 #   after it, nothing when not even "…" does
@@ -905,6 +1358,8 @@ FN foot_draw
     mov rdi, rbx
     mov esi, [rsp + 8]
     call layout
+    mov eax, [rip + fl_stage]
+    mov [rip + fd_stage], eax
     mov rdi, rbx
     call foot_cur
     mov r15, rax                # the current mode, or 0
@@ -1000,6 +1455,14 @@ FN foot_draw
     mov esi, [rsp]
     mov edx, [rsp + 4]
     call fast_draw
+    mov rdi, rbx                # the context pie
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    call ctx_draw
+    mov rdi, rbx                # the prompt cache's clock
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    call clock_draw
     # the command menu's button
     mov r12d, [rsp]
     add r12d, [rip + fl_nx]
@@ -1058,6 +1521,7 @@ pill_draw:
     PROLOGUE 16
     mov rbx, rdi
     mov [rsp], esi
+    add edx, [rip + fl_py]      # stage 2: on the row under the first
     mov [rsp + 4], edx
     mov dword ptr [rip + fd_pill], 0
     mov dword ptr [rip + fd_pill_y], 0
@@ -1202,6 +1666,371 @@ fast_draw:
     call tip_note_text
 9:  EPILOGUE
 
+# ctx_draw(AS* or 0, x, y): the context pie where layout put it (none: fl_iw 0): the share in use as a
+#   filled part of a disc; tooltip "N% of context remaining until auto-compact. Click to compact now."
+#   (webview index.js @5787140 kFt); a click sends "/compact" as a prompt (held while a turn runs)
+ctx_draw:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov dword ptr [rip + fd_ctx], 0
+    mov dword ptr [rip + fd_ctx_y], 0
+    cmp dword ptr [rip + fl_iw], 0
+    je 9f
+    mov r12d, [rsp]
+    add r12d, [rip + fl_ix]
+    mov edi, ID_AGFOOT + FOOT_CTX
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    mov ecx, [rip + fl_iw]
+    mov r8d, [rip + fl_row]
+    call ui_btn
+    mov r13d, eax
+    mov ecx, [rip + fl_iw]
+    shr ecx, 1
+    lea eax, [r12 + rcx]
+    mov [rip + fd_ctx], eax
+    mov eax, [rip + fl_row]
+    shr eax, 1
+    add eax, [rsp + 4]
+    mov [rip + fd_ctx_y], eax
+    xor eax, eax
+    test r13d, UB_HOVER
+    setnz al
+    mov edi, r12d
+    mov esi, [rsp + 4]
+    mov edx, [rip + fl_iw]
+    call hover_draw
+    PM ecx, MI_16               # the disc
+    mov edi, [rip + fl_iw]
+    sub edi, ecx
+    sar edi, 1
+    add edi, r12d
+    mov esi, [rip + fl_row]
+    sub esi, ecx
+    sar esi, 1
+    add esi, [rsp + 4]
+    mov edx, ecx
+    mov ecx, [rip + fl_pct]
+    call pie_draw
+    lea rdi, [rip + tsb]        # its tooltip
+    call sb_clear
+    lea rdi, [rip + tsb]
+    mov esi, 100
+    sub esi, [rip + fl_pct]
+    call sb_push_u64
+    lea rdi, [rip + tsb]
+    lea rsi, [rip + .Lt_ctx]
+    call sb_push_cstr
+    lea rdi, [rip + tsb]
+    xor esi, esi
+    call sb_push_byte
+    mov edi, ID_AGFOOT + FOOT_CTX
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    add edx, [rip + fl_row]
+    mov ecx, [rip + fl_iw]
+    mov r8d, r13d
+    mov r9, [rip + tsb + SB_ptr]
+    call tip_note_text
+    test r13d, UB_CLICK
+    jz 9f
+    test rbx, rbx
+    jz 9f
+    mov rdi, rbx                # compact now: a prompt, as if typed
+    lea rsi, [rip + .Lv_compact]
+    mov edx, 8
+    call agent_send
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# pie_draw(x, y, d, percent): a disc d wide at x, y: the part in use from 12 o'clock clockwise in the warning
+#   colour, the rest muted
+pie_draw:
+    PROLOGUE 32
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov r12d, edx               # d
+    mov r13d, ecx
+    cmp r13d, 100
+    jbe 1f
+    mov r13d, 100
+1:  mov r14d, r12d              # (2r)^2, in half pixels
+    imul r14d, r12d
+    lea rax, [rip + pie_dirs]
+    movsx ecx, word ptr [rax + r13*4]
+    mov [rsp + 8], ecx          # the boundary: sin, cos (x 1024)
+    movsx ecx, word ptr [rax + r13*4 + 2]
+    mov [rsp + 12], ecx
+    xor r15d, r15d              # row
+2:  cmp r15d, r12d
+    jae 9f
+    xor ebx, ebx                # column
+3:  cmp ebx, r12d
+    jae 8f
+    lea eax, [rbx + rbx]        # dx, dy in half pixels from the centre (y up)
+    sub eax, r12d
+    inc eax
+    mov [rsp + 16], eax
+    lea ecx, [r15 + r15]
+    sub ecx, r12d
+    inc ecx
+    neg ecx
+    mov [rsp + 20], ecx
+    imul eax, eax
+    imul ecx, ecx
+    add eax, ecx
+    cmp eax, r14d
+    jg 7f                       # outside the disc
+    mov ecx, r12d               # its rim, half covered
+    dec ecx
+    imul ecx, ecx
+    mov edx, 255
+    cmp eax, ecx
+    jle 4f
+    mov edx, 128
+4:  mov [rsp + 24], edx
+    mov edi, [rsp + 16]
+    mov esi, [rsp + 20]
+    mov edx, r13d
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 12]
+    call in_part
+    mov edi, [rsp]
+    add edi, ebx
+    mov esi, [rsp + 4]
+    add esi, r15d
+    test eax, eax
+    jz 5f
+    COLOR edx, T_WARNING
+    mov ecx, [rsp + 24]
+    call gfx_blend_px
+    jmp 7f
+5:  COLOR edx, T_MUTED
+    mov ecx, [rsp + 24]
+    shr ecx, 2
+    call gfx_blend_px
+7:  inc ebx
+    jmp 3b
+8:  inc r15d
+    jmp 2b
+9:  EPILOGUE
+
+# in_part(dx, dy (y up), percent, sin, cos of the boundary x 1024) -> eax 1 when the point's angle from 12
+#   o'clock, clockwise, is under the percent's
+in_part:
+    xor eax, eax
+    test edx, edx
+    jz 9f
+    mov eax, 1
+    cmp edx, 100
+    jae 9f
+    xor r9d, r9d                # its half: 0 the right one (from 12 to 6 o'clock), 1 the left
+    test edi, edi
+    jg 1f
+    jl 2f
+    test esi, esi
+    jg 1f
+2:  mov r9d, 1
+1:  xor r10d, r10d
+    cmp edx, 50
+    jb 3f
+    mov r10d, 1
+3:  cmp r9d, r10d
+    je 4f
+    setb al                     # different halves: in it when the point's comes first
+    movzx eax, al
+    ret
+4:  imul edi, r8d               # the same half: dx cos - dy sin < 0
+    imul esi, ecx
+    sub edi, esi
+    xor eax, eax
+    test edi, edi
+    sets al
+9:  ret
+
+# clock_draw(AS* or 0, x, y): the prompt cache's clock where layout put it (none: fl_cw 0): an icon and "Nm"
+#   while warm, the icon dimmed once cold; tooltip "Prompt cache warm, about N min left.", "Prompt cache
+#   likely expired (idle 5m).", "Prompt cache does not cover the compacted conversation." (webview index.js
+#   @3601560 HUe, BUe). While warm the panel redraws it the second its minutes change (agents_label_due):
+#   no timer of its own, none at all once it is not drawn
+clock_draw:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov dword ptr [rip + fd_cache], 0
+    mov dword ptr [rip + fd_cache_y], 0
+    cmp dword ptr [rip + fl_cw], 0
+    je 9f
+    mov r12d, [rsp]
+    add r12d, [rip + fl_cx]
+    mov edi, ID_AGFOOT + FOOT_CACHE
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    mov ecx, [rip + fl_cw]
+    mov r8d, [rip + fl_row]
+    call ui_btn
+    mov r13d, eax
+    mov ecx, [rip + fl_cw]
+    shr ecx, 1
+    lea eax, [r12 + rcx]
+    mov [rip + fd_cache], eax
+    mov eax, [rip + fl_row]
+    shr eax, 1
+    add eax, [rsp + 4]
+    mov [rip + fd_cache_y], eax
+    COLOR r14d, T_MUTED
+    cmp dword ptr [rip + fl_cstate], CACHE_WARM
+    je 1f
+    COLOR edi, T_PANEL
+    mov esi, r14d
+    mov edx, 55
+    call color_mix
+    mov r14d, eax
+1:  PM ecx, MI_16
+    mov esi, r12d
+    add esi, [rip + g_pmt + 4*MI_6]
+    mov edx, [rip + fl_row]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 4]
+    mov edi, IC_F_CLOCK
+    mov r8d, r14d
+    call icon_draw
+    cmp dword ptr [rip + fl_cstate], CACHE_WARM
+    jne 2f
+    mov rdi, [rip + ag_fsmall]  # its minutes
+    mov esi, r12d
+    add esi, [rip + g_pmt + 4*MI_6]
+    add esi, [rip + g_pmt + 4*MI_16]
+    add esi, [rip + g_pmt + 4*MI_4]
+    mov edx, [rsp + 4]
+    mov ecx, [rip + fl_row]
+    mov r8, [rip + csb + SB_ptr]
+    mov r9, [rip + csb + SB_len]
+    push r14
+    push r14
+    call ui_text_v
+    add rsp, 16
+    cmp dword ptr [rip + fl_force], 0
+    jge 2f
+    mov eax, [rip + fl_cmin]    # the second its minutes change: ms left past the minute below
+    dec eax
+    imul rax, rax, 60000
+    mov rcx, [rip + fl_cms]
+    sub rcx, rax
+    add rcx, 999
+    mov rax, rcx
+    xor edx, edx
+    mov ecx, 1000
+    div rcx
+    mov r15, rax
+    call time_now
+    lea rdi, [rax + r15]
+    call agents_label_due
+2:  call clock_tip
+    mov edi, ID_AGFOOT + FOOT_CACHE
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    add edx, [rip + fl_row]
+    mov ecx, [rip + fl_cw]
+    mov r8d, r13d
+    mov r9, [rip + tsb + SB_ptr]
+    call tip_note_text
+9:  EPILOGUE
+
+# clock_tip(): tsb = the clock's tooltip in its state (fl_cstate, fl_cmin, fl_cms)
+clock_tip:
+    PROLOGUE
+    lea rdi, [rip + tsb]
+    call sb_clear
+    mov eax, [rip + fl_cstate]
+    cmp eax, CACHE_WARM
+    jne 1f
+    lea rdi, [rip + tsb]
+    lea rsi, [rip + .Lt_warm]
+    call sb_push_cstr
+    lea rdi, [rip + tsb]
+    mov esi, [rip + fl_cmin]
+    call sb_push_u64
+    lea rsi, [rip + .Lt_warm_tail]
+    jmp 8f
+1:  lea rsi, [rip + .Lt_compacted]
+    cmp eax, CACHE_COMPACTED
+    je 8f
+    lea rdi, [rip + tsb]
+    lea rsi, [rip + .Lt_expired]
+    call sb_push_cstr
+    mov rdi, [rip + fl_cms]     # BUe: "Nm", "Nh Nm", "Nd Nh"
+    lea rsi, [rip + tsb]
+    call idle_words
+    lea rsi, [rip + .Lt_expired_tail]
+8:  lea rdi, [rip + tsb]
+    call sb_push_cstr
+    lea rdi, [rip + tsb]
+    xor esi, esi
+    call sb_push_byte
+    EPILOGUE
+
+# idle_words(ms, sb): "5m" under an hour, "2h 5m" under a day, else "3d 2h"
+idle_words:
+    PROLOGUE
+    mov r12, rsi
+    mov rax, rdi
+    test rax, rax
+    jns 1f
+    xor eax, eax
+1:  xor edx, edx
+    mov ecx, 60000
+    div rcx
+    mov rbx, rax                # minutes
+    cmp rbx, 60
+    jae 2f
+    mov rdi, r12
+    mov rsi, rbx
+    call sb_push_u64
+    mov esi, 'm'
+    jmp 8f
+2:  mov rax, rbx
+    xor edx, edx
+    mov ecx, 60
+    div rcx
+    mov r13, rax                # hours
+    mov r14, rdx
+    cmp r13, 24
+    jae 3f
+    mov rdi, r12
+    mov rsi, r13
+    call sb_push_u64
+    lea rsi, [rip + .Lt_h_sp]
+    mov rdi, r12
+    call sb_push_cstr
+    mov rdi, r12
+    mov rsi, r14
+    call sb_push_u64
+    mov esi, 'm'
+    jmp 8f
+3:  mov rax, r13
+    xor edx, edx
+    mov ecx, 24
+    div rcx
+    mov r14, rdx
+    mov rdi, r12
+    mov rsi, rax
+    call sb_push_u64
+    lea rsi, [rip + .Lt_d_sp]
+    mov rdi, r12
+    call sb_push_cstr
+    mov rdi, r12
+    mov rsi, r14
+    call sb_push_u64
+    mov esi, 'h'
+8:  mov rdi, r12
+    call sb_push_byte
+    EPILOGUE
+
 # hover_bg(popup kind, ub) -> eax 1 when the button is drawn lit: hovered, or its popup is open (the button
 #   menu for APP_MENU)
 hover_bg:
@@ -1331,10 +2160,13 @@ FN foot_mode_cycle
 9:  mov eax, r15d
     EPILOGUE
 
-# FN foot_dump(sb): print-agents-foot (see the top of the file); the setting is the user's again after it
+# FN foot_dump(sb, esi every): print-agents-foot (see the top of the file); the setting is the user's again
+#   after it. every: the layout lines once for each combination of the extras (combo= bits: 1 the fast mark,
+#   2 the context pie, 4 a warm cache clock of "60m"), the conversation's own ones not looked at
 FN foot_dump
     PROLOGUE 48
     mov rbx, rdi
+    mov [rsp + 36], esi
     call agentext_box_owner     # the box's conversation (0: its draft)
     mov r15, rax
     mov rdi, rax
@@ -1374,6 +2206,14 @@ FN foot_dump
     lea rdx, [rip + fd_fast]
     call put_at
     mov rdi, rbx
+    lea rsi, [rip + .Ld_ctx_at]
+    lea rdx, [rip + fd_ctx]
+    call put_at
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_cache_at]
+    lea rdx, [rip + fd_cache]
+    call put_at
+    mov rdi, rbx
     lea rsi, [rip + .Ld_fast]
     call sb_push_cstr
     mov rdi, r15
@@ -1385,7 +2225,29 @@ FN foot_dump
     mov rsi, [rcx + rax*8]
     mov rdi, rbx
     call sb_push_cstr
+    mov rdi, rbx                # the clock as it would show now: "Nm", cold, or none
+    lea rsi, [rip + .Ld_clock]
+    call sb_push_cstr
+    mov rdi, r15
+    call extras
+    mov eax, [rip + fl_cstate]
+    cmp eax, CACHE_WARM
+    jne 21f
     mov rdi, rbx
+    mov rsi, [rip + csb + SB_ptr]
+    mov rdx, [rip + csb + SB_len]
+    call sb_push
+    jmp 23f
+21: lea rsi, [rip + .Ld_dash]
+    cmp eax, CACHE_NONE
+    je 22f
+    lea rsi, [rip + .Ld_cold]
+22: mov rdi, rbx
+    call sb_push_cstr
+23: mov rdi, rbx
+    lea rsi, [rip + .Ld_stage]
+    mov edx, [rip + fd_stage]
+    call put_num
     lea rsi, [rip + .Ld_label]
     call sb_push_cstr
     mov rdi, r12
@@ -1414,10 +2276,15 @@ FN foot_dump
     call sb_push_byte
     mov eax, [rip + cfg_agents_font_size]
     mov [rsp], eax
+    mov dword ptr [rsp + 40], 0 # the combination
+    cmp dword ptr [rsp + 36], 0
+    je .Lfd_combo
+    mov dword ptr [rip + fl_force], 0
+.Lfd_combo:
     mov dword ptr [rsp + 4], 8  # size
 .Lfd_size:
     cmp dword ptr [rsp + 4], 32
-    ja .Lfd_done
+    ja .Lfd_next_combo
     mov eax, [rsp + 4]
     mov [rip + cfg_agents_font_size], eax
     call agents_metrics
@@ -1492,6 +2359,7 @@ FN foot_dump
     call put_num
     lea rsi, [rip + .Ld_pill_y]
     mov edx, [rsp + 28]
+    add edx, [rip + fl_py]
     call put_num
     lea rsi, [rip + .Ld_pill_w]
     mov edx, [rip + fl_pw]
@@ -1522,14 +2390,54 @@ FN foot_dump
     lea rsi, [rip + .Ld_fast_h]
     mov edx, [rip + fl_row]
     call put_num
-    mov rdi, rbx
-    lea rsi, [rip + .Ld_label]
+    lea rsi, [rip + .Ld_ctx_x]
+    mov edx, [rip + fl_ix]
+    call put_num
+    lea rsi, [rip + .Ld_ctx_y]
+    mov edx, [rsp + 28]
+    call put_num
+    lea rsi, [rip + .Ld_ctx_w]
+    mov edx, [rip + fl_iw]
+    call put_num
+    lea rsi, [rip + .Ld_ctx_h]
+    mov edx, [rip + fl_row]
+    call put_num
+    lea rsi, [rip + .Ld_cache_x]
+    mov edx, [rip + fl_cx]
+    call put_num
+    lea rsi, [rip + .Ld_cache_y]
+    mov edx, [rsp + 28]
+    call put_num
+    lea rsi, [rip + .Ld_cache_w]
+    mov edx, [rip + fl_cw]
+    call put_num
+    lea rsi, [rip + .Ld_cache_h]
+    mov edx, [rip + fl_row]
+    call put_num
+    lea rsi, [rip + .Ld_stage]
+    mov edx, [rip + fl_stage]
+    call put_num
+    cmp dword ptr [rsp + 36], 0
+    je 4f
+    lea rsi, [rip + .Ld_combo]
+    mov edx, [rsp + 40]
+    call put_num
+4:  lea rsi, [rip + .Ld_label]
     call sb_push_cstr
     mov rdi, rbx
     mov rsi, [rip + lsb + SB_ptr]
     mov rdx, [rip + lsb + SB_len]
     call sb_push
     mov rdi, rbx
+    lea rsi, [rip + .Ld_pill_shown]
+    call sb_push_cstr
+    cmp dword ptr [rip + fl_pw], 0
+    je 5f
+    mov rdi, rbx
+    mov rsi, [rip + psb3 + SB_ptr]
+    mov rdx, [rip + psb3 + SB_len]
+    call sb_push
+5:  mov rdi, rbx
     mov esi, 10
     call sb_push_byte
     add dword ptr [rsp + 8], 20
@@ -1537,7 +2445,17 @@ FN foot_dump
 .Lfd_next:
     inc dword ptr [rsp + 4]
     jmp .Lfd_size
+.Lfd_next_combo:
+    cmp dword ptr [rsp + 36], 0
+    je .Lfd_done
+    inc dword ptr [rsp + 40]
+    mov eax, [rsp + 40]
+    cmp eax, 8
+    jae .Lfd_done
+    mov [rip + fl_force], eax
+    jmp .Lfd_combo
 .Lfd_done:
+    mov dword ptr [rip + fl_force], -1
     mov eax, [rsp]
     mov [rip + cfg_agents_font_size], eax
     call agents_metrics
@@ -1594,6 +2512,8 @@ band_tips: .quad .Lt_error, .Lt_warning, .Lt_warning, .Lt_warning, .Lt_notice
 .Ld_lines: .asciz " lines="
 .Ld_close: .asciz " close="
 .Ld_room: .asciz "room="
+.Ld_link: .asciz "link "
+.Lt_agent: .asciz "The agent"
 .Ld_drawn: .asciz " drawn="
 .Lellipsis: .ascii "\342\200\246"
 .Lmode: .asciz "Mode"
@@ -1606,6 +2526,15 @@ band_tips: .quad .Lt_error, .Lt_warning, .Lt_warning, .Lt_warning, .Lt_notice
 .Lultra: .asciz " \302\267 Ultracode"
 .Lt_pill: .asciz "Switch model"
 .Lt_open: .asciz " ("
+.Lt_ctx: .asciz "% of context remaining until auto-compact. Click to compact now."
+.Lv_compact: .asciz "/compact"
+.Lt_warm: .asciz "Prompt cache warm, about "
+.Lt_warm_tail: .asciz " min left."
+.Lt_expired: .asciz "Prompt cache likely expired (idle "
+.Lt_expired_tail: .asciz ")."
+.Lt_compacted: .asciz "Prompt cache does not cover the compacted conversation."
+.Lt_h_sp: .asciz "h "
+.Lt_d_sp: .asciz "d "
 .Lt_fast_on: .asciz "Fast mode enabled"
 .Lt_fast_cool: .asciz "Fast mode cooling down"
 .Ld_mode: .asciz "mode="
@@ -1632,6 +2561,21 @@ band_tips: .quad .Lt_error, .Lt_warning, .Lt_warning, .Lt_warning, .Lt_notice
 .Ld_pill_at: .asciz " pill_at="
 .Ld_fast_at: .asciz " fast_at="
 .Ld_fast: .asciz " fast="
+.Ld_ctx_at: .asciz " ctx_at="
+.Ld_cache_at: .asciz " cache_at="
+.Ld_clock: .asciz " clock="
+.Ld_cold: .asciz "cold"
+.Ld_stage: .asciz " stage="
+.Ld_combo: .asciz " combo="
+.Ld_pill_shown: .asciz "\tpill="
+.Ld_ctx_x: .asciz " ctx_x="
+.Ld_ctx_y: .asciz " ctx_y="
+.Ld_ctx_w: .asciz " ctx_w="
+.Ld_ctx_h: .asciz " ctx_h="
+.Ld_cache_x: .asciz " cache_x="
+.Ld_cache_y: .asciz " cache_y="
+.Ld_cache_w: .asciz " cache_w="
+.Ld_cache_h: .asciz " cache_h="
 .Ld_pill: .asciz "\tpill="
 .Ld_title: .asciz "\ttitle="
 .Ld_pill_x: .asciz " pill_x="
@@ -1648,3 +2592,15 @@ band_tips: .quad .Lt_error, .Lt_warning, .Lt_warning, .Lt_warning, .Lt_notice
 .Lf_cool: .asciz "cooldown"
 .p2align 3
 fast_words: .quad .Lf_off, .Lf_on, .Lf_cool
+pie_dirs:                       # sin, cos (x 1024) of each percent of a turn, 0 to 100
+    .short 0, 1024, 64, 1022, 128, 1016, 192, 1006, 255, 992, 316, 974, 377, 952, 436, 927, 493, 897, 549, 865
+    .short 602, 828, 653, 789, 701, 746, 746, 701, 789, 653, 828, 602, 865, 549, 897, 493, 927, 436, 952, 377
+    .short 974, 316, 992, 255, 1006, 192, 1016, 128, 1022, 64, 1024, 0, 1022, -64, 1016, -128, 1006, -192, 992, -255
+    .short 974, -316, 952, -377, 927, -436, 897, -493, 865, -549, 828, -602, 789, -653, 746, -701, 701, -746, 653, -789
+    .short 602, -828, 549, -865, 493, -897, 436, -927, 377, -952, 316, -974, 255, -992, 192, -1006, 128, -1016, 64, -1022
+    .short 0, -1024, -64, -1022, -128, -1016, -192, -1006, -255, -992, -316, -974, -377, -952, -436, -927, -493, -897, -549, -865
+    .short -602, -828, -653, -789, -701, -746, -746, -701, -789, -653, -828, -602, -865, -549, -897, -493, -927, -436, -952, -377
+    .short -974, -316, -992, -255, -1006, -192, -1016, -128, -1022, -64, -1024, 0, -1022, 64, -1016, 128, -1006, 192, -992, 255
+    .short -974, 316, -952, 377, -927, 436, -897, 493, -865, 549, -828, 602, -789, 653, -746, 701, -701, 746, -653, 789
+    .short -602, 828, -549, 865, -493, 897, -436, 927, -377, 952, -316, 974, -255, 992, -192, 1006, -128, 1016, -64, 1022
+    .short 0, 1024

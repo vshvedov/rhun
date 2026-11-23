@@ -1615,6 +1615,9 @@ h_assistant:
     call is_sub
     test eax, eax
     jnz 9f
+    mov rdi, rbx                # the context in use and the prompt cache (claude_session.s)
+    mov rsi, r12
+    call claude_frame
     mov rdi, r12
     lea rsi, [rip + .Lk_message]
     call json_get
@@ -1726,6 +1729,8 @@ h_user:
     call is_sub
     test eax, eax
     jnz 9f
+    mov rdi, rbx                # a request goes out: the prompt cache's clock (claude_session.s)
+    call claude_asked
     mov rdi, r12
     lea rsi, [rip + .Lk_isReplay]
     call json_get
@@ -3281,6 +3286,7 @@ cl_types:
     .quad .Lv_user, h_user, .Lv_cancel, h_cancel
     .quad .Lv_lifecycle, claude_lifecycle       # task 3: a message's lifecycle (claude_session.s)
     .quad .Lv_suggestion, h_suggestion          # the prompt Claude suggests next (finding 19)
+    .quad .Lv_rate_event, claude_rate           # task 8: the rate-limit band (claude_session.s)
     .quad 0, 0
 perm_qs:                        # a permission card's question: the tool, before its summary, after it
     .quad .Lt_bash, .Lq_bash, .Lempty, .Lt_edit, .Lq_edit, .Lq_mark, .Lt_multiedit, .Lq_edit, .Lq_mark
@@ -3293,6 +3299,7 @@ cl_flags:
 .Lname: .asciz "Claude Code"
 .Lhint: .asciz "Ask Claude to edit\xe2\x80\xa6"
 .Lv_suggestion: .asciz "prompt_suggestion"
+.Lv_rate_event: .asciz "rate_limit_event"
 .Lk_suggestion: .asciz "suggestion"
 .Lk_ultrathink: .asciz "ultrathink_available"
 .Lv_ultrathink: .asciz "ultrathink"

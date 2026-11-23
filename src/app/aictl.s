@@ -429,8 +429,8 @@ state_named:
 8:  mov eax, -1
     EPILOGUE
 
-# agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES]: shorter times
-#   (and a smaller cap, a smaller input queue) for tests
+# agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES] [cache=MS]: shorter
+#   times (and a smaller cap, a smaller input queue, a prompt cache's lifetime, 0 the CLI's) for tests
 c_agent_timing:
     PROLOGUE
     call ai_set
@@ -1027,12 +1027,22 @@ set_switch:
 8:  mov rax, -1
     EPILOGUE
 
-# print-agents-foot: the footer under the box (foot_dump)
+# print-agents-foot [every]: the footer under the box (foot_dump; every: each combination of its extras)
 c_print_agents_foot:
     PROLOGUE
     call ai_set
-    call ai_out
+    call ai_arg                 # "every": every combination of the controls that come and go
+    xor ebx, ebx
+    test rdx, rdx
+    jz 1f
     mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + .Lw_every]
+    call str_eq_cstr
+    mov ebx, eax
+1:  call ai_out
+    mov rdi, rax
+    mov esi, ebx
     call foot_dump
     xor eax, eax
     EPILOGUE
@@ -1161,6 +1171,8 @@ c_agent_test_band:
 .Lt_hold: .asciz "hold"
 .Lt_guard: .asciz "guard"
 .Lt_queue: .asciz "queue"
+.Lt_cache: .asciz "cache"
+.Lw_every: .asciz "every"
 .Lc_print_tools: .asciz "print-tools"
 .Lc_print_holder: .asciz "print-holder"
 .Lr_chat_off: .asciz "Chat with Claude Code is off (Settings > Claude Code)."
@@ -1228,4 +1240,4 @@ band_words: .quad .Lb_error, .Lb_settings, .Lb_auth, .Lb_rate, .Lb_notice
 live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_conn_kill_ms
     .quad .Lt_eof, g_conn_eof_ms, .Lt_hold, g_drv_hold_ms, .Lt_guard, g_conn_max
-    .quad .Lt_queue, g_conn_queue_max, 0, 0
+    .quad .Lt_queue, g_conn_queue_max, .Lt_cache, g_cache_ttl_ms, 0, 0

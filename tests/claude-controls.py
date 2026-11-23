@@ -7,8 +7,12 @@ starts the fake. Nothing here writes the user's own Claude Code settings: the fa
 test's HOME."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
+import shutil
+import subprocess
+import time
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -232,7 +236,7 @@ class ConfigTest(CfgCase):
         requests = [m['request']['subtype'] for m in self.stdin() if m.get('type') == 'control_request']
         self.assertEqual(requests, ['initialize', 'get_settings'])
         live = self.command('print-agent-live')
-        self.assertRegex(live, ' model=claude-opus-5-5 effort=high ultra=0 think=1 fast=off held=0 ctx=- cache=- '
+        self.assertRegex(live, ' model=claude-opus-5-5 effort=high ultra=0 think=1 fast=off held=0 ctx=0 cache=- '
                          'suggest=[01] ')            # (the fake suggests a prompt after the turn: ComposerTest)
         self.assertEqual([r for r in self.records() if 'update_settings' in str(r.get('stdin', ''))], [])
 
@@ -1529,8 +1533,7 @@ class ModeTest(ModeCase):
         self.assertEqual(len(lines), 25 * 34)
         cut = 0
         for line in lines:
-            r = {k: int(v) for k, v in (f.split('=') for f in line.split(' label=')[0].split())}
-            label = line.split(' label=', 1)[1]
+            r, label, _ = foot_line(line)
             what = line
             rects = {name: (r[name + '_x'], r[name + '_y'], r[name + '_w'], r[name + '_h'])
                      for name in ('send', 'mode', 'menu')}
@@ -1553,7 +1556,7 @@ class ModeTest(ModeCase):
             cut += label != 'Edit automatically'
         at = {(int(re.search(r'size=(\d+)', l).group(1)), int(re.search(r' w=(\d+)', l).group(1))): l
               for l in lines}
-        self.assertTrue(at[13, 380].endswith(' label=Edit automatically'), at[13, 380])
+        self.assertEqual(foot_line(at[13, 600])[1], 'Edit automatically', at[13, 600])
         self.assertGreater(cut, 0)                                   # a large font in a narrow panel cuts it
 
 
@@ -1905,9 +1908,9 @@ class ModelTest(ModelCase):
         self.assertEqual(self.foot()['fast'], 'on')
         lines = self.command('print-agents-foot').splitlines()[1:]
         self.assertEqual(len(lines), 25 * 34)
-        shown = hidden = fast = 0
+        shown = own_row = fast = 0
         for line in lines:
-            r = {k: int(v) for k, v in (f.split('=') for f in line.split(' label=')[0].split())}
+            r, _, _ = foot_line(line)
             rects = {name: (r[name + '_x'], r[name + '_y'], r[name + '_w'], r[name + '_h'])
                      for name in ('send', 'mode', 'menu', 'pill', 'fast') if r[name + '_w'] > 0}
             fast += 'fast' in rects
@@ -1924,18 +1927,17 @@ class ModelTest(ModelCase):
                     apart = ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay
                     self.assertTrue(apart, f'{a} and {b} overlap: {line}')
             self.assertGreaterEqual(r['mode_w'], r['menu_w'], line)
-            if 'pill' in rects:
-                shown += 1
-                self.assertLess(r['pill_text'], r['pill_w'], line)
-            else:
-                hidden += 1
+            self.assertIn('pill', rects, line)                       # the pill never goes: at worst its own row
+            shown += 1
+            self.assertLess(r['pill_text'], r['pill_w'], line)
+            own_row += r['stage'] == 2
         at = {(int(re.search(r'size=(\d+)', l).group(1)), int(re.search(r' w=(\d+)', l).group(1))): l
               for l in lines}
-        self.assertTrue(at[13, 380].endswith(' label=Edit automatically'), at[13, 380])
+        self.assertEqual(foot_line(at[13, 380])[1], 'Edit automatically', at[13, 380])
         self.assertIn(' pill_w=', at[13, 380])
         self.assertGreater(int(re.search(r' pill_w=(\d+)', at[13, 380]).group(1)), 0)
         self.assertGreater(shown, 0)
-        self.assertGreater(hidden, 0)                                # 240 px at 32: the pill gives way
+        self.assertGreater(own_row, 0)                               # 240 px at 32: the pill takes its own row
         self.assertGreater(int(re.search(r' fast_w=(\d+)', at[13, 380]).group(1)), 0)
         self.assertLess(fast, len(lines))                            # and there the fast mark too
         # the models picker fits every size too
@@ -1948,6 +1950,384 @@ class ModelTest(ModelCase):
             self.assertGreaterEqual(r['left'], r['x'], line)
             self.assertLessEqual(r['right'], r['x'] + r['pw'], line)
             self.assertGreater(r['label'], 0, line)
+
+
+FOOT_RECTS = ('send', 'mode', 'menu', 'pill', 'fast', 'ctx', 'cache')
+WINDOW = 1000000 - 20000 - 13000        # the fake's contextWindow, less min(maxOutputTokens, 20000) and 13000
+
+
+def foot_line(line):
+    """A print-agents-foot layout line: its numbers, the label and the pill as shown."""
+    head, rest = line.split(' label=', 1)
+    label, pill = rest.split('\tpill=', 1)
+    numbers = {k: int(v) for k, v in (f.split('=') for f in head.split())}
+    return numbers, label, pill
+
+
+def local_reset(at, date):
+    """The bundle's reset time (index.js @3698835 ex): "at 3:45 PM" within a day for the five-hour limit, else
+    "Tue, Nov 24 at 3:45 PM" (the year after the day when it is another year)."""
+    when = time.localtime(at)
+    clock = '%d:%02d %s' % ((when.tm_hour + 11) % 12 + 1, when.tm_min, 'AM' if when.tm_hour < 12 else 'PM')
+    if at - time.time() < 60:
+        return 'soon'
+    if not date and at - time.time() < 86400:
+        return 'at ' + clock
+    day = time.strftime('%a, %b ', when) + str(when.tm_mday)
+    if when.tm_year != time.localtime().tm_year:
+        day += ', %d' % when.tm_year
+    return day + ' at ' + clock
+
+
+class NoticeCase(ModelCase):
+    def bands(self):
+        return [line for line in self.command('print-agent-bands').splitlines() if line.startswith('band ')]
+
+    def band(self, kind):
+        """The text of the band of that kind, or None."""
+        for line in self.bands():
+            match = re.match(r'band (\S+) lines=\d+ close=\d+,\d+ (.*)$', line)
+            if match and match.group(1) == kind:
+                return match.group(2)
+        return None
+
+    def link(self, kind):
+        """A band's link: (x, y, label, url), or None."""
+        for line in self.command('print-agent-bands').splitlines():
+            match = re.match(r'link (\S+) (\d+),(\d+) (.*)\t(.*)$', line)
+            if match and match.group(1) == kind:
+                return match.group(2), match.group(3), match.group(4), match.group(5)
+        return None
+
+    def close(self, kind):
+        for line in self.bands():
+            match = re.match(r'band (\S+) lines=\d+ close=(\d+),(\d+) ', line)
+            if match and match.group(1) == kind:
+                self.command('click %s %s' % match.group(2, 3))
+                return
+        self.fail('no %s band' % kind)
+
+    def rates(self):
+        return [r['rate'] for r in self.records() if 'rate' in r]
+
+    def live_word(self, word):
+        return re.search(' %s=(\\S+)' % word, self.command('print-agent-live')).group(1)
+
+    def stats(self):
+        passes, draws = (int(w.split('=')[1]) for w in self.command('print-loop-stats').split()[:2])
+        return passes, draws
+
+    def idle(self, seconds=3, samples=1):
+        """The main loop's passes (without the second command's own) and the frames it drew over that long;
+        of several samples, the one with the fewest passes (the panel's discovery may run in one)."""
+        out = []
+        for _ in range(samples):
+            p0, d0 = self.stats()
+            time.sleep(seconds)
+            p1, d1 = self.stats()
+            out.append((p1 - p0 - 1, d1 - d0))
+        return min(out)
+
+
+class NoticeTest(NoticeCase):
+    def test_rate_limit_warning_and_rejection_bands(self):
+        opened = self.work / 'opened'
+        opener = self.work / 'opener.sh'
+        opener.write_text(f'#!/bin/sh\necho "$1" >> {opened}\n', encoding='utf-8')
+        opener.chmod(0o755)
+        self.start(env={'FAKE_CLAUDE_RATE': 'warning', 'RHUN_OPEN_URL': str(opener)})
+        self.chat('hello')
+        resets = self.rates()[-1]['resetsAt']
+        self.assertEqual(self.band('rate'), "You've used 85% of your 5-hour limit · resets " +
+                         local_reset(resets, False))
+        x, y, label, url = self.link('rate')                         # the account is a Max plan's (the fake's)
+        self.assertEqual((label, url), ('Get more usage', 'https://claude.ai/settings/usage'))
+        self.command(f'click {x} {y}')
+        self.command('wait 50')
+        palette = self.command('print-palette').splitlines()
+        self.assertEqual(palette[0], 'choose=Claude Code wants to open claude.ai in your browser: '
+                                     'https://claude.ai/settings/usage')
+        self.command('key Escape')
+        self.command('wait 200')
+        self.assertFalse(opened.exists())                            # nothing opens without Open
+        self.close('rate')
+        self.assertIsNone(self.band('rate'))
+        self.command('agent-prompt again')                           # the same notice again: it stays away
+        self.command('wait-agent ready 10000')
+        self.assertEqual(len(self.rates()), 2)
+        self.assertIsNone(self.band('rate'))
+        self.command('agent-prompt rate rejected')                   # another one shows
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.band('rate'), "You've hit your 5-hour limit · resets " +
+                         local_reset(resets, False))
+        for kind, text in (('weekly', "You've used 75% of your weekly limit · resets " +
+                            local_reset(resets, True)),
+                           ('over', 'Over 90% of your 5-hour limit used · resets ' + local_reset(resets, False)),
+                           ('approaching', 'Approaching 5-hour limit · resets ' + local_reset(resets, False)),
+                           ('paused', 'Usage is paused for your organization. For help, please contact support.'),
+                           ('spend', "You've hit your spend limit · resets " + local_reset(resets, True)),
+                           ('soon', "You've hit your 5-hour limit · resets soon")):
+            self.command('agent-prompt rate ' + kind)
+            self.command('wait-agent ready 10000')
+            self.assertEqual(self.band('rate'), text, kind)
+        self.command('agent-prompt rate allowed')                    # allowed: it goes
+        self.command('wait-agent ready 10000')
+        self.until(lambda: self.band('rate') is None, 'allowed takes the band away')
+        self.assertIsNone(self.link('rate'))
+
+    def test_no_link_without_a_paid_plan(self):
+        self.start(env={'FAKE_CLAUDE_RATE': 'warning', 'FAKE_CLAUDE_ACCOUNT': 'none'})
+        self.chat('hello')
+        self.assertTrue(self.band('rate').startswith("You've used 85% of your 5-hour limit"))
+        self.assertIsNone(self.link('rate'))
+
+    def test_settings_error_band(self):
+        self.start(env={'FAKE_CLAUDE_SETTINGS_ERROR': 'Unexpected token'})
+        self.chat('hello')
+        self.until(lambda: self.band('settings'), 'the band')
+        self.assertEqual(self.band('settings'), 'Settings file failed to parse: %s — Unexpected token. '
+                         'Permission rules and other settings from this file are not in effect.'
+                         % (self.project / '.claude/settings.json'))
+        self.close('settings')
+        self.assertEqual(self.bands(), [])
+        self.quit()
+        self.start()
+        self.chat('hello')
+        self.assertEqual(self.bands(), [])
+
+    def test_settings_refused_is_an_error_band(self):
+        self.start(env={'FAKE_CLAUDE_SETTINGS_FAIL': 'settings are busy'})
+        self.chat('hello')
+        self.until(lambda: self.band('error'), 'the band')
+        self.assertEqual(self.band('error'), "Couldn't read Claude Code's settings: settings are busy")
+        self.assertEqual(self.thread()[-1], chat.REPLY + 'ok: hello')          # the conversation goes on
+
+    def test_reset_times_follow_the_zone(self):
+        """The reset's local time: a zone file's transitions, and past them its POSIX rule (a "slim" file, made
+        with zic where there is one), each as Python's own local time says."""
+        zones = [z for z in ('Australia/Sydney', 'America/New_York', 'Asia/Kolkata')
+                 if Path('/usr/share/zoneinfo', z).exists()]
+        slim = self.work / 'zones'
+        zic = shutil.which('zic') or ('/usr/sbin/zic' if Path('/usr/sbin/zic').exists() else None)
+        if zic:
+            source = self.work / 'zones.txt'
+            source.write_text('Zone Test/South 10:00 AN AE%sT\nRule AN 2008 max - Apr Sun>=1 2:00s 0 S\n'
+                              'Rule AN 2008 max - Oct Sun>=1 2:00s 1:00 D\nZone Test/North -5:00 US E%sT\n'
+                              'Rule US 2007 max - Mar Sun>=8 2:00 1:00 D\nRule US 2007 max - Nov Sun>=1 2:00 0 S\n',
+                              encoding='utf-8')
+            made = subprocess.run([zic, '-b', 'slim', '-d', str(slim), str(source)], capture_output=True)
+            if made.returncode == 0:
+                zones += [str(slim / 'Test/South'), str(slim / 'Test/North')]
+        if not zones:
+            self.skipTest('no zone files here')
+        saved = os.environ.get('TZ')
+        try:
+            for zone in zones:
+                self.start(env={'FAKE_CLAUDE_RATE': 'weekly', 'TZ': zone})
+                self.chat('hello')
+                resets = self.rates()[-1]['resetsAt']
+                os.environ['TZ'] = zone
+                time.tzset()
+                self.assertEqual(self.band('rate'), "You've used 75% of your weekly limit \u00b7 resets " +
+                                 local_reset(resets, True), zone)
+                self.quit()
+        finally:
+            if saved is None:
+                os.environ.pop('TZ', None)
+            else:
+                os.environ['TZ'] = saved
+            time.tzset()
+
+    def test_auth_conflict_band(self):
+        self.start(env={'FAKE_CLAUDE_AUTH_CONFLICT': '1'})
+        self.chat('hello')
+        self.assertEqual(self.band('auth'), 'Claude Code has both your claude.ai login and ANTHROPIC_API_KEY, so it '
+                         'may not use the credential you expect. Keep one and remove the other, then start a new '
+                         'conversation (restart your editor if you removed one from your shell).')
+        self.assertIn(' close=', self.bands()[0])
+        self.assertFalse('auth_conflict' in self.command('print-agent-cfg'))
+        self.quit()
+        self.start()
+        self.chat('hello')
+        self.assertIsNone(self.band('auth'))
+
+    def test_context_pie_appears_below_half(self):
+        self.start(env={'FAKE_CLAUDE_CONTEXT': str(WINDOW * 40 // 100)})
+        self.chat('hello')
+        self.assertEqual(self.live_word('ctx'), '40')
+        self.assertEqual(self.foot()['ctx_at'], '0,0')               # more than half left: no pie
+        self.quit()
+        self.start(env={'FAKE_CLAUDE_CONTEXT': str(WINDOW * 60 // 100)})
+        self.chat('hello')
+        self.assertEqual(self.live_word('ctx'), '60')
+        foot = self.foot()
+        self.assertNotEqual(foot['ctx_at'], '0,0')
+        x, y = foot['ctx_at'].split(',')
+        self.command(f'move {x} {y}')
+        self.command('wait 700')
+        self.assertIn('40% of context remaining until auto-compact. Click to compact now.',
+                      self.command('print-tip'))
+        self.command(f'click {x} {y}')                               # /compact goes as a prompt
+        self.until(lambda: '/compact' in self.prompts(), '/compact sent')
+        self.command('wait-agent ready 10000')
+        self.until(lambda: self.foot()['ctx_at'] == '0,0', 'compacted: the context is small again')
+        self.assertEqual(self.live_word('cache'), 'cold')            # the cache does not cover the summary
+        self.assertEqual(self.foot()['clock'], 'cold')
+        x, y = self.foot()['cache_at'].split(',')
+        self.command(f'move {x} {y}')
+        self.command('wait 700')
+        self.assertIn('Prompt cache does not cover the compacted conversation.', self.command('print-tip'))
+
+    def test_a_pie_click_during_a_turn_is_queued(self):
+        self.start(env={'FAKE_CLAUDE_CONTEXT': str(WINDOW * 70 // 100)})
+        self.chat('hello')
+        x, y = self.foot()['ctx_at'].split(',')
+        self.command('agent-prompt slow')
+        self.command('wait-agent working')
+        self.command(f'click {x} {y}')
+        self.assertIn('queued /compact', self.command('print-agents'))
+        self.until(lambda: '/compact' in self.prompts(), '/compact written at once')
+
+    def test_cache_clock_warm_then_cold(self):
+        self.start()
+        self.chat('hello')
+        self.assertEqual(self.live_word('cache'), '-')               # no cache written: no clock
+        self.assertEqual(self.foot()['cache_at'], '0,0')
+        self.command('agent-prompt usage')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.live_word('cache'), '60m')             # an hour's cache, just written
+        foot = self.foot()
+        self.assertEqual(foot['clock'], '60m')
+        x, y = foot['cache_at'].split(',')
+        self.command(f'move {x} {y}')
+        self.command('wait 700')
+        self.assertIn('Prompt cache warm, about 60 min left.', self.command('print-tip'))
+        self.command('agent-timing cache=1500')
+        self.command('agent-prompt usage')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.live_word('cache'), '1m')
+        self.until(lambda: self.live_word('cache') == 'cold', 'expired', seconds=5)
+        self.command('move 1 1')
+        self.command(f'move {x} {y}')
+        self.command('wait 700')
+        self.assertIn('Prompt cache likely expired (idle 0m).', self.command('print-tip'))
+        self.assertEqual(self.foot()['clock'], 'cold')
+
+    def test_notices_add_no_timer(self):
+        self.start()
+        self.chat('hello')                                           # a conversation without a cache
+        self.command('move 1 1')
+        time.sleep(1.5)                                              # what the turn left settles
+        plain, _ = self.idle(samples=2)
+        plain4, _ = self.idle(4, samples=2)
+        self.command('agent-prompt usage')                           # a warm cache: its clock shows
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.foot()['clock'], '60m')
+        self.command('agent-test-band notice A notice that stays')
+        time.sleep(1.5)
+        warm, frames = self.idle(samples=2)
+        self.assertLessEqual(warm, plain + 1, (warm, plain))         # its minute may turn once in 3 s
+        self.assertLessEqual(frames, 1, frames)
+        # a clock that changes while measured: a frame for it, no pass of its own
+        self.command('agent-timing cache=4500')
+        self.command('agent-prompt usage')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.foot()['clock'], '1m')
+        time.sleep(1.5)
+        changing, frames = self.idle(4)
+        self.assertLessEqual(changing, plain4 + 1, (changing, plain4))
+        self.assertGreaterEqual(frames, 1, 'the clock was redrawn when it went cold')
+        self.assertEqual(self.foot()['clock'], 'cold')
+        # hidden, the panel draws nothing and has no wake-up: the same as without a cache
+        self.command('agent-timing cache=0')
+        self.command('agent-prompt usage')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.foot()['clock'], '60m')
+        self.command('cmd toggle_agents')
+        time.sleep(1.5)
+        hidden, frames = self.idle(samples=2)
+        self.assertEqual(frames, 0)
+        self.command('cmd toggle_agents')
+        self.command('agent-new claude')                             # a draft: no clock
+        self.command('cmd toggle_agents')
+        time.sleep(1.5)
+        hidden_plain, _ = self.idle(samples=2)
+        self.assertLessEqual(hidden, hidden_plain, (hidden, hidden_plain))
+
+    def test_footer_fits_every_size_and_width(self):
+        self.start(env={'FAKE_CLAUDE_MODELS': 'fast,ultra,effort', 'FAKE_CLAUDE_FAST': 'on -'})
+        self.chat('hello')
+        self.command('agent-ultra on')
+        self.until(lambda: ' ultra=1 ' in self.command('print-agent-live'), 'Ultracode')
+        self.command('agent-mode acceptEdits')
+        self.until(lambda: self.mode() == 'acceptEdits', 'acceptEdits')
+        pill = self.foot()['pill']
+        self.assertTrue(pill.endswith(' · Ultracode'), pill)
+        lines = self.command('print-agents-foot every').splitlines()[1:]
+        self.assertEqual(len(lines), 8 * 25 * 34)
+        stages = {}
+        for line in lines:
+            r, label, shown = foot_line(line)
+            combo = r['combo']
+            rects = {name: (r[name + '_x'], r[name + '_y'], r[name + '_w'], r[name + '_h'])
+                     for name in FOOT_RECTS if r[name + '_w'] > 0}
+            self.assertIn('mode', rects, line)                       # the mode button never goes
+            self.assertIn('menu', rects, line)
+            self.assertIn('send', rects, line)
+            self.assertIn('pill', rects, line)                       # nor the pill: at worst on its own row
+            for name, (x, y, w, h) in rects.items():
+                self.assertGreater(h, 0, line)
+                self.assertGreaterEqual(x, 0, line)
+                self.assertLessEqual(x + w, r['w'], f'{name}: {line}')
+                self.assertGreaterEqual(y, 0, line)
+                self.assertLessEqual(y + h, r['h'], f'{name}: {line}')
+            names = list(rects)
+            for i, a in enumerate(names):
+                for b in names[i + 1:]:
+                    ax, ay, aw, ah = rects[a]
+                    bx, by, bw, bh = rects[b]
+                    apart = ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay
+                    self.assertTrue(apart, f'{a} and {b} overlap: {line}')
+            self.assertGreaterEqual(r['mode_w'], r['menu_w'], line)  # room for its dot or a cut label
+            self.assertTrue(label == 'Edit automatically' or label.endswith('…'), line)
+            self.assertTrue(shown == pill or shown.endswith('…'), line)
+            self.assertLess(r['pill_text'], r['pill_w'], line)
+            stage = r['stage']
+            stages.setdefault(stage, 0)
+            stages[stage] += 1
+            if stage == 0:                                           # everything, nothing cut, one row
+                self.assertEqual((label, shown), ('Edit automatically', pill), line)
+                self.assertEqual(r['pill_y'], r['mode_y'], line)
+                self.assertEqual('cache' in rects, bool(combo & 4), line)
+                self.assertEqual('ctx' in rects, bool(combo & 2), line)
+                self.assertEqual('fast' in rects, bool(combo & 1), line)
+            elif stage == 1:                                         # the clock goes, the label may be cut
+                self.assertNotIn('cache', rects, line)
+                self.assertEqual(shown, pill, line)
+                self.assertEqual(r['pill_y'], r['mode_y'], line)
+                self.assertEqual('ctx' in rects, bool(combo & 2), line)
+                self.assertEqual('fast' in rects, bool(combo & 1), line)
+            else:                                                    # the pill on its own row, under it
+                self.assertEqual(stage, 2, line)
+                self.assertNotIn('cache', rects, line)
+                self.assertGreaterEqual(r['pill_y'], r['mode_y'] + r['mode_h'], line)
+        self.assertEqual(set(stages), {0, 1, 2}, stages)
+        at = {}
+        for line in lines:
+            r, label, shown = foot_line(line)
+            at[r['combo'], r['size'], r['w']] = (r, label, shown)
+        for size in (8, 13):                                         # a wide panel holds everything
+            r, label, shown = at[7, size, 600]
+            self.assertEqual(r['stage'], 0, (size, r))
+        r, _, _ = at[7, 32, 240]                                     # the narrowest, largest: two rows
+        self.assertEqual(r['stage'], 2, r)
+        r, _, _ = at[0, 13, 380]                                     # no extras at the default size
+        self.assertLessEqual(r['stage'], 1, r)
+        # the pill's own row is room the footer takes: more than one row's at the same size
+        for size in range(8, 33):
+            rows = {r['stage'] == 2: r['h'] - r['mode_y'] for (c, s_, w), (r, _, _) in at.items() if s_ == size}
+            if len(rows) == 2:
+                self.assertGreater(rows[True], rows[False], size)
 
 
 class UserSettingsScanTest(unittest.TestCase):

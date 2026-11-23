@@ -4124,6 +4124,39 @@ worktree_badge:
 9:  mov eax, r12d
     EPILOGUE
 
+# FN agents_label_due(unix second): something the panel draws changes by itself then (a countdown in the
+#   footer): the panel's poll redraws it once that second has come (agents_tick), with no timer of its own.
+#   Called while drawing (agents_draw resets label_due first), so a label that is not drawn asks nothing
+FN agents_label_due
+    cmp rdi, [rip + label_due]
+    jae 1f
+    mov [rip + label_due], rdi
+1:  ret
+
+# FN agents_web_link(who cstr, url ptr, len): a web link clicked in the panel's bottom area (a band's), asked
+#   about once the frame is drawn (reply_follow: links_ask_open, as a reply's link)
+FN agents_web_link
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, r12
+    mov rsi, r13
+    call links_url_ok
+    test eax, eax
+    jz 9f
+    mov rdi, [rip + pend_link]
+    call mem_free
+    mov rdi, [rip + pend_cwd]
+    call mem_free
+    mov qword ptr [rip + pend_cwd], 0
+    mov rdi, r12
+    mov rsi, r13
+    call mem_dup
+    mov [rip + pend_link], rax
+    mov [rip + pend_who], rbx
+9:  EPILOGUE
+
 # rel_time(unix seconds) -> cstr in buf ("now", "5m", "3h", "2d"); notes in label_due when it changes
 rel_time:
     push rbx

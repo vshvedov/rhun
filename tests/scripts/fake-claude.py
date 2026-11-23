@@ -50,8 +50,9 @@ FAKE_CLAUDE_USER_LATE_MS (a turn's user line reaches the transcript only when a 
 that long after the signal: a prompt recorded as it is stopped; or, nobody stopping it, after
 FAKE_CLAUDE_USER_LATE_WAIT_MS, default 10000, and the turn goes on);
 FAKE_CLAUDE_MODELS (comma-separated: effort, nothink, auto, fast, unavailable, ultra, noeffort; see model_list);
-FAKE_CLAUDE_CONTEXT (N: a turn's usage adds up to N tokens); FAKE_CLAUDE_RATE (warning, rejected: a
-rate_limit_event before each result); FAKE_CLAUDE_SETTINGS_ERROR (TEXT: get_settings has one error);
+FAKE_CLAUDE_CONTEXT (N: a turn's usage adds up to N tokens); FAKE_CLAUDE_RATE (warning, rejected, ...: a
+rate_limit_event of that kind before each result, see rate_limit; the prompt `rate KIND` sends one once); FAKE_CLAUDE_SETTINGS_ERROR (TEXT: get_settings has one error);
+FAKE_CLAUDE_SETTINGS_FAIL (TEXT: get_settings is answered with that error, unrecorded);
 FAKE_CLAUDE_AUTH_CONFLICT (initialize has auth_conflict); FAKE_CLAUDE_FAST ("STATE REASON": initialize's
 fast_mode_state and fast_mode_disabled_reason, "-" for none, as 2.1.330's "off sdk_opt_in_required"; system/init and
 every result carry the state; without it initialize has no reason, as before); FAKE_CLAUDE_FAST_REJECT (unrecorded:
@@ -287,9 +288,15 @@ def emit(record):
             leave(1)
 
 
+TURN_CACHE = [None]                 # the `usage` scenario's (written, read): its messages' usage reports them too
+
+
 def usage(cache=None):
     """A turn's usage. FAKE_CLAUDE_CONTEXT=N: the four token counts add up to N (the context in use).
-    cache: (written, read) for the `usage` scenario, with the 1-hour and 5-minute split the CLI reports."""
+    cache: (written, read) for the `usage` scenario, with the 1-hour and 5-minute split the CLI reports
+    (finding 21 has them on result.usage; an assistant message's usage is the API's, which has the same
+    members); its messages' usage reports the same (TURN_CACHE)."""
+    cache = cache or TURN_CACHE[0]
     used = int(ENV.get('FAKE_CLAUDE_CONTEXT', '0') or 0)
     record = {'input_tokens': 6, 'cache_creation_input_tokens': 0,
               'cache_read_input_tokens': max(0, used - 18) if used else 120, 'output_tokens': 12}
@@ -815,23 +822,46 @@ def result(final='', subtype='success', errors=None, stop='end_turn', terminal='
     record.update(type='result', duration_ms=20, uuid=str(uuid.uuid4()))
     if errors is None and TURN_UUID[0]:
         record['user_message_uuid'] = TURN_UUID[0]
-    if ENV.get('FAKE_CLAUDE_RATE'):
+    if ENV.get('FAKE_CLAUDE_RATE') and not RATE_TURN[0]:
         rate_limit(ENV['FAKE_CLAUDE_RATE'])
     emit(record)
 
 
+RESETS = [None]                     # when the limits reset: an hour after the first event, the same after it
+RATE_TURN = [False]                 # `rate KIND` sent this turn's event: FAKE_CLAUDE_RATE's is not sent too
+
+
 def rate_limit(kind):
     """A rate_limit_event before the result (as the recordings place it, finding 20). kind: warning (85 % of
-    the five-hour window used), rejected (all of it), else allowed. The recorded event of 2.1.330 had
-    status, resetsAt, rateLimitType, overage fields and unifiedWindows; utilization at the top is the
-    schema's (ext-host-protocol 2.6), unrecorded."""
-    resets = int(time.time()) + 3600
-    status_, used = {'warning': ('allowed_warning', 0.85), 'rejected': ('rejected', 1.0)}.get(kind, ('allowed', 0.2))
-    emit({'type': 'rate_limit_event', 'rate_limit_info': {
-        'status': status_, 'resetsAt': resets, 'rateLimitType': 'five_hour', 'utilization': used,
-        'isUsingOverage': False,
-        'unifiedWindows': {'five_hour': {'utilization': used, 'resetsAt': resets, 'status': status_}}},
-        'uuid': str(uuid.uuid4()), 'session_id': SID})
+    the five-hour window used), rejected (all of it), weekly (75 % of the week), over (past a threshold of
+    90 %, no utilization), approaching (neither), paused (the organization's daily cap), spend (the spend
+    limit, with an admin request offer), soon (the five-hour limit hit, resetting in 30 s), else allowed. The
+    recorded event of 2.1.330 had status, resetsAt, rateLimitType, overage fields and unifiedWindows (only
+    allowed was seen); utilization at the top and every other kind are the schema's (ext-host-protocol 2.6),
+    unrecorded. Logged as {"rate": rate_limit_info}."""
+    if RESETS[0] is None:
+        RESETS[0] = int(time.time()) + 3600
+    resets = RESETS[0]
+    kinds = {'warning': ('allowed_warning', 'five_hour', 0.85), 'rejected': ('rejected', 'five_hour', 1.0),
+             'weekly': ('allowed_warning', 'seven_day', 0.75), 'over': ('allowed_warning', 'five_hour', None),
+             'approaching': ('allowed_warning', 'five_hour', None), 'paused': ('rejected', 'five_hour', 1.0),
+             'spend': ('rejected', 'overage', 1.0), 'soon': ('rejected', 'five_hour', 1.0)}
+    status_, window, used = kinds.get(kind, ('allowed', 'five_hour', 0.2))
+    if kind == 'soon':
+        resets = int(time.time()) + 30
+    info = {'status': status_, 'resetsAt': resets, 'rateLimitType': window}
+    if used is not None:
+        info['utilization'] = used
+    if kind == 'over':
+        info['surpassedThreshold'] = 0.9
+    if kind == 'paused':
+        info['dailyCapPaused'] = True
+    if kind == 'spend':
+        info.update(overageStatus='rejected', adminRequestOffer={'state': 'can_ask'})
+    info.update(isUsingOverage=False,
+                unifiedWindows={window: {'utilization': used or 0.9, 'resetsAt': resets, 'status': status_}})
+    log(rate=info)
+    emit({'type': 'rate_limit_event', 'rate_limit_info': info, 'uuid': str(uuid.uuid4()), 'session_id': SID})
 
 
 CUT = []                            # (message id, block index) of the text block an interrupt cut
@@ -1482,11 +1512,31 @@ def s_held(prompt):
 
 def s_usage(prompt):
     """a reply whose usage reports a prompt cache: 2000 tokens written for an hour, 30000 read (the split the
-    CLI reports under usage.cache_creation and modelUsage, finding 21)"""
+    CLI reports under usage.cache_creation and modelUsage, finding 21), on its message and its result"""
+    TURN_CACHE[0] = (2000, 30000)
+    try:
+        mid = message_start()
+        if text(mid, 0, ['cached']):
+            message_end()
+            result('cached', cache=(2000, 30000))
+        else:
+            cut_off()
+    finally:
+        TURN_CACHE[0] = None
+
+
+def s_rate(prompt):
+    """rate KIND: a rate_limit_event of that kind (rate_limit) before the reply's result"""
+    words = prompt.split()
     mid = message_start()
-    if text(mid, 0, ['cached']):
+    if text(mid, 0, ['limits']):
         message_end()
-        result('cached', cache=(2000, 30000))
+        rate_limit(words[1] if len(words) > 1 else 'allowed')
+        RATE_TURN[0] = True
+        try:
+            result('limits')
+        finally:
+            RATE_TURN[0] = False
     else:
         cut_off()
 
@@ -1676,7 +1726,8 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'replay': s_replay, 'mcp': s_mcp, 'noid': s_noid, 'askx': s_askx, 'deep': s_deep,
              'withdraw': s_withdraw, 'unsaved': s_unsaved, 'unknown': s_unknown, 'unhandled': s_unhandled,
              'mute': s_mute, 'orphan': s_orphan, 'autherr': s_autherr, 'long': s_long, 'gone': s_gone,
-             'stream': s_stream, 'held': s_held, 'usage': s_usage, 'edit': s_edit, 'fetch': s_fetch}
+             'stream': s_stream, 'held': s_held, 'usage': s_usage, 'edit': s_edit, 'fetch': s_fetch,
+             'rate': s_rate}
 
 
 # three of 2.1.330's commands, as its initialize lists them (finding 22; the real list has every built-in,
@@ -1813,7 +1864,10 @@ def handle(message):
         elif sub == 'set_model':
             respond_empty(rid)
         elif sub == 'get_settings':
-            respond(rid, get_settings())
+            if ENV.get('FAKE_CLAUDE_SETTINGS_FAIL'):    # unrecorded: the CLI's error answer, with that text
+                respond_error(rid, ENV['FAKE_CLAUDE_SETTINGS_FAIL'])
+            else:
+                respond(rid, get_settings())
         elif sub == 'apply_flag_settings':
             settings = request.get('settings') if isinstance(request.get('settings'), dict) else {}
             for key, value in settings.items():

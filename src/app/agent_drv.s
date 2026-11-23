@@ -45,7 +45,8 @@
 #     ev_thinking(al, on), ev_fast(al, FS_*, reason ptr, len) (kept in the project's record too),
 #     ev_pill(al, ptr, len) (a one-line pill row, "Switched to NAME"),
 #     ev_band(al, BK_*, ptr, len) (a band above the box; ptr 0 takes it away; dismissed, it stays away until
-#     its text changes), ev_started(al, uuid ptr, len) (a held message started: its row joins),
+#     its text changes), ev_band_link(al, BK_*, label cstr, url cstr) (a link under it, asked before it
+#     opens), ev_usage(al, AGU*) (the context and prompt-cache numbers), ev_started(al, uuid ptr, len) (a held message started: its row joins),
 #     ev_dropped(al, uuid ptr, len) (a held message will not run: back to its own conversation's box)
 #   A driver's table also has its lists and controls (DRV_modes, DRV_set_*, DRV_reply, DRV_action): the
 #   extension driver's answer 0
@@ -356,6 +357,9 @@ live_lists_free:
 3:  mov rdi, [rbx + AL_bands + r12*8]
     call mem_free
     mov qword ptr [rbx + AL_bands + r12*8], 0
+    mov rdi, [rbx + AL_blinks + r12*8]
+    call mem_free
+    mov qword ptr [rbx + AL_blinks + r12*8], 0
     inc r12
     cmp r12, BK_COUNT
     jb 3b
@@ -2195,6 +2199,9 @@ FN ev_band
     jnz 9f
 2:  mov rdi, r15
     call mem_free
+    mov rdi, [rbx + AL_blinks + r12*8]  # and its link goes with it (ev_band_link gives the new one's)
+    call mem_free
+    mov qword ptr [rbx + AL_blinks + r12*8], 0
     mov ecx, r12d               # a new text shows, even if the old one was dismissed
     mov eax, 1
     shl eax, cl
@@ -2209,6 +2216,54 @@ FN ev_band
 1:  mov [rbx + AL_bands + r12*8], rax
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
+
+# FN ev_band_link(al, kind BK_*, label cstr, url cstr): the band of that kind (shown or dismissed) offers a
+#   link under its text: the label, opening the URL once the user says so (links_ask_open); label 0: none.
+#   A new text (ev_band) takes the link away
+FN ev_band_link
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rdx
+    mov r14, rcx
+    cmp r12d, BK_COUNT
+    jae 9f
+    mov rdi, [rbx + AL_blinks + r12*8]
+    call mem_free
+    mov qword ptr [rbx + AL_blinks + r12*8], 0
+    test r13, r13
+    jz 8f
+    cmp qword ptr [rbx + AL_bands + r12*8], 0
+    je 8f
+    mov rdi, r13
+    call strlen
+    mov r15, rax
+    mov rdi, r14
+    call strlen
+    lea rdi, [r15 + rax + 2]
+    call mem_alloc
+    test rax, rax
+    jz 8f
+    mov [rbx + AL_blinks + r12*8], rax
+    mov rdi, rax
+    mov rsi, r13
+    call cstr_copy
+    mov rdi, [rbx + AL_blinks + r12*8]
+    lea rdi, [rdi + r15 + 1]
+    mov rsi, r14
+    call cstr_copy
+8:  mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# FN ev_usage(al, AGU*): the conversation's context and prompt-cache numbers (the footer's pie and clock
+#   draw from them; nothing else follows)
+FN ev_usage
+    PROLOGUE
+    lea rdi, [rdi + AL_usage]
+    mov edx, AGU_SIZE
+    call memmove
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
 
 # FN ev_turn_end(al, reason, ptr, len): a turn ended: TE_DONE, TE_ERROR (the agent's text as an error row)
 #   or TE_INTERRUPTED (an "Interrupted" row). READY once every prompt sent has had its end
@@ -2825,10 +2880,12 @@ live_controls_dump:
     call sb_push_cstr
     test r12, r12
     jz 7f
-    cmp qword ptr [r12 + AL_usage + AGU_window], 0
-    je 7f
+    lea rdi, [r12 + AL_usage]   # the share of the window in use, in percent
+    call agent_ctx_used
+    test edx, edx
+    jz 7f
     mov rdi, rbx
-    mov rsi, [r12 + AL_usage + AGU_used]
+    mov esi, eax
     call sb_push_u64
     jmp 71f
 7:  mov rdi, rbx
@@ -2839,16 +2896,13 @@ live_controls_dump:
     call sb_push_cstr
     test r12, r12
     jz 81f
-    mov r13, [r12 + AL_usage + AGU_cache_at]
-    test r13, r13
-    jz 81f
-    cmp dword ptr [r12 + AL_usage + AGU_cold], CCOLD_NONE
+    lea rdi, [r12 + AL_usage]
+    call agent_cache_state
+    cmp eax, CACHE_NONE
+    je 81f
+    cmp eax, CACHE_WARM
     jne 82f
-    add r13, [r12 + AL_usage + AGU_cache_ttl]
-    call time_ms
-    sub r13, rax                # ms left
-    jle 82f
-    lea rax, [r13 + 59999]      # minutes left, rounded up
+    lea rax, [rdx + 59999]      # minutes left, rounded up
     xor edx, edx
     mov ecx, 60000
     div rcx

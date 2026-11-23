@@ -599,6 +599,30 @@ class ChatTest(DrivenCase):
         self.assertEqual(self.command(f'print-claude-path {self.project} {sid}'), f'{transcript}\n')
         self.assertRegex(self.live(), r' new=0\b')
 
+    def relative_dir_dropped(self, **start):
+        """A relative CLAUDE_CONFIG_DIR: claude does not get it, and both sides use $HOME/.claude."""
+        self.env['FAKE_CLAUDE_ECHO_ENV'] = 'CLAUDE_CONFIG_DIR'
+        self.start(**start)
+        self.chat('hello')
+        sid = self.sid()
+        self.assertIsNone(self.starts()[0]['env']['CLAUDE_CONFIG_DIR'])
+        transcript = self.work / '.claude/projects' / slug(self.project) / (sid + '.jsonl')
+        self.assertTrue(transcript.exists())
+        self.assertEqual(self.command(f'print-claude-path {self.project} {sid}'), f'{transcript}\n')
+        self.assertRegex(self.live(), r' new=0\b')
+        self.assertFalse((self.project / 'rel').exists())
+        self.client.sendall(b'quit\n')
+        self.assertEqual(self.process.wait(timeout=15), 0)
+        err = self.process.stderr.read().decode('utf-8', 'replace')
+        self.assertIn('CLAUDE_CONFIG_DIR is not an absolute path', err)
+        self.assertNotIn('rel/dir', err)
+
+    def test_a_relative_config_dir_pair_is_not_passed_on(self):
+        self.relative_dir_dropped(claude=self.claude_section('env.CLAUDE_CONFIG_DIR = rel/dir\n'))
+
+    def test_a_relative_inherited_config_dir_is_not_passed_on(self):
+        self.relative_dir_dropped(env={'CLAUDE_CONFIG_DIR': 'rel/dir'})
+
     def test_text_streams_into_one_row(self):
         self.start()
         self.chat('slow', 'working')

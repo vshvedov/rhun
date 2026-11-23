@@ -300,11 +300,14 @@ config_dir_pair:
     EPILOGUE
 
 # FN claude_config_dir_value() -> rax the value of [claude] env.CLAUDE_CONFIG_DIR (a cstr, borrowed until
-#   the config is read again), or 0 when it is not set
+#   the config is read again), or 0 when it is not set or not absolute (claude does not get it then)
 FN claude_config_dir_value
-    lea rdi, [rip + .Lconfig_dir_eq]
-    mov esi, CONFIG_DIR_LEN
-    jmp pair_value
+    PROLOGUE
+    call config_dir_pair
+    test rax, rax
+    jz 9f
+    add rax, CONFIG_DIR_LEN
+9:  EPILOGUE
 
 # pair_value(name_eq, len) -> rax the value of the [claude] env pair "NAME=" (len bytes with its '='
 #   names it), or 0
@@ -334,8 +337,10 @@ FN claude_env
     call pairs_list
     mov rbx, rax
     mov rdi, rax
+    call dir_unsets
+    mov rdx, rax
+    mov rdi, rbx
     lea rsi, [rip + forced]
-    lea rdx, [rip + unsets]
     call uproc_env_make
     mov r12, rax
     mov rdi, rbx
@@ -380,6 +385,47 @@ FN claude_env_dir
     mov rdi, rbx
     call mem_free
     mov rax, r12
+    EPILOGUE
+
+# dir_unsets(list) -> rax the names claude_env removes: unsets, and CLAUDE_CONFIG_DIR when its value is not
+#   an absolute path (or empty), from the pairs (its entry leaves the list) or else the environment. Claude
+#   would resolve a relative one against the conversation's folder, which claude_dir cannot follow; without
+#   it both use $HOME/.claude. A log line names the variable, never its value
+dir_unsets:
+    PROLOGUE
+    mov rbx, rdi
+    xor ecx, ecx
+1:  mov rax, [rbx + rcx*8]
+    test rax, rax
+    jz 4f
+    mov r12, rcx
+    mov rdi, rax
+    lea rsi, [rip + .Lconfig_dir_eq]
+    mov edx, CONFIG_DIR_LEN
+    call memeq
+    mov rcx, r12
+    inc rcx
+    test eax, eax
+    jz 1b
+    mov rax, [rbx + r12*8]      # the pair: kept when absolute
+    add rax, CONFIG_DIR_LEN
+    PATH_ABSOLUTE rax, 8f
+2:  mov rax, [rbx + r12*8 + 8]  # it leaves the list
+    mov [rbx + r12*8], rax
+    inc r12
+    test rax, rax
+    jnz 2b
+    jmp 7f
+4:  lea rdi, [rip + .Lconfig_dir]   # no pair: the environment's
+    call uproc_env_get
+    test rax, rax
+    jz 8f
+    PATH_ABSOLUTE rax, 8f
+7:  lea rdi, [rip + .Ldir_dropped]
+    call log_cstr
+    lea rax, [rip + unsets_dir]
+    EPILOGUE
+8:  lea rax, [rip + unsets]
     EPILOGUE
 
 # claude_exe() -> rax argv prefix, edx count (see the top of the file)
@@ -605,13 +651,18 @@ FN claude_dir
     lea r12, [rax + CONFIG_DIR_LEN]
     xor r13d, r13d
     jmp 3f
-1:  lea rdi, [rip + .Lconfig_dir]   # the environment claude gets
+1:  lea rdi, [rip + .Lconfig_dir_eq]   # a pair that is not absolute: claude gets none (dir_unsets)
+    mov esi, CONFIG_DIR_LEN
+    call pair_value
+    test rax, rax
+    jnz 2f
+    lea rdi, [rip + .Lconfig_dir]   # the environment claude gets: only an absolute one is passed on
     call uproc_env_get
     test rax, rax
     jz 2f
-    cmp byte ptr [rax], 0
-    je 2f
-    mov r12, rax
+    PATH_ABSOLUTE rax, 11f
+    jmp 2f
+11: mov r12, rax
     xor r13d, r13d
     jmp 3f
 2:  lea rdi, [rip + .Lhome_eq]   # the HOME claude gets: an env.HOME pair, else the environment's
@@ -907,6 +958,7 @@ claude_ctl:
 # rhun's forced values (they win over the env pairs) and the variables a surrounding Claude Code sets
 forced: .quad .Lf_entry, .Lf_mcp, 0
 unsets: .quad .Lu_claudecode, .Lu_child, .Lu_traceparent, .Lu_tracestate, 0
+unsets_dir: .quad .Lu_claudecode, .Lu_child, .Lu_traceparent, .Lu_tracestate, .Lconfig_dir, 0
 
 # [claude] initial_mode (config.s): " " is the CLI's own default, written as an empty value
 .globl g_claude_mode_opts
@@ -938,6 +990,7 @@ places:
 .Ldump_env: .asciz "claude.env."
 .Ldump_set: .asciz "=(set)\n"
 .Ldrop_a: .asciz "rhun: [claude] env."
+.Ldir_dropped: .asciz "rhun: CLAUDE_CONFIG_DIR is not an absolute path: claude is started without it\n"
 .Ldrop_b: .asciz " dropped: the name is not a variable's, the pair is over 8 KiB, or there are 64 already\n"
 .Lconfig_dir_eq: .ascii "CLAUDE_CONFIG_DIR="
 .Lconfig_dir: .asciz "CLAUDE_CONFIG_DIR"

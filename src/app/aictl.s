@@ -1529,4 +1529,6 @@ timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_co
     .quad .Lt_queue, g_conn_queue_max, .Lt_cache, g_cache_ttl_ms
     .quad .Lt_card, g_card_lock_ms, .Lt_keyed, g_card_keyed_ms     # the rich cards (agentcard.s)
     .quad .Lt_advance, g_card_advance_ms                            # the question card's move on
+    .quad .Lt_settings, g_settings_wait_ms      # the prompts' wait for get_settings (claude_session.s)
     .quad 0, 0
+.Lt_settings: .asciz "settings"

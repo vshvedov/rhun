@@ -60,22 +60,29 @@
 .equ CLF_ULTRA, 2
 .equ CLF_THINK, 3
 .equ THINK_TOKENS, 31999        # thinking on (finding 14; --max-thinking-tokens=31999 at a start)
+.equ CLP_PREV, 512              # AL_cfg, per conversation (the review of 2026-11-23): AL_dprev is what a
+.equ CLP_FLMODEL, 1024          #   refused pick puts back; AL_dmodel a model asked of the running program,
+.equ CLP_ULON, 4096             #   kept and named once applied; Ultracode asked on (its failure's words);
+.equ CLP_WAITTHINK, 16384       #   thinking switched while it started (apply_kept); the prompts wait for its
+.equ CLP_PROMPTS, 32768         #   first settings answer (prompts_go, at most g_settings_wait_ms); it started
+.equ CLP_UNBYPASS, 65536        #   in bypass without rhun's gate (default is asked first); AL_dpend is a pick
+.equ CLP_PEND, 131072           #   made while it started, asked once initialize is answered (claude_init_ask);
+.equ CLP_PLANWAIT, 262144       #   /plan without a program: get_plan once it is up (prompts_go)
+.equ SETTINGS_WAIT_MS, 3000     # the prompts wait this long at most for the first get_settings answer
+
+.data
+.p2align 2
+.globl g_settings_wait_ms
+g_settings_wait_ms: .long SETTINGS_WAIT_MS  # agent-timing settings= (tests)
 
 .bss
 .p2align 3
-fl_al: .quad 0                  # the model the user picked while the program ran: its AL and value (the pill
-fl_model: .zero 64              #   once it is applied)
-ul_on: .long 0                  # Ultracode asked on (1) or off: the failure's words
 .p2align 3
 fast_why: .zero 32              # the reason fast mode is off, kept while a record names none
 credit_txt: .zero 256           # the notification that refused fast mode's requests
 asb: .zero SB_SIZE              # a command's aliases, joined
 effort_sfx: .zero 48            # the Effort row's "(Level)"
 offered: .zero AMD_SIZE * MODES_N   # claude_modes' list
-prev_al: .quad 0                # the last pick asked of a running program: its AL and the mode before it
-prev_mode: .zero 32             #   (a refusal puts it back)
-pend_al: .quad 0                # a pick made while the program started, asked once initialize is answered
-pend_mode: .zero 32
 bsb: .zero SB_SIZE              # the settings band's text
 rsb: .zero SB_SIZE              # the rate-limit and auth bands' texts
 .globl g_cache_ttl_ms
@@ -581,7 +588,10 @@ origin_of:
     EPILOGUE
 
 # FN claude_settings_answer(AL*, control_response's response): get_settings' applied values, and its
-#   errors as the settings band
+#   errors as the settings band; everything is read before anything is written to the program (a write
+#   that breaks the connection runs its close, which may parse: the response is gone then). The first
+#   answer of a process (or its refusal) then writes the kept choices (apply_kept) and lets the prompts
+#   that waited go (prompts_go)
 FN claude_settings_answer
     PROLOGUE
     mov rbx, rdi
@@ -646,10 +656,6 @@ FN claude_settings_answer
 5:  mov rdi, rbx                # the policies the modes follow (effective settings)
     mov rsi, r12
     call policies
-    mov rdi, rbx                # the first answer of a process: the choices it has not taken yet
-    mov esi, r14d
-    mov edx, r15d
-    call apply_kept
     mov rdi, r12
     lea rsi, [rip + .Lk_errors]
     call json_get
@@ -663,7 +669,7 @@ FN claude_settings_answer
     xor edx, edx
     xor ecx, ecx
     call ev_band
-    EPILOGUE
+    jmp 7f
 6:  mov rdi, r13
     call band_text
     mov rdi, rbx
@@ -671,6 +677,12 @@ FN claude_settings_answer
     mov rdx, [rip + bsb + SB_ptr]
     mov rcx, [rip + bsb + SB_len]
     call ev_band
+7:  mov rdi, rbx                # read: the first answer of a process writes the choices it has not taken
+    mov esi, r14d               #   yet, then the prompts that waited go
+    mov edx, r15d
+    call apply_kept
+    mov rdi, rbx
+    call prompts_go
 9:  EPILOGUE
 .Lsa_refused:                   # refused: the error band says so (its words cut at 300 bytes)
     lea rdi, [rip + bsb]
@@ -695,6 +707,99 @@ FN claude_settings_answer
     mov rdx, [rip + bsb + SB_ptr]
     mov rcx, [rip + bsb + SB_len]
     call ev_band
+    mov rdi, rbx                # the choices still go (nothing says what is in effect), then the prompts
+    xor esi, esi
+    xor edx, edx
+    call apply_kept
+    mov rdi, rbx
+    call prompts_go
+    EPILOGUE
+
+# prompts_go(AL*): the prompts that waited for the first get_settings answer (CLP_PROMPTS) go now, once
+#   (ev_ready), while the start is still under way and the connection up; then a /plan that started it
+#   asks for the plan (CLP_PLANWAIT)
+prompts_go:
+    PROLOGUE
+    mov rbx, rdi
+    test dword ptr [rbx + AL_cfg], CLP_PROMPTS
+    jz 9f
+    and dword ptr [rbx + AL_cfg], ~CLP_PROMPTS
+    cmp dword ptr [rbx + AL_state], ALS_STARTING
+    jne 9f
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
+    call ev_ready
+    test dword ptr [rbx + AL_cfg], CLP_PLANWAIT
+    jz 9f
+    and dword ptr [rbx + AL_cfg], ~CLP_PLANWAIT
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
+    mov rdi, rbx
+    call claude_get_plan
+9:  EPILOGUE
+
+# FN claude_prompts_wait(AL*): initialize is answered and get_settings asked: the prompts wait for its
+#   answer, g_settings_wait_ms at most (claude_settings_tick)
+FN claude_prompts_wait
+    PROLOGUE
+    mov rbx, rdi
+    or dword ptr [rbx + AL_cfg], CLP_PROMPTS
+    call time_ms
+    mov ecx, [rip + g_settings_wait_ms]
+    add rax, rcx
+    mov [rbx + AL_dwait], rax
+    EPILOGUE
+
+# FN claude_settings_tick(): a get_settings that does not answer in time: the kept choices are written
+#   without its word and the prompts go
+FN claude_settings_tick
+    PROLOGUE
+1:  xor ebx, ebx
+2:  mov edi, ebx
+    call agent_live_at
+    test rax, rax
+    jz 9f
+    inc ebx
+    mov r12, rax
+    test dword ptr [r12 + AL_cfg], CLP_PROMPTS
+    jz 2b
+    call time_ms
+    cmp rax, [r12 + AL_dwait]
+    jl 2b
+    mov rdi, r12
+    xor esi, esi
+    xor edx, edx
+    call apply_kept
+    mov rdi, r12
+    call prompts_go
+    jmp 1b                      # (what went may have changed the list)
+9:  EPILOGUE
+
+# FN claude_settings_timeout() -> eax ms until a get_settings answer's wait ends (0: now), -1 when none waits
+FN claude_settings_timeout
+    PROLOGUE
+    mov r13, -1
+    xor ebx, ebx
+1:  mov edi, ebx
+    call agent_live_at
+    test rax, rax
+    jz 8f
+    inc ebx
+    mov r12, rax
+    test dword ptr [r12 + AL_cfg], CLP_PROMPTS
+    jz 1b
+    call time_ms
+    mov rcx, [r12 + AL_dwait]
+    sub rcx, rax
+    jns 2f
+    xor ecx, ecx
+2:  cmp r13, -1
+    je 3f
+    cmp rcx, r13
+    jae 1b
+3:  mov r13, rcx
+    jmp 1b
+8:  mov eax, r13d
     EPILOGUE
 
 # policies(AL*, get_settings' response): AL_cfg's CLP_NOAUTO (effective.permissions.disableAutoMode or
@@ -1222,7 +1327,18 @@ FN claude_set_mode
     je 2f
     cmp eax, ALS_STARTING       # not running: kept for its start (the start passes it), and the label
     jne 3f
-    or dword ptr [rbx + AL_cfg], CLP_MODEWAIT   # (a process starting now is asked once it answers)
+    test dword ptr [rbx + AL_cfg], CLP_PROMPTS
+    jnz 2f                      # initialize answered, the prompts wait for the settings: asked now
+    or dword ptr [rbx + AL_cfg], CLP_MODEWAIT   # (a process starting now is asked once it answers; its
+    mov rdi, rbx                #   answer makes it the project's default: claude_mode_answer)
+    call claude_sid
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call ev_mode
+    mov rdi, rbx
+    call agent_mode_keep
+    jmp .Lsm_yes
 3:  mov rdi, rbx
     call claude_sid
     mov rdi, rbx
@@ -1236,10 +1352,10 @@ FN claude_set_mode
     jmp .Lsm_yes
 2:  cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
     jne 3b
-    mov [rip + prev_al], rbx    # what a refusal puts back
-    lea rdi, [rip + prev_mode]
+    lea rdi, [rbx + AL_dprev]   # what a refusal puts back (this conversation's own)
     lea rsi, [rbx + AL_mode]
     call cstr_copy
+    or dword ptr [rbx + AL_cfg], CLP_PREV
     mov rdi, rbx
     mov rsi, r12
     call cl_set_mode
@@ -1343,76 +1459,131 @@ FN claude_mode_answer
     call sb_push_byte
     mov rdi, [rip + bsb + SB_ptr]
     call app_toast
-    cmp [rip + prev_al], rbx
-    jne 9f
-    mov qword ptr [rip + prev_al], 0
-    lea rdi, [rip + prev_mode]
+    test dword ptr [rbx + AL_cfg], CLP_PREV
+    jz 9f
+    and dword ptr [rbx + AL_cfg], ~CLP_PREV
+    lea rdi, [rbx + AL_dprev]
     call strlen
     mov rdx, rax
     mov rdi, rbx
-    lea rsi, [rip + prev_mode]
+    lea rsi, [rbx + AL_dprev]
     call ev_mode
 9:  EPILOGUE
 
-# FN claude_init_mode(AL*, mode ptr, len) -> rax ptr, rdx len: the mode to show once initialize is answered:
-#   a pick made while the program started (when it differs from the one it started in: it is asked for by
-#   claude_init_ask), else the one it reports
+# FN claude_init_mode(AL*, mode ptr or 0, len; 0: none reported) -> rax ptr, rdx len: the mode to show (rax 0:
+#   nothing changes; rdx 0: the label waits for the mode's answer):
+#   the mode to show once initialize is answered. A start in bypassPermissions without rhun's gate (the
+#   user's own default chose it) shows nothing yet: default is asked first (claude_init_ask, CLP_UNBYPASS) and
+#   its answer shows. A pick made while the program started (when it differs from the one it started in,
+#   through the gate again) is asked by claude_init_ask, the mode it reported kept to put back on a refusal;
+#   else the one it reports
 FN claude_init_mode
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
-    test dword ptr [rbx + AL_cfg], CLP_MODEWAIT
-    jz 9f
-    and dword ptr [rbx + AL_cfg], ~CLP_MODEWAIT
-    lea r14, [rbx + AL_mode]    # the pick (AL_mode holds it until initialize's report)
-    cmp byte ptr [r14], 0
-    je 9f
-    mov rdi, r14
-    call strlen
-    cmp rax, r13
-    jne 1f
-    mov rdi, r14
-    mov rsi, r12
-    mov rdx, r13
-    call memeq
-    test eax, eax
-    jnz 9f                      # it started in it
-1:  mov rdi, r14
-    call mode_entry
-    test rax, rax
-    jz 9f
-    mov [rip + pend_al], rbx
-    lea rdi, [rip + pend_mode]
-    mov rsi, r14
-    call cstr_copy
-    lea r12, [rip + pend_mode]
+    and dword ptr [rbx + AL_cfg], ~(CLP_UNBYPASS | CLP_PEND)
+    test r13, r13
+    jz 1f
     mov rdi, r12
-    call strlen
-    mov r13, rax
-9:  mov rax, r12
-    mov rdx, r13
-    EPILOGUE
-
-# FN claude_init_ask(AL*): the pick claude_init_mode kept is asked for (through the gate), before any prompt
-FN claude_init_ask
-    PROLOGUE
-    mov rbx, rdi
-    cmp [rip + pend_al], rbx
-    jne 9f
-    mov qword ptr [rip + pend_al], 0
-    lea rdi, [rip + pend_mode]
-    lea rsi, [rip + .Lv_bypass]
-    call strcmp_eq
+    mov rsi, r13
+    lea rdx, [rip + .Lv_bypass]
+    call str_eq_cstr
     test eax, eax
     jz 1f
     mov rdi, rbx
     call bypass_ok
     test eax, eax
-    jz 9f
-1:  mov qword ptr [rip + prev_al], 0
+    jnz 1f
+    or dword ptr [rbx + AL_cfg], CLP_UNBYPASS   # the mode it will be in once asked: default
+    lea r12, [rip + .Lv_default]
+    mov r13d, 7
+1:  test dword ptr [rbx + AL_cfg], CLP_MODEWAIT
+    jz 8f
+    and dword ptr [rbx + AL_cfg], ~CLP_MODEWAIT
+    lea r14, [rbx + AL_mode]    # the pick (AL_mode holds it until initialize's report)
+    cmp byte ptr [r14], 0
+    je 8f
+    mov rdi, r14
+    call mode_entry
+    test rax, rax
+    jz 8f
+    mov rdi, r14                # bypass picked: the gate once more (the setting may have gone meanwhile)
+    lea rsi, [rip + .Lv_bypass]
+    call strcmp_eq
+    test eax, eax
+    jz 2f
     mov rdi, rbx
-    lea rsi, [rip + pend_mode]
+    call bypass_ok
+    test eax, eax
+    jz 7f
+2:  mov rdi, r14
+    call strlen
+    cmp rax, r13
+    jne 3f
+    mov rdi, r14
+    mov rsi, r12
+    mov rdx, r13
+    call memeq
+    test eax, eax
+    jnz 8f                      # it started in it (or will be in it: default)
+3:  lea rdi, [rbx + AL_dpend]
+    mov rsi, r14
+    call cstr_copy
+    or dword ptr [rbx + AL_cfg], CLP_PEND
+    cmp r13, 31                 # what a refusal puts back: what it reported
+    jbe 4f
+    mov r13d, 31
+4:  lea rdi, [rbx + AL_dprev]
+    mov rsi, r12
+    mov rdx, r13
+    mov byte ptr [rdi + rdx], 0
+    call memmove
+    lea rax, [rbx + AL_dpend]
+    mov rdi, rax
+    call strlen
+    mov rdx, rax
+    lea rax, [rbx + AL_dpend]
+    EPILOGUE
+7:  test r13, r13                # bypass picked, the gate shut: the label shows what was reported, or
+    jnz 8f                      #   nothing (it never shows a mode that was not asked for)
+    lea r12, [rbx + AL_dprev]
+    mov byte ptr [r12], 0
+8:  mov rax, r12                # nothing picked: what it reported (nothing yet when default is asked)
+    mov rdx, r13
+    test dword ptr [rbx + AL_cfg], CLP_UNBYPASS
+    jz 9f
+    xor edx, edx
+9:  EPILOGUE
+
+# FN claude_init_ask(AL*): before any prompt: default when it started in bypass without the gate, then the
+#   pick claude_init_mode kept (through the gate)
+FN claude_init_ask
+    PROLOGUE
+    mov rbx, rdi
+    test dword ptr [rbx + AL_cfg], CLP_UNBYPASS
+    jz 1f
+    and dword ptr [rbx + AL_cfg], ~CLP_UNBYPASS
+    mov rdi, rbx                # (its answer shows the mode: claude_mode_answer)
+    lea rsi, [rip + .Lv_default]
+    call claude_mode_quiet
+    test eax, eax
+    jz 9f
+1:  test dword ptr [rbx + AL_cfg], CLP_PEND
+    jz 9f
+    and dword ptr [rbx + AL_cfg], ~CLP_PEND
+    lea rdi, [rbx + AL_dpend]
+    lea rsi, [rip + .Lv_bypass]
+    call strcmp_eq
+    test eax, eax
+    jz 2f
+    mov rdi, rbx
+    call bypass_ok
+    test eax, eax
+    jz 9f
+2:  or dword ptr [rbx + AL_cfg], CLP_PREV   # a refusal puts back what it reported (AL_dprev)
+    mov rdi, rbx
+    lea rsi, [rbx + AL_dpend]
     call cl_set_mode
 9:  EPILOGUE
 
@@ -1472,7 +1643,18 @@ FN claude_set_model
     jz .Lsmo_no
     test dword ptr [rax + AMO_flags], AMOF_OFF
     jnz .Lsmo_no
-    mov rdi, r13
+    test rbx, rbx               # a draft's pick (AL* 0): nothing runs
+    jz 2f
+    mov rdi, rbx
+    call live_up
+    test eax, eax
+    jz 2f
+    lea rdi, [rbx + AL_dmodel]  # running: kept, and its pill, once it is applied (claude_flags_answer)
+    mov rsi, r12
+    call cstr_copy
+    or dword ptr [rbx + AL_cfg], CLP_FLMODEL
+    jmp 1f
+2:  mov rdi, r13
     mov esi, AGF_MODEL
     mov rdx, r12
     mov rcx, r14
@@ -1481,15 +1663,8 @@ FN claude_set_model
     call agentcfg_save
     test rbx, rbx               # a draft's pick (AL* 0): the project's choice only
     jz .Lsmo_yes
-    mov rdi, rbx
-    call live_up
-    test eax, eax
-    jz 3f
-    mov [rip + fl_al], rbx      # the pill once it is applied
-    lea rdi, [rip + fl_model]
-    mov rsi, r12
-    call cstr_copy
-    mov rdi, rbx
+    jmp 3f
+1:  mov rdi, rbx
     mov esi, CLF_MODEL
     lea rdx, [rip + .Lk_model]
     mov rcx, r12
@@ -1624,8 +1799,11 @@ FN claude_set_ultra
     call agentcfg_save
     test r14d, r14d
     jz .Lsu_yes
-    mov [rip + ul_on], r12d
-    mov rdi, rbx
+    and dword ptr [rbx + AL_cfg], ~CLP_ULON  # this conversation's: a refusal's words
+    test r12d, r12d
+    jz 3f
+    or dword ptr [rbx + AL_cfg], CLP_ULON
+3:  mov rdi, rbx
     mov esi, CLF_ULTRA
     lea rdx, [rip + .Lk_ultra]
     xor ecx, ecx
@@ -1679,13 +1857,17 @@ FN claude_set_thinking
     mov rdi, rbx
     call live_up
     test eax, eax
-    jz 1f
+    jz 2f
     xor edx, edx
     test dword ptr [rbx + AL_cfg], CLP_SUMMARIES
     setnz dl
     mov rdi, rbx
     mov esi, r12d
     call cl_thinking
+    jmp 1f
+2:  cmp dword ptr [rbx + AL_state], ALS_STARTING
+    jne 1f
+    or dword ptr [rbx + AL_cfg], CLP_WAITTHINK     # asked once its first settings answer came (apply_kept)
 1:  mov dword ptr [rip + g_dirty], 1
     mov eax, 1
     EPILOGUE
@@ -1698,7 +1880,7 @@ FN claude_set_thinking
 FN claude_started
     PROLOGUE
     mov rbx, rdi
-    and dword ptr [rbx + AL_cfg], ~(CLP_WAITMODEL | CLP_WAITEFFORT | CLP_CREDITS)
+    and dword ptr [rbx + AL_cfg], ~(CLP_WAITMODEL | CLP_WAITEFFORT | CLP_WAITTHINK | CLP_CREDITS | CLP_PREV | CLP_FLMODEL | CLP_PROMPTS | CLP_UNBYPASS | CLP_PEND)
     or dword ptr [rbx + AL_cfg], CLP_FIRST
     mov edi, AG_CLAUDE
     call agentcfg_get
@@ -1708,9 +1890,9 @@ FN claude_started
     mov [rbx + AL_think], ecx
     EPILOGUE
 
-# apply_kept(AL*, Ultracode offered, on): the first get_settings answer of a process: a model and an effort
-#   level picked while it started are asked for now, and the project's Ultracode when it differs from the
-#   one in effect
+# apply_kept(AL*, Ultracode offered, on): the first get_settings answer of a process (or its refusal, or the
+#   wait's end: nothing offered): a model, an effort level and thinking picked while it started are asked
+#   for now, and the project's Ultracode when it differs from the one in effect
 apply_kept:
     PROLOGUE
     mov rbx, rdi
@@ -1719,7 +1901,7 @@ apply_kept:
     test dword ptr [rbx + AL_cfg], CLP_FIRST
     jz 9f
     mov r12d, [rbx + AL_cfg]
-    and dword ptr [rbx + AL_cfg], ~(CLP_FIRST | CLP_WAITMODEL | CLP_WAITEFFORT)
+    and dword ptr [rbx + AL_cfg], ~(CLP_FIRST | CLP_WAITMODEL | CLP_WAITEFFORT | CLP_WAITTHINK)
     mov edi, AG_CLAUDE
     call agentcfg_get
     mov r13, rax
@@ -1727,7 +1909,7 @@ apply_kept:
     jz 1f
     cmp byte ptr [r13 + AGC_model], 0
     je 1f
-    mov qword ptr [rip + fl_al], 0
+    and dword ptr [rbx + AL_cfg], ~CLP_FLMODEL  # (the project's already: no pill)
     mov rdi, rbx
     mov esi, CLF_MODEL
     lea rdx, [rip + .Lk_model]
@@ -1746,14 +1928,30 @@ apply_kept:
     call cl_apply
     test eax, eax
     jz 9f
-2:  test r14d, r14d
+2:  test r12d, CLP_WAITTHINK    # thinking switched while it started
+    jz 21f
+    xor esi, esi
+    cmp dword ptr [r13 + AGC_think], 0
+    setne sil
+    xor edx, edx
+    test dword ptr [rbx + AL_cfg], CLP_SUMMARIES
+    setnz dl
+    mov rdi, rbx
+    call cl_thinking
+    test eax, eax
+    jz 9f
+21: test r14d, r14d
     jz 9f
     mov eax, [r13 + AGC_ultra]
     test eax, eax
     js 9f
     cmp eax, r15d
     je 9f
-    mov [rip + ul_on], eax
+    and dword ptr [rbx + AL_cfg], ~CLP_ULON
+    test eax, eax
+    jz 22f
+    or dword ptr [rbx + AL_cfg], CLP_ULON
+22: mov eax, [r13 + AGC_ultra]
     mov rdi, rbx
     mov esi, CLF_ULTRA
     lea rdx, [rip + .Lk_ultra]
@@ -1782,24 +1980,32 @@ FN claude_flags_answer
     jz 5f
     cmp r13d, CLF_MODEL
     jne 4f
-    cmp [rip + fl_al], rbx
-    jne 4f
-    mov qword ptr [rip + fl_al], 0
+    test dword ptr [rbx + AL_cfg], CLP_FLMODEL
+    jz 4f
+    and dword ptr [rbx + AL_cfg], ~CLP_FLMODEL
+    mov edi, AG_CLAUDE          # applied: the project's model now
+    call agentcfg_get
+    mov r14, rax
+    lea rdi, [rbx + AL_dmodel]
+    call strlen
+    mov r15, rax
+    mov rdi, r14
+    mov esi, AGF_MODEL
+    lea rdx, [rbx + AL_dmodel]
+    mov rcx, r15
+    call agentcfg_set
+    mov rdi, r14
+    call agentcfg_save
     lea rdi, [rip + bsb]        # "Switched to NAME" (webview index.js @5967170)
     call sb_clear
     lea rdi, [rip + bsb]
     lea rsi, [rip + .Lp_switched]
     call sb_push_cstr
-    mov edi, AG_CLAUDE
-    call agentcfg_get
-    mov r14, rax
-    lea rdi, [rip + fl_model]
-    call strlen
     mov rdi, r14
-    lea rsi, [rip + fl_model]
-    mov rdx, rax
+    lea rsi, [rbx + AL_dmodel]
+    mov rdx, r15
     call agentcfg_find_model
-    lea rsi, [rip + fl_model]
+    lea rsi, [rbx + AL_dmodel]
     test rax, rax
     jz 3f
     mov rsi, [rax + AMO_label]
@@ -1821,10 +2027,13 @@ FN claude_flags_answer
     cmp r13d, CLF_ULTRA
     jne 6f
     lea rsi, [rip + .Lf_ultra_off]
-    cmp dword ptr [rip + ul_on], 0
-    je 6f
+    test dword ptr [rbx + AL_cfg], CLP_ULON
+    jz 6f
     lea rsi, [rip + .Lf_ultra_on]
-6:  lea rdi, [rip + bsb]
+6:  cmp r13d, CLF_MODEL         # a refused model is not the project's, and no pill names it
+    jne 61f
+    and dword ptr [rbx + AL_cfg], ~CLP_FLMODEL
+61: lea rdi, [rip + bsb]
     call sb_push_cstr
     mov rdi, r12
     lea rsi, [rip + .Lk_error]

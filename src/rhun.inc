@@ -2997,6 +2997,10 @@ F AL_bands, 8*BK_COUNT      # owned cstr or 0 per band kind (BK_*)
 F AL_word, 16           # cstr: the word the box paints, "" none
 F AL_keyed, 8           # time_ms of the box's last key (the card focus rule)
 F AL_blinks, 8*BK_COUNT # owned "LABEL\0URL\0" or 0 per band kind: the band's link (ev_band_link)
+F AL_dprev, 32          # the driver's own, per conversation: cstr, the mode before a pick it asked for (a
+F AL_dpend, 32          #   refusal puts it back); cstr, a mode picked while its program started;
+F AL_dmodel, 64         #   cstr, a model picked while it ran (kept and named once applied);
+F AL_dwait, 8           #   time_ms the prompts held for its first settings answer go anyway
 ENDSTRUCT AL_SIZE
 .equ TE_DONE, 0                 # ev_turn_end's reasons
 .equ TE_ERROR, 1

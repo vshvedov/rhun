@@ -2720,6 +2720,168 @@ class ReviewProtocolTest(ModelCase):
         self.command('wait 200')
         self.assertIn(' model=claude-opus-5-5 ', self.command('print-agent-live'))
 
+    def test_the_kept_choices_go_before_the_first_prompt(self):
+        # P2: the project's Ultracode (applied once get_settings answered) is written before the prompt
+        self.start(env={'FAKE_CLAUDE_MODELS': 'ultra'})
+        self.command('agent-cfg-set ultra 1')
+        self.chat('hello')
+        order = self.order()
+        self.assertEqual(order[:2], ['initialize', 'get_settings'])
+        self.assertIn('apply_flag_settings', order)
+        self.assertLess(order.index('apply_flag_settings'), order.index('user hello'))
+        self.assertEqual(self.flags(), [{'ultracode': True}])
+        # a model picked while it starts goes before the prompt too
+        self.released()
+        self.command('agent-prompt again')
+        self.command('agent-model sonnet')
+        self.command('wait-agent ready 10000')
+        order = self.order()
+        second = order[len(order) - 1 - order[::-1].index('initialize'):]
+        self.assertEqual(second[:2], ['initialize', 'get_settings'])
+        self.assertLess(second.index('apply_flag_settings'), second.index('user again'))
+        self.assertIn({'model': 'sonnet'}, self.flags())
+
+    def test_prompts_wait_for_the_settings_at_most_the_bound(self):
+        # P2: a get_settings that never answers holds the prompts only for the bound (agent-timing settings=)
+        self.start(env={'FAKE_CLAUDE_SETTINGS_MS': 'never'})
+        self.command('agent-timing settings=1500')
+        began = time.monotonic()
+        self.chat('hello')
+        self.assertGreaterEqual(time.monotonic() - began, 1.4)
+        self.assertEqual(self.thread()[-1], chat.REPLY + 'ok: hello')
+        # one that answers late: the prompts go when it does, before the bound
+        self.quit()
+        self.start(env={'FAKE_CLAUDE_SETTINGS_MS': '400'})
+        self.command('agent-timing settings=5000')
+        began = time.monotonic()
+        self.chat('hello')
+        self.assertLess(time.monotonic() - began, 4)
+        records = self.records()
+        records = records[max(i for i, r in enumerate(records) if r.get('start') == 'stream'):]
+        answered = next(i for i, r in enumerate(records) if 'settings_answer' in r)
+        user = next(i for i, r in enumerate(records) if 'stdin' in r and json.loads(r['stdin']).get('type') == 'user')
+        self.assertLess(answered, user)
+
+    def test_a_refused_settings_answer_lets_the_prompts_go(self):
+        self.start(env={'FAKE_CLAUDE_SETTINGS_FAIL': 'no settings'})
+        self.chat('hello')
+        self.assertEqual(self.thread()[-1], chat.REPLY + 'ok: hello')
+
+    def test_a_refused_pick_during_a_start_goes_back(self):
+        # P3: a mode picked while the program starts and refused by it: the label and the kept mode are the
+        # program's again, and the refused mode is not the project's default
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '800', 'FAKE_CLAUDE_MODELS': 'auto', 'FAKE_CLAUDE_REFUSE_AUTO': '1'})
+        self.chat('hello')                              # the lists (auto is offered), then a start again
+        self.released()
+        self.command('agent-prompt again')
+        self.command('agent-mode auto')
+        self.command('wait-agent ready 10000')
+        self.until(lambda: self.asked() == ['auto'], 'asked')
+        self.until(lambda: self.mode() == 'default', 'the mode it reported')
+        self.assertEqual(self.foot()['label'], 'Manual')
+        self.assertIn(self.conv_mode(self.sid()), (None, 'default'))
+        self.assertNotEqual(self.newmode(), 'auto')
+        self.assertIn('Failed to set mode', self.command('print-toast'))
+
+    def test_a_pick_during_a_start_without_a_reported_mode_is_sent(self):
+        # 4.3 (2): initialize without current_permission_mode still sends the pick before the prompt
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '800', 'FAKE_CLAUDE_NO_INIT_MODE': '1'})
+        self.command('agent-new claude')
+        self.command('agent-prompt hello')
+        self.command('agent-mode acceptEdits')
+        self.command('wait-agent ready 10000')
+        order = self.order()
+        self.assertIn('set_permission_mode', order)
+        self.assertLess(order.index('set_permission_mode'), order.index('user hello'))
+        self.assertEqual(self.asked(), ['acceptEdits'])
+        self.until(lambda: self.mode() == 'acceptEdits', 'the mode')
+
+    def test_bypass_picked_during_a_start_goes_through_the_gate_again(self):
+        # 4.3 (3): the setting turned off before initialize answered: bypass is neither sent nor shown
+        self.start(self.claude_section('allow_bypass_permissions = true\n'), env={'FAKE_CLAUDE_INIT_MS': '8000'})
+        self.command('agent-new claude')
+        self.command('agent-prompt hello')
+        self.command('agent-mode bypassPermissions')
+        self.assertEqual(self.foot()['label'], 'Bypass permissions')
+        time.sleep(1.1)                                 # (the config's time changes)
+        self.config.write_text(self.BASE + self.claude_section('allow_bypass_permissions = false\n'), encoding='utf-8')
+        self.until(lambda: not self.reply('agent-mode bypassPermissions')[1], 'the reload', 7)
+        self.assertFalse([r for r in self.records() if 'initialize' in r], 'initialize answered too early')
+        self.command('wait-agent ready 10000')
+        self.command('wait 200')
+        self.assertNotIn('bypassPermissions', self.asked())
+        self.assertNotEqual(self.mode(), 'bypassPermissions')
+        self.assertNotEqual(self.foot()['label'], 'Bypass permissions')
+
+    def test_thinking_switched_during_a_start_is_applied(self):
+        # 4.3 (1): as model and effort are, once the program is up
+        self.start(env={'FAKE_CLAUDE_MODELS': 'nothink', 'FAKE_CLAUDE_INIT_MS': '800'})
+        self.chat('hello', ms=15000)
+        self.released()
+        self.command('agent-prompt again')
+        self.command('agent-thinking off')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.starts()[-1]['switches']['thinking'], '31999')
+        self.until(lambda: self.thinking() and self.thinking()[-1]['max_thinking_tokens'] == 0, 'thinking off')
+        order = self.order()
+        last = len(order) - 1 - order[::-1].index('initialize')
+        self.assertLess(order.index('set_max_thinking_tokens', last), order.index('user again'))
+
+    def test_bypass_at_a_start_without_the_setting_is_left(self):
+        # P7: the user's own default starts the CLI in bypass; rhun's setting is off: default is asked for
+        # before any prompt, the footer follows the CLI's answer, nothing remembers bypass
+        self.start(env={'FAKE_CLAUDE_MODE': 'bypassPermissions'})
+        self.chat('hello')
+        order = self.order()
+        self.assertEqual(order[:2], ['initialize', 'get_settings'])
+        self.assertIn('set_permission_mode', order)
+        self.assertLess(order.index('set_permission_mode'), order.index('user hello'))
+        self.assertEqual(self.asked(), ['default'])
+        self.until(lambda: self.mode() == 'default', 'default')
+        self.assertEqual(self.foot()['label'], 'Manual')
+        self.assertNotEqual(self.conv_mode(self.sid()), 'bypassPermissions')
+        self.assertNotEqual(self.newmode(), 'bypassPermissions')
+        self.quit()
+        # with the setting on, the CLI's bypass stays
+        self.start(self.claude_section('allow_bypass_permissions = true\n'),
+                   env={'FAKE_CLAUDE_MODE': 'bypassPermissions'})
+        self.chat('hello')
+        self.assertEqual(self.mode(), 'bypassPermissions')
+
+    def test_two_conversations_pick_modes_at_once(self):
+        # 4.2: the mode before a pick is each conversation's own: a refusal in one while the other asks puts
+        # its own mode back
+        self.start(env={'FAKE_CLAUDE_MODELS': 'auto', 'FAKE_CLAUDE_REFUSE_AUTO': '1', 'FAKE_CLAUDE_MODE_MS': '800'})
+        self.chat('one')
+        first = self.sid()
+        self.chat('two')
+        second = self.sid()
+        self.open_sid(first)
+        self.command('agent-mode auto')                 # refused, 800 ms later
+        self.open_sid(second)
+        self.command('agent-mode acceptEdits')
+        self.until(lambda: sorted(self.asked()) == ['acceptEdits', 'auto'], 'both asked')
+        self.until(lambda: len([r for r in self.records() if 'mode_answer' in r]) == 2, 'both answered')
+        self.command('wait 200')
+        self.assertEqual(self.mode(), 'acceptEdits')
+        self.open_sid(first)
+        self.assertEqual(self.mode(), 'default')
+        self.assertIn(self.conv_mode(first), (None, 'default'))
+
+    def test_a_refused_model_is_not_kept(self):
+        # 4.2: a model the CLI refuses is not the project's choice, and no pill names it
+        self.start(env={'FAKE_CLAUDE_REFUSE_MODEL': 'sonnet'})
+        self.chat('hello')
+        self.command('agent-model sonnet')
+        self.until(lambda: 'Failed to set model' in self.command('print-toast'), 'the refusal')
+        self.until(lambda: ' model=claude-opus-5-5 ' in self.command('print-agent-live'), 'back')
+        self.assertTrue(self.choices().startswith('model=- '), self.choices())
+        self.assertEqual(self.pills(), [])
+        self.command('agent-cfg-set ultra 0')
+        self.command('agent-model default')             # one that goes: its own pill only
+        self.until(lambda: self.pills(), 'a pill')
+        self.assertEqual(self.pills(), ['Switched to Default (recommended)'])
+
 
 if __name__ == '__main__':
     unittest.main()

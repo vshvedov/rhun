@@ -1130,9 +1130,12 @@ au_answer:
     EPILOGUE
 
 # FN claude_auth_tick(): the sign-in question's time, kept whoever waits for it (a draft left before the
-#   answer has no record to ask cl_auth): past AUTH_MS it ends and counts as signed in, as in cl_auth
+#   answer has no record to ask cl_auth): past AUTH_MS it ends and counts as signed in, as in cl_auth. The
+#   driver's other clock goes with it: prompts that waited too long for a get_settings answer
+#   (claude_settings_tick)
 FN claude_auth_tick
     PROLOGUE
+    call claude_settings_tick
     cmp dword ptr [rip + au_state], AU_ASKING
     jne 9f
     call time_ms
@@ -1141,9 +1144,12 @@ FN claude_auth_tick
     call au_timeout
 9:  EPILOGUE
 
-# FN claude_auth_timeout() -> eax ms until the sign-in question's time is up (0: now), -1 when none runs
+# FN claude_auth_timeout() -> eax ms until the sign-in question's time is up (0: now), or the wait for a
+#   get_settings answer (claude_settings_timeout), whichever comes first; -1 when none runs
 FN claude_auth_timeout
     PROLOGUE
+    call claude_settings_timeout
+    mov ebx, eax
     mov eax, -1
     cmp dword ptr [rip + au_state], AU_ASKING
     jne 9f
@@ -1153,7 +1159,14 @@ FN claude_auth_timeout
     xor eax, eax
     test rcx, rcx
     cmovg eax, ecx
-9:  EPILOGUE
+9:  test ebx, ebx
+    js 8f
+    test eax, eax
+    js 7f
+    cmp eax, ebx
+    jbe 8f
+7:  mov eax, ebx
+8:  EPILOGUE
 
 # FN claude_auth_end(): the status question, if one runs, ends (its watch, its pipe, its process); its
 #   profile is asked again next time (au_done sets an answer after)
@@ -3157,10 +3170,13 @@ h_response:
     lea rsi, [rip + .Lk_current_mode]
     call jstr
     test rdx, rdx
-    jz 1f
-    mov rdi, rbx                # a mode picked while it started is asked for below (claude_session.s)
+    jnz 11f
+    xor eax, eax                # none reported: a pick is still asked for
+11: mov rdi, rbx                # a mode picked while it started is asked for below (claude_session.s)
     mov rsi, rax
     call claude_init_mode
+    test rax, rax
+    jz 1f
     mov rdi, rbx
     mov rsi, rax
     call ev_mode
@@ -3174,12 +3190,12 @@ h_response:
     call send_get_settings
     cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
     jne 9f
-    mov rdi, rbx                # the mode picked while it started, before any prompt goes
-    call claude_init_ask
+    mov rdi, rbx                # the mode picked while it started (default first after a start in bypass
+    call claude_init_ask        #   without rhun's gate), before any prompt goes
     cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
     jne 9f
-    mov rdi, rbx
-    call ev_ready
+    mov rdi, rbx                # the prompts wait for get_settings' answer: the kept choices go first
+    call claude_prompts_wait    #   (claude_settings_answer, or the bound: claude_settings_tick)
 9:  EPILOGUE
 5:  mov rdi, r12                # refused: the start failed with its words, the process goes
     lea rsi, [rip + .Lk_error]

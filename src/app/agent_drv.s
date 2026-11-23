@@ -181,6 +181,16 @@ FN agent_live_get
     mov rax, [rdi + AS_live]
 1:  ret
 
+# FN agent_live_at(i) -> rax the i-th live record (from 0, in no order), or 0 past the last: a driver's clock
+#   looks at its own
+FN agent_live_at
+    xor eax, eax
+    cmp rdi, [rip + lives + VEC_len]
+    jae 1f
+    mov rax, [rip + lives + VEC_ptr]
+    mov rax, [rax + rdi*8]
+1:  ret
+
 # FN agent_live(AS*) -> rax its live record, made on first use; 0 when its driver keeps none
 FN agent_live
     PROLOGUE

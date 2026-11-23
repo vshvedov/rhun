@@ -10,6 +10,8 @@
 #     shared arena is reset (a JV* of an earlier parse is invalid afterwards). Windows: HOLDER_NONE
 .include "rhun.inc"
 
+.equ RECORD_MAX, 65536      # a session record is a few hundred bytes
+
 .bss
 .p2align 3
 hc_sid: .quad 0             # the conversation looked for (cstr)
@@ -115,7 +117,8 @@ judge:
     mov dword ptr [rip + hc_result], HOLDER_UNKNOWN
 9:  EPILOGUE
 
-# one_file(ctx, name): dir_each_names' step: a file NAME.json of the sessions folder, read and judged
+# one_file(ctx, name): dir_each_names' step: a file NAME.json of the sessions folder, read and judged.
+#   Only a regular file of RECORD_MAX bytes at most is read: anything else there is no record (skipped)
 one_file:
     PROLOGUE
     mov rbx, rsi
@@ -132,10 +135,17 @@ one_file:
     mov rsi, rbx
     call path_join_tmp
     mov rdi, rax
-    call file_read_all
+    mov esi, RECORD_MAX
+    call file_read_limited
     test rax, rax
     jnz 1f
     cmp rdx, -2                 # ENOENT: the session ended between the listing and the read
+    je 9f
+    cmp rdx, -22                # not a regular file (a FIFO would never end, a device), a folder, or
+    je 9f                       #   larger than a record is: skipped
+    cmp rdx, -21
+    je 9f
+    cmp rdx, -27
     je 9f
     jmp 8f
 1:  mov r12, rax

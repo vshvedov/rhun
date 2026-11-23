@@ -1683,6 +1683,19 @@ class HolderTest(DrivenCase):
         (self.work / '.claude/sessions/bad.json').write_text('{not json', encoding='utf-8')
         self.assertEqual(self.command('print-holder s2'), 'holder=unknown\n')
 
+    def test_only_small_regular_files_are_records(self):
+        # a FIFO, a folder and a file larger than any record are no records: skipped, not unknown
+        record = self.hold('s3')
+        text = json.loads(record.read_text(encoding='utf-8'))
+        text['padding'] = 'x' * 70000
+        record.write_text(json.dumps(text), encoding='utf-8')
+        os.mkfifo(record.parent / 'fifo.json')
+        (record.parent / 'folder.json').mkdir()
+        self.start()
+        self.assertEqual(self.command('print-holder s3'), 'holder=none\n')
+        self.hold('s4')
+        self.assertEqual(self.command('print-holder s4'), 'holder=other\n')
+
 
 SIGN_IN_CARD = 'card=Claude Code is not signed in. options=Sign In'
 TRUST_CARD = ("card=Trust this folder? Claude Code would then use the project's own settings, hooks and "

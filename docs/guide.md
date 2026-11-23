@@ -179,7 +179,8 @@ alone. **Cancel** puts your prompt back into the box. rhun does not check on Win
 Signing in is Claude Code's own: run `claude auth login` in rhun's terminal, or anywhere else, and
 rhun uses that sign-in through the CLI. rhun never signs in, reads or stores Claude Code's
 credentials. Before the first start in a window rhun runs `claude auth status --json` in the
-background and reads only whether it is signed in; an answer it cannot read, or none in 10
+background, once for each Claude Code folder its conversations use, and reads only whether it is
+signed in; an answer it cannot read, or none in 10
 seconds, counts as signed in. When it is not signed in, or a turn fails because the sign-in was
 refused, the prompt goes back into the box and a card says "Claude Code is not signed in." with
 **Sign In**. Sign In opens the prompt "Run in the terminal: Enter, or Esc" with `claude auth login`
@@ -288,8 +289,9 @@ line: `path`,
 `path:12`, `path:12:5`, `path:12-20`, `path#L12` or `path#L12-L20`, absolute, or relative to the
 conversation's checkout and then to the project. A `file:` URI of one is read too (`file:///path`,
 `file://host/path` with the host left out, `file:/path`; `file:///C:/path` is `C:/path`), and `%`
-escapes such as `%20` are decoded. A range goes to its first line, and a file that does not exist
-shows "No such file: PATH" instead.
+escapes such as `%20` are decoded, after the line is taken off, so `a%23b.txt` is the file
+`a#b.txt`; a file whose whole name is the link's text, `#` or `:` included, is opened as that. A
+range goes to its first line, and a file that does not exist shows "No such file: PATH" instead.
 
 ### Text size
 

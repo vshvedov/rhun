@@ -242,7 +242,7 @@ type them.
 | General config… | Opens Settings > Claude Code |
 | Switch account, `/login`; Sign out, `/logout` | Opens rhun's terminal prompt with `claude auth login` or `claude auth logout` |
 | View help docs | Asks before opening Claude Code's documentation |
-| `/plan [open\|TEXT]` | Switches to Plan mode, and sends TEXT as a prompt; in Plan mode `/plan open` shows the plan Claude wrote in a tab |
+| `/plan [open\|TEXT]` | Switches to Plan mode, and sends TEXT as a prompt; in Plan mode `/plan`, with or without words, shows the plan Claude wrote in a tab instead |
 | `/copy [N]` | Copies Claude's last reply, or the Nth last, to the clipboard |
 | Every other command | Goes to Claude Code as typed, as the list of its commands shows them |
 
@@ -288,8 +288,8 @@ it while the box holds text, and a click on the card gives it the keys. Keys typ
 the editor never answer a card, and for the first half second a card's buttons do nothing. With the
 keys, 1, 2 and 3 pick a button and the next number goes to the text field, Up and Down move between
 the command, the buttons and the field, Enter presses the focused one (in the field, Enter sends the
-No with your text), and Tab goes back to the box. A card that suggests No starts on it, without
-numbers. One card shows at a time, the oldest first, and the others wait behind it (32 at most;
+No with your text), and Tab goes back to the box. You can paste into the command and into a
+card's text field. A card that suggests No starts on it, without numbers. One card shows at a time, the oldest first, and the others wait behind it (32 at most;
 Claude gets an error for one more). A request Claude withdraws goes, with a "Withdrawn by Claude"
 row. If the process ends while a card is up, the card goes and a row says "Claude Code ended before
 the request was answered."
@@ -316,7 +316,8 @@ Claude Code may also ask about usage credits for a model ("Continue on Fable wit
 "Fable requires usage credits") with **Switch to the default model and continue**, which also
 drops rhun's model choice for the project, and **Continue with NAME**, **Buy usage credits on
 claude.ai** or **Request usage credits from your admin**; and when auto mode falls back to Claude
-Code's own checks, with **Continue** and **Stop**. Both have **Learn more**. Requests of other
+Code's own checks, with **Continue** and **Stop** (this card has no ×: Escape stops the turn, as
+it does without a card). Both have **Learn more**. Requests of other
 kinds (from hooks, MCP servers, forms or other dialogs) are answered as not supported, so Claude
 never waits for a card that is not there.
 

@@ -66,7 +66,9 @@
 .equ CLP_UNBYPASS, 65536        #   in bypass without rhun's gate (default is asked first); AL_dpend is a pick
 .equ CLP_PEND, 131072           #   made while it started, asked once initialize is answered (claude_init_ask);
 .equ CLP_PLANWAIT, 262144       #   /plan without a program: get_plan once it is up (prompts_go)
-.equ CLP_RUN, CLP_MODEWAIT | CLP_WAITMODEL | CLP_WAITEFFORT | CLP_FIRST | CLP_WAITTHINK | CLP_PROMPTS | CLP_UNBYPASS | CLP_PEND | CLP_PLANWAIT | CLP_PREV
+.equ CLP_SPINCOMPACT, 1024      #   the spinner's words: it compacts (system/status compacting),
+.equ CLP_SPINHOOK, 2048         #   a start-up hook runs (hook_started of SessionStart or Setup, no answer yet)
+.equ CLP_RUN, CLP_MODEWAIT | CLP_WAITMODEL | CLP_WAITEFFORT | CLP_FIRST | CLP_WAITTHINK | CLP_PROMPTS | CLP_UNBYPASS | CLP_PEND | CLP_PLANWAIT | CLP_PREV | CLP_SPINCOMPACT | CLP_SPINHOOK
                                 # what a start or a run keeps: claude_ended lets go of it (and AL_dpicks)
 .equ SETTINGS_WAIT_MS, 3000     # the prompts wait this long at most for the first get_settings answer
 .equ DPICK_N, 4                 # AL_dpicks: the models asked of the running program, by request: {its
@@ -90,14 +92,6 @@ bsb: .zero SB_SIZE              # the settings band's text
 rsb: .zero SB_SIZE              # the rate-limit and auth bands' texts
 .globl g_cache_ttl_ms
 g_cache_ttl_ms: .long 0         # tests: a prompt cache's lifetime in ms in place of the CLI's (agent-timing cache=)
-tz_tried: .long 0               # the zone file was looked for (tz_load)
-tz_n: .zero 4 * 6               # a zone file header's counts
-.p2align 3
-tz_buf: .quad 0                 # the zone file (owned), or 0
-tz_len: .quad 0
-tz_p: .quad 0                   # the POSIX rule being read, and its end
-tz_end: .quad 0
-tz_path: .zero 256
 
 .text
 
@@ -2243,6 +2237,9 @@ FN claude_record
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    call spin_record            # the spinner's words (MLe @5436400)
+    mov rdi, rbx
+    mov rsi, r12
     call usage_record           # the context window, a compaction
     mov rdi, rbx
     mov rsi, r12
@@ -3230,6 +3227,92 @@ milli:
     xor edx, edx
     EPILOGUE
 
+# ---- the spinner's words ----
+
+# spin_record(AL*, record): the spinner's words in place of a verb, as the extension picks them (MLe
+#   @5436400): "Compacting" from system/status compacting until another status; else "Running start-up hooks"
+#   from a SessionStart or Setup hook's hook_started until its hook_response (2.1.330 sends those before the
+#   initialize answer and during /compact without --include-hook-events, finding 32); a turn's result ends
+#   both. The words go to the spinner as data (ev_spin); none: the verbs again
+spin_record:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, [rbx + AL_cfg]
+    mov rdi, r12
+    lea rsi, [rip + .Lk_type]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_result]
+    call json_is
+    test eax, eax
+    jz 1f
+    and dword ptr [rbx + AL_cfg], ~(CLP_SPINCOMPACT | CLP_SPINHOOK)
+    jmp 7f
+1:  mov rdi, r12
+    lea rsi, [rip + .Lk_subtype]
+    call json_get
+    mov r14, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lk_status]
+    call json_is
+    test eax, eax
+    jz 2f
+    and dword ptr [rbx + AL_cfg], ~CLP_SPINCOMPACT
+    mov rdi, r12
+    lea rsi, [rip + .Lk_status]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lsp_compacting_v]
+    call json_is
+    test eax, eax
+    jz 7f
+    or dword ptr [rbx + AL_cfg], CLP_SPINCOMPACT
+    jmp 7f
+2:  mov rdi, r14
+    lea rsi, [rip + .Lsp_started]
+    call json_is
+    mov r15d, eax
+    mov rdi, r14
+    lea rsi, [rip + .Lsp_response]
+    call json_is
+    or eax, r15d
+    jz 9f                       # nothing of the spinner's
+    mov rdi, r12
+    lea rsi, [rip + .Lsp_event]
+    call json_get
+    mov r14, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lsp_start]
+    call json_is
+    test eax, eax
+    jnz 3f
+    mov rdi, r14
+    lea rsi, [rip + .Lsp_setup]
+    call json_is
+    test eax, eax
+    jz 9f
+3:  and dword ptr [rbx + AL_cfg], ~CLP_SPINHOOK
+    test r15d, r15d
+    jz 7f
+    or dword ptr [rbx + AL_cfg], CLP_SPINHOOK
+7:  mov eax, [rbx + AL_cfg]     # what the words are now, when they changed
+    xor eax, r13d
+    test eax, CLP_SPINCOMPACT | CLP_SPINHOOK
+    jz 9f
+    xor esi, esi
+    mov eax, [rbx + AL_cfg]
+    test eax, CLP_SPINHOOK
+    jz 71f
+    lea rsi, [rip + .Lsp_hooks]
+71: test eax, CLP_SPINCOMPACT
+    jz 72f
+    lea rsi, [rip + .Lsp_compacting]
+72: mov rdi, rbx
+    xor edx, edx
+    call ev_spin
+9:  EPILOGUE
+
 # ---- times in the bundle's form (index.js @3698835 ex, @3698130 Vj, @3698516 $j) ----
 
 # fmt_reset(unix seconds, esi named day): rsb gains "soon" within a minute, "at 3:45 PM" within a day
@@ -3249,12 +3332,12 @@ fmt_reset:
     EPILOGUE
 1:  mov r14, rax                # seconds left
     mov rdi, r13                # this year, here
-    call local_days
+    call agtime_days
     mov rdi, rax
-    call civil
+    call agtime_civil
     mov [rsp + 16], rax
     mov rdi, rbx
-    call local_days
+    call agtime_days
     mov r15, rax                # the day
     mov [rsp], rdx              # its second
     test r12d, r12d
@@ -3275,7 +3358,7 @@ fmt_reset:
     lea rsi, [rip + .Lr_comma]
     call push_rsb
     mov rdi, r15
-    call civil
+    call agtime_civil
     mov [rsp + 8], rax
     mov r14d, ecx
     lea rax, [rip + month_names]    # "Nov 24"
@@ -3331,612 +3414,6 @@ fmt_reset:
     lea rsi, [rip + .Lr_pm]
 7:  call push_rsb
     EPILOGUE
-
-# local_days(unix seconds) -> rax the local day (days since 1970-01-01), rdx its second
-local_days:
-    PROLOGUE
-    mov rbx, rdi
-    call tz_offset
-    add rax, rbx
-    jns 1f
-    xor eax, eax
-1:  xor edx, edx
-    mov ecx, 86400
-    div rcx
-    EPILOGUE
-
-# civil(days since 1970-01-01, not before it) -> rax the year, edx the month (1-12), ecx the day (H. Hinnant's
-#   civil_from_days)
-civil:
-    lea rax, [rdi + 719468]
-    xor edx, edx
-    mov ecx, 146097
-    div rcx
-    mov r8, rax                 # the era
-    mov r9, rdx                 # the day of the era
-    mov rax, r9                 # the year of the era: (doe - doe/1460 + doe/36524 - doe/146096) / 365
-    xor edx, edx
-    mov ecx, 1460
-    div rcx
-    mov r10, r9
-    sub r10, rax
-    mov rax, r9
-    xor edx, edx
-    mov ecx, 36524
-    div rcx
-    add r10, rax
-    mov rax, r9
-    xor edx, edx
-    mov ecx, 146096
-    div rcx
-    sub r10, rax
-    mov rax, r10
-    xor edx, edx
-    mov ecx, 365
-    div rcx
-    mov r10, rax                # yoe
-    imul rcx, r10, 365          # the day of the year from March: doe - (365 yoe + yoe/4 - yoe/100)
-    mov rax, r10
-    shr rax, 2
-    add rcx, rax
-    mov rax, r10
-    xor edx, edx
-    mov r11d, 100
-    div r11
-    sub rcx, rax
-    sub r9, rcx                 # doy
-    imul rax, r9, 5             # mp = (5 doy + 2) / 153
-    add rax, 2
-    xor edx, edx
-    mov r11d, 153
-    div r11
-    mov r11, rax
-    imul rax, r11, 153          # the day: doy - (153 mp + 2) / 5 + 1
-    add rax, 2
-    xor edx, edx
-    mov ecx, 5
-    div rcx
-    mov rcx, r9
-    sub rcx, rax
-    inc rcx
-    lea rdx, [r11 + 3]          # the month: mp < 10 ? mp + 3 : mp - 9
-    cmp r11, 10
-    jb 1f
-    lea rdx, [r11 - 9]
-1:  imul rax, r8, 400
-    add rax, r10
-    cmp edx, 2
-    ja 2f
-    inc rax
-2:  ret
-
-# days_of(year, month, day) -> rax days since 1970-01-01 (H. Hinnant's days_from_civil; years from 1)
-days_of:
-    mov rax, rdi
-    cmp esi, 2
-    ja 1f
-    dec rax
-1:  xor r8d, r8d
-    mov r9, rax
-    test rax, rax
-    js 9f
-    push rdx
-    xor edx, edx
-    mov ecx, 400
-    div rcx
-    mov r8, rax                 # the era
-    mov r9, rdx                 # yoe
-    pop rdx
-    lea eax, [rsi - 3]          # doy = (153 (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1
-    cmp esi, 2
-    ja 2f
-    lea eax, [rsi + 9]
-2:  mov r10d, edx
-    imul eax, eax, 153
-    add eax, 2
-    xor edx, edx
-    mov ecx, 5
-    div ecx
-    lea r10, [rax + r10 - 1]
-    imul rax, r9, 365           # doe = 365 yoe + yoe/4 - yoe/100 + doy
-    mov rcx, r9
-    shr rcx, 2
-    add rax, rcx
-    push rax
-    mov rax, r9
-    xor edx, edx
-    mov ecx, 100
-    div rcx
-    mov rcx, rax
-    pop rax
-    sub rax, rcx
-    add rax, r10
-    imul rcx, r8, 146097
-    add rax, rcx
-    sub rax, 719468
-    ret
-9:  xor eax, eax
-    ret
-
-# tz_offset(unix seconds) -> rax the local zone's offset east of UTC then, in seconds: the zone file (TZ
-#   naming one, else /etc/localtime; read once, on a writer's notice: a rate limit) by its transitions, and
-#   past the last one by its POSIX rule ("PST8PDT,M3.2.0,M11.1.0": the M forms; others keep standard
-#   time). No file (Windows, a container without one): UTC
-tz_offset:
-    PROLOGUE 32
-    mov rbx, rdi
-    call tz_load
-    test rax, rax
-    jz .Ltz_zero
-    mov r12, rax                # the file
-    mov r13, rdx
-    cmp r13, 44
-    jb .Ltz_zero
-    cmp dword ptr [r12], 0x66695a54     # "TZif"
-    jne .Ltz_zero
-    xor esi, esi
-    call tz_counts
-    mov r15d, 4                 # the size of a transition's time
-    mov r14d, 44                # where the data starts
-    cmp byte ptr [r12 + 4], '2'
-    jb 1f
-    mov eax, [rip + tz_n + 12]  # past the version 1 block: the 64-bit one
-    imul eax, eax, 5
-    mov ecx, [rip + tz_n + 16]
-    imul ecx, ecx, 6
-    add eax, ecx
-    add eax, [rip + tz_n + 20]
-    mov ecx, [rip + tz_n + 8]
-    shl ecx, 3
-    add eax, ecx
-    add eax, [rip + tz_n + 4]
-    add eax, [rip + tz_n]
-    lea rsi, [rax + 44]
-    lea rcx, [rsi + 44]
-    cmp rcx, r13
-    ja .Ltz_zero
-    cmp dword ptr [r12 + rsi], 0x66695a54
-    jne .Ltz_zero
-    mov r14, rsi
-    call tz_counts
-    add r14, 44
-    mov r15d, 8
-1:  mov eax, [rip + tz_n + 12]  # the transitions, their types, the types, the names, leaps, flags: in the file
-    imul rax, r15
-    lea r8, [r14 + rax]         # the types of the transitions
-    mov eax, [rip + tz_n + 12]
-    lea r9, [r8 + rax]          # the types
-    mov eax, [rip + tz_n + 16]
-    imul eax, eax, 6
-    lea r10, [r9 + rax]
-    add r10d, [rip + tz_n + 20]
-    lea rax, [r15 + 4]
-    imul eax, [rip + tz_n + 8]
-    add r10, rax
-    add r10d, [rip + tz_n + 4]
-    add r10d, [rip + tz_n]      # the end of the data: the footer's "\n" after it (version 2 on)
-    cmp r10, r13
-    ja .Ltz_zero
-    mov [rsp], r9
-    mov [rsp + 8], r10
-    mov [rsp + 16], r8
-    mov ecx, -1                 # the last transition at or before t
-    xor edx, edx
-2:  cmp edx, [rip + tz_n + 12]
-    jae 4f
-    mov eax, edx
-    imul rax, r15
-    add rax, r14
-    cmp r15d, 8
-    jne 3f
-    mov rax, [r12 + rax]
-    bswap rax
-    jmp 31f
-3:  mov eax, [r12 + rax]
-    bswap eax
-    movsxd rax, eax
-31: cmp rax, rbx
-    jg 4f
-    mov ecx, edx
-    inc edx
-    jmp 2b
-4:  mov eax, [rip + tz_n + 12]  # past the last transition (or none): the rule, when there is one
-    dec eax
-    cmp ecx, eax
-    jne 5f
-    cmp r15d, 8
-    jne 5f
-    mov rsi, [rsp + 8]
-    lea rax, [rsi + 1]
-    cmp rax, r13
-    jae 5f
-    cmp byte ptr [r12 + rsi], 10
-    jne 5f
-    mov [rsp + 24], ecx
-    lea rdi, [r12 + rsi + 1]    # the rule's line
-    mov rax, r13
-    sub rax, rsi
-    dec rax
-    mov rsi, rax
-    mov rdx, rbx
-    call tz_rule
-    test edx, edx
-    jnz 9f
-    mov ecx, [rsp + 24]
-    mov r8, [rsp + 16]
-5:  xor eax, eax                # the type of that transition (before the first: the first type)
-    test ecx, ecx
-    js 6f
-    lea rax, [r8 + rcx]
-    movzx eax, byte ptr [r12 + rax]
-6:  cmp eax, [rip + tz_n + 16]
-    jae .Ltz_zero
-    imul eax, eax, 6
-    add rax, [rsp]
-    mov eax, [r12 + rax]
-    bswap eax
-    movsxd rax, eax
-9:  EPILOGUE
-.Ltz_zero:
-    xor eax, eax
-    EPILOGUE
-
-# tz_counts(rsi the header's offset) (r12 the file): tz_n = its six counts (isut, isstd, leap, time, type,
-#   char), each at most 100000
-tz_counts:
-    lea rdx, [r12 + rsi + 20]
-    xor ecx, ecx
-1:  mov eax, [rdx + rcx*4]
-    bswap eax
-    cmp eax, 100000
-    jbe 2f
-    mov eax, 100000
-2:  lea r8, [rip + tz_n]
-    mov [r8 + rcx*4], eax
-    inc ecx
-    cmp ecx, 6
-    jb 1b
-    ret
-
-# tz_load() -> rax the zone file's bytes, rdx their length (0, 0 none): read once, at most 1 MiB
-tz_load:
-    PROLOGUE
-    cmp dword ptr [rip + tz_tried], 0
-    jne 8f
-    mov dword ptr [rip + tz_tried], 1
-    lea rdi, [rip + .Ltz_env]
-    call getenv
-    test rax, rax
-    jz 3f
-    mov rbx, rax
-    cmp byte ptr [rbx], ':'
-    jne 1f
-    inc rbx
-1:  cmp byte ptr [rbx], 0
-    je 3f
-    mov rdi, rbx
-    cmp byte ptr [rbx], '/'
-    je 2f
-    mov rdi, rbx
-    call strlen
-    cmp rax, 200
-    ja 3f
-    lea rdi, [rip + tz_path]
-    lea rsi, [rip + .Ltz_dir]
-    call cstr_copy
-    lea rdi, [rip + tz_path]
-    call strlen
-    lea rdi, [rip + tz_path]
-    add rdi, rax
-    mov rsi, rbx
-    call cstr_copy
-    lea rdi, [rip + tz_path]
-2:  call file_read_all
-    test rax, rax
-    jnz 4f
-3:  lea rdi, [rip + .Ltz_local]
-    call file_read_all
-    test rax, rax
-    jz 8f
-4:  cmp rdx, 1 << 20
-    jbe 5f
-    mov rdi, rax
-    call mem_free
-    jmp 8f
-5:  mov [rip + tz_buf], rax
-    mov [rip + tz_len], rdx
-8:  mov rax, [rip + tz_buf]
-    mov rdx, [rip + tz_len]
-    EPILOGUE
-
-# tz_rule(ptr, len of the footer's line, t) -> rax the offset east at t, edx 1 when the rule was read:
-#   STD OFFSET [DST [OFFSET] ,Mm.w.d[/TIME],Mm.w.d[/TIME]]
-tz_rule:
-    PROLOGUE 48
-    mov [rip + tz_p], rdi
-    lea rax, [rdi + rsi]
-    mov [rip + tz_end], rax
-    mov rbx, rdx
-    call pz_name
-    test eax, eax
-    jz 8f
-    call pz_off
-    test edx, edx
-    jz 8f
-    neg rax
-    mov r12, rax                # standard time, east
-    call pz_name
-    test eax, eax
-    jz 7f                       # no daylight saving time
-    lea r13, [r12 + 3600]
-    call pz_peek
-    cmp eax, ','
-    je 1f
-    cmp eax, 10
-    je 7f
-    test eax, eax
-    js 7f
-    call pz_off
-    test edx, edx
-    jz 7f
-    neg rax
-    mov r13, rax                # daylight saving time, east
-1:  call pz_peek
-    cmp eax, ','
-    jne 7f                      # no rules given: standard time
-    inc qword ptr [rip + tz_p]
-    lea rdi, [rsp]
-    call pz_rule
-    test eax, eax
-    jz 7f
-    call pz_peek
-    cmp eax, ','
-    jne 7f
-    inc qword ptr [rip + tz_p]
-    lea rdi, [rsp + 24]
-    call pz_rule
-    test eax, eax
-    jz 7f
-    lea rax, [rbx + r12]        # this year, in standard time
-    test rax, rax
-    js 7f
-    xor edx, edx
-    mov ecx, 86400
-    div rcx
-    mov rdi, rax
-    call civil
-    mov r14, rax
-    mov rdi, r14
-    lea rsi, [rsp]
-    call rule_at
-    sub rax, r12
-    mov r15, rax                # it starts (UTC)
-    mov rdi, r14
-    lea rsi, [rsp + 24]
-    call rule_at
-    sub rax, r13                # it ends (UTC)
-    cmp r15, rax
-    jge 3f
-    cmp rbx, r15                # northern: from the start to the end
-    jl 7f
-    cmp rbx, rax
-    jge 7f
-    jmp 6f
-3:  cmp rbx, rax                # southern: all but from the end to the start
-    jl 6f
-    cmp rbx, r15
-    jl 7f
-6:  mov rax, r13
-    mov edx, 1
-    EPILOGUE
-7:  mov rax, r12
-    mov edx, 1
-    EPILOGUE
-8:  xor eax, eax
-    xor edx, edx
-    EPILOGUE
-
-# rule_at(year, rule {m 4, w 4, d 4, pad 4, time 8}) -> rax the local second it changes, from 1970
-rule_at:
-    PROLOGUE
-    mov rbx, rdi
-    mov r12, rsi
-    mov rdi, rbx                # the month's first day, and its weekday
-    mov esi, [r12]
-    mov edx, 1
-    call days_of
-    mov r13, rax
-    add rax, 4
-    xor edx, edx
-    mov ecx, 7
-    div rcx                     # rdx its weekday (0 Sunday)
-    mov eax, [r12 + 8]
-    sub eax, edx
-    add eax, 7
-    xor edx, edx
-    mov ecx, 7
-    div ecx
-    mov r14d, edx               # the first such weekday: 0 + that many days
-    mov eax, [r12 + 4]
-    dec eax
-    imul eax, eax, 7
-    add r14d, eax               # its w-th (5: the last)
-    mov rdi, rbx                # the days of the month: the next month's first day less this one's
-    mov esi, [r12]
-    inc esi
-    mov rdx, rbx
-    cmp esi, 12
-    jbe 1f
-    mov esi, 1
-    inc rdi
-1:  mov edx, 1
-    call days_of
-    sub rax, r13
-2:  cmp r14, rax
-    jb 3f
-    sub r14d, 7
-    jmp 2b
-3:  lea rax, [r13 + r14]
-    imul rax, rax, 86400
-    add rax, [r12 + 8 + 8]
-    EPILOGUE
-
-# pz_peek() -> eax the rule's next character, -1 at its end
-pz_peek:
-    mov rcx, [rip + tz_p]
-    mov eax, -1
-    cmp rcx, [rip + tz_end]
-    jae 1f
-    movzx eax, byte ptr [rcx]
-1:  ret
-
-# pz_name() -> eax 1 when a zone's name was read ("<+03>" or letters)
-pz_name:
-    call pz_peek
-    cmp eax, '<'
-    jne 2f
-1:  inc qword ptr [rip + tz_p]
-    call pz_peek
-    test eax, eax
-    js 8f
-    cmp eax, '>'
-    jne 1b
-    inc qword ptr [rip + tz_p]
-    mov eax, 1
-    ret
-2:  xor edx, edx
-3:  call pz_peek
-    or eax, 0x20
-    sub eax, 'a'
-    cmp eax, 25
-    ja 4f
-    inc qword ptr [rip + tz_p]
-    inc edx
-    jmp 3b
-4:  xor eax, eax
-    test edx, edx
-    setnz al
-    ret
-8:  xor eax, eax
-    ret
-
-# pz_num() -> rax a number's digits, edx 1 when there was one
-pz_num:
-    xor r8d, r8d
-    xor r9d, r9d
-1:  call pz_peek
-    sub eax, '0'
-    cmp eax, 9
-    ja 2f
-    inc qword ptr [rip + tz_p]
-    cmp r8, 100000
-    jae 1b
-    imul r8, r8, 10
-    add r8, rax
-    mov r9d, 1
-    jmp 1b
-2:  mov rax, r8
-    mov edx, r9d
-    ret
-
-# pz_off() -> rax [+-]hh[:mm[:ss]] in seconds, edx 1 when read
-pz_off:
-    push rbx
-    push r12
-    push r13
-    xor ebx, ebx                # negative
-    call pz_peek
-    cmp eax, '+'
-    je 1f
-    cmp eax, '-'
-    jne 2f
-    mov ebx, 1
-1:  inc qword ptr [rip + tz_p]
-2:  call pz_num
-    test edx, edx
-    jz 8f
-    imul r12, rax, 3600
-    mov r13d, 60
-3:  call pz_peek
-    cmp eax, ':'
-    jne 4f
-    inc qword ptr [rip + tz_p]
-    call pz_num
-    imul rax, r13
-    add r12, rax
-    cmp r13d, 1
-    je 4f
-    mov r13d, 1
-    jmp 3b
-4:  mov rax, r12
-    test ebx, ebx
-    jz 5f
-    neg rax
-5:  mov edx, 1
-    pop r13
-    pop r12
-    pop rbx
-    ret
-8:  xor eax, eax
-    xor edx, edx
-    pop r13
-    pop r12
-    pop rbx
-    ret
-
-# pz_rule(rdi out {m 4, w 4, d 4, pad 4, time 8}) -> eax 1 when an Mm.w.d[/TIME] rule was read
-pz_rule:
-    push rbx
-    mov rbx, rdi
-    mov qword ptr [rbx + 8 + 8], 7200   # 02:00 when no time is given
-    call pz_peek
-    cmp eax, 'M'
-    jne 8f
-    inc qword ptr [rip + tz_p]
-    call pz_num
-    test edx, edx
-    jz 8f
-    cmp rax, 1
-    jb 8f
-    cmp rax, 12
-    ja 8f
-    mov [rbx], eax
-    call pz_peek
-    cmp eax, '.'
-    jne 8f
-    inc qword ptr [rip + tz_p]
-    call pz_num
-    test edx, edx
-    jz 8f
-    cmp rax, 1
-    jb 8f
-    cmp rax, 5
-    ja 8f
-    mov [rbx + 4], eax
-    call pz_peek
-    cmp eax, '.'
-    jne 8f
-    inc qword ptr [rip + tz_p]
-    call pz_num
-    test edx, edx
-    jz 8f
-    cmp rax, 6
-    ja 8f
-    mov [rbx + 8], eax
-    call pz_peek
-    cmp eax, '/'
-    jne 7f
-    inc qword ptr [rip + tz_p]
-    call pz_off
-    test edx, edx
-    jz 8f
-    mov [rbx + 8 + 8], rax
-7:  mov eax, 1
-    pop rbx
-    ret
-8:  xor eax, eax
-    pop rbx
-    ret
 
 # ---- the auth conflict, the account's plan ----
 
@@ -4623,6 +4100,14 @@ local_cmds:
 .Le_refused: .asciz "Claude Code took no more input before the conversation's settings went to it; nothing was sent."
 .Lk_rate_info: .asciz "rate_limit_info"
 .Lk_status: .asciz "status"
+.Lsp_compacting_v: .asciz "compacting"
+.Lsp_compacting: .asciz "Compacting"
+.Lsp_hooks: .asciz "Running start-up hooks"
+.Lsp_started: .asciz "hook_started"
+.Lsp_response: .asciz "hook_response"
+.Lsp_event: .asciz "hook_event"
+.Lsp_start: .asciz "SessionStart"
+.Lsp_setup: .asciz "Setup"
 .Lk_rate_type: .asciz "rateLimitType"
 .Lk_resets: .asciz "resetsAt"
 .Lk_paused: .asciz "dailyCapPaused"
@@ -4677,11 +4162,6 @@ local_cmds:
 .Lr_comma: .asciz ", "
 .Lr_am: .asciz " AM"
 .Lr_pm: .asciz " PM"
-.Ltz_env: .asciz "TZ"
-.Ltz_dir: .asciz "/usr/share/zoneinfo/"
-.Ltz_local: .asciz "/etc/localtime"
-day_names: .ascii "Sun\0Mon\0Tue\0Wed\0Thu\0Fri\0Sat\0"
-month_names: .ascii "Jan\0Feb\0Mar\0Apr\0May\0Jun\0Jul\0Aug\0Sep\0Oct\0Nov\0Dec\0"
 # the auth band's words (webview index.js @3777297 authConflictWarning, @3899982 lZe); rhun is not VS Code:
 #   a key saved by /login is signed out of in a terminal
 .Lk_account: .asciz "account"
@@ -4732,3 +4212,109 @@ reason_words: .quad .Lk_seat1, .Lr_seat, .Lk_seat2, .Lr_seat, .Lk_member1, .Lr_m
 source_words: .quad .Lv_claude_ai, .Ls_claude_ai, .Lv_profile, .Ls_profile, .Lv_login_key, .Ls_login_key
     .quad .Lv_helper, .Ls_helper, 0, 0
 fail_words: .quad .Lf_model, .Lf_effort, .Lf_ultra_on, .Lf_think     # by CLF_*
+
+# the spinner's verbs (index.js @5437454 ALe, 82): DRV_verbs is claudecfg.s's list, these with the
+#   [claude] spinner_verb lines added or in their place ([claude] spinner_verbs)
+.p2align 3
+.globl claude_verbs
+claude_verbs:
+    .quad .Lverb_Accomplishing, .Lverb_Actioning, .Lverb_Actualizing, .Lverb_Baking, .Lverb_Booping
+    .quad .Lverb_Brewing, .Lverb_Calculating, .Lverb_Cerebrating, .Lverb_Channeling, .Lverb_Churning
+    .quad .Lverb_Clauding, .Lverb_Coalescing, .Lverb_Cogitating, .Lverb_Computing, .Lverb_Combobulating
+    .quad .Lverb_Concocting, .Lverb_Considering, .Lverb_Contemplating, .Lverb_Cooking, .Lverb_Crafting
+    .quad .Lverb_Creating, .Lverb_Crunching, .Lverb_Deciphering, .Lverb_Deliberating, .Lverb_Determining
+    .quad .Lverb_Discombobulating, .Lverb_Doing, .Lverb_Effecting, .Lverb_Elucidating, .Lverb_Enchanting
+    .quad .Lverb_Envisioning, .Lverb_Finagling, .Lverb_Flibbertigibbeting, .Lverb_Forging, .Lverb_Forming
+    .quad .Lverb_Frolicking, .Lverb_Generating, .Lverb_Germinating, .Lverb_Hatching, .Lverb_Herding
+    .quad .Lverb_Honking, .Lverb_Ideating, .Lverb_Imagining, .Lverb_Incubating, .Lverb_Inferring
+    .quad .Lverb_Manifesting, .Lverb_Marinating, .Lverb_Meandering, .Lverb_Moseying, .Lverb_Mulling
+    .quad .Lverb_Mustering, .Lverb_Noodling, .Lverb_Percolating, .Lverb_Perusing, .Lverb_Philosophizing
+    .quad .Lverb_Pontificating, .Lverb_Pondering, .Lverb_Processing, .Lverb_Puttering, .Lverb_Puzzling
+    .quad .Lverb_Reticulating, .Lverb_Ruminating, .Lverb_Schlepping, .Lverb_Shimmying, .Lverb_Simmering
+    .quad .Lverb_Smooshing, .Lverb_Spelunking, .Lverb_Spinning, .Lverb_Stewing, .Lverb_Sussing
+    .quad .Lverb_Synthesizing, .Lverb_Thinking, .Lverb_Tinkering, .Lverb_Transmuting, .Lverb_Unfurling
+    .quad .Lverb_Unraveling, .Lverb_Vibing, .Lverb_Wandering, .Lverb_Whirring, .Lverb_Wibbling
+    .quad .Lverb_Working, .Lverb_Wrangling
+    .quad 0
+.Lverb_Accomplishing: .asciz "Accomplishing"
+.Lverb_Actioning: .asciz "Actioning"
+.Lverb_Actualizing: .asciz "Actualizing"
+.Lverb_Baking: .asciz "Baking"
+.Lverb_Booping: .asciz "Booping"
+.Lverb_Brewing: .asciz "Brewing"
+.Lverb_Calculating: .asciz "Calculating"
+.Lverb_Cerebrating: .asciz "Cerebrating"
+.Lverb_Channeling: .asciz "Channeling"
+.Lverb_Churning: .asciz "Churning"
+.Lverb_Clauding: .asciz "Clauding"
+.Lverb_Coalescing: .asciz "Coalescing"
+.Lverb_Cogitating: .asciz "Cogitating"
+.Lverb_Computing: .asciz "Computing"
+.Lverb_Combobulating: .asciz "Combobulating"
+.Lverb_Concocting: .asciz "Concocting"
+.Lverb_Considering: .asciz "Considering"
+.Lverb_Contemplating: .asciz "Contemplating"
+.Lverb_Cooking: .asciz "Cooking"
+.Lverb_Crafting: .asciz "Crafting"
+.Lverb_Creating: .asciz "Creating"
+.Lverb_Crunching: .asciz "Crunching"
+.Lverb_Deciphering: .asciz "Deciphering"
+.Lverb_Deliberating: .asciz "Deliberating"
+.Lverb_Determining: .asciz "Determining"
+.Lverb_Discombobulating: .asciz "Discombobulating"
+.Lverb_Doing: .asciz "Doing"
+.Lverb_Effecting: .asciz "Effecting"
+.Lverb_Elucidating: .asciz "Elucidating"
+.Lverb_Enchanting: .asciz "Enchanting"
+.Lverb_Envisioning: .asciz "Envisioning"
+.Lverb_Finagling: .asciz "Finagling"
+.Lverb_Flibbertigibbeting: .asciz "Flibbertigibbeting"
+.Lverb_Forging: .asciz "Forging"
+.Lverb_Forming: .asciz "Forming"
+.Lverb_Frolicking: .asciz "Frolicking"
+.Lverb_Generating: .asciz "Generating"
+.Lverb_Germinating: .asciz "Germinating"
+.Lverb_Hatching: .asciz "Hatching"
+.Lverb_Herding: .asciz "Herding"
+.Lverb_Honking: .asciz "Honking"
+.Lverb_Ideating: .asciz "Ideating"
+.Lverb_Imagining: .asciz "Imagining"
+.Lverb_Incubating: .asciz "Incubating"
+.Lverb_Inferring: .asciz "Inferring"
+.Lverb_Manifesting: .asciz "Manifesting"
+.Lverb_Marinating: .asciz "Marinating"
+.Lverb_Meandering: .asciz "Meandering"
+.Lverb_Moseying: .asciz "Moseying"
+.Lverb_Mulling: .asciz "Mulling"
+.Lverb_Mustering: .asciz "Mustering"
+.Lverb_Noodling: .asciz "Noodling"
+.Lverb_Percolating: .asciz "Percolating"
+.Lverb_Perusing: .asciz "Perusing"
+.Lverb_Philosophizing: .asciz "Philosophizing"
+.Lverb_Pontificating: .asciz "Pontificating"
+.Lverb_Pondering: .asciz "Pondering"
+.Lverb_Processing: .asciz "Processing"
+.Lverb_Puttering: .asciz "Puttering"
+.Lverb_Puzzling: .asciz "Puzzling"
+.Lverb_Reticulating: .asciz "Reticulating"
+.Lverb_Ruminating: .asciz "Ruminating"
+.Lverb_Schlepping: .asciz "Schlepping"
+.Lverb_Shimmying: .asciz "Shimmying"
+.Lverb_Simmering: .asciz "Simmering"
+.Lverb_Smooshing: .asciz "Smooshing"
+.Lverb_Spelunking: .asciz "Spelunking"
+.Lverb_Spinning: .asciz "Spinning"
+.Lverb_Stewing: .asciz "Stewing"
+.Lverb_Sussing: .asciz "Sussing"
+.Lverb_Synthesizing: .asciz "Synthesizing"
+.Lverb_Thinking: .asciz "Thinking"
+.Lverb_Tinkering: .asciz "Tinkering"
+.Lverb_Transmuting: .asciz "Transmuting"
+.Lverb_Unfurling: .asciz "Unfurling"
+.Lverb_Unraveling: .asciz "Unraveling"
+.Lverb_Vibing: .asciz "Vibing"
+.Lverb_Wandering: .asciz "Wandering"
+.Lverb_Whirring: .asciz "Whirring"
+.Lverb_Wibbling: .asciz "Wibbling"
+.Lverb_Working: .asciz "Working"
+.Lverb_Wrangling: .asciz "Wrangling"

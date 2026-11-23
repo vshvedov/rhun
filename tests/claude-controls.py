@@ -50,31 +50,37 @@ class ConfigTest(CfgCase):
         out = self.command('print-settings')
         rows = [line for line in out.splitlines() if line.startswith('claude.')]
         self.assertEqual(rows, ['claude.chat', 'claude.executable', 'claude.wrapper', 'claude.initial_mode',
-                                'claude.allow_bypass_permissions', 'claude.prompt_suggestions'])
+                                'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
+                                'claude.spinner_verbs'])
         agents = [line for line in out.splitlines() if line.startswith('agents.')]
-        self.assertEqual(agents[-3:], ['agents.font_size', 'agents.ctrl_enter_sends', 'agents.scroll_on_send'])
+        self.assertEqual(agents[-3:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps'])
         self.command('cmd toggle_word_wrap')            # a setting changed: the exit writes the file
         self.quit()
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(chat.section(saved, 'claude')[3:], [
-            'initial_mode =', 'allow_bypass_permissions = false', 'prompt_suggestions = true'])
+            'initial_mode =', 'allow_bypass_permissions = false', 'prompt_suggestions = true',
+            'spinner_verbs = append'])
         self.assertEqual(chat.section(saved, 'agents')[-3:], [
-            'font_size = 0', 'ctrl_enter_sends = false', 'scroll_on_send = true'])
+            'ctrl_enter_sends = false', 'scroll_on_send = true', 'timestamps = true'])
         # changed, they are written back as they are; the env pairs still follow the last [claude] row
         claude = self.claude_section('initial_mode = acceptEdits\nallow_bypass_permissions = true\n'
-                                     'prompt_suggestions = false\nenv.FOO = bar\n')
-        self.start(claude, '[agents]\nctrl_enter_sends = true\nscroll_on_send = false\n')
+                                     'prompt_suggestions = false\nspinner_verb = Zooming\nspinner_verbs = replace\n'
+                                     'env.FOO = bar\nspinner_verb = Whooshing\n')
+        self.start(claude, '[agents]\nctrl_enter_sends = true\nscroll_on_send = false\ntimestamps = false\n')
         out = self.command('print-settings')
         rows = [line for line in out.splitlines() if line.startswith('claude.')]
-        self.assertEqual(rows[-3:], ['claude.allow_bypass_permissions', 'claude.prompt_suggestions',
-                                     'claude.env.FOO=(set)'])
+        self.assertEqual(rows[-5:], ['claude.prompt_suggestions', 'claude.spinner_verbs',
+                                     'claude.env.FOO=(set)', 'claude.spinner_verb=Zooming',
+                                     'claude.spinner_verb=Whooshing'])
         self.command('cmd toggle_word_wrap')
         self.quit()
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(chat.section(saved, 'claude'), [
             'chat = true', f'executable = {chat.FAKE}', f'wrapper = {chat.PYTHON}', 'initial_mode = acceptEdits',
-            'allow_bypass_permissions = true', 'prompt_suggestions = false', 'env.FOO = bar'])
-        self.assertEqual(chat.section(saved, 'agents')[-2:], ['ctrl_enter_sends = true', 'scroll_on_send = false'])
+            'allow_bypass_permissions = true', 'prompt_suggestions = false', 'spinner_verbs = replace',
+            'env.FOO = bar', 'spinner_verb = Zooming', 'spinner_verb = Whooshing'])
+        self.assertEqual(chat.section(saved, 'agents')[-3:], ['ctrl_enter_sends = true', 'scroll_on_send = false',
+                                                              'timestamps = false'])
 
     def mode_passed(self, extra):
         self.start(self.claude_section(extra))

@@ -78,7 +78,9 @@ initialize's perTaskStopAffordance and forwardNestedSubagentToolCalls are logged
 --include-hook-events is taken. FAKE_CLAUDE_TASKS (the task tools in place of TodoWrite); FAKE_CLAUDE_HOOKS
 (comma-separated: start, prompt, block, stop, post; see HOOKS_ON); FAKE_CLAUDE_BG_MS (how long `bg` runs
 before it ends, default 3000); FAKE_CLAUDE_PRESERVED (/compact sends the last assistant record again, as
-20-compact recorded).
+20-compact recorded). Task 5: `linger [S]` (a turn that works S seconds); FAKE_CLAUDE_HOOK_MS (a hook's
+hook_response comes that long after its hook_started); FAKE_CLAUDE_COMPACT_MS (how long /compact's compacting
+status lasts, default 200).
 FAKE_CLAUDE_ECHO_ENV (comma-separated names whose values the log's start record shows, besides
 CLAUDE_CODE_ENTRYPOINT, CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, MCP_CONNECTION_NONBLOCKING, TRACEPARENT and
 TRACESTATE);
@@ -2023,7 +2025,7 @@ def c_compact(prompt):
     emit({'type': 'system', 'subtype': 'status', 'status': 'compacting', 'session_id': SID, 'uuid': str(uuid.uuid4())})
     if 'start' in HOOKS_ON:
         hook_records('SessionStart', 'SessionStart:compact')
-    time.sleep(0.2)
+    time.sleep(int(ENV.get('FAKE_CLAUDE_COMPACT_MS', '200')) / 1000)    # task 5: compacting lasts that long
     emit({'type': 'system', 'subtype': 'status', 'status': None, 'compact_result': 'success', 'session_id': SID,
           'uuid': str(uuid.uuid4())})
     system_init()
@@ -2236,6 +2238,7 @@ def hook_records(event, name):
         hid = str(uuid.uuid4())
         emit({'type': 'system', 'subtype': 'hook_started', 'hook_id': hid, 'hook_name': name, 'hook_event': event,
               'uuid': str(uuid.uuid4()), 'session_id': SID})
+        time.sleep(int(ENV.get('FAKE_CLAUDE_HOOK_MS', '0')) / 1000)     # task 5: the hook runs that long
         emit({'type': 'system', 'subtype': 'hook_response', 'hook_id': hid, 'hook_name': name, 'hook_event': event,
               'output': 'hi\n', 'stdout': 'hi\n', 'stderr': '', 'exit_code': 0, 'outcome': 'success',
               'uuid': str(uuid.uuid4()), 'session_id': SID})
@@ -3199,6 +3202,24 @@ def s_diffs(prompt):
 
 
 SCENARIOS.update({'diffs': s_diffs})
+
+
+# Phase 3 task 5 (the spinner): a turn that works long enough to watch it
+def s_linger(prompt):
+    """linger [S]: the turn works S seconds (default 20, fractions taken) before its reply; an interrupt ends
+    it at once"""
+    words = prompt.split()
+    try:
+        seconds = float(words[1]) if len(words) > 1 else 20.0
+    except ValueError:
+        seconds = 20.0
+    if INTERRUPT.wait(seconds):
+        cut_off()
+    else:
+        final('ok: ' + prompt)
+
+
+SCENARIOS.update({'linger': s_linger})
 
 
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already

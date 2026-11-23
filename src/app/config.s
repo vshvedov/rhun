@@ -113,6 +113,10 @@ cfg_claude_allow_bypass: .long 0        # [claude] allow_bypass_permissions: rhu
 cfg_claude_prompt_suggestions: .long 1  # [claude] prompt_suggestions: initialize asks for them
 cfg_agents_ctrl_enter_sends: .long 0    # [agents] ctrl_enter_sends: Enter a new line, Ctrl+Enter sends
 cfg_agents_scroll_on_send: .long 1      # [agents] scroll_on_send: sending scrolls to the end
+.globl cfg_agents_timestamps, cfg_claude_spinner_verbs
+cfg_agents_timestamps: .long 1          # [agents] timestamps: prompts and replies show their time, days a pill
+cfg_claude_spinner_verbs: .long 0       # [claude] spinner_verbs: 0 the spinner_verb lines are added, 1 they replace
+ts_seen: .long 1                        # cfg_agents_timestamps as the last read left it (a reload that changes it)
 .p2align 3
 cfg_theme: .quad cfg_def_theme
 cfg_dark_theme: .quad cfg_def_theme
@@ -543,6 +547,13 @@ FN config_load
     mov dword ptr [rip + cfg_agents_grok], 1
 1:  call config_agent_sources
     call agentext_config_done   # AI: the extension sources' switches from this read
+    call claudecfg_done         # Claude Code: the spinner's verbs from this read (claudecfg.s)
+    mov eax, [rip + cfg_agents_timestamps]  # the agents panel's heights follow a changed [agents] timestamps
+    cmp eax, [rip + ts_seen]
+    je 2f
+    mov [rip + ts_seen], eax
+    call agents_view_changed
+2:
     mov rdi, r15
     call mem_free
     EPILOGUE
@@ -734,7 +745,7 @@ FN config_save
     jne 51f
     lea rdi, [rsp]              # AI: the extension sources switched off (agentext.s)
     call agentext_config_save
-51: lea rax, [rip + cfg_claude_prompt_suggestions]    # the last [claude] row
+51: lea rax, [rip + cfg_claude_spinner_verbs]         # the last [claude] row
     cmp [rbx + SET_ptr], rax
     jne .Lcs_skip
     lea rdi, [rsp]              # Claude Code: the env pairs (claudecfg.s)
@@ -1011,14 +1022,16 @@ g_settings:
     SETTING .Ls_agents, font_size, ST_INT, cfg_agents_font_size, 0, 32, 1, 0, "Font size", "Text size of the agents panel. 0 follows the interface."
     SETTING .Ls_agents, ctrl_enter_sends, ST_BOOL, cfg_agents_ctrl_enter_sends, 0, 1, 1, 0, "Ctrl+Enter sends", "Enter starts a new line; Ctrl+Enter (Cmd+Enter on macOS) sends."
     SETTING .Ls_agents, scroll_on_send, ST_BOOL, cfg_agents_scroll_on_send, 0, 1, 1, 0, "Scroll to the end on send", "Sending a prompt scrolls the conversation to its end."
+    SETTING .Ls_agents, timestamps, ST_BOOL, cfg_agents_timestamps, 0, 1, 1, 0, "Timestamps", "Show the time on prompts and replies, and a line where the day changes."
     # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
     SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
     SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."
     SETTING .Ls_claude, wrapper, ST_STR, cfg_claude_wrapper, 0, 0, 0, 0, "Wrapper program", "A program that is started with claude and its arguments after it."
     SETTING .Ls_claude, initial_mode, ST_CHOICE, cfg_claude_initial_mode, 0, 5, 1, 0, "Permission mode", "The mode a conversation starts in.", g_claude_mode_opts
     SETTING .Ls_claude, allow_bypass_permissions, ST_BOOL, cfg_claude_allow_bypass, 0, 1, 1, 0, "Allow bypass permissions", "Offer Bypass permissions in the mode picker. Claude then runs commands without asking for approval."
-    # the last [claude] row: the env pairs follow it (config_save, settings_dump)
     SETTING .Ls_claude, prompt_suggestions, ST_BOOL, cfg_claude_prompt_suggestions, 0, 1, 1, 0, "Prompt suggestions", "Claude suggests your next prompt after a reply. Tab takes it."
+    # the last [claude] row: the env pairs and the spinner_verb lines follow it (config_save, settings_dump)
+    SETTING .Ls_claude, spinner_verbs, ST_CHOICE, cfg_claude_spinner_verbs, 0, 1, 1, 0, "Spinner verbs", "How the spinner_verb lines of the config file are used.", .Lspin_opts
     SETTING .Ls_terminal, shell, ST_STR, cfg_term_shell, 0, 0, 0, 0, "Shell", "Program the terminal runs. Empty uses $SHELL."
     SETTING .Ls_terminal, font_size, ST_INT, cfg_term_font_size, 8, 40, 1, 0, "Terminal font size", "Font size of the terminal panel."
     SETTING .Ls_terminal, font, ST_STR, cfg_term_font, 0, 0, 0, 0, "Terminal font", "Path to a monospace .ttf file. Empty uses the editor font."
@@ -1047,6 +1060,7 @@ g_settings:
 .Lextup_opts: .asciz "install", "Install", "check", "Show only", "off", "Off", ""
 .Lextup_label: .asciz "Check extensions now"
 .Lpaste_opts: .asciz "spread", "Spread lines", "full", "Full text", ""
+.Lspin_opts: .asciz "append", "Add to the built-in verbs", "replace", "Use only mine", ""
 .Lmodifier_opts: .asciz "alt", "Alt", "ctrl", "Ctrl", ""
 .Ldeco_opts: .asciz "auto", "Auto", "client", "rhun", "server", "Desktop", ""
 

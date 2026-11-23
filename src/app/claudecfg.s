@@ -6,7 +6,12 @@
 #   claudecfg_key(sec, seclen, key, keylen, val, vallen) -> eax 1 taken: [claude] env.NAME = value
 #                                           (NAME [A-Za-z_][A-Za-z0-9_]*, 64 pairs, 8 KiB a pair; others
 #                                           are dropped with a log line that names no value)
-#   claudecfg_save(sb)                      the pairs, as lines of [claude]
+#   claudecfg_key also takes [claude] spinner_verb = TEXT lines (VERB_LINES of VERB_MAX bytes at most; empty
+#                                           ones and more are dropped)
+#   claudecfg_done()                        the config was read or spinner_verbs changed: claude_verb_list (the
+#                                           Claude driver's DRV_verbs) is the built-in verbs (claude_verbs) and
+#                                           the lines, or the lines alone with spinner_verbs = replace and any
+#   claudecfg_save(sb)                      the pairs, then the spinner_verb lines, as lines of [claude]
 #   claudecfg_pairs() -> eax                how many (config_save writes the file 0600 with any)
 #   claudecfg_dump(sb)                      "claude.env.NAME=(set)" a line each (print-settings): people
 #                                           put keys in these pairs, so a value is never printed, logged
@@ -52,10 +57,16 @@
 .equ ENV_WAIT_MS, 10000         # print-claude-exe waits this long for the login environment
 .equ CONFIG_DIR_LEN, 18         # "CLAUDE_CONFIG_DIR="
 .equ MODE_OPT_BYPASS, 5         # bypassPermissions' index in g_claude_mode_opts
+.equ VERB_LINES, 64             # [claude] spinner_verb lines kept
+.equ VERB_MAX, 40               # bytes of one
+.equ BUILTIN_MAX, 128           # the built-in verbs counted at most
 
 .bss
 .p2align 3
 pairs: .zero VEC_SIZE           # owned "NAME=value" cstrs, 8-byte slots, in the file's order
+verbs: .zero VEC_SIZE           # owned spinner_verb texts (cstr, 8-byte slots), in the file's order
+.globl claude_verb_list
+claude_verb_list: .zero 8 * (BUILTIN_MAX + VERB_LINES + 1)  # the spinner's verbs (claudecfg_done), 0-ended
 index_env: .quad 0              # claude_index_envp's last array
 xsb: .zero SB_SIZE              # a path with "~/" expanded
 idx_dir: .zero SB_SIZE          # the folder discovery last ran with (claude_index_envp), "" none yet
@@ -84,9 +95,96 @@ FN claudecfg_reset
     jmp 1b
 2:  lea rdi, [rip + pairs]
     call vec_free
+    xor ebx, ebx
+3:  cmp rbx, [rip + verbs + VEC_len]
+    jae 4f
+    mov rax, [rip + verbs + VEC_ptr]
+    mov rdi, [rax + rbx*8]
+    call mem_free
+    inc rbx
+    jmp 3b
+4:  lea rdi, [rip + verbs]
+    call vec_free
+    call claudecfg_done
     EPILOGUE
 
-# claudecfg_key(sec, seclen, key, keylen, val, vallen) -> eax 1 when it is a [claude] env.NAME pair
+# FN claudecfg_done(): claude_verb_list from the built-in verbs and the spinner_verb lines: with spinner_verbs
+#   = replace and a line or more, the lines alone (the extension's GRn: replace with none keeps its own)
+FN claudecfg_done
+    PROLOGUE
+    lea r12, [rip + claude_verb_list]
+    xor r13d, r13d              # entries
+    cmp dword ptr [rip + cfg_claude_spinner_verbs], 0
+    je 1f
+    cmp qword ptr [rip + verbs + VEC_len], 0
+    jne 3f
+1:  xor ebx, ebx                # the built-in ones
+2:  cmp ebx, BUILTIN_MAX
+    jae 3f
+    lea rax, [rip + claude_verbs]
+    mov rax, [rax + rbx*8]
+    test rax, rax
+    jz 3f
+    mov [r12 + r13*8], rax
+    inc r13d
+    inc ebx
+    jmp 2b
+3:  xor ebx, ebx                # the lines
+4:  cmp rbx, [rip + verbs + VEC_len]
+    jae 8f
+    mov rax, [rip + verbs + VEC_ptr]
+    mov rax, [rax + rbx*8]
+    mov [r12 + r13*8], rax
+    inc r13d
+    inc rbx
+    jmp 4b
+8:  mov qword ptr [r12 + r13*8], 0
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# verb_key(key, keylen, val, vallen) -> eax 1 when it is a spinner_verb line (taken, or dropped when empty, too
+#   long or one too many)
+verb_key:
+    PROLOGUE
+    mov rbx, rdx
+    mov r12, rcx
+    lea rdx, [rip + .Lverb_key]
+    call str_eq_cstr
+    test eax, eax
+    jz 9f
+    mov rdi, rbx
+    mov rsi, r12
+    call trim
+    mov rbx, rax
+    mov r12, rdx
+    test r12, r12
+    jz 8f
+    cmp r12, VERB_MAX
+    ja 8f
+    cmp qword ptr [rip + verbs + VEC_len], VERB_LINES
+    jae 8f
+    xor ecx, ecx                # one line of printable text: no controls
+1:  cmp rcx, r12
+    jae 2f
+    cmp byte ptr [rbx + rcx], 32
+    jb 8f
+    cmp byte ptr [rbx + rcx], 127
+    je 8f
+    inc rcx
+    jmp 1b
+2:  mov rdi, rbx
+    mov rsi, r12
+    call mem_dup
+    mov r13, rax
+    lea rdi, [rip + verbs]
+    mov esi, 8
+    call vec_push
+    mov [rax], r13
+8:  mov eax, 1
+9:  EPILOGUE
+
+# claudecfg_key(sec, seclen, key, keylen, val, vallen) -> eax 1 when it is a [claude] env.NAME pair or a
+#   spinner_verb line
 FN claudecfg_key
     PROLOGUE
     mov rbx, rdx
@@ -97,6 +195,13 @@ FN claudecfg_key
     call str_eq_cstr
     test eax, eax
     jz 8f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    mov rcx, r14
+    call verb_key
+    test eax, eax
+    jnz 9f
     mov rdi, rbx
     mov rsi, r12
     lea rdx, [rip + .Lenv_dot]
@@ -225,9 +330,34 @@ FN claudecfg_save
     call sb_push_byte
     inc rbx
     jmp 1b
+9:  lea rsi, [rip + .Lverb_line]   # then the spinner_verb lines
+    mov rdi, r12
+    call verb_lines
+    EPILOGUE
+
+# verb_lines(sb, prefix): prefix, a spinner_verb's text and a line feed, a line each
+verb_lines:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    xor ebx, ebx
+1:  cmp rbx, [rip + verbs + VEC_len]
+    jae 9f
+    mov rdi, r12
+    mov rsi, r13
+    call sb_push_cstr
+    mov rax, [rip + verbs + VEC_ptr]
+    mov rsi, [rax + rbx*8]
+    mov rdi, r12
+    call sb_push_cstr
+    mov rdi, r12
+    mov esi, 10
+    call sb_push_byte
+    inc rbx
+    jmp 1b
 9:  EPILOGUE
 
-# claudecfg_dump(sb): "claude.env.NAME=(set)" a line each: never the value
+# claudecfg_dump(sb): "claude.env.NAME=(set)" a line each: never the value; then "claude.spinner_verb=TEXT"
 FN claudecfg_dump
     PROLOGUE
     mov r12, rdi
@@ -251,7 +381,10 @@ FN claudecfg_dump
     call sb_push_cstr
     inc rbx
     jmp 1b
-9:  EPILOGUE
+9:  mov rdi, r12
+    lea rsi, [rip + .Ldump_verb]
+    call verb_lines
+    EPILOGUE
 
 # name_len(pair) -> rax the bytes before its '='
 name_len:
@@ -1077,6 +1210,9 @@ places:
 .Leq: .asciz " = "
 .Ldump_env: .asciz "claude.env."
 .Ldump_set: .asciz "=(set)\n"
+.Lverb_key: .asciz "spinner_verb"
+.Lverb_line: .asciz "spinner_verb = "
+.Ldump_verb: .asciz "claude.spinner_verb="
 .Ldrop_a: .asciz "rhun: [claude] env."
 .Ldir_dropped: .asciz "rhun: CLAUDE_CONFIG_DIR is not an absolute path: claude is started without it\n"
 .Ldrop_b: .asciz " dropped: the name is not a variable's, the pair is over 8 KiB, or there are 64 already\n"

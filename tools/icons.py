@@ -131,6 +131,30 @@ ICONS.append(('DBG_INTO', [('W', 11), ('M', 64, 12), ('L', 64, 62), ('P', 3, 42,
                            ('D', 64, 104, 11)]))
 ICONS.append(('DBG_OUT', [('W', 11), ('M', 64, 84), ('L', 64, 34), ('P', 3, 42, 48, 86, 48, 64, 18),
                           ('D', 64, 108, 11)]))
+# the agents panel's spinner (agentspin.s): six frames of "·", "✢", "*", "✶", "✻", "✽" as vectors (the glyphs
+# are not in every interface font), each a little larger than the one before
+def spokes(n, r0, r1, a0=-90):
+    out = []
+    for k in range(n):
+        a = math.radians(a0 + 360 * k / n)
+        out += [('M', round(64 + r0 * math.cos(a)), round(64 + r0 * math.sin(a))),
+                ('L', round(64 + r1 * math.cos(a)), round(64 + r1 * math.sin(a)))]
+    return out
+
+def star(n, r0, r1):
+    pts = []
+    for k in range(2 * n):
+        a = math.radians(-90 + 180 * k / n)
+        r = r1 if k % 2 == 0 else r0
+        pts += [round(64 + r * math.cos(a)), round(64 + r * math.sin(a))]
+    return [('P', 2 * n) + tuple(pts)]
+
+ICONS.append(('SPIN0', [('D', 64, 64, 12)]))
+ICONS.append(('SPIN1', [('W', 14)] + spokes(4, 6, 40) + [('D', 64, 64, 10)]))
+ICONS.append(('SPIN2', [('W', 13)] + spokes(6, 0, 40)))
+ICONS.append(('SPIN3', star(6, 22, 50)))
+ICONS.append(('SPIN4', [('W', 16)] + spokes(8, 12, 50) + [('D', 64, 64, 14)]))
+ICONS.append(('SPIN5', [('W', 22)] + spokes(8, 14, 52) + [('D', 64, 64, 20)]))
 # icon_mask keys its cache by icon | size << 8
 assert len(ICONS) <= 256, len(ICONS)
 # the color names of file icons, in the order of their theme slots from T_ICON (src/app/theme.s)

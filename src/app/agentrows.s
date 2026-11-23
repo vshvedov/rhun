@@ -1825,15 +1825,9 @@ state_color:
     COLOR ecx, T_MUTED
     test eax, eax
     jz 8f
-    mov rdi, rbx
-    call agent_drv_of
-    COLOR ecx, T_ACCENT
-    test rax, rax
-    jz 8f
-    mov rdx, [rax + DRV_brand]
-    test edx, edx
-    jz 8f
-    mov ecx, edx
+    mov rdi, rbx                # the spinner's: the open mode's, the driver's own in the default ones
+    call agspin_color
+    mov ecx, eax
 8:  mov eax, ecx
     EPILOGUE
 
@@ -2543,7 +2537,13 @@ tr_lay:
     mov [rsp + 12], eax
     cmp dword ptr [rip + lr_mode], LM_DRAW
     jne 1f
-    mov rdi, rbx
+    cmp dword ptr [r15 + AT_state], ATS_RUNNING
+    jne 87f
+    mov rdi, rbx                # a running call's dot blinks (agentspin.s's tick) where rhun drives the turn
+    call agspin_blink
+    test eax, eax
+    jz 1f
+87: mov rdi, rbx
     mov rsi, r15
     call state_color
     mov ecx, eax

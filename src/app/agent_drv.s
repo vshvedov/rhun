@@ -43,6 +43,7 @@
 #     ev_model(al, ptr, len), ev_effort(al, ptr, len) (what is in effect), ev_ultra(al, available, on),
 #     ev_thinking(al, on), ev_fast(al, FS_*, reason ptr, len) (kept in the project's record too),
 #     ev_pill(al, ptr, len) (a one-line pill row, "Switched to NAME"),
+#     ev_spin(al, cstr or 0, static) (the spinner's words in place of a verb),
 #     ev_band(al, BK_*, ptr, len) (a band above the box; ptr 0 takes it away; dismissed, it stays away until
 #     its text changes), ev_band_link(al, BK_*, label cstr, url cstr) (a link under it, asked before it
 #     opens), ev_usage(al, AGU*) (the context and prompt-cache numbers), ev_card(al, AQ*, CD*) (a request's
@@ -2378,6 +2379,12 @@ FN ev_fast
     call agentcfg_set
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
+
+# FN ev_spin(al, cstr or 0, static): the spinner's words in place of a verb while the driver says so
+#   ("Compacting", a start-up hook's); static 1: shown at once, no typewriter; 0 gives the verbs back
+FN ev_spin
+    mov rdi, [rdi + AL_as]
+    jmp agspin_set
 
 # FN ev_pill(al, ptr, len): a one-line pill in the conversation ("Switched to NAME"): centred, muted, in a
 #   rounded frame (agents_pill)

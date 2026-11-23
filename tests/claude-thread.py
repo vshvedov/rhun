@@ -6,8 +6,13 @@ rhun gets its own HOME and XDG folders, an environment without CLAUDE* or ANTHRO
 config whose [claude] section starts the fake (tests/scripts/fake-claude.py); conversations are seeded as
 files or made with the test seam (agent-test-row), never with the real CLI. Nothing here writes the user's
 own Claude Code settings."""
+import calendar
 import importlib.util
+import itertools
 import json
+import os
+import shutil
+import subprocess
 from pathlib import Path
 import re
 import time
@@ -40,7 +45,8 @@ class ThreadCase(chat.DrivenCase):
         folder.mkdir(parents=True, exist_ok=True)
         cwd = self.project.as_posix()
         lines = []
-        for role, text in rows:
+        for row in rows:
+            role, text = row[0], row[1]
             if role == 'user':
                 lines.append({'type': 'user', 'message': {'role': 'user', 'content': text}, 'cwd': cwd,
                               'sessionId': sid})
@@ -50,6 +56,8 @@ class ThreadCase(chat.DrivenCase):
             else:
                 lines.append({'type': 'assistant', 'message': {'role': 'assistant',
                                                                'content': [{'type': 'text', 'text': text}]}})
+            if len(row) > 2:                         # (role, text, ISO time): the record's timestamp
+                lines[-1]['timestamp'] = row[2]
         lines.append({'type': 'custom-title', 'customTitle': title, 'sessionId': sid})
         path = folder / (sid + '.jsonl')
         path.write_text(''.join(json.dumps(r) + '\n' for r in lines), encoding='utf-8')
@@ -291,6 +299,33 @@ class AnchorTest(ThreadCase):
         self.assertEqual(e['last'], rows - 1, e)
         self.assertTrue(e['anchor'] is None or e['anchor'][0] == rows - 1, e)
 
+    def test_view_stays_through_the_timestamps_toggle(self):
+        """[agents] timestamps adds a time line above every prompt and a day pill where the day changes: the
+        heights above the view change, the row at the top stays where it was (task 5)."""
+        rows = []
+        for i in range(200):                         # a new day every four turns
+            at = '2026-10-%02dT12:%02d:00Z' % (1 + i // 8, i % 60)
+            rows += [('user', 'step %d' % i, at), ('assistant', 'reply %d' % i, at)]
+        self.open_seeded(rows)
+        self.wheel(-900)
+        first, y = self.top_row()
+        height = int(self.row(first + 1)['height'])
+        on = self.engine()
+        self.assertEqual(on['follow'], 0, on)
+        for value in ('false', 'true'):
+            gen = self.engine()['gen']
+            self.config.write_text(self.BASE + self.claude_section() + '[agents]\ntimestamps = %s\n' % value,
+                                   encoding='utf-8')
+            self.until(lambda: self.engine()['gen'] != gen, 'the reload', 10)
+            self.command('print-frames')
+            # the same row at the top, its text where it was: only its time line and pill come or go above it
+            now = int(self.row(first + 1)['height'])
+            self.assert_stays((first, y + height - now), 'timestamps = ' + value)
+            if value == 'false':
+                self.assertLess(self.engine()['content'], on['content'])
+                self.assertLess(now, height)
+        self.assertEqual(self.top_row(), (first, y))
+
     def test_following_stays_at_the_end_through_all_of_them(self):
         self.start()
         self.chat('hello')
@@ -498,6 +533,444 @@ class TypedKeysTest(ThreadCase):
         self.assertIsNone(self.engine()['focus'])
         self.command('key Escape')                   # then the conversation closes
         self.assertNotIn('rows=', self.command('print-agent-thread'))
+
+
+def spin_words(line):
+    """print-agent-spinner as a dict ("-" as None; "_" in verb and label are spaces)."""
+    out = {}
+    for word in line.strip().split(' '):
+        key, value = word.split('=', 1)
+        if key in ('verb', 'label'):
+            out[key] = value.replace('_', ' ')
+        else:
+            out[key] = None if value == '-' else value
+    return out
+
+
+class SpinnerCase(ThreadCase):
+    def spin(self):
+        return spin_words(self.command('print-agent-spinner'))
+
+    def passes(self):
+        return int(self.command('print-loop-stats').split()[0].split('=')[1])
+
+    def wakeups(self, seconds=1.5):
+        """main loop passes in that many seconds (the two print-loop-stats add one)"""
+        before = self.passes()
+        time.sleep(seconds)
+        return self.passes() - before - 1
+
+    def ticks(self, n):
+        for _ in range(n):
+            self.command('agent-spin-tick')
+
+    def working(self, prompt='linger 30', env=None, extra=''):
+        """a driven conversation whose turn works (the fake's linger)"""
+        self.start(extra=extra, env=env)
+        self.chat('hello')
+        self.command('agent-prompt ' + prompt)
+        self.command('wait-agent working')
+
+
+class SpinnerTest(SpinnerCase):
+    """The line after the last row while the open conversation works: frames, verbs, the typewriter; the one
+    tick of 120 ms that serves it and every running dot, armed only by something moving drawn in view."""
+
+    def test_spinner_shows_while_a_turn_runs_and_goes(self):
+        self.start()
+        self.chat('hello')
+        self.assertEqual(self.spin()['shown'], '0')
+        self.command('agent-prompt linger 1.5')
+        self.command('wait-agent working')
+        spin = self.spin()
+        self.assertEqual(spin['shown'], '1', spin)
+        self.assertEqual(spin['verbs'], '82', spin)
+        self.assertIsNotNone(spin['y'], spin)
+        self.assertIsNotNone(spin['timeout'], spin)
+        self.command('wait-agent ready 10000')
+        self.command('print-frames')
+        spin = self.spin()
+        self.assertEqual((spin['shown'], spin['timeout']), ('0', None), spin)
+
+    def test_frames_step_there_and_back(self):
+        self.start()
+        self.command('agent-timing spin=0')          # the tick held: steps by agent-spin-tick alone
+        self.chat('hello')
+        self.command('agent-prompt linger 30')
+        self.command('wait-agent working')
+        self.assertEqual(self.spin()['frame'], '0')
+        frames = []
+        for _ in range(13):
+            self.ticks(1)
+            frames.append(int(self.spin()['frame']))
+        self.assertEqual(frames, [1, 2, 3, 4, 5, 5, 4, 3, 2, 1, 0, 0, 1])
+        self.assertEqual(self.spin()['tick'], '0')
+
+    def test_verbs_change_at_2_5_10_seconds(self):
+        self.start()
+        self.command('agent-timing spin=0')
+        self.chat('hello')
+        self.command('agent-prompt linger 60')
+        self.command('wait-agent working')
+        verbs = [self.spin()['verb']]
+        changed = []
+        for n in range(1, 90):
+            self.ticks(1)
+            verb = self.spin()['verb']
+            if verb != verbs[-1]:
+                changed.append(n)
+                verbs.append(verb)
+        # 120 ms a tick: the first change at 2 s, then 3 s and 5 s later
+        self.assertEqual(changed, [17, 42, 84], verbs)
+
+    def test_user_verbs_append_and_replace(self):
+        self.start(self.claude_section('spinner_verbs = replace\nspinner_verb = Zooming\n'))
+        self.assertIn('claude.spinner_verb=Zooming\n', self.command('print-settings'))
+        self.chat('hello')
+        self.command('agent-prompt linger 30')
+        self.command('wait-agent working')
+        spin = self.spin()
+        self.assertEqual((spin['verbs'], spin['verb']), ('1', 'Zooming'), spin)
+        self.command('agent-stop')
+        self.command('wait-agent ready 10000')
+        self.quit()
+        self.start(self.claude_section('spinner_verb = Zooming\nspinner_verb = Whooshing\n'))
+        self.chat('hello')
+        self.command('agent-prompt linger 30')
+        self.command('wait-agent working')
+        self.assertEqual(self.spin()['verbs'], '84')
+        self.command('agent-stop')
+        self.command('wait-agent ready 10000')
+        self.quit()
+        self.start(self.claude_section('spinner_verbs = replace\n'))   # replace with none: the driver's
+        self.chat('hello')
+        self.command('agent-prompt linger 30')
+        self.command('wait-agent working')
+        self.assertEqual(self.spin()['verbs'], '82')
+
+    def test_typewriter_reaches_the_verb(self):
+        self.start()
+        self.command('agent-timing spin=0')
+        self.chat('hello')
+        self.command('agent-prompt linger 30')
+        self.command('wait-agent working')
+        spin = self.spin()
+        self.assertEqual(spin['label'], '', spin)            # it starts blank
+        self.ticks(1)
+        self.assertIn('▌', self.spin()['label'])         # the cursor sweeps, 3 characters a tick
+        self.ticks(9)
+        spin = self.spin()
+        self.assertEqual(spin['label'], spin['verb'] + '...', spin)
+
+    def test_compacting_and_start_hook_words(self):
+        self.start(env={'FAKE_CLAUDE_HOOKS': 'start', 'FAKE_CLAUDE_HOOK_MS': '2500',
+                        'FAKE_CLAUDE_COMPACT_MS': '2500'})
+        self.command('agent-new claude')
+        self.command('agent-prompt hello')
+        spin = self.until(lambda: (lambda s: s if s['verb'] == 'Running start-up hooks' else None)(self.spin()),
+                          'the start-up hook\'s words')
+        self.assertEqual(spin['shown'], '1', spin)
+        self.command('wait-agent ready 15000')
+        self.assertEqual(self.spin()['shown'], '0')
+        self.command('agent-prompt /compact')
+        spin = self.until(lambda: (lambda s: s if s['verb'] == 'Compacting' else None)(self.spin()), 'Compacting')
+        self.assertEqual(spin['static'], '0', spin)
+        self.command('wait-agent ready 15000')
+        self.command('agent-prompt linger 30')
+        self.command('wait-agent working')
+        self.assertNotIn(self.spin()['verb'], ('Compacting', 'Running start-up hooks'))
+
+    def test_no_hook_events_flag_is_passed(self):
+        self.start(env={'FAKE_CLAUDE_HOOKS': 'start'})
+        self.chat('hello')
+        self.assertNotIn('--include-hook-events', self.starts()[0]['argv'])
+
+    def test_colour_follows_the_mode(self):
+        self.working()
+        self.assertEqual(self.spin()['color'], 'd97757')     # the default mode: the driver's own colour
+        self.command('agent-stop')
+        self.command('wait-agent ready 10000')
+        self.command('agent-mode plan')
+        self.command('wait-agent ready 10000')
+        self.command('agent-prompt linger 30')
+        self.command('wait-agent working')
+        plan = self.spin()['color']
+        self.assertNotEqual(plan, 'd97757')
+
+    def test_spinner_is_before_queued_rows(self):
+        self.working()
+        self.command('agent-prompt and then this')           # queued while the turn works
+        self.until(lambda: self.command('print-agents').splitlines()[-1] == 'queued and then this', 'queued')
+        spin = self.spin()
+        e = self.engine()
+        last = self.row(e['rows'])
+        self.assertGreaterEqual(int(spin['y']), int(last['y']) + int(last['height']), (spin, last))
+
+    def test_a_running_dot_blinks_only_when_driven(self):
+        self.working()
+        self.command('agent-timing spin=0')
+        self.command('agent-test-tool a name=Bash second=sleep 9')    # a running call
+        states = []
+        for _ in range(17):
+            states.append(self.spin()['blink'])
+            self.ticks(1)
+        self.assertEqual(set(states), {'on', 'off'}, states)
+        runs = [len(list(g)) for _, g in itertools.groupby(states)]
+        self.assertEqual(runs[1:-1], [4] * (len(runs) - 2), states)       # 4 ticks on, 4 off
+
+    def test_a_reader_has_no_tick(self):
+        self.open_seeded(turns(3))
+        self.command('agent-test-tool a name=Bash second=sleep 9')     # running, in a conversation only read
+        self.command('print-frames')
+        spin = self.spin()
+        self.assertEqual((spin['shown'], spin['seen'], spin['timeout'], spin['blink']), ('0', '0', None, None), spin)
+        self.assertLessEqual(self.wakeups(), 4)
+
+    def test_the_tick_stops(self):
+        self.write(turns(3), sid='other', title='Other')
+        self.start()
+        self.chat('hello')
+        for i in range(60):                          # a thread taller than the panel
+            self.command('agent-test-row meta a note that takes some room in the thread %d' % i)
+        self.command('agent-prompt linger 60')
+        self.command('wait-agent working')
+
+        def ticking(what):
+            self.assertIsNotNone(self.spin()['timeout'], what)
+            self.assertGreaterEqual(self.wakeups(), 8, what)
+
+        def still(what):
+            time.sleep(1.0)                          # the tick after the last one that drew it, a scrollbar's fade
+            self.command('print-frames')
+            spin = self.spin()
+            self.assertIsNone(spin['timeout'], (what, spin))
+            self.assertLessEqual(self.wakeups(), 4, what)
+
+        ticking('the line in view')
+        self.wheel(-3000)                            # scrolled up: the line is out of view
+        still('scrolled up')
+        self.command('cmd focus_agents')
+        self.command('key End')
+        ticking('back at the end')
+        self.command('cmd toggle_agents')            # the panel hidden
+        still('the panel hidden')
+        self.command('cmd toggle_agents')
+        ticking('the panel shown again')
+        self.command('click %d %d' % chat.BACK)      # the list
+        still('the list')
+        rows = self.listed()
+        other = [i for i, r in enumerate(rows) if 'Other' in r]
+        self.assertEqual(len(other), 1, rows)
+        self.command('print-agents %d' % (other[0] + 1))   # another conversation open
+        still('another conversation')
+        mine = [i for i, r in enumerate(self.listed()) if 'Other' not in r]
+        self.command('print-agents %d' % (mine[0] + 1))
+        self.command('wait-agent working')
+        self.command('key End')
+        ticking('the working one again')
+        self.command('agent-stop')
+        self.command('wait-agent ready 10000')
+        still('after the turn')
+
+    def test_no_spinner_without_verbs(self):
+        """An extension's session that says it works (tests/ext-prompts.py's fixture): no spinner line, no tick,
+        the loop's passes as without it."""
+        prompts = importlib.util.spec_from_file_location('ext_prompts', ROOT / 'tests/ext-prompts.py')
+        module = importlib.util.module_from_spec(prompts)
+        import sys
+        sys.path.insert(0, str(ROOT / 'tests'))
+        prompts.loader.exec_module(module)
+        case = module.Prompts('test_a_prompt_goes_to_the_open_session')
+        case.setUp()
+        try:
+            out = case.editor(['print-agents 1', 'wait 300', 'print-agents', 'print-agent-spinner',
+                               'print-loop-stats', 'wait 2000', 'print-loop-stats', 'print-agent-spinner'])
+        finally:
+            case.tearDown()
+        spins = [spin_words(line) for line in out if line.startswith('shown=')]
+        self.assertEqual(len(spins), 2, out)
+        for spin in spins:
+            self.assertEqual((spin['shown'], spin['timeout']), ('0', None), spin)
+        loops = [int(line.split()[0].split('=')[1]) for line in out if line.startswith('passes=')]
+        self.assertLessEqual(loops[1] - loops[0], 6, out)
+
+
+def zone_env(zone):
+    """os.environ with TZ=zone for Python's own local time (restore with the returned value)"""
+    saved = os.environ.get('TZ')
+    os.environ['TZ'] = zone
+    time.tzset()
+    return saved
+
+
+def zone_back(saved):
+    if saved is None:
+        os.environ.pop('TZ', None)
+    else:
+        os.environ['TZ'] = saved
+    time.tzset()
+
+
+def ms(iso):
+    return calendar.timegm(time.strptime(iso[:19], '%Y-%m-%dT%H:%M:%S')) * 1000
+
+
+class TimeTest(ThreadCase):
+    """Times on prompts and replies, local per timestamp (TZ set for each run), and the day lines."""
+
+    def stamps(self, n):
+        """print-agent-row N's time, tip and day ("-" as None, "_" back to spaces)"""
+        first = self.command('print-agent-row %d' % n).splitlines()[0]
+        words = dict(word.split('=', 1) for word in first.split(' '))
+        return tuple(None if words[k] == '-' else words[k].replace('_', ' ') for k in ('time', 'tip', 'day'))
+
+    def rows(self):
+        """print-agent-rows: (kind, t, day) a row"""
+        out = []
+        for line in self.command('print-agent-rows').splitlines():
+            if line[:1].isdigit():
+                words = dict(w.split('=', 1) for w in line.split(' ')[2:] if '=' in w)
+                out.append((line.split(' ')[1], words.get('t'), words.get('day')))
+        return out
+
+    def seeded(self, rows, zone, extra=''):
+        self.write(rows)
+        self.start(extra=extra, env={'TZ': zone})
+        self.open_listed()
+        self.command('print-frames')
+
+    def zic(self, source):
+        zic = shutil.which('zic') or ('/usr/sbin/zic' if Path('/usr/sbin/zic').exists() else None)
+        if not zic:
+            self.skipTest('no zic here')
+        text = self.work / 'zones.txt'
+        text.write_text(source, encoding='utf-8')
+        made = subprocess.run([zic, '-b', 'slim', '-d', str(self.work / 'zones'), str(text)], capture_output=True)
+        if made.returncode != 0:
+            self.skipTest('zic failed: %r' % made.stderr)
+        return self.work / 'zones'
+
+    def test_iso_forms(self):
+        forms = ['2026-11-22T10:00:00.000Z', '2026-11-22T10:00:00Z', '2026-11-22T12:30:00+02:30',
+                 '2026-11-22T10:00:00.5Z', 'yesterday', '2026-13-01T00:00:00Z']
+        self.seeded([('user', 'p%d' % i, f) for i, f in enumerate(forms)], 'UTC')
+        got = [t for _, t, _ in self.rows()]
+        base = ms('2026-11-22T10:00:00')
+        self.assertEqual(got, [str(base), str(base), str(base), str(base + 500), '-', '-'])
+
+    def test_clock_and_tip(self):
+        if not Path('/usr/share/zoneinfo/America/Denver').exists():
+            self.skipTest('no zone files here')
+        self.seeded([('user', 'winter', '2026-01-15T22:45:07.000Z'), ('assistant', 'w', '2026-01-15T22:45:08.000Z'),
+                     ('user', 'summer', '2026-07-15T21:45:07.000Z')], 'America/Denver')
+        self.assertEqual(self.stamps(1), ('3:45 PM', '2026-01-15 15:45:07 MST', 'Thu, Jan 15'))
+        self.assertEqual(self.stamps(2)[:2], ('3:45 PM', '2026-01-15 15:45:08 MST'))
+        self.assertEqual(self.stamps(3), ('3:45 PM', '2026-07-15 15:45:07 MDT', 'Wed, Jul 15'))
+        self.quit()
+        if Path('/usr/share/zoneinfo/Asia/Kolkata').exists():
+            self.seeded([('user', 'india', '2026-01-15T10:15:00Z')], 'Asia/Kolkata')
+            self.assertEqual(self.stamps(1)[:2], ('3:45 PM', '2026-01-15 15:45:00 IST'))
+            self.quit()
+        zones = self.zic('Zone Test/Num 5:30 - <+0530>\nZone Test/Neg -7:00 - <-07>\n')
+        self.seeded([('user', 'numeric', '2026-01-15T10:15:00Z')], str(zones / 'Test/Num'))
+        self.assertEqual(self.stamps(1)[:2], ('3:45 PM', '2026-01-15 15:45:00 UTC+5:30'))
+        self.quit()
+        self.seeded([('user', 'numeric', '2026-01-15T22:45:00Z')], str(zones / 'Test/Neg'))
+        self.assertEqual(self.stamps(1)[:2], ('3:45 PM', '2026-01-15 15:45:00 UTC-7'))
+        self.quit()
+        self.seeded([('user', 'utc', '2026-01-15T15:45:00Z')], 'UTC')
+        self.assertEqual(self.stamps(1)[:2], ('3:45 PM', '2026-01-15 15:45:00 UTC'))
+
+    def test_day_pill_on_the_first_row_and_at_midnight(self):
+        if not Path('/usr/share/zoneinfo/America/Denver').exists():
+            self.skipTest('no zone files here')
+        self.seeded([('user', 'late', '2026-11-20T06:59:00Z'),        # Nov 19, 11:59 PM
+                     ('assistant', 'after midnight', '2026-11-20T07:00:30Z'),   # Nov 20, 12:00 AM
+                     ('user', 'morning', '2026-11-20T15:00:00Z')], 'America/Denver')
+        self.assertEqual([d for _, _, d in self.rows()], ['1', '1', '0'])
+        self.assertEqual(self.stamps(1), ('11:59 PM', '2026-11-19 23:59:00 MST', 'Thu, Nov 19'))
+        self.assertEqual(self.stamps(2)[0], '12:00 AM')
+        self.assertEqual(self.stamps(2)[2], 'Fri, Nov 20')
+        self.assertIsNone(self.stamps(3)[2])
+
+    def test_day_line_across_a_dst_change(self):
+        """Each time by its own date's rule: a midnight after the spring change (MDT), and one in 2006, when that
+        date was still standard time (the zone file's transitions, not this year's rule)."""
+        if not Path('/usr/share/zoneinfo/America/Denver').exists():
+            self.skipTest('no zone files here')
+        self.seeded([('user', 'before', '2026-03-08T12:00:00Z'), ('assistant', 'after', '2026-03-09T06:30:00Z'),
+                     ('user', 'old', '2006-03-19T12:00:00Z'), ('assistant', 'old late', '2006-03-20T06:30:00Z')],
+                    'America/Denver')
+        self.assertEqual([d for _, _, d in self.rows()], ['1', '1', '1', '0'])
+        self.assertEqual(self.stamps(2)[:2], ('12:30 AM', '2026-03-09 00:30:00 MDT'))
+        self.assertEqual(self.stamps(4)[:2], ('11:30 PM', '2006-03-19 23:30:00 MST'))
+        # a rule-only zone file: past its transitions the POSIX rule, per date
+        zones = self.zic('Zone Test/North -5:00 US E%sT\nRule US 2007 max - Mar Sun>=8 2:00 1:00 D\n'
+                         'Rule US 2007 max - Nov Sun>=1 2:00 0 S\n')
+        self.quit()
+        self.seeded([('user', 'summer', '2031-07-01T03:30:00Z'), ('user', 'winter', '2031-12-01T04:30:00Z')],
+                    str(zones / 'Test/North'))
+        self.assertEqual(self.stamps(1), ('11:30 PM', '2031-06-30 23:30:00 EDT', 'Mon, Jun 30, 2031'))
+        self.assertEqual(self.stamps(2), ('11:30 PM', '2031-11-30 23:30:00 EST', 'Sun, Nov 30, 2031'))
+
+    def test_other_year_label(self):
+        this = time.gmtime().tm_year
+        self.seeded([('user', 'last year', '%d-06-10T12:00:00Z' % (this - 1)),
+                     ('user', 'this year', '%d-06-10T12:00:00Z' % this)], 'UTC')
+        saved = zone_env('UTC')
+        try:
+            last = time.strftime('%a, %b 10, ', time.gmtime(ms('%d-06-10T12:00:00' % (this - 1)) / 1000)) + str(this - 1)
+            now = time.strftime('%a, %b 10', time.gmtime(ms('%d-06-10T12:00:00' % this) / 1000))
+        finally:
+            zone_back(saved)
+        self.assertEqual(self.stamps(1)[2], last)
+        self.assertEqual(self.stamps(2)[2], now)
+
+    def test_no_pills_without_timestamps(self):
+        rows = [('user', 'one', '2026-11-20T12:00:00Z'), ('assistant', 'two', '2026-11-20T12:00:01Z'),
+                ('user', 'three', '2026-11-21T12:00:00Z')]
+        self.seeded(rows, 'UTC')
+        on = [int(self.row(n)['height']) for n in (1, 2, 3)]
+        self.quit()
+        self.seeded(rows, 'UTC', extra='[agents]\ntimestamps = false\n')
+        self.assertEqual([self.stamps(n) for n in (1, 2, 3)], [(None, None, None)] * 3)
+        off = [int(self.row(n)['height']) for n in (1, 2, 3)]
+        self.assertGreater(on[0], off[0])            # a pill and a time line
+        self.assertGreater(on[0], on[2] - 1)
+        self.assertEqual(on[1], off[1])              # a reply's time is on its label line
+        self.assertGreater(on[2], off[2])
+
+    def test_a_prompt_has_its_time_line_and_a_reply_after_a_reply_none(self):
+        rows = [('user', 'one', '2026-11-20T12:00:00Z'), ('assistant', 'two', '2026-11-20T12:00:01Z'),
+                ('assistant', 'three', '2026-11-20T12:00:02Z'), ('user', 'four', '2026-11-20T12:05:00Z')]
+        self.seeded(rows, 'UTC')
+        self.assertEqual(self.stamps(1)[0], '12:00 PM')
+        self.assertEqual(self.stamps(2)[0], '12:00 PM')
+        self.assertIsNone(self.stamps(3)[0])         # a reply after a reply: no time
+        self.assertEqual(self.stamps(4), ('12:05 PM', '2026-11-20 12:05:00 UTC', None))
+        h1, h4 = int(self.row(1)['height']), int(self.row(4)['height'])
+        self.assertGreater(h1, h4)                   # the first has the day pill too
+
+    def test_live_rows_get_the_clock(self):
+        self.start(env={'TZ': 'UTC'})
+        began = time.time() * 1000
+        self.chat('hello')
+        ended = time.time() * 1000
+        stamped = [(k, t) for k, t, _ in self.rows() if k in ('user', 'agent')]
+        self.assertTrue(stamped, self.rows())
+        for kind, t in stamped:
+            self.assertTrue(began - 2000 <= int(t) <= ended + 2000, (kind, t, began, ended))
+        n = self.engine()['rows']
+        clock = self.stamps(n - 1)[0]
+        self.assertRegex(clock, r'^\d{1,2}:\d\d [AP]M$')
+
+    def test_rate_band_still_formats(self):
+        """Phase 2's reset texts go through the moved zone code (claude-controls.py has the zones)."""
+        self.start(env={'FAKE_CLAUDE_RATE': 'weekly', 'TZ': 'UTC'})
+        self.chat('hello')
+        bands = self.command('print-agent-bands')
+        self.assertRegex(bands, r'resets (at \d{1,2}:\d\d [AP]M|\w{3}, \w{3} \d{1,2}( at|, \d{4} at) \d{1,2}:\d\d [AP]M)')
+
 
 
 if __name__ == '__main__':

@@ -462,7 +462,7 @@ state_named:
 8:  mov eax, -1
     EPILOGUE
 
-# agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES] [cache=MS]
+# agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES] [cache=MS] [spin=MS]
 #   [card=MS] [keyed=MS] [advance=MS]: shorter times (and a smaller cap, a smaller input queue, a prompt
 #   cache's lifetime, 0 the CLI's) for tests; card: a rich card's lock, keyed: how recent a key in the box
 #   keeps a new card from taking the keyboard, advance: the question card's move to the next question
@@ -718,6 +718,36 @@ c_print_agent_thread:
     mov rdi, rax
     call agents_thread_dump
     xor eax, eax
+    EPILOGUE
+
+# print-agent-spinner: the spinner line of the open conversation and the tick (agspin_dump; phase 3 task 5)
+c_print_agent_spinner:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agspin_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-spin-tick [N]: N steps of the tick now (1), whatever its time (agent-timing spin=0 holds it)
+c_agent_spin_tick:
+    PROLOGUE
+    call ai_set
+    mov ebx, 1
+    call ai_arg
+    test rdx, rdx
+    jz 1f
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov ebx, eax
+1:  test ebx, ebx
+    jz 9f
+    call agspin_step
+    dec ebx
+    jmp 1b
+9:  xor eax, eax
     EPILOGUE
 
 # agent-test-view: as a setting that changes heights (agents_view_changed)
@@ -2274,6 +2304,8 @@ c_agent_card_uncomment:
 .Lc_print_agent_thread: .asciz "print-agent-thread"
 .Lc_agent_test_row: .asciz "agent-test-row"
 .Lc_agent_test_view: .asciz "agent-test-view"
+.Lc_print_agent_spinner: .asciz "print-agent-spinner"
+.Lc_agent_spin_tick: .asciz "agent-spin-tick"
 .Lk_thinking: .asciz "thinking"
 .Lk_meta: .asciz "meta"
 .Lk_compact: .asciz "compact"
@@ -2349,6 +2381,7 @@ ai_ctl:
     # the thread's engine and rows (agents.s, agentrows.s: phase 3)
     .quad .Lc_print_agent_thread, c_print_agent_thread, .Lc_agent_test_row, c_agent_test_row
     .quad .Lc_agent_test_view, c_agent_test_view
+    .quad .Lc_print_agent_spinner, c_print_agent_spinner, .Lc_agent_spin_tick, c_agent_spin_tick   # task 5
     .quad .Lc_print_agent_rows, c_print_agent_rows, .Lc_print_agent_rows_fit, c_print_agent_rows_fit
     .quad .Lc_agent_test_tool, c_agent_test_tool, .Lc_agent_row_click, c_agent_row_click
     .quad .Lc_agent_test_truncate, c_agent_test_truncate
@@ -2413,5 +2446,7 @@ timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_co
     .quad .Lt_card, g_card_lock_ms, .Lt_keyed, g_card_keyed_ms     # the rich cards (agentcard.s)
     .quad .Lt_advance, g_card_advance_ms                            # the question card's move on
     .quad .Lt_settings, g_settings_wait_ms      # the prompts' wait for get_settings (claude_session.s)
+    .quad .Lt_spin, g_spin_ms                   # the spinner's tick, 0 held (agentspin.s)
     .quad 0, 0
 .Lt_settings: .asciz "settings"
+.Lt_spin: .asciz "spin"

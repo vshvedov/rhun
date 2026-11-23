@@ -174,13 +174,13 @@ class SettingsTest(ChatCase):
         rows = [line for line in out.splitlines() if line.startswith('claude.')]
         self.assertEqual(rows, ['claude.chat', 'claude.executable', 'claude.wrapper', 'claude.initial_mode',
                                 'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
-                                'claude.env.FOO=(set)', 'claude.env.ANSWER_2=(set)'])
+                                'claude.spinner_verbs', 'claude.env.FOO=(set)', 'claude.env.ANSWER_2=(set)'])
         self.command('cmd toggle_word_wrap')         # a setting changed: the exit writes the file
         self.quit()
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(section(saved, 'claude'), [
             'chat = false', f'executable = {FAKE}', f'wrapper = {PYTHON}', 'initial_mode = plan',
-            'allow_bypass_permissions = false', 'prompt_suggestions = true',
+            'allow_bypass_permissions = false', 'prompt_suggestions = true', 'spinner_verbs = append',
             'env.FOO = very-secret-value', 'env.ANSWER_2 = forty two'])
         self.assertIn('idle_stop_minutes = 15', section(saved, 'agents'))
 
@@ -216,7 +216,7 @@ class SettingsTest(ChatCase):
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(section(saved, 'claude'), [
             'chat = true', 'executable =', 'wrapper =', 'initial_mode = default', 'allow_bypass_permissions = false',
-            'prompt_suggestions = true', 'env.OK = fine'])
+            'prompt_suggestions = true', 'spinner_verbs = append', 'env.OK = fine'])
         self.assertIn('idle_stop_minutes = 240', section(saved, 'agents'))
 
     def test_the_cli_default_mode_is_written_empty(self):

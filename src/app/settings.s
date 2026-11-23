@@ -121,7 +121,7 @@ FN settings_dump
     jne 3f
     mov rdi, r12                # AI: the extension sources (agentext.s)
     call agentext_settings_dump
-3:  lea rax, [rip + cfg_claude_prompt_suggestions]    # the last [claude] row
+3:  lea rax, [rip + cfg_claude_spinner_verbs]         # the last [claude] row
     cmp [rbx + SET_ptr], rax
     jne 2f
     mov rdi, r12                # Claude Code: the env pairs, never their values (claudecfg.s)
@@ -188,7 +188,17 @@ FN setting_applied
     jne 41f
     call agent_drv_apply        # switched off: the conversations rhun drives end with their programs
     jmp 9f
-41: lea rcx, [rip + cfg_git]
+41: lea rcx, [rip + cfg_agents_timestamps]
+    cmp rax, rcx
+    jne 42f
+    call agents_view_changed    # a time line above every prompt, a pill where the day changes
+    jmp 9f
+42: lea rcx, [rip + cfg_claude_spinner_verbs]
+    cmp rax, rcx
+    jne 43f
+    call claudecfg_done         # the spinner's verbs
+    jmp 9f
+43: lea rcx, [rip + cfg_git]
     cmp rax, rcx
     jne 5f
     call git_apply

@@ -23,7 +23,9 @@ fake streams a long Markdown reply (scenario `stream`) and with nothing streamin
 the time from a new conversation's first prompt to its answer (a cold start: the process, initialize,
 get_settings, the turn) and the wake-ups of a ready conversation and of a permission request waiting; on a
 build with phase 2's controls (it knows print-agent-cfg), the wake-ups of a band with a warm prompt-cache
-clock and of the open command menu, and the command menu's open time with 500 cached commands.
+clock and of the open command menu, and the command menu's open time with 500 cached commands; on a build
+with phase 3's spinner (print-agent-spinner), the wake-ups of a working turn with its spinner in view and
+scrolled away.
 """
 import argparse
 import json
@@ -407,6 +409,17 @@ def chat_live(b, work):
     home, project = claude_project(work, 'menu')
     results['idle loop passes in 10 s, the command menu open'] = b.idle_passes(
         [project], home, True, setup=chatted('hello', 'ready', 'agent-menu /'), chat=True)
+    if has_spinner(b, work):
+        # phase 3 task 5: a turn that works (the fake's linger) with its spinner line in view ticks every
+        # 120 ms; scrolled away, nothing moving is drawn and the tick stops
+        home, project = claude_project(work, 'spin')
+        results['idle loop passes in 10 s, a turn working, the spinner in view'] = b.idle_passes(
+            [project], home, True, setup=chatted('linger 40', 'working'), chat=True)
+        home, project = claude_project(work, 'spinaway')
+        notes = ['agent-test-row meta a note that takes some room in the thread %d' % i for i in range(60)]
+        results['idle loop passes in 10 s, a turn working, the spinner scrolled away'] = b.idle_passes(
+            [project], home, True, setup=chatted('linger 40', 'working', *notes, 'move 1100 400', 'scroll -4000'),
+            chat=True)
     home, project = claude_project(work, 'commands')
 
     def menu(command):
@@ -450,6 +463,20 @@ def commands_record(n):
 
 FIRST = {}                                  # every cold start's time of the --chat runs, by build
 CONTROLS = {}                               # whether a build has phase 2's controls, by build
+
+
+def has_spinner(b, work):
+    """whether b's build has the spinner (phase 3 task 5: print-agent-spinner)"""
+    if ('spin', b.exe) not in CONTROLS:
+        def probe(command):
+            try:
+                command('print-agent-spinner')
+                return True
+            except RuntimeError:
+                return False
+        home, project = claude_project(work, 'probe3')
+        CONTROLS[('spin', b.exe)] = b.controlled([project], home, True, probe, chat=True)
+    return CONTROLS[('spin', b.exe)]
 
 
 def has_controls(b, work):

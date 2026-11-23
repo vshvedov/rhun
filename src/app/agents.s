@@ -14,6 +14,7 @@
 .equ ID_AG_FOLLOW, 0x5f04
 .equ ID_AG_MORE, 0x5f05
 .equ ID_AG_MD, 0x480000          # + (row & 255) * 4096: the links of the replies in view
+.equ ID_AG_TIME, 0x63f000        # + (row & 4095): a row's time (its tip), in phase 3's 0x600000-0x63ffff
 
 .equ ROUTINE_GAP, 2000          # ms from one routine discovery run to the next
 .equ INDEX_TIMEOUT, 60000       # ms a discovery run may take before it is stopped
@@ -41,6 +42,7 @@ label_due: .quad 0              # unix second when a label shown changes ("now" 
 last_scan: .quad 0
 tmp: .zero SB_SIZE
 line: .zero SB_SIZE
+ts_sb: .zero SB_SIZE            # a row's time, its tip, its day's label (stamp_*)
 buf: .zero 96
 .p2align 3
 page_limit: .quad 0
@@ -93,6 +95,8 @@ th_last: .long -1
 .globl th_arow, th_aoff
 th_arow: .long -1               # the anchor: the row under the area's top edge, -1 none (the thread follows
 th_aoff: .long 0                #   its end), and the pixels of it above the edge (row 0: -MI_12 at the top)
+th_aabove: .long -1             # the anchor row's day pill and time line then (row_above), -1 unknown: when
+                                #   they change (timestamps) the offset follows, so the row's text stays put
 index_fd: .long -1
 common_wd: .long -1             # the watch of the common .git folder (agents_watch_repo)
 registry_wd: .long -1           # and of its worktrees folder
@@ -1421,7 +1425,27 @@ row_init:
     mov r13, rax
     mov rax, rcx
 3:  mov [r13 + AM_t], rax
-    mov eax, -1                 # its turn: a prompt starts one, any other row is in the one before it
+    test rax, rax               # a stamped prompt or reply that starts another local day: its day pill
+    jz 31f
+    mov ecx, [r13 + AM_role]
+    cmp ecx, R_USER
+    je 30f
+    cmp ecx, R_ASSIST
+    jne 31f
+30: test dword ptr [r13 + AM_flags], AMF_QUEUED | AMF_PILL
+    jnz 31f
+    mov rdi, rax
+    call agtime_day
+    mov r14, rax
+    mov rdi, rbx
+    mov rsi, r12
+    call row_at
+    mov r13, rax
+    cmp r14, [rbx + AS_day]
+    je 31f
+    mov [rbx + AS_day], r14
+    or dword ptr [r13 + AM_flags], AMF_DAY
+31: mov eax, -1                 # its turn: a prompt starts one, any other row is in the one before it
     test r12, r12
     jz 4f
     mov eax, [r13 - AM_SIZE + AM_turn]
@@ -1505,6 +1529,7 @@ FN agents_reveal
 1:  mov dword ptr [rip + th_follow], 0
     mov [rip + th_arow], esi
     mov dword ptr [rip + th_aoff], 0
+    mov dword ptr [rip + th_aabove], -1
     mov dword ptr [rip + g_dirty], 1
 9:  ret
 
@@ -2869,6 +2894,15 @@ FN agents_timeout
 4:  xor eax, eax
     test rcx, rcx
     cmovns rax, rcx
+    push rax
+    call agspin_timeout         # the one tick of what moves (agentspin.s): while it is drawn
+    pop rcx
+    test eax, eax
+    js 5f
+    cmp eax, ecx
+    cmovg eax, ecx
+    ret
+5:  mov eax, ecx
     ret
 1:  mov eax, 50
     ret
@@ -2877,6 +2911,7 @@ FN agents_timeout
 
 FN agents_tick
     PROLOGUE
+    call agspin_tick            # the spinner and the running dots (agentspin.s)
     call index_reap
     call index_finish
     # a worker that does not finish (blocked on a FIFO named .jsonl, or a hung network home) would keep
@@ -3494,6 +3529,7 @@ th_keys:
     PM eax, MI_12
     neg eax
     mov [rip + th_aoff], eax
+    mov dword ptr [rip + th_aabove], -1
     mov [rip + th_aas], rbx
     jmp 7f
 3:  mov dword ptr [rip + th_follow], 1  # the last, following
@@ -5075,7 +5111,10 @@ row_parts:
     cmp eax, R_ASSIST
     je 1f
     PM r14d, MI_20              # a result, an error, a notice: boxed
-1:  mov edx, [rbx + AM_nl]
+1:  mov rdi, rbx                # a day pill, a prompt's time line ([agents] timestamps)
+    call row_above
+    add r14d, eax
+    mov edx, [rbx + AM_nl]
     inc edx
     cmp edx, EST_CAP
     jbe 11f
@@ -5298,6 +5337,10 @@ row_measure:
     mov rdi, r14
     mov esi, r13d
     call msg_height
+    mov r15d, eax
+    mov rdi, r14                # and above it its day pill, a prompt's time line
+    call row_above
+    add eax, r15d
     EPILOGUE
 5:  mov rdi, rbx
     mov rsi, r12
@@ -5916,6 +5959,14 @@ th_layout:
     mov [rip + lay_row], rax
     mov eax, [rip + th_aoff]
     mov [rip + lay_off], eax
+    mov eax, [rip + th_aabove]  # what is above its own part changed: the offset follows
+    test eax, eax
+    js 6f
+    mov rdi, rbx
+    mov rsi, [rip + lay_row]
+    call anchor_above
+    sub eax, [rip + th_aabove]
+    add [rip + lay_off], eax
     jmp 6f
 4:  mov rdi, rbx                # no anchor (the scrollbar was dragged): the row at the scroll
     mov esi, [rip + th_scroll]
@@ -5986,6 +6037,10 @@ th_layout:
     mov [rip + th_arow], eax
     mov eax, [rip + lay_off]
     mov [rip + th_aoff], eax
+    mov rdi, rbx
+    mov rsi, [rip + lay_row]
+    call anchor_above
+    mov [rip + th_aabove], eax
     EPILOGUE
 
 # th_reanchor(AS*): th_scroll was set from outside the layout (the scrollbar, a key): the anchor is the row
@@ -6011,6 +6066,7 @@ th_reanchor:
     mov ecx, [rip + th_scroll]
     sub ecx, edx
     mov [rip + th_aoff], ecx
+    mov dword ptr [rip + th_aabove], -1
 9:  mov [rip + th_aas], rbx
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
@@ -6404,6 +6460,280 @@ msg_height:
     mov [rbx + AM_hgen], eax
     mov [rbx + AM_hdoc], r13d
     mov eax, r14d
+    EPILOGUE
+
+# ---- times on rows (UI 3.18, 3.19: LRe @5641013, zg @5948148) ----
+
+# stamp_kind(AM*) -> eax where its time shows with [agents] timestamps: 0 nowhere, 1 a prompt's line of its
+#   own above it, 2 the right end of a reply's label line (a reply that does not follow a reply)
+stamp_kind:
+    xor eax, eax
+    cmp dword ptr [rip + cfg_agents_timestamps], 0
+    je 9f
+    cmp qword ptr [rdi + AM_t], 0
+    je 9f
+    test dword ptr [rdi + AM_flags], AMF_QUEUED | AMF_PILL
+    jnz 9f
+    cmp qword ptr [rdi + AM_x], 0
+    jne 9f
+    mov ecx, [rdi + AM_role]
+    cmp ecx, R_USER
+    jne 1f
+    mov eax, 1
+    ret
+1:  cmp ecx, R_ASSIST
+    jne 9f
+    mov rdx, [rip + th_as]      # the row before it (in the session drawn)
+    test rdx, rdx
+    jz 2f
+    mov rcx, [rdx + AS_msgs + VEC_ptr]
+    cmp rdi, rcx
+    jbe 2f
+    mov r8, [rdx + AS_msgs + VEC_len]
+    imul r8, r8, AM_SIZE
+    add r8, rcx
+    cmp rdi, r8
+    jae 2f
+    cmp dword ptr [rdi - AM_SIZE + AM_role], R_ASSIST
+    je 9f
+2:  mov eax, 2
+9:  ret
+
+# row_index_id(rbx AM*, of th_as) -> eax the id of its time's tip (ID_AG_TIME + its index & 4095)
+row_index_id:
+    mov rcx, [rip + th_as]
+    mov rax, rbx
+    sub rax, [rcx + AS_msgs + VEC_ptr]
+    xor edx, edx
+    mov ecx, AM_SIZE
+    div rcx
+    and eax, 4095
+    add eax, ID_AG_TIME
+    ret
+
+# stamp_line_h() -> eax a prompt's time line: the small face's line and MI_4
+stamp_line_h:
+    mov rax, [rip + ag_fsmall]
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_4]
+    ret
+
+# day_h() -> eax a day pill above a row: the pill and MI_8
+day_h:
+    call pill_h
+    add eax, [rip + g_pmt + 4*MI_8]
+    ret
+
+# row_above(AM*) -> eax the pixels above a row's own part with [agents] timestamps: its day pill (AMF_DAY),
+#   a prompt's time line. Fixed pixels: the estimate's and the aggregates' too, so a toggle (ag_gen) keeps
+#   the view (the anchor)
+row_above:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+    cmp dword ptr [rip + cfg_agents_timestamps], 0
+    je 9f
+    call stamp_kind
+    cmp eax, 1
+    jne 1f
+    call stamp_line_h
+    mov r12d, eax
+1:  test dword ptr [rbx + AM_flags], AMF_DAY    # (only a stamped prompt or reply has it: row_init)
+    jz 9f
+    call day_h
+    add r12d, eax
+9:  mov eax, r12d
+    EPILOGUE
+
+# anchor_above(AS*, row) -> eax row_above of that row (0 for none)
+anchor_above:
+    xor eax, eax
+    test rsi, rsi
+    js 9f
+    cmp rsi, [rdi + AS_msgs + VEC_len]
+    jae 9f
+    call row_at
+    mov rdi, rax
+    jmp row_above
+9:  ret
+
+# stamp_text(AM*, what): ts_sb is its time "3:45 PM" (what 0), its tip "2026-11-23 15:45:07 MST" (1) or its
+#   day's label "Mon, Nov 23" (2), NUL-ended
+stamp_text:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    lea rdi, [rip + ts_sb]
+    call sb_clear
+    lea rdi, [rip + ts_sb]
+    mov rsi, [rbx + AM_t]
+    cmp r12d, 1
+    je 2f
+    ja 3f
+    call agtime_clock
+    jmp 1f
+2:  call agtime_full
+    jmp 1f
+3:  call agtime_daylabel
+1:    lea rdi, [rip + ts_sb]
+    xor esi, esi
+    call sb_push_byte
+    dec qword ptr [rip + ts_sb + SB_len]
+    EPILOGUE
+
+# stamp_draw(AM*, right, y, h, id): its time in the small face, muted, ending at right, centred in y..y+h;
+#   hovered, its tip (the full date and zone). -> eax its width
+stamp_draw:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov r14d, ecx
+    mov [rsp], r8d
+    xor esi, esi
+    call stamp_text
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rip + ts_sb + SB_ptr]
+    mov rdx, [rip + ts_sb + SB_len]
+    call text_width
+    mov r15d, eax
+    mov [rsp + 4], eax
+    sub r12d, r15d              # its left
+    mov rdi, [rip + ag_fsmall]
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    mov r8, [rip + ts_sb + SB_ptr]
+    mov r9, [rip + ts_sb + SB_len]
+    COLOR r10d, T_MUTED
+    lea r11d, [r15 + 1]
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+    mov edi, r12d               # its tip
+    mov esi, r13d
+    mov edx, r15d
+    mov ecx, r14d
+    call ui_in
+    test eax, eax
+    jz 9f
+    mov rdi, rbx
+    mov esi, 1
+    call stamp_text
+    mov edi, [rsp]
+    mov esi, r12d
+    lea edx, [r13 + r14]
+    mov ecx, r15d
+    mov r8d, UB_HOVER
+    mov r9, [rip + ts_sb + SB_ptr]
+    call tip_note_text
+9:  mov eax, [rsp + 4]
+    EPILOGUE
+
+# day_pill(AM*, left, y, text width): its day's label in a pill centred in the text's width, muted, in a
+#   rounded frame (as a pill row), at the top of the day_h above the row
+day_pill:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
+    mov esi, 2
+    call stamp_text
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rip + ts_sb + SB_ptr]
+    mov rdx, [rip + ts_sb + SB_len]
+    call text_width
+    mov ecx, [rsp + 8]          # the line's room
+    sub ecx, [rip + g_pmt + 4*MI_12]
+    sub ecx, [rip + g_pmt + 4*MI_12]
+    cmp ecx, 1
+    jge 1f
+    mov ecx, 1
+1:  cmp eax, ecx
+    cmovg eax, ecx
+    mov r12d, eax               # the text's width as drawn
+    add eax, [rip + g_pmt + 4*MI_12]
+    add eax, [rip + g_pmt + 4*MI_12]
+    mov r13d, eax               # the frame's
+    mov ecx, [rsp + 8]
+    sub ecx, eax
+    sar ecx, 1
+    jns 2f
+    xor ecx, ecx
+2:  add ecx, [rsp]
+    mov r14d, ecx               # its x
+    call pill_h
+    mov r15d, eax
+    COLOR r9d, T_BORDER
+    COLOR eax, T_PANEL
+    mov edi, r14d
+    mov esi, [rsp + 4]
+    add esi, [rip + g_pmt + 4*MI_4]
+    mov edx, r13d
+    mov ecx, r15d
+    PM r8d, MI_RADIUS
+    push rax
+    push rax
+    call gfx_frame
+    add rsp, 16
+    mov rdi, [rip + ag_fsmall]
+    mov esi, r14d
+    add esi, [rip + g_pmt + 4*MI_12]
+    mov edx, [rsp + 4]
+    add edx, [rip + g_pmt + 4*MI_4]
+    mov ecx, r15d
+    mov r8, [rip + ts_sb + SB_ptr]
+    mov r9, [rip + ts_sb + SB_len]
+    COLOR r10d, T_MUTED
+    lea r11d, [r12 + 1]
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+    EPILOGUE
+
+# stamp_dump(sb, AM*): print-agent-row's " time=T tip=T day=T" ("-" where none shows; spaces as "_")
+stamp_dump:
+    PROLOGUE
+    mov r12, rdi
+    mov rbx, rsi
+    mov rdi, rbx
+    call stamp_kind
+    mov r13d, eax
+    xor r14d, r14d              # what: time, tip, day
+1:  mov rdi, r12
+    lea rax, [rip + .Lst_names]
+    mov rsi, [rax + r14*8]
+    call sb_push_cstr
+    test r13d, r13d
+    jz 4f
+    cmp r14d, 2
+    jne 2f
+    test dword ptr [rbx + AM_flags], AMF_DAY
+    jz 4f
+2:  mov rdi, rbx
+    mov esi, r14d
+    call stamp_text
+    xor r15d, r15d
+3:  cmp r15, [rip + ts_sb + SB_len]
+    jae 5f
+    mov rax, [rip + ts_sb + SB_ptr]
+    movzx esi, byte ptr [rax + r15]
+    cmp esi, ' '
+    jne 31f
+    mov esi, '_'
+31: mov rdi, r12
+    call sb_push_byte
+    inc r15
+    jmp 3b
+4:  mov rdi, r12
+    mov esi, '-'
+    call sb_push_byte
+5:  inc r14d
+    cmp r14d, 3
+    jb 1b
     EPILOGUE
 
 # pill_h() -> eax a pill's frame: a line of the panel's small face and MI_6 above and below it
@@ -7247,7 +7577,39 @@ draw_msg:
     je .Ldm_typed
     cmp eax, R_UNKNOWN
     je .Ldm_typed
-0:  test dword ptr [rbx + AM_flags], AMF_PILL
+0:  mov rdi, rbx                # above it: its day pill, a prompt's time line ([agents] timestamps)
+    call row_above
+    test eax, eax
+    jz 87f
+    mov [rsp + 96], eax
+    test dword ptr [rbx + AM_flags], AMF_DAY
+    jz 88f
+    mov rdi, rbx
+    mov esi, r15d
+    mov edx, r12d
+    mov ecx, [r14 + 32]
+    call day_pill
+    call day_h
+    add r12d, eax
+    sub r13d, eax
+88: mov rdi, rbx
+    call stamp_kind
+    cmp eax, 1
+    jne 89f
+    call row_index_id
+    mov r8d, eax
+    mov rdi, rbx
+    mov esi, r15d
+    add esi, [r14 + 32]
+    mov edx, r12d
+    call stamp_line_h
+    mov ecx, eax
+    call stamp_draw
+    call stamp_line_h
+    add r12d, eax
+    sub r13d, eax
+89:
+87: test dword ptr [rbx + AM_flags], AMF_PILL
     jnz .Ldm_pill
     mov eax, [rbx + AM_role]
     cmp eax, R_TOOL
@@ -7292,13 +7654,29 @@ draw_msg:
     add edx, [rip + g_pmt + 4*MI_4]
     PM ecx, MI_20
     call ui_text_c
-    # the model of the replies from here on, where it changed
+    mov [rsp + 96], eax
+    mov dword ptr [rsp + 100], 0        # a reply's time at the right end of its label line
+    mov rdi, rbx
+    call stamp_kind
+    cmp eax, 2
+    jne 21f
+    call row_index_id
+    mov r8d, eax
+    mov rdi, rbx
+    mov esi, r15d
+    add esi, [r14 + 32]
+    mov edx, r12d
+    add edx, [rip + g_pmt + 4*MI_4]
+    PM ecx, MI_20
+    call stamp_draw
+    add eax, [rip + g_pmt + 4*MI_8]
+    mov [rsp + 100], eax
+21: # the model of the replies from here on, where it changed
     cmp dword ptr [rbx + AM_role], R_ASSIST
     jne 3f
     mov rdi, [rbx + AM_name]
     test rdi, rdi
     jz 3f
-    mov [rsp + 96], eax
     lea rdi, [rip + tmp]
     call sb_clear
     lea rdi, [rip + tmp]
@@ -7319,6 +7697,7 @@ draw_msg:
     add r11d, [r14 + 8]
     sub r11d, esi
     sub r11d, [rip + g_pmt + 4*MI_24]
+    sub r11d, [rsp + 100]
     push r11
     push r10
     call ui_text_v_fit
@@ -8201,7 +8580,10 @@ FN agents_row_dump
     mov rdi, r15
     mov esi, [rax + FACE_px]
     call sb_push_u64
-41: mov rdi, r15
+41: mov rdi, r15                # its time, tip and day ([agents] timestamps)
+    mov rsi, rbx
+    call stamp_dump
+    mov rdi, r15
     mov esi, 10
     call sb_push_byte
     cmp qword ptr [rbx + AM_x], 0       # a typed row: its parts as drawn (agentrows.s)
@@ -8224,8 +8606,11 @@ FN agents_row_dump
     mov eax, [rbx + AM_dser]
     cmp eax, [rip + th_serial]
     jne 3f
+    mov rdi, rbx                # (below its day pill)
+    call row_above
+    mov ecx, eax
+    add ecx, [rbx + AM_dy]
     mov edx, [rbx + AM_dx]
-    mov ecx, [rbx + AM_dy]
     add ecx, [rip + g_pmt + 4*MI_28]
 3:  mov rdi, [rbx + AM_doc]
     mov rsi, r15
@@ -8348,6 +8733,11 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Loc_failed: .asciz "OpenCode: check CLI and data access"
 .Lnoproj: .asciz "Open a folder to see its agent sessions"
 .Luntitled: .asciz "Untitled session"
+.Lst_time: .asciz " time="
+.Lst_tip: .asciz " tip="
+.Lst_day: .asciz " day="
+.p2align 3
+.Lst_names: .quad .Lst_time, .Lst_tip, .Lst_day
 .Lthis_reply: .asciz "This reply"
 .Lempty_thread: .asciz "Nothing here yet"
 .Lclaude_name: .asciz "Claude"

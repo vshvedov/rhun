@@ -3446,7 +3446,7 @@ claude_drv:
     .quad .Lhint                # DRV_hint
     .quad claude_ended          # DRV_ended (claude_session.s)
     .quad 0xffd97757            # DRV_brand: Claude's own colour (the running dot)
-    .quad 0                     # DRV_verbs (phase 3 task 5)
+    .quad claude_verb_list      # DRV_verbs: the spinner's (claudecfg.s: the built-in and the user's)
     .quad 0                     # DRV_tips (phase 3 task 8)
     .quad cl_task               # DRV_task (phase 3 task 11)
 cl_types:

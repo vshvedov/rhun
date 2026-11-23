@@ -767,12 +767,18 @@ FN config_save
     call config_dir
     lea rdi, [rip + cfg_dir_buf]
     call mkdir_p
+    call claudecfg_pairs        # [claude] env.* values may be keys: then only the owner reads the file
+    mov ebx, eax
     call config_path
     mov rdi, rax
     mov rsi, [rsp + SB_ptr]
     mov rdx, [rsp + SB_len]
-    call file_write_all
-    mov rbx, rax
+    test ebx, ebx
+    jz 8f
+    call file_write_private
+    jmp 81f
+8:  call file_write_all
+81: mov rbx, rax
     call config_path
     mov rdi, rax
     call file_mtime_ns

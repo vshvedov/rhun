@@ -7,6 +7,7 @@
 #                                           (NAME [A-Za-z_][A-Za-z0-9_]*, 64 pairs, 8 KiB a pair; others
 #                                           are dropped with a log line that names no value)
 #   claudecfg_save(sb)                      the pairs, as lines of [claude]
+#   claudecfg_pairs() -> eax                how many (config_save writes the file 0600 with any)
 #   claudecfg_dump(sb)                      "claude.env.NAME=(set)" a line each (print-settings): people
 #                                           put keys in these pairs, so a value is never printed, logged
 #                                           or shown outside the config file and the child's environment
@@ -168,6 +169,11 @@ FN claudecfg_key
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
+
+# FN claudecfg_pairs() -> eax how many [claude] env.NAME pairs there are
+FN claudecfg_pairs
+    mov rax, [rip + pairs + VEC_len]
+    ret
 
 # claudecfg_save(sb): "env.NAME = value" a line each
 FN claudecfg_save

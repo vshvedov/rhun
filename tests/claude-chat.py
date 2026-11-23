@@ -180,6 +180,25 @@ class SettingsTest(ChatCase):
             'env.FOO = very-secret-value', 'env.ANSWER_2 = forty two'])
         self.assertIn('idle_stop_minutes = 15', section(saved, 'agents'))
 
+    def test_a_config_with_env_pairs_is_the_owners_alone(self):
+        def mode():
+            return self.config.stat().st_mode & 0o777
+        self.start(self.claude_section('env.ANTHROPIC_API_KEY = sk-test\n'))
+        self.config.chmod(0o644)
+        self.command('cmd toggle_word_wrap')
+        self.quit()
+        self.assertEqual(mode(), 0o600)                 # an existing file loses the others' bits
+        self.start(self.claude_section('env.ANTHROPIC_API_KEY = sk-test\n'))
+        self.config.unlink()
+        self.command('cmd toggle_word_wrap')
+        self.quit()
+        self.assertEqual(mode(), 0o600)                 # a new one is made so
+        self.start()                                    # without a pair it is left as it is
+        self.config.chmod(0o644)
+        self.command('cmd toggle_word_wrap')
+        self.quit()
+        self.assertEqual(mode(), 0o644)
+
     def test_defaults_and_odd_values(self):
         # manual is the CLI's old name of default; a bad name, a long pair and an out-of-range number
         claude = ('[claude]\ninitial_mode = manual\nenv.1BAD = x\nenv.A-B = y\nenv.OK = fine\n'

@@ -12,8 +12,8 @@
 # Kinds. A card's kind (CD_kind) is a row of `kinds`: measure (CD*, w) -> eax its height, draw (AS*, CD*,
 # x, y, w, h), key (AS*, CD*, keysym, cp, mods) -> eax taken, dump (sb, CD*) its kind's own lines. The
 # permission card, the plan card and the dialog card are button cards (bc_*: a header, the details,
-# buttons, the lines under the rule button, the reject field, "Esc to cancel"); the question card (task 10)
-# gets entries of its own in the same row. agentcard_answer is the one way an answer leaves a card.
+# buttons, the lines under the rule button, the reject field, "Esc to cancel"); the question card has entries
+# of its own (qc_*, at the end). agentcard_answer is the one way an answer leaves a card.
 #
 # The button card:
 #   the header (CD_title, wrapped) with a fold button (folded: the header's first line only); the hint
@@ -90,6 +90,25 @@
 .equ FIELD_ROWS, 3
 .equ LABEL_LINES, 12
 .equ STOPS_MAX, 20
+# the question card
+.equ QID_TAB, 0x200             # ID_AGCARD + : a tab (+ its question, 16)
+.equ QID_CLOSE, 0x210           #   the ×
+.equ QID_FOLD, 0x211
+.equ QID_SUBMIT, 0x212
+.equ QID_FIELD, 0x213           #   Other's field
+.equ QID_OPT, 0x220             #   a row (+ the row, 17)
+.equ QID_LINKS, 0x300           #   the preview's links (+ their index, to 0x4ff)
+.equ LK_TAB, 16                 # its layout items (item_letters)
+.equ LK_CLOSE, 17
+.equ LK_OPT, 18                 #   a row (LI_idx: the row; the last one is Other)
+.equ LK_OLINE, 19               #   a line in it (LI_idx: the row | its style << 8)
+.equ LK_PREVIEW, 20             #   the preview (LI_idx: the row it shows)
+.equ QTEXT_LINES, 6             # lines at most: the question, a label, a description
+.equ OLABEL_LINES, 3
+.equ ODESC_LINES, 3
+.equ PREVIEW_MIN, 3             # the preview's body: this many to PREVIEW_LINES lines of the panel's text
+.equ PREVIEW_LINES, 16
+.equ QC_BESIDE_W, 480           # a card this wide (2 x 240) shows the preview beside the rows, else under
 
 STRUCT
 F LI_kind, 4
@@ -277,7 +296,9 @@ FN agentcard_free
     call mem_free
     inc r12
     jmp 5b
-6:  lea rdi, [rbx + CD_btns]
+6:  mov rdi, rbx                # the question card's questions
+    call qc_free
+    lea rdi, [rbx + CD_btns]
     call vec_free
     lea rdi, [rbx + CD_extra]
     call vec_free
@@ -375,7 +396,10 @@ FN agentcard_shown
     jns 1f
     xor eax, eax
 1:  mov [r12 + CD_focus], eax
-    mov dword ptr [r12 + CD_scroll], 0
+    cmp dword ptr [r12 + CD_kind], CDK_QUESTIONS
+    jne 11f
+    mov dword ptr [r12 + CD_focus], CD_OPTS     # the question card: on its first row
+11: mov dword ptr [r12 + CD_scroll], 0
     or dword ptr [r12 + CD_flags], CDF_WHEEL     # its top (its header) shows first; a key brings the focus
     # the focus rule
     mov eax, [rip + g_focus]
@@ -419,6 +443,10 @@ FN agentcard_timeout
     test rax, rax
     jz 8f
     mov rbx, rax
+    mov rdi, rax                # the question card's move to the next question
+    call qc_advance_due
+    test eax, eax
+    jns 9f
     test dword ptr [rbx + CD_flags], CDF_LIVE
     jnz 8f
     call time_ms
@@ -546,7 +574,13 @@ FN agentcard_answer
     call agentcard_live
     test eax, eax
     jz 8f
-    mov r14, [rbx + AS_live]
+    cmp r12d, CBA_SUBMIT        # the question card: not before every question has an answer
+    jne 0f
+    mov rdi, r13
+    call qc_complete
+    test eax, eax
+    jz 8f
+0:  mov r14, [rbx + AS_live]
     mov [r13 + CD_chosen], r12d
     call time_ms
     mov [r14 + AL_used], rax
@@ -600,7 +634,14 @@ FN agentcard_pick
     call loop_poll
     call app_tick
     jmp 1b
-2:  cmp r12, [r13 + CD_btns + VEC_len]
+2:  cmp dword ptr [r13 + CD_kind], CDK_QUESTIONS
+    jne 3f
+    mov rdi, r13                # the question card: row n of its question, as a click on it
+    mov esi, r12d
+    call qc_pick
+    mov eax, 1
+    EPILOGUE
+3:  cmp r12, [r13 + CD_btns + VEC_len]
     jae 8f
     mov rax, [r13 + CD_btns + VEC_ptr]
     imul rcx, r12, CDB_SIZE
@@ -611,7 +652,8 @@ FN agentcard_pick
 8:  xor eax, eax
     EPILOGUE
 
-# FN agentcard_set_text(AS*, which 0 the field | 1 the command, ptr, len) -> eax 1 set
+# FN agentcard_set_text(AS*, which 0 the field | 1 the command | 2 a question's Other (picked), ptr, len)
+#   -> eax 1 set
 FN agentcard_set_text
     PROLOGUE
     mov r12d, esi
@@ -621,7 +663,14 @@ FN agentcard_set_text
     test rax, rax
     jz 8f
     mov rbx, rax
-    lea rdi, [rbx + CD_field]
+    cmp r12d, 2                 # the question card's Other
+    jne 0f
+    mov rdi, rbx
+    mov rsi, r13
+    mov rdx, r14
+    call qc_set_other
+    EPILOGUE
+0:  lea rdi, [rbx + CD_field]
     test r12d, r12d
     jz 1f
     test dword ptr [rbx + CD_flags], CDF_EDIT
@@ -636,7 +685,8 @@ FN agentcard_set_text
 8:  xor eax, eax
     EPILOGUE
 
-# FN agentcard_toggle(AS*, what 0 fold | 1 the Details | 2 the place) -> eax 1 done (as a click on it)
+# FN agentcard_toggle(AS*, what 0 fold | 1 the Details | 2 the place | 3 Submit answers | 4 the ×) -> eax 1
+#   done (as a click on it)
 FN agentcard_toggle
     PROLOGUE
     mov rbx, rdi
@@ -645,7 +695,16 @@ FN agentcard_toggle
     test rax, rax
     jz 8f
     mov r13, rax
-    cmp r12d, 2
+    cmp r12d, 3                 # the question card's Submit answers and ×
+    jb 0f
+    mov esi, CBA_SUBMIT
+    je 4f
+    mov esi, CBA_NO
+4:  mov rdi, rbx
+    call agentcard_answer
+    mov eax, 1
+    EPILOGUE
+0:  cmp r12d, 2
     jne 1f
     mov rdi, rbx
     mov rsi, r13
@@ -701,14 +760,15 @@ dest_step:
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
-# FN agentcard_waiting(AS*) -> rax "Waiting for permission…" while its card waits and the box (its own)
-#   has text, else 0
+# FN agentcard_waiting(AS*) -> rax "Waiting for permission…" ("Waiting for your answer…" for a question)
+#   while its card waits and the box (its own) has text, else 0
 FN agentcard_waiting
     PROLOGUE
     mov rbx, rdi
     call agentcard_of
     test rax, rax
     jz 8f
+    mov r12, rax
     call agentext_box_owner
     cmp rax, rbx
     jne 8f
@@ -718,7 +778,10 @@ FN agentcard_waiting
     test rdx, rdx
     jz 8f
     lea rax, [rip + .Lwaiting]
-    EPILOGUE
+    cmp dword ptr [r12 + CD_kind], CDK_QUESTIONS
+    jne 9f
+    lea rax, [rip + .Lwaiting_q]    # the question card's
+9:  EPILOGUE
 8:  xor eax, eax
     EPILOGUE
 
@@ -2252,6 +2315,9 @@ FN agentcard_dump
     lea rsi, [rip + .Lw_edit]
     cmp eax, CD_EDIT
     je 3f
+    lea rsi, [rip + .Lw_options]    # the question card's rows
+    cmp eax, CD_OPTS
+    je 3f
     lea esi, [rax + 1]
     mov rdi, rbx
     call sb_push_u64
@@ -2300,7 +2366,7 @@ FN agentcard_dump
     test esi, esi
     jnz 51f
     mov esi, 400
-51: call bc_layout
+51: call kind_layout
     mov rdi, rbx
     lea rsi, [rip + .Ld_scroll]
     call sb_push_cstr
@@ -2475,7 +2541,14 @@ FN agentcard_input_line
     test rax, rax
     jz 8f
     mov r12, rax
-    mov rdi, rbx
+    cmp dword ptr [r12 + CD_kind], CDK_QUESTIONS
+    jne 0f
+    mov rdi, rbx                # the question card: the question shown and its rows
+    mov rsi, r12
+    call qc_input
+    mov eax, 1
+    EPILOGUE
+0:  mov rdi, rbx
     lea rsi, [rip + .Ld_card]
     call sb_push_cstr
     mov rsi, [r12 + CD_title]
@@ -2542,7 +2615,8 @@ FN agentcard_input_line
 # FN agentcard_fit_dump(sb): print-agent-card-fit: the open conversation's card at every panel size 8 to
 #   32 and width 240 to 900 in steps of 20, a line each: "size=S w=W h=H frame=X,Y,W,H items=K:X,Y,W,H;..."
 #   (K: t a text line, f the fold button, e the command, b a button, l a line of a button's label (with
-#   its button's number: l2), F the field, d Details). The setting is the user's again after it
+#   its button's number: l2), F the field, d Details; the question card's T a tab, x its ×, o a row, k a
+#   line in a row (with the row's number), p the preview). The setting is the user's again after it
 FN agentcard_fit_dump
     PROLOGUE 32
     mov rbx, rdi
@@ -2564,7 +2638,7 @@ FN agentcard_fit_dump
     ja 7f
     mov rdi, r15
     mov esi, r13d
-    call bc_layout
+    call kind_layout
     mov r14d, eax
     mov rdi, rbx
     lea rsi, [rip + .Lbd_size]
@@ -2631,8 +2705,15 @@ FN agentcard_fit_dump
     cmp dword ptr [rcx + LI_kind], LK_BLINE
     je 31f
     cmp dword ptr [rcx + LI_kind], LK_BTN
+    je 31f
+    cmp dword ptr [rcx + LI_kind], LK_TAB       # the question card's tabs, rows and their lines
+    je 31f
+    cmp dword ptr [rcx + LI_kind], LK_OPT
+    je 31f
+    cmp dword ptr [rcx + LI_kind], LK_OLINE
     jne 32f
 31: mov esi, [rcx + LI_idx]
+    and esi, 0xff
     inc esi
     mov rdi, rbx
     call sb_push_u64
@@ -2673,7 +2754,7 @@ FN agentcard_fit_dump
 # the kinds: measure, draw, key, dump (by CD_kind from 1)
 kinds:
     .quad bc_h, bc_draw, bc_key, bc_dump        # CDK_PERMISSION
-    .quad bc_h, bc_draw, bc_key, bc_dump        # CDK_QUESTIONS (task 10: its own)
+    .quad qc_layout, qc_draw, qc_key, qc_dump   # CDK_QUESTIONS: the question card
     .quad bc_h, bc_draw, bc_key, bc_dump        # CDK_PLAN
     .quad bc_h, bc_draw, bc_key, bc_dump        # CDK_DIALOG
 # the text styles: the face's variable, its colour's theme slot, the line's leading (a metric)
@@ -2695,6 +2776,7 @@ kind_names: .quad .Lk_permission, .Lk_questions, .Lk_plan, .Lk_dialog
 .p2align 2
 text_slots: .long CD_title, CD_hint, CD_detail, CD_desc, CD_note, CD_json, CD_link, -1, CD_ph
 item_letters: .byte '?', 't', 'f', 'e', 'b', 'l', 'F', 'd'
+    .byte '?', '?', '?', '?', '?', '?', '?', '?', 'T', 'x', 'o', 'k', 'p'     # 8..15 unused; the question card's
 .Lk_permission: .asciz "permission"
 .Lk_questions: .asciz "questions"
 .Lk_plan: .asciz "plan"
@@ -2738,3 +2820,2271 @@ item_letters: .byte '?', 't', 'f', 'e', 'b', 'l', 'F', 'd'
 
 .bss
 num: .byte 0, 0
+
+# ---------------------------------------------------------------- the question card
+#
+# A CDK_QUESTIONS card (ext-webview-ui.md 4.12, 4.13; webview index.js `w8n` @5236200, its previews @5241123):
+#   a tab per question (its header; an answered one with a check) with the fold button and a × (the card's
+#   No) at the right; the question shown (CD_tab); its options as radio rows (a single choice) or checkbox
+#   rows (multiSelect), each its label and description, then "Other", whose field ("Type your answer…",
+#   CDQ_other) shows while it is picked; when an option of a single-choice question has a preview, the
+#   preview of the row the keyboard is on (CDQ_sel) as Markdown at the panel's size, compact, headed
+#   "Preview: LABEL" ("No preview for this option" without one), beside the rows on a card QC_BESIDE_W
+#   wide or more, else under them (its body as tall as the tallest of the question's previews, 3 to 16
+#   lines, so it does not jump); "1 Submit answers", enabled once every question has an answer; "Esc to
+#   cancel".
+#   A single choice moves to the next question after g_card_advance_ms (not from the last; one move at a
+#   time); Other on a single choice clears the label picked, a label clears Other (its text is kept). An
+#   answer is the labels picked in their order, joined with ", ", then Other's text ("Other" while its
+#   field is empty: the extension's rule); a blank one is no answer.
+#   Keys (while it has the keyboard): Left and Right the questions (from the rows); Up and Down round the
+#   rows, Other's field (while Other is picked) and Submit answers; Space or Enter picks the row (on Submit
+#   answers: submits); 1 submits; Escape is No; in Other's field Enter goes to the next question, Up and
+#   Down (no line feed in it) leave it, Escape is No, other keys are the field's. Clicks as keys; the tabs
+#   and the fold button work during the lock, the rest after it.
+#   CD_focus: CD_OPTS (the rows: the row is CDQ_sel), CD_FIELD (Other's field), 0 (Submit answers).
+#
+#   agentcard_question(CD*, header cstr, text cstr, multi) -> rax CDQ* (copied; 0 past CDQ_MAX)
+#   agentcard_option(CDQ*, label cstr, desc cstr, preview ptr, len)    (copied; past CDQ_OPTS_MAX nothing)
+#   agentcard_qtext(CDQ*, sb) -> eax 1 when the answer it appends to sb is not blank
+#   g_card_advance_ms                         agent-timing advance=
+
+.text
+
+# FN agentcard_question(CD*, header, text, multi) -> rax a new question of the card (0 past CDQ_MAX)
+FN agentcard_question
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14d, ecx
+    xor eax, eax
+    cmp qword ptr [rbx + CD_qs + VEC_len], CDQ_MAX
+    jae 9f
+    mov edi, CDQ_SIZE
+    call mem_alloc
+    mov r15, rax
+    mov rdi, rax
+    xor esi, esi
+    mov edx, CDQ_SIZE
+    call memset
+    mov dword ptr [r15 + CDQ_other + TF_prefx], -1
+    mov [r15 + CDQ_multi], r14d
+    mov rdi, r12
+    call q_dup
+    mov [r15 + CDQ_header], rax
+    mov rdi, r13
+    call q_dup
+    mov [r15 + CDQ_text], rax
+    lea rdi, [rbx + CD_qs]
+    mov esi, 8
+    call vec_push
+    mov [rax], r15
+    mov rax, r15
+9:  EPILOGUE
+
+# q_dup(cstr or 0) -> rax its copy ("" for 0)
+q_dup:
+    push rbx
+    lea rax, [rip + .Lq_empty]
+    test rdi, rdi
+    cmovz rdi, rax
+    mov rbx, rdi
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    pop rbx
+    jmp mem_dup
+
+# FN agentcard_option(CDQ*, label, desc, preview ptr, len): an option of the question; a preview that is not
+#   blank becomes its Markdown (q_fence)
+FN agentcard_option
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov r15, r8
+    cmp qword ptr [rbx + CDQ_opts + VEC_len], CDQ_OPTS_MAX
+    jae 9f
+    lea rdi, [rbx + CDQ_opts]
+    mov esi, CDO_SIZE
+    call vec_push
+    mov rbx, rax
+    mov qword ptr [rbx + CDO_preview], 0
+    mov rdi, r12
+    call q_dup
+    mov [rbx + CDO_label], rax
+    mov rdi, r13
+    call q_dup
+    mov [rbx + CDO_desc], rax
+    mov rdi, r14
+    mov rsi, r15
+    call q_fence
+    test rax, rax
+    jz 9f
+    mov rdi, rax
+    mov rsi, rdx
+    call md_new
+    mov [rbx + CDO_preview], rax
+    mov rdi, rax
+    mov esi, 1
+    call md_set_compact
+9:  EPILOGUE
+
+# q_fence(ptr, len) -> rax ptr, rdx len (in fsb): a preview as the extension shows it (`_8n` @5232059): its
+#   trailing line feeds cut, then in a fence of one backtick more than its longest run of them (3 at least)
+#   marked "text", unless a line of it opens a fence of its own (up to 3 spaces, 3 backticks or more, no
+#   backtick after them); rax 0 for a blank one (it has none)
+q_fence:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    xor ecx, ecx
+1:  cmp rcx, r13
+    jae 8f
+    movzx eax, byte ptr [r12 + rcx]
+    inc rcx
+    cmp eax, ' '
+    je 1b
+    cmp eax, 9
+    je 1b
+    cmp eax, 10
+    je 1b
+    cmp eax, 13
+    je 1b
+2:  cmp byte ptr [r12 + r13 - 1], 10
+    jne 3f
+    dec r13
+    jmp 2b
+3:  xor r14d, r14d              # its longest run of backticks
+    xor ecx, ecx
+    xor edx, edx
+31: cmp rcx, r13
+    jae 4f
+    cmp byte ptr [r12 + rcx], '`'
+    jne 32f
+    inc edx
+    cmp edx, r14d
+    cmova r14d, edx
+    jmp 33f
+32: xor edx, edx
+33: inc rcx
+    jmp 31b
+4:  xor ebx, ebx                # a line's start
+41: cmp rbx, r13
+    jae 7f
+    mov rcx, rbx
+    xor edx, edx
+42: cmp rcx, r13
+    jae 46f
+    cmp byte ptr [r12 + rcx], ' '
+    jne 43f
+    cmp edx, 3
+    jae 46f
+    inc edx
+    inc rcx
+    jmp 42b
+43: mov rsi, rcx
+44: cmp rcx, r13
+    jae 45f
+    cmp byte ptr [r12 + rcx], '`'
+    jne 45f
+    inc rcx
+    jmp 44b
+45: mov rax, rcx
+    sub rax, rsi
+    cmp rax, 3
+    jb 46f
+451:cmp rcx, r13
+    jae 6f
+    movzx eax, byte ptr [r12 + rcx]
+    cmp eax, 10
+    je 6f
+    cmp eax, '`'
+    je 46f
+    inc rcx
+    jmp 451b
+46: cmp rcx, r13                # on to the next line
+    jae 7f
+    cmp byte ptr [r12 + rcx], 10
+    je 47f
+    inc rcx
+    jmp 46b
+47: lea rbx, [rcx + 1]
+    jmp 41b
+6:  lea rdi, [rip + fsb]        # as it is
+    call sb_clear
+    lea rdi, [rip + fsb]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    jmp 79f
+7:  cmp r14d, 2
+    jge 71f
+    mov r14d, 2
+71: inc r14d
+    lea rdi, [rip + fsb]
+    call sb_clear
+    mov edi, r14d
+    call q_ticks
+    lea rdi, [rip + fsb]
+    lea rsi, [rip + .Lq_text_lf]
+    call sb_push_cstr
+    lea rdi, [rip + fsb]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    lea rdi, [rip + fsb]
+    mov esi, 10
+    call sb_push_byte
+    mov edi, r14d
+    call q_ticks
+79: mov rax, [rip + fsb + SB_ptr]
+    mov rdx, [rip + fsb + SB_len]
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    EPILOGUE
+
+# q_ticks(n): n backticks onto fsb
+q_ticks:
+    push rbx
+    mov ebx, edi
+1:  test ebx, ebx
+    jz 2f
+    lea rdi, [rip + fsb]
+    mov esi, '`'
+    call sb_push_byte
+    dec ebx
+    jmp 1b
+2:  pop rbx
+    ret
+
+# qc_free(CD*): its questions and what they own (agentcard_free)
+qc_free:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12, [rbx + CD_qs + VEC_len]
+    jae 9f
+    mov rax, [rbx + CD_qs + VEC_ptr]
+    mov r13, [rax + r12*8]
+    inc r12
+    mov rdi, [r13 + CDQ_header]
+    call mem_free
+    mov rdi, [r13 + CDQ_text]
+    call mem_free
+    xor r14d, r14d
+2:  cmp r14, [r13 + CDQ_opts + VEC_len]
+    jae 3f
+    imul r15, r14, CDO_SIZE
+    add r15, [r13 + CDQ_opts + VEC_ptr]
+    inc r14
+    mov rdi, [r15 + CDO_label]
+    call mem_free
+    mov rdi, [r15 + CDO_desc]
+    call mem_free
+    mov rdi, [r15 + CDO_preview]
+    call md_free
+    jmp 2b
+3:  lea rdi, [r13 + CDQ_opts]
+    call vec_free
+    lea rdi, [r13 + CDQ_other + TF_sb]
+    call sb_free
+    mov rdi, r13
+    call mem_free
+    jmp 1b
+9:  EPILOGUE
+
+# qc_cur(CD*) -> rax the question shown (CDQ*), 0 none
+qc_cur:
+    xor eax, eax
+    mov ecx, [rdi + CD_tab]
+    cmp rcx, [rdi + CD_qs + VEC_len]
+    jae 1f
+    mov rax, [rdi + CD_qs + VEC_ptr]
+    mov rax, [rax + rcx*8]
+1:  ret
+
+# qc_answered(CDQ*) -> eax 1 when a row of it is picked (its tab's check)
+qc_answered:
+    xor eax, eax
+    cmp dword ptr [rdi + CDQ_picks], 0
+    jne 1f
+    cmp dword ptr [rdi + CDQ_otheron], 0
+    je 2f
+1:  mov eax, 1
+2:  ret
+
+# qc_opt(CDQ*, row) -> rax the row's option (CDO*), 0 for Other (the row past them)
+qc_opt:
+    xor eax, eax
+    mov esi, esi
+    cmp rsi, [rdi + CDQ_opts + VEC_len]
+    jae 1f
+    imul rax, rsi, CDO_SIZE
+    add rax, [rdi + CDQ_opts + VEC_ptr]
+1:  ret
+
+# qc_label(CDQ*, row) -> rax the row's label ("Other" for the last)
+qc_label:
+    call qc_opt
+    test rax, rax
+    jz 1f
+    mov rax, [rax + CDO_label]
+    ret
+1:  lea rax, [rip + .Lq_other]
+    ret
+
+# qc_picked(CDQ*, row) -> eax 1 when the row is picked
+qc_picked:
+    xor eax, eax
+    mov esi, esi
+    cmp rsi, [rdi + CDQ_opts + VEC_len]
+    jb 1f
+    jne 2f
+    cmp dword ptr [rdi + CDQ_otheron], 0
+    setne al
+    ret
+1:  mov edx, [rdi + CDQ_picks]
+    bt edx, esi
+    setc al
+2:  ret
+
+# qc_has_preview(CDQ*) -> eax 1 for a single choice with an option that has a preview
+qc_has_preview:
+    xor eax, eax
+    cmp dword ptr [rdi + CDQ_multi], 0
+    jne 9f
+    mov rcx, [rdi + CDQ_opts + VEC_len]
+    mov rdx, [rdi + CDQ_opts + VEC_ptr]
+1:  test rcx, rcx
+    jz 9f
+    cmp qword ptr [rdx + CDO_preview], 0
+    jne 2f
+    add rdx, CDO_SIZE
+    dec rcx
+    jmp 1b
+2:  mov eax, 1
+9:  ret
+
+# FN agentcard_qtext(CDQ*, sb) -> eax 1 when the answer appended to sb is not blank: the labels picked, in
+#   their order, joined with ", ", then Other's text ("Other" while it is empty)
+FN agentcard_qtext
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, [r12 + SB_len]
+    xor r14d, r14d
+    xor r15d, r15d              # labels so far
+1:  cmp r14, [rbx + CDQ_opts + VEC_len]
+    jae 3f
+    mov eax, [rbx + CDQ_picks]
+    bt eax, r14d
+    jnc 2f
+    test r15d, r15d
+    jz 11f
+    mov rdi, r12
+    lea rsi, [rip + .Lq_comma]
+    call sb_push_cstr
+11: imul rcx, r14, CDO_SIZE
+    add rcx, [rbx + CDQ_opts + VEC_ptr]
+    mov rsi, [rcx + CDO_label]
+    mov rdi, r12
+    call sb_push_cstr
+    inc r15d
+2:  inc r14
+    jmp 1b
+3:  cmp dword ptr [rbx + CDQ_otheron], 0
+    je 5f
+    test r15d, r15d
+    jz 31f
+    mov rdi, r12
+    lea rsi, [rip + .Lq_comma]
+    call sb_push_cstr
+31: mov rdx, [rbx + CDQ_other + TF_sb + SB_len]
+    test rdx, rdx
+    jnz 32f
+    mov rdi, r12
+    lea rsi, [rip + .Lq_other]
+    call sb_push_cstr
+    jmp 5f
+32: mov rdi, r12
+    mov rsi, [rbx + CDQ_other + TF_sb + SB_ptr]
+    call sb_push
+5:  xor eax, eax                # a character but white space in what it appended
+    mov rcx, r13
+6:  cmp rcx, [r12 + SB_len]
+    jae 9f
+    mov rdx, [r12 + SB_ptr]
+    movzx edx, byte ptr [rdx + rcx]
+    inc rcx
+    cmp edx, ' '
+    je 6b
+    cmp edx, 9
+    je 6b
+    cmp edx, 10
+    je 6b
+    cmp edx, 13
+    je 6b
+    mov eax, 1
+9:  EPILOGUE
+
+# qc_complete(CD*) -> eax 1 when every question has an answer
+qc_complete:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+    cmp qword ptr [rbx + CD_qs + VEC_len], 0
+    je 8f
+1:  cmp r12, [rbx + CD_qs + VEC_len]
+    jae 7f
+    lea rdi, [rip + qsb]
+    call sb_clear
+    mov rax, [rbx + CD_qs + VEC_ptr]
+    mov rdi, [rax + r12*8]
+    inc r12
+    lea rsi, [rip + qsb]
+    call agentcard_qtext
+    test eax, eax
+    jnz 1b
+8:  xor eax, eax
+    EPILOGUE
+7:  mov eax, 1
+    EPILOGUE
+
+# qc_tab(CD*, i): question i shows, the keyboard on its first row
+qc_tab:
+    push rbx
+    mov rbx, rdi
+    mov [rbx + CD_tab], esi
+    mov dword ptr [rbx + CD_focus], CD_OPTS
+    and dword ptr [rbx + CD_flags], ~CDF_WHEEL
+    call qc_cur
+    test rax, rax
+    jz 1f
+    mov dword ptr [rax + CDQ_sel], 0
+1:  mov dword ptr [rip + g_dirty], 1
+    pop rbx
+    ret
+
+# qc_pick(CD*, row): the row of the question shown, picked (as Space on it, or a click): a checkbox toggles,
+#   a radio is the one picked (and the next question comes after g_card_advance_ms), Other also gives its
+#   field the keyboard
+qc_pick:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    call qc_cur
+    test rax, rax
+    jz 9f
+    mov r13, rax
+    cmp r12, [r13 + CDQ_opts + VEC_len]
+    ja 9f
+    mov [r13 + CDQ_sel], r12d
+    mov dword ptr [rbx + CD_focus], CD_OPTS
+    and dword ptr [rbx + CD_flags], ~CDF_WHEEL
+    cmp r12, [r13 + CDQ_opts + VEC_len]
+    jb .Lqp_opt
+    cmp dword ptr [r13 + CDQ_multi], 0  # Other
+    je 1f
+    xor dword ptr [r13 + CDQ_otheron], 1
+    jmp 2f
+1:  mov dword ptr [r13 + CDQ_picks], 0
+    mov dword ptr [r13 + CDQ_otheron], 1
+2:  cmp dword ptr [r13 + CDQ_otheron], 0
+    je 8f
+    mov dword ptr [rbx + CD_focus], CD_FIELD
+    jmp 8f
+.Lqp_opt:
+    mov eax, 1
+    mov ecx, r12d
+    shl eax, cl
+    cmp dword ptr [r13 + CDQ_multi], 0
+    je 3f
+    xor [r13 + CDQ_picks], eax
+    jmp 8f
+3:  mov [r13 + CDQ_picks], eax
+    mov dword ptr [r13 + CDQ_otheron], 0
+    mov eax, [rbx + CD_tab]
+    inc eax
+    cmp rax, [rbx + CD_qs + VEC_len]
+    jae 8f
+    cmp qword ptr [rbx + CD_advat], 0
+    jne 8f
+    mov [rbx + CD_advto], eax
+    cmp dword ptr [rip + g_card_advance_ms], 0
+    jg 4f
+    mov rdi, rbx                # at once
+    mov esi, eax
+    call qc_tab
+    jmp 8f
+4:  call time_ms
+    movsxd rcx, dword ptr [rip + g_card_advance_ms]
+    add rax, rcx
+    mov [rbx + CD_advat], rax
+8:  mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# qc_advance_due(CD*) -> eax ms until a single choice's move to the next question; 0 when it was just made;
+#   -1 none waiting
+qc_advance_due:
+    PROLOGUE
+    mov rbx, rdi
+    mov eax, -1
+    cmp qword ptr [rbx + CD_advat], 0
+    je 9f
+    call time_ms
+    mov rcx, [rbx + CD_advat]
+    sub rcx, rax
+    jle 1f
+    mov eax, ecx
+    EPILOGUE
+1:  mov qword ptr [rbx + CD_advat], 0
+    mov rdi, rbx
+    mov esi, [rbx + CD_advto]
+    call qc_tab
+    xor eax, eax
+9:  EPILOGUE
+
+# qc_step(CD*, dir): the keyboard to the next stop down (1) or up (-1), round: the rows, Other's field
+#   (while Other is picked), Submit answers
+qc_step:
+    push rbx
+    mov rbx, rdi
+    push rsi
+    call qc_cur
+    pop rsi
+    test rax, rax
+    jz 9f
+    mov r8, [rax + CDQ_opts + VEC_len]  # the last row (Other)
+    xor r9d, r9d
+    cmp dword ptr [rax + CDQ_otheron], 0
+    setne r9b                   # 1: its field is a stop
+    lea r10, [r8 + r9 + 2]      # the stops
+    mov ecx, [rbx + CD_focus]
+    mov edx, [rax + CDQ_sel]
+    cmp ecx, CD_OPTS
+    je 1f
+    lea rdx, [r8 + 1]
+    cmp ecx, CD_FIELD
+    je 1f
+    lea rdx, [r8 + r9 + 1]
+1:  movsxd rsi, esi
+    add rdx, rsi
+    jns 2f
+    add rdx, r10
+2:  cmp rdx, r10
+    jb 3f
+    sub rdx, r10
+3:  cmp rdx, r8
+    ja 4f
+    mov [rax + CDQ_sel], edx
+    mov dword ptr [rbx + CD_focus], CD_OPTS
+    jmp 8f
+4:  lea rcx, [r8 + 1]
+    cmp rdx, rcx
+    jne 5f
+    test r9d, r9d
+    jz 5f
+    mov dword ptr [rbx + CD_focus], CD_FIELD
+    jmp 8f
+5:  mov dword ptr [rbx + CD_focus], 0
+8:  and dword ptr [rbx + CD_flags], ~CDF_WHEEL
+    mov dword ptr [rip + g_dirty], 1
+9:  pop rbx
+    ret
+
+# qc_set_other(CD*, ptr, len) -> eax 1: Other of the question shown picked with that text, its field with
+#   the keyboard (agent-card-text other)
+qc_set_other:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    call qc_cur
+    test rax, rax
+    jz 8f
+    mov r14, rax
+    cmp dword ptr [r14 + CDQ_multi], 0
+    jne 1f
+    mov dword ptr [r14 + CDQ_picks], 0
+1:  mov dword ptr [r14 + CDQ_otheron], 1
+    mov rax, [r14 + CDQ_opts + VEC_len]
+    mov [r14 + CDQ_sel], eax
+    mov dword ptr [rbx + CD_focus], CD_FIELD
+    lea rdi, [r14 + CDQ_other]
+    mov rsi, r12
+    mov rdx, r13
+    call tf_set
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# qc_preview_px(CD*): its previews at the panel's text size (when it changed)
+qc_preview_px:
+    PROLOGUE
+    mov rbx, rdi
+    mov rax, [rip + ag_fui]
+    mov r12d, [rax + FACE_px]
+    cmp r12d, [rbx + CD_qpx]
+    je 9f
+    mov [rbx + CD_qpx], r12d
+    xor r13d, r13d
+1:  cmp r13, [rbx + CD_qs + VEC_len]
+    jae 9f
+    mov rax, [rbx + CD_qs + VEC_ptr]
+    mov r14, [rax + r13*8]
+    inc r13
+    xor r15d, r15d
+2:  cmp r15, [r14 + CDQ_opts + VEC_len]
+    jae 1b
+    imul rax, r15, CDO_SIZE
+    add rax, [r14 + CDQ_opts + VEC_ptr]
+    inc r15
+    mov rdi, [rax + CDO_preview]
+    test rdi, rdi
+    jz 2b
+    mov esi, r12d
+    call md_set_size
+    jmp 2b
+9:  EPILOGUE
+
+# qc_body_h(CDQ*, w) -> eax the preview's body at width w: its tallest preview's height, PREVIEW_MIN to
+#   PREVIEW_LINES lines of the panel's text
+qc_body_h:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    xor r13d, r13d
+    xor r14d, r14d
+1:  cmp r14, [rbx + CDQ_opts + VEC_len]
+    jae 2f
+    imul rax, r14, CDO_SIZE
+    add rax, [rbx + CDQ_opts + VEC_ptr]
+    inc r14
+    mov rdi, [rax + CDO_preview]
+    test rdi, rdi
+    jz 1b
+    mov esi, r12d
+    call md_layout
+    cmp eax, r13d
+    cmovg r13d, eax
+    jmp 1b
+2:  mov rax, [rip + ag_fui]
+    mov ecx, [rax + FACE_lineh]
+    imul eax, ecx, PREVIEW_MIN
+    cmp r13d, eax
+    cmovl r13d, eax
+    imul eax, ecx, PREVIEW_LINES
+    cmp r13d, eax
+    cmovg r13d, eax
+    mov eax, r13d
+    EPILOGUE
+
+# kind_layout(CD*, w) -> eax the card's height at width w, its layout in lis (its kind's measure)
+kind_layout:
+    push rsi
+    xor esi, esi
+    call kind_fn
+    pop rsi
+    test rax, rax
+    jz 1f
+    jmp rax
+1:  ret
+
+# qc_lay_btn(CD*): "Submit answers" (button 0) at lx, ly, lw, its label wrapping as the button card's; ly
+#   moves under it. Locals as bc_layout's buttons
+qc_lay_btn:
+    PROLOGUE 48
+    mov rbx, rdi
+    xor esi, esi
+    call compose
+    mov [rsp + 40], rax
+    mov [rsp + 8], rdx
+    mov rdi, rbx
+    call btn_inset
+    mov ecx, [rip + lx]
+    add ecx, eax
+    mov [rsp + 20], ecx
+    mov r13d, [rip + lw]
+    sub r13d, eax
+    sub r13d, [rip + g_pmt + 4*MI_6]
+    cmp r13d, 8
+    jge 1f
+    mov r13d, 8
+1:  mov edi, LK_BTN
+    xor esi, esi
+    call li_new
+    mov [rsp + 32], rax
+    mov ecx, [rip + lx]
+    mov [rax + LI_x], ecx
+    mov ecx, [rip + lw]
+    mov [rax + LI_w], ecx
+    mov ecx, [rip + ly]
+    mov [rax + LI_y], ecx
+    mov edi, TS_SMALL
+    call st_lineh
+    mov [rsp + 24], eax
+    mov eax, [rip + ly]
+    add eax, [rip + g_pmt + 4*MI_6]
+    mov [rsp + 28], eax
+    xor r15d, r15d
+2:  cmp qword ptr [rsp + 8], 0
+    je 5f
+    cmp r15d, LABEL_LINES
+    jae 5f
+    inc r15d
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rsp + 40]
+    mov rdx, [rsp + 8]
+    mov ecx, r13d
+    call wrap_one
+    mov r12, rdx
+    mov rcx, rax
+    cmp r15d, LABEL_LINES
+    jb 3f
+    mov rcx, [rsp + 8]
+3:  push rcx
+    push rcx
+    mov edi, LK_BLINE
+    xor esi, esi
+    call li_new
+    pop rcx
+    pop rcx
+    mov rdx, [rsp + 40]
+    mov [rax + LI_ptr], rdx
+    mov [rax + LI_len], rcx
+    mov ecx, [rsp + 20]
+    mov [rax + LI_x], ecx
+    mov [rax + LI_w], r13d
+    mov ecx, [rsp + 28]
+    mov [rax + LI_y], ecx
+    mov ecx, [rsp + 24]
+    mov [rax + LI_h], ecx
+    add [rsp + 28], ecx
+    add [rsp + 40], r12
+    sub [rsp + 8], r12
+    jmp 2b
+5:  mov eax, [rsp + 28]
+    sub eax, [rip + ly]
+    add eax, [rip + g_pmt + 4*MI_6]
+    cmp eax, [rip + g_pmt + 4*MI_32]
+    jge 6f
+    mov eax, [rip + g_pmt + 4*MI_32]
+6:  mov rcx, [rsp + 32]
+    mov [rcx + LI_h], eax
+    mov r14d, eax
+    cmp dword ptr [rbx + CD_focus], 0
+    jne 7f
+    mov edi, [rip + ly]
+    mov esi, r14d
+    call set_focus_rect
+7:  add [rip + ly], r14d
+    mov eax, [rip + g_pmt + 4*MI_6]
+    add [rip + ly], eax
+    EPILOGUE
+
+# qc_layout(CD*, w) -> eax the question card's height at width w; lis/nlis its items from its top left,
+#   foc_y/foc_h the focused control's place. Locals: [rsp] the × and fold buttons' size, +4 the tab row's
+#   right end, +8 a tab's height, +12 a tab row's, +16 the next tab's x, +20 its row's y, +24 and +28 lx and
+#   lw kept, +32 the rows' width, +36 their top, +40 a mark's size, +44 a row's top, +48 the preview's x,
+#   +52 its width, +56 beside, +60 the items before a row's text, +64 a preview, +68 a row's text from its
+#   left, +72 the row, +76 Other's field's width
+qc_layout:
+    PROLOGUE 80
+    mov rbx, rdi
+    mov r12d, esi
+    mov dword ptr [rip + nlis], 0
+    mov dword ptr [rip + nstops], 0
+    mov dword ptr [rip + foc_y], 0
+    mov dword ptr [rip + foc_h], 0
+    PM eax, MI_16               # the frame MI_8 in, the content MI_8 in from it (as the button card's)
+    mov [rip + lx], eax
+    mov eax, r12d
+    sub eax, [rip + g_pmt + 4*MI_16]
+    sub eax, [rip + g_pmt + 4*MI_16]
+    cmp eax, 16
+    jge 1f
+    mov eax, 16
+1:  mov [rip + lw], eax
+    PM eax, MI_6
+    add eax, [rip + g_pmt + 4*MI_10]
+    mov [rip + ly], eax
+    mov rdi, rbx
+    call qc_preview_px
+    mov edi, TS_TITLE           # the × and the fold button at the right of the first row
+    call st_lineh
+    mov [rsp], eax
+    mov edi, LK_CLOSE
+    xor esi, esi
+    call li_new
+    mov ecx, [rip + lx]
+    add ecx, [rip + lw]
+    sub ecx, [rsp]
+    mov [rax + LI_x], ecx
+    mov ecx, [rip + ly]
+    mov [rax + LI_y], ecx
+    mov ecx, [rsp]
+    mov [rax + LI_w], ecx
+    mov [rax + LI_h], ecx
+    mov edi, LK_FOLD
+    xor esi, esi
+    call li_new
+    mov ecx, [rip + lx]
+    add ecx, [rip + lw]
+    sub ecx, [rsp]
+    sub ecx, [rsp]
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    mov [rax + LI_x], ecx
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    mov [rsp + 4], ecx
+    mov ecx, [rip + ly]
+    mov [rax + LI_y], ecx
+    mov ecx, [rsp]
+    mov [rax + LI_w], ecx
+    mov [rax + LI_h], ecx
+    mov rax, [rip + ag_fsmall]  # a tab's height, a row's
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_4]
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov [rsp + 8], eax
+    mov ecx, [rsp]
+    cmp eax, ecx
+    cmovl eax, ecx
+    mov [rsp + 12], eax
+    mov eax, [rip + lx]
+    mov [rsp + 16], eax
+    mov eax, [rip + ly]
+    mov [rsp + 20], eax
+    mov eax, [rsp + 4]          # little room beside the buttons: the tabs start under them
+    sub eax, [rip + lx]
+    mov ecx, [rip + g_pmt + 4*MI_16]
+    imul ecx, ecx, 6
+    cmp eax, ecx
+    jge 2f
+    mov eax, [rsp]
+    add eax, [rip + g_pmt + 4*MI_4]
+    add [rsp + 20], eax
+    mov eax, [rip + lx]
+    add eax, [rip + lw]
+    mov [rsp + 4], eax
+2:  xor r14d, r14d
+.Lql_tab:
+    cmp r14, [rbx + CD_qs + VEC_len]
+    jae .Lql_tabs
+    mov rax, [rbx + CD_qs + VEC_ptr]
+    mov r15, [rax + r14*8]
+    mov rdi, [r15 + CDQ_header]
+    call strlen
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [r15 + CDQ_header]
+    mov rdx, rax
+    call text_width
+    mov r13d, eax
+    add r13d, [rip + g_pmt + 4*MI_8]
+    add r13d, [rip + g_pmt + 4*MI_8]
+    mov rdi, r15
+    call qc_answered
+    test eax, eax
+    jz 3f
+    mov rax, [rip + ag_fsmall]  # its check
+    add r13d, [rax + FACE_px]
+    add r13d, [rip + g_pmt + 4*MI_4]
+3:  mov ecx, [rsp + 16]         # past the row's end: a row more
+    cmp ecx, [rip + lx]
+    jle 4f
+    add ecx, r13d
+    cmp ecx, [rsp + 4]
+    jle 4f
+    mov eax, [rip + lx]
+    mov [rsp + 16], eax
+    mov eax, [rsp + 12]
+    add eax, [rip + g_pmt + 4*MI_4]
+    add [rsp + 20], eax
+    mov eax, [rip + lx]
+    add eax, [rip + lw]
+    mov [rsp + 4], eax
+4:  mov ecx, [rsp + 4]          # the row at most
+    sub ecx, [rsp + 16]
+    cmp r13d, ecx
+    cmovg r13d, ecx
+    cmp r13d, 8
+    jge 5f
+    mov r13d, 8
+5:  mov edi, LK_TAB
+    mov esi, r14d
+    call li_new
+    mov ecx, [rsp + 16]
+    mov [rax + LI_x], ecx
+    mov ecx, [rsp + 12]
+    sub ecx, [rsp + 8]
+    sar ecx, 1
+    add ecx, [rsp + 20]
+    mov [rax + LI_y], ecx
+    mov [rax + LI_w], r13d
+    mov ecx, [rsp + 8]
+    mov [rax + LI_h], ecx
+    add r13d, [rip + g_pmt + 4*MI_4]
+    add [rsp + 16], r13d
+    inc r14
+    jmp .Lql_tab
+.Lql_tabs:
+    mov eax, [rsp + 20]
+    add eax, [rsp + 12]
+    mov [rip + ly], eax
+    test dword ptr [rbx + CD_flags], CDF_FOLDED
+    jnz .Lql_end
+    mov rdi, rbx
+    call qc_cur
+    test rax, rax
+    jz .Lql_end
+    mov r15, rax                # the question shown
+    mov eax, [rip + g_pmt + 4*MI_8]
+    add [rip + ly], eax
+    mov rdi, [r15 + CDQ_text]
+    mov esi, TS_TITLE
+    mov edx, QTEXT_LINES
+    call lay_cstr
+    mov eax, [rip + g_pmt + 4*MI_6]
+    add [rip + ly], eax
+    # the rows, and the preview beside them (a wide card) or under them
+    mov eax, [rip + lx]
+    mov [rsp + 24], eax
+    mov [rsp + 48], eax
+    mov eax, [rip + lw]
+    mov [rsp + 28], eax
+    mov [rsp + 32], eax
+    mov [rsp + 52], eax
+    mov dword ptr [rsp + 56], 0
+    mov rdi, r15
+    call qc_has_preview
+    mov [rsp + 64], eax
+    test eax, eax
+    jz 6f
+    cmp r12d, QC_BESIDE_W
+    jl 6f
+    mov dword ptr [rsp + 56], 1
+    mov eax, [rip + lw]
+    sub eax, [rip + g_pmt + 4*MI_12]
+    sar eax, 1
+    mov [rsp + 32], eax
+    mov ecx, [rip + lx]
+    add ecx, eax
+    add ecx, [rip + g_pmt + 4*MI_12]
+    mov [rsp + 48], ecx
+    mov ecx, [rip + lw]
+    sub ecx, eax
+    sub ecx, [rip + g_pmt + 4*MI_12]
+    mov [rsp + 52], ecx
+6:  mov rax, [rip + ag_fui]     # a row: its mark, then its text
+    mov eax, [rax + FACE_px]
+    mov [rsp + 40], eax
+    add eax, [rip + g_pmt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_8]
+    mov [rsp + 68], eax
+    mov eax, [rip + ly]
+    mov [rsp + 36], eax
+    mov dword ptr [rsp + 72], 0
+.Lql_row:
+    mov eax, [rsp + 72]
+    cmp rax, [r15 + CDQ_opts + VEC_len]
+    ja .Lql_rows
+    mov eax, [rip + ly]
+    mov [rsp + 44], eax
+    mov edi, LK_OPT
+    mov esi, [rsp + 72]
+    call li_new
+    mov r13, rax
+    mov ecx, [rsp + 24]
+    mov [rax + LI_x], ecx
+    mov ecx, [rsp + 32]
+    mov [rax + LI_w], ecx
+    mov ecx, [rip + ly]
+    mov [rax + LI_y], ecx
+    mov eax, [rsp + 24]         # its text
+    add eax, [rsp + 68]
+    mov [rip + lx], eax
+    mov eax, [rsp + 32]
+    sub eax, [rsp + 68]
+    sub eax, [rip + g_pmt + 4*MI_8]
+    cmp eax, 8
+    jge 7f
+    mov eax, 8
+7:  mov [rip + lw], eax
+    mov eax, [rip + nlis]
+    mov [rsp + 60], eax
+    mov eax, [rip + g_pmt + 4*MI_6]
+    add [rip + ly], eax
+    mov rdi, r15
+    mov esi, [rsp + 72]
+    call qc_label
+    mov rdi, rax
+    mov esi, TS_BODY
+    mov edx, OLABEL_LINES
+    call lay_cstr
+    mov rdi, r15
+    mov esi, [rsp + 72]
+    call qc_opt
+    test rax, rax
+    jz 8f
+    mov rdi, [rax + CDO_desc]
+    mov esi, TS_MUTED
+    mov edx, ODESC_LINES
+    call lay_cstr
+8:  mov ecx, [rsp + 60]         # its lines are the row's
+81: cmp ecx, [rip + nlis]
+    jae 82f
+    imul eax, ecx, LI_SIZE
+    lea rdx, [rip + lis]
+    add rdx, rax
+    mov dword ptr [rdx + LI_kind], LK_OLINE
+    mov eax, [rdx + LI_idx]
+    shl eax, 8
+    or eax, [rsp + 72]
+    mov [rdx + LI_idx], eax
+    inc ecx
+    jmp 81b
+82: mov eax, [rsp + 24]
+    mov [rip + lx], eax
+    mov eax, [rsp + 28]
+    mov [rip + lw], eax
+    mov eax, [rip + ly]         # its height: its lines and their padding, MI_32 at least
+    sub eax, [rsp + 44]
+    add eax, [rip + g_pmt + 4*MI_6]
+    cmp eax, [rip + g_pmt + 4*MI_32]
+    jge 83f
+    mov eax, [rip + g_pmt + 4*MI_32]
+83: mov [r13 + LI_h], eax
+    mov r14d, eax
+    mov ecx, [rsp + 44]
+    add ecx, eax
+    mov [rip + ly], ecx
+    cmp dword ptr [rbx + CD_focus], CD_OPTS
+    jne 84f
+    mov eax, [r15 + CDQ_sel]
+    cmp eax, [rsp + 72]
+    jne 84f
+    mov edi, [rsp + 44]
+    mov esi, r14d
+    call set_focus_rect
+84: mov eax, [rip + g_pmt + 4*MI_4]
+    add [rip + ly], eax
+    mov eax, [rsp + 72]         # Other's field under it while it is picked
+    cmp rax, [r15 + CDQ_opts + VEC_len]
+    jne 89f
+    cmp dword ptr [r15 + CDQ_otheron], 0
+    je 89f
+    mov esi, [rsp + 32]
+    sub esi, [rsp + 68]
+    cmp esi, 16
+    jge 85f
+    mov esi, 16
+85: mov [rsp + 76], esi
+    lea rdi, [r15 + CDQ_other]
+    mov edx, FIELD_ROWS
+    call ta_box_h
+    mov r14d, eax
+    mov edi, LK_FIELD
+    xor esi, esi
+    call li_new
+    mov ecx, [rsp + 24]
+    add ecx, [rsp + 68]
+    mov [rax + LI_x], ecx
+    mov ecx, [rsp + 76]
+    mov [rax + LI_w], ecx
+    mov ecx, [rip + ly]
+    mov [rax + LI_y], ecx
+    mov [rax + LI_h], r14d
+    cmp dword ptr [rbx + CD_focus], CD_FIELD
+    jne 86f
+    mov edi, [rip + ly]
+    mov esi, r14d
+    call set_focus_rect
+86: add r14d, [rip + g_pmt + 4*MI_4]
+    add [rip + ly], r14d
+89: inc dword ptr [rsp + 72]
+    jmp .Lql_row
+.Lql_rows:
+    cmp dword ptr [rsp + 64], 0  # the preview
+    je .Lql_btn
+    mov esi, [rsp + 52]
+    sub esi, [rip + g_pmt + 4*MI_8]
+    sub esi, [rip + g_pmt + 4*MI_8]
+    cmp esi, 16
+    jge 9f
+    mov esi, 16
+9:  mov rdi, r15
+    call qc_body_h
+    add eax, [rip + g_pmt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_4]
+    add eax, [rip + g_pmt + 4*MI_8]
+    mov rcx, [rip + ag_fsmall]
+    add eax, [rcx + FACE_lineh]
+    mov r14d, eax               # its height
+    mov edi, LK_PREVIEW
+    mov esi, [r15 + CDQ_sel]
+    call li_new
+    mov ecx, [rsp + 48]
+    mov [rax + LI_x], ecx
+    mov ecx, [rsp + 52]
+    mov [rax + LI_w], ecx
+    mov [rax + LI_h], r14d
+    mov ecx, [rip + ly]
+    cmp dword ptr [rsp + 56], 0
+    je 91f
+    mov ecx, [rsp + 36]         # beside: at the rows' top
+91: mov [rax + LI_y], ecx
+    add ecx, r14d
+    add ecx, [rip + g_pmt + 4*MI_4]
+    cmp ecx, [rip + ly]
+    jle .Lql_btn
+    mov [rip + ly], ecx
+.Lql_btn:
+    mov eax, [rip + g_pmt + 4*MI_4]
+    add [rip + ly], eax
+    mov rdi, rbx
+    call qc_lay_btn
+    lea rdi, [rip + .Lesc]
+    mov esi, TS_MUTED
+    mov edx, 1
+    call lay_cstr
+.Lql_end:
+    mov eax, [rip + ly]
+    add eax, [rip + g_pmt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_2]
+    mov [rip + lay_total], eax
+    EPILOGUE
+
+# qc_draw(AS*, CD*, x, y, w, h): the question card in its room, scrolled as the button card is (bc_draw).
+#   Clicks act after the drawing (an answer frees the card). Locals: [rsp] x, +4 y (the card's top,
+#   scrolled), +8 w, +12 h, +16 the room's top, +20 live, +24 keys, +28 the room's bottom, +32 to +47 an
+#   item's, +48 the question shown, +56 Submit answers works, +60 an item's
+qc_draw:
+    PROLOGUE 64
+    mov rbx, rdi
+    mov r12, rsi
+    mov [rsp], edx
+    mov [rsp + 4], ecx
+    mov [rsp + 16], ecx
+    mov [rsp + 8], r8d
+    mov [rsp + 12], r9d
+    lea eax, [rcx + r9]
+    mov [rsp + 28], eax
+    mov [r12 + CD_room], r9d
+    mov [r12 + CD_lastw], r8d
+    mov dword ptr [rip + pend_act], 0
+    mov dword ptr [rip + q_ptab], 0
+    mov dword ptr [rip + q_prow], 0
+    mov rdi, r12
+    call agentcard_live
+    mov [rsp + 20], eax
+    mov rdi, rbx
+    mov rsi, r12
+    call has_keys
+    mov [rsp + 24], eax
+    mov rdi, r12
+    call qc_complete
+    and eax, [rsp + 20]
+    mov [rsp + 56], eax
+    mov rdi, r12
+    call qc_cur
+    mov [rsp + 48], rax
+    mov rdi, r12
+    mov esi, [rsp + 8]
+    call qc_layout
+    mov r13d, eax               # its height
+    # the scroll: the wheel's over it, else the focused control in view
+    xor eax, eax
+    mov ecx, r13d
+    sub ecx, [rsp + 12]
+    jle 2f
+    mov eax, [r12 + CD_scroll]
+    cmp dword ptr [rip + g_scroll_y], 0
+    je 10f
+    push rcx
+    push rax
+    mov edi, [rsp + 16]
+    mov esi, [rsp + 16 + 16]
+    mov edx, [rsp + 16 + 8]
+    mov ecx, [rsp + 16 + 12]
+    call ui_in
+    mov edx, eax
+    pop rax
+    pop rcx
+    test edx, edx
+    jz 10f
+    add eax, [rip + g_scroll_y]
+    mov dword ptr [rip + g_scroll_y], 0
+    or dword ptr [r12 + CD_flags], CDF_WHEEL
+    jmp 12f
+10: test dword ptr [r12 + CD_flags], CDF_WHEEL
+    jnz 12f
+    mov r8d, [rsp + 12]         # a margin round it: MI_8, less when the room is short
+    sub r8d, [rip + foc_h]
+    sar r8d, 1
+    cmp r8d, [rip + g_pmt + 4*MI_8]
+    jle 101f
+    mov r8d, [rip + g_pmt + 4*MI_8]
+101:test r8d, r8d
+    jns 102f
+    xor r8d, r8d
+102:mov edx, [rip + foc_y]      # its bottom in view, then its top
+    add edx, [rip + foc_h]
+    add edx, r8d
+    sub edx, [rsp + 12]
+    cmp edx, eax
+    jle 11f
+    mov eax, edx
+11: mov edx, [rip + foc_y]
+    sub edx, r8d
+    cmp edx, eax
+    jge 12f
+    mov eax, edx
+12: cmp eax, ecx
+    cmovg eax, ecx
+    test eax, eax
+    jns 2f
+    xor eax, eax
+2:  mov [r12 + CD_scroll], eax
+    sub [rsp + 4], eax
+    # the frame
+    PM eax, MI_8
+    mov edi, [rsp]
+    add edi, eax
+    mov esi, [rsp + 4]
+    add esi, [rip + g_pmt + 4*MI_6]
+    mov edx, [rsp + 8]
+    sub edx, eax
+    sub edx, eax
+    mov ecx, r13d
+    sub ecx, [rip + g_pmt + 4*MI_8]
+    PM r8d, MI_RADIUS
+    COLOR r9d, T_ACCENT
+    COLOR eax, T_PANEL
+    push rax
+    push rax
+    call gfx_frame
+    add rsp, 16
+    # cut: a thumb at its right edge
+    mov ecx, [rsp + 12]
+    cmp r13d, ecx
+    jle 15f
+    mov eax, ecx
+    imul eax, ecx
+    xor edx, edx
+    div r13d
+    cmp eax, [rip + g_pmt + 4*MI_16]
+    jge 13f
+    mov eax, [rip + g_pmt + 4*MI_16]
+13: mov [rsp + 32], eax
+    mov eax, [r12 + CD_scroll]
+    mov ecx, [rsp + 12]
+    sub ecx, [rsp + 32]
+    imul eax, ecx
+    mov ecx, r13d
+    sub ecx, [rsp + 12]
+    xor edx, edx
+    div ecx
+    mov esi, [rsp + 16]
+    add esi, eax
+    mov edi, [rsp]
+    add edi, [rsp + 8]
+    sub edi, [rip + g_pmt + 4*MI_8]
+    sub edi, [rip + g_pmt + 4*MI_6]
+    PM edx, MI_3
+    mov ecx, [rsp + 32]
+    COLOR r8d, T_SCROLLBAR
+    call gfx_fill
+15: xor r14d, r14d
+.Lqd_item:
+    cmp r14d, [rip + nlis]
+    jae .Lqd_done
+    imul eax, r14d, LI_SIZE
+    lea r15, [rip + lis]
+    add r15, rax
+    inc r14d
+    mov eax, [rsp + 4]          # in the room at all?
+    add eax, [r15 + LI_y]
+    cmp eax, [rsp + 28]
+    jge .Lqd_item
+    add eax, [r15 + LI_h]
+    cmp eax, [rsp + 16]
+    jle .Lqd_item
+    mov eax, [r15 + LI_kind]
+    cmp eax, LK_TEXT
+    je .Lqd_text
+    cmp eax, LK_FOLD
+    je .Lqd_fold
+    cmp eax, LK_CLOSE
+    je .Lqd_close
+    cmp eax, LK_TAB
+    je .Lqd_tab
+    cmp eax, LK_OPT
+    je .Lqd_opt
+    cmp eax, LK_OLINE
+    je .Lqd_oline
+    cmp eax, LK_FIELD
+    je .Lqd_field
+    cmp eax, LK_PREVIEW
+    je .Lqd_preview
+    cmp eax, LK_BTN
+    je .Lqd_btn
+    cmp eax, LK_BLINE
+    je .Lqd_bline
+    jmp .Lqd_item
+.Lqd_text:
+    mov edi, [r15 + LI_idx]
+    call st_color
+    mov [rsp + 32], eax
+    mov edi, [r15 + LI_idx]
+    call st_face
+    mov rdi, rax
+    mov esi, [rsp]
+    add esi, [r15 + LI_x]
+    mov edx, [rsp + 4]
+    add edx, [r15 + LI_y]
+    mov ecx, [r15 + LI_h]
+    mov r8, [r15 + LI_ptr]
+    mov r9, [r15 + LI_len]
+    mov eax, [r15 + LI_w]
+    push rax
+    mov eax, [rsp + 8 + 32]
+    push rax
+    call ui_text_v_fit
+    add rsp, 16
+    jmp .Lqd_item
+.Lqd_fold:
+    mov edi, ID_AGCARD + QID_FOLD
+    mov r9d, IC_CHEV_UP
+    test dword ptr [r12 + CD_flags], CDF_FOLDED
+    jz 1f
+    mov r9d, IC_CHEV_D
+1:  call qd_icon
+    test eax, UB_CLICK
+    jz .Lqd_item
+    xor dword ptr [r12 + CD_flags], CDF_FOLDED
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lqd_item
+.Lqd_close:
+    mov edi, ID_AGCARD + QID_CLOSE
+    mov r9d, IC_CLOSE
+    call qd_icon
+    test eax, UB_CLICK
+    jz .Lqd_item
+    cmp dword ptr [rsp + 20], 0
+    je .Lqd_item
+    mov dword ptr [rip + pend_act], CBA_NO
+    jmp .Lqd_item
+.Lqd_tab:
+    mov eax, [r15 + LI_idx]
+    lea edi, [rax + ID_AGCARD + QID_TAB]
+    call qd_btn_at
+    mov [rsp + 32], eax
+    test eax, UB_CLICK
+    jz 1f
+    mov eax, [r15 + LI_idx]
+    inc eax
+    mov [rip + q_ptab], eax
+1:  COLOR r9d, T_BORDER
+    COLOR eax, T_PANEL
+    test dword ptr [rsp + 32], UB_HOVER
+    jz 2f
+    COLOR eax, T_HOVER
+2:  mov ecx, [r15 + LI_idx]
+    cmp ecx, [r12 + CD_tab]
+    jne 3f
+    COLOR r9d, T_ACCENT         # the one shown
+    COLOR eax, T_INPUT
+3:  call qd_frame
+    mov eax, [r15 + LI_idx]
+    mov rcx, [r12 + CD_qs + VEC_ptr]
+    mov rax, [rcx + rax*8]
+    mov [rsp + 40], rax         # its question
+    mov eax, [rsp]
+    add eax, [r15 + LI_x]
+    add eax, [rip + g_pmt + 4*MI_8]
+    mov [rsp + 36], eax         # its text's x
+    mov rdi, [rsp + 40]
+    call qc_answered
+    test eax, eax
+    jz 4f
+    mov rax, [rip + ag_fsmall]  # answered: a check before it
+    mov ecx, [rax + FACE_px]
+    mov edx, [r15 + LI_h]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 4]
+    add edx, [r15 + LI_y]
+    mov esi, [rsp + 36]
+    add ecx, [rip + g_pmt + 4*MI_4]
+    add [rsp + 36], ecx
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    mov edi, IC_CHECK
+    COLOR r8d, T_ACCENT
+    call icon_draw
+4:  COLOR eax, T_MUTED
+    mov ecx, [r15 + LI_idx]
+    cmp ecx, [r12 + CD_tab]
+    jne 5f
+    COLOR eax, T_FG
+5:  mov [rsp + 32], eax
+    mov eax, [rsp]              # the room left for its text
+    add eax, [r15 + LI_x]
+    add eax, [r15 + LI_w]
+    sub eax, [rip + g_pmt + 4*MI_8]
+    sub eax, [rsp + 36]
+    jns 6f
+    xor eax, eax
+6:  mov [rsp + 60], eax
+    mov rax, [rsp + 40]
+    mov rdi, [rax + CDQ_header]
+    call strlen
+    mov r9, rax
+    mov rax, [rsp + 40]
+    mov r8, [rax + CDQ_header]
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp + 36]
+    mov edx, [rsp + 4]
+    add edx, [r15 + LI_y]
+    mov ecx, [r15 + LI_h]
+    mov eax, [rsp + 60]
+    push rax
+    mov eax, [rsp + 8 + 32]
+    push rax
+    call ui_text_v_fit
+    add rsp, 16
+    jmp .Lqd_item
+.Lqd_opt:
+    mov eax, [r15 + LI_idx]
+    lea edi, [rax + ID_AGCARD + QID_OPT]
+    call qd_btn_at
+    mov [rsp + 32], eax
+    test eax, UB_CLICK
+    jz 1f
+    cmp dword ptr [rsp + 20], 0
+    je 1f
+    mov eax, [r15 + LI_idx]
+    inc eax
+    mov [rip + q_prow], eax
+1:  mov rdi, [rsp + 48]
+    mov esi, [r15 + LI_idx]
+    call qc_picked
+    mov [rsp + 36], eax         # picked
+    xor ecx, ecx                # picked and about to move on to the next question
+    test eax, eax
+    jz 2f
+    cmp qword ptr [r12 + CD_advat], 0
+    je 2f
+    mov eax, [r12 + CD_advto]
+    dec eax
+    cmp eax, [r12 + CD_tab]
+    jne 2f
+    mov ecx, 1
+2:  mov [rsp + 60], ecx
+    COLOR r9d, T_BORDER
+    cmp dword ptr [r12 + CD_focus], CD_OPTS
+    jne 3f
+    mov rax, [rsp + 48]
+    mov eax, [rax + CDQ_sel]
+    cmp eax, [r15 + LI_idx]
+    jne 3f
+    COLOR r9d, T_ACCENT         # the keyboard's
+3:  cmp dword ptr [rsp + 60], 0
+    je 31f
+    COLOR r9d, T_ACCENT
+31: COLOR eax, T_INPUT
+    cmp dword ptr [rsp + 60], 0
+    jne 32f
+    cmp dword ptr [rsp + 20], 0
+    je 33f
+    test dword ptr [rsp + 32], UB_HOVER
+    jz 33f
+32: COLOR eax, T_HOVER
+33: call qd_frame
+    mov rax, [rip + ag_fui]     # its mark, as tall as the text, beside its first line
+    mov eax, [rax + FACE_px]
+    mov [rsp + 40], eax
+    mov edi, TS_BODY
+    call st_lineh
+    sub eax, [rsp + 40]
+    sar eax, 1
+    add eax, [rip + g_pmt + 4*MI_6]
+    add eax, [rsp + 4]
+    add eax, [r15 + LI_y]
+    mov [rsp + 44], eax
+    mov eax, [rsp]
+    add eax, [r15 + LI_x]
+    add eax, [rip + g_pmt + 4*MI_8]
+    mov [rsp + 32], eax
+    COLOR r9d, T_MUTED
+    cmp dword ptr [rsp + 36], 0
+    je 4f
+    COLOR r9d, T_ACCENT
+4:  mov rax, [rsp + 48]
+    cmp dword ptr [rax + CDQ_multi], 0
+    je .Lqd_radio
+    COLOR eax, T_PANEL          # a checkbox
+    cmp dword ptr [rsp + 36], 0
+    je 5f
+    COLOR eax, T_ACCENT
+5:  push rax
+    push rax
+    mov edi, [rsp + 16 + 32]
+    mov esi, [rsp + 16 + 44]
+    mov edx, [rsp + 16 + 40]
+    mov ecx, edx
+    PM r8d, MI_3
+    call gfx_frame
+    add rsp, 16
+    cmp dword ptr [rsp + 36], 0
+    je .Lqd_item
+    mov edi, IC_CHECK
+    mov esi, [rsp + 32]
+    mov edx, [rsp + 44]
+    mov ecx, [rsp + 40]
+    COLOR r8d, T_ACCENT_FG
+    call icon_draw
+    jmp .Lqd_item
+.Lqd_radio:
+    COLOR eax, T_PANEL
+    push rax
+    push rax
+    mov edi, [rsp + 16 + 32]
+    mov esi, [rsp + 16 + 44]
+    mov edx, [rsp + 16 + 40]
+    mov ecx, edx
+    mov r8d, edx
+    sar r8d, 1
+    call gfx_frame
+    add rsp, 16
+    cmp dword ptr [rsp + 36], 0
+    je .Lqd_item
+    mov eax, [rsp + 40]         # picked: a dot in it
+    sar eax, 2
+    jnz 6f
+    mov eax, 1
+6:  mov edi, [rsp + 32]
+    add edi, eax
+    mov esi, [rsp + 44]
+    add esi, eax
+    mov edx, [rsp + 40]
+    sub edx, eax
+    sub edx, eax
+    mov ecx, edx
+    mov r8d, edx
+    sar r8d, 1
+    COLOR r9d, T_ACCENT
+    COLOR eax, T_ACCENT
+    push rax
+    push rax
+    call gfx_frame
+    add rsp, 16
+    jmp .Lqd_item
+.Lqd_oline:
+    mov edi, [r15 + LI_idx]
+    shr edi, 8
+    mov [rsp + 36], edi
+    call st_color
+    cmp dword ptr [rsp + 20], 0
+    jne 1f
+    COLOR eax, T_MUTED          # dimmed while locked
+1:  mov [rsp + 32], eax
+    mov edi, [rsp + 36]
+    call st_face
+    mov rdi, rax
+    mov esi, [rsp]
+    add esi, [r15 + LI_x]
+    mov edx, [rsp + 4]
+    add edx, [r15 + LI_y]
+    mov ecx, [r15 + LI_h]
+    mov r8, [r15 + LI_ptr]
+    mov r9, [r15 + LI_len]
+    mov eax, [r15 + LI_w]
+    push rax
+    mov eax, [rsp + 8 + 32]
+    push rax
+    call ui_text_v_fit
+    add rsp, 16
+    jmp .Lqd_item
+.Lqd_field:
+    mov rdi, [rsp + 48]
+    test rdi, rdi
+    jz .Lqd_item
+    lea rdi, [rdi + CDQ_other]
+    mov dword ptr [rdi + TF_id], ID_AGCARD + QID_FIELD
+    mov rax, [rip + ag_fui]
+    mov [rdi + TF_face], rax
+    xor r9d, r9d
+    cmp dword ptr [r12 + CD_focus], CD_FIELD
+    jne 1f
+    mov r9d, [rsp + 24]         # focused when the card has the keys
+1:  lea rax, [rip + .Lq_ph]
+    push rax
+    push rax
+    mov esi, [rsp + 16]
+    add esi, [r15 + LI_x]
+    mov edx, [rsp + 16 + 4]
+    add edx, [r15 + LI_y]
+    mov ecx, [r15 + LI_w]
+    mov r8d, [r15 + LI_h]
+    call ui_textarea
+    add rsp, 16
+    test eax, UB_PRESS
+    jz .Lqd_item
+    mov dword ptr [r12 + CD_focus], CD_FIELD
+    mov dword ptr [rip + g_focus], FOCUS_AGENTS
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lqd_item
+.Lqd_preview:
+    COLOR r9d, T_BORDER
+    COLOR eax, T_INPUT
+    call qd_frame
+    lea rdi, [rip + qsb]        # "Preview: LABEL"
+    call sb_clear
+    lea rdi, [rip + qsb]
+    lea rsi, [rip + .Lq_preview]
+    call sb_push_cstr
+    mov rdi, [rsp + 48]
+    mov esi, [r15 + LI_idx]
+    call qc_label
+    lea rdi, [rip + qsb]
+    mov rsi, rax
+    call sb_push_cstr
+    mov eax, [r15 + LI_w]
+    sub eax, [rip + g_pmt + 4*MI_8]
+    sub eax, [rip + g_pmt + 4*MI_8]
+    cmp eax, 16
+    jge 1f
+    mov eax, 16
+1:  mov [rsp + 60], eax         # its body's width
+    mov rax, [rip + ag_fsmall]
+    mov ecx, [rax + FACE_lineh]
+    mov eax, [rsp + 4]
+    add eax, [r15 + LI_y]
+    add eax, [rip + g_pmt + 4*MI_8]
+    lea edx, [rax + rcx]
+    add edx, [rip + g_pmt + 4*MI_4]
+    mov [rsp + 36], edx         # its body's y
+    mov edx, [r15 + LI_h]
+    sub edx, [rip + g_pmt + 4*MI_8]
+    sub edx, ecx
+    sub edx, [rip + g_pmt + 4*MI_4]
+    sub edx, [rip + g_pmt + 4*MI_8]
+    mov [rsp + 32], edx         # its body's height
+    mov edx, eax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [r15 + LI_x]
+    add esi, [rip + g_pmt + 4*MI_8]
+    mov r8, [rip + qsb + SB_ptr]
+    mov r9, [rip + qsb + SB_len]
+    mov eax, [rsp + 60]
+    push rax
+    COLOR eax, T_MUTED
+    push rax
+    call ui_text_v_fit
+    add rsp, 16
+    mov rdi, [rsp + 48]
+    mov esi, [r15 + LI_idx]
+    call qc_opt
+    test rax, rax
+    jz 2f
+    mov rax, [rax + CDO_preview]
+    test rax, rax
+    jz 2f
+    mov [rsp + 40], rax
+    mov rdi, rax
+    mov esi, [rsp + 60]
+    call md_layout
+    mov edi, [rsp]
+    add edi, [r15 + LI_x]
+    add edi, [rip + g_pmt + 4*MI_8]
+    mov esi, [rsp + 36]
+    mov edx, [rsp + 60]
+    mov ecx, [rsp + 32]
+    call gfx_clip_push
+    mov eax, ID_AGCARD + QID_LINKS
+    push rax
+    push rax
+    mov rdi, [rsp + 16 + 40]
+    mov esi, [rsp + 16]
+    add esi, [r15 + LI_x]
+    add esi, [rip + g_pmt + 4*MI_8]
+    mov edx, [rsp + 16 + 36]
+    mov ecx, [rsp + 16 + 60]
+    mov r8d, [rsp + 16 + 32]
+    xor r9d, r9d
+    call md_draw
+    add rsp, 16
+    call gfx_clip_pop
+    jmp .Lqd_item
+2:  lea rdi, [rip + .Lq_nopreview]
+    call strlen
+    mov r9, rax
+    lea r8, [rip + .Lq_nopreview]
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [r15 + LI_x]
+    add esi, [rip + g_pmt + 4*MI_8]
+    mov edx, [rsp + 36]
+    mov rax, [rip + ag_fsmall]
+    mov ecx, [rax + FACE_lineh]
+    mov eax, [rsp + 60]
+    push rax
+    COLOR eax, T_MUTED
+    push rax
+    call ui_text_v_fit
+    add rsp, 16
+    jmp .Lqd_item
+.Lqd_btn:
+    mov edi, ID_AGCARD + QID_SUBMIT
+    call qd_btn_at
+    mov [rsp + 32], eax
+    test eax, UB_CLICK
+    jz 1f
+    cmp dword ptr [rsp + 56], 0
+    je 1f
+    mov dword ptr [rip + pend_act], CBA_SUBMIT
+1:  COLOR r9d, T_BORDER
+    cmp dword ptr [r12 + CD_focus], 0
+    jne 2f
+    COLOR r9d, T_ACCENT
+2:  COLOR eax, T_INPUT
+    cmp dword ptr [rsp + 56], 0
+    je 3f
+    test dword ptr [rsp + 32], UB_HOVER
+    jz 3f
+    COLOR eax, T_HOVER
+3:  call qd_frame
+    mov byte ptr [rip + num], '1'
+    mov edi, TS_SMALL
+    call st_lineh
+    mov ecx, eax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [r15 + LI_x]
+    add esi, [rip + g_pmt + 4*MI_6]
+    mov edx, [rsp + 4]
+    add edx, [r15 + LI_y]
+    add edx, [rip + g_pmt + 4*MI_6]
+    lea r8, [rip + num]
+    mov r9d, 1
+    COLOR eax, T_MUTED
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    jmp .Lqd_item
+.Lqd_bline:
+    COLOR eax, T_MUTED
+    cmp dword ptr [rsp + 56], 0
+    je 1f
+    COLOR eax, T_FG
+1:  mov [rsp + 32], eax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [r15 + LI_x]
+    mov edx, [rsp + 4]
+    add edx, [r15 + LI_y]
+    mov ecx, [r15 + LI_h]
+    mov r8, [r15 + LI_ptr]
+    mov r9, [r15 + LI_len]
+    mov eax, [r15 + LI_w]
+    push rax
+    mov eax, [rsp + 8 + 32]
+    push rax
+    call ui_text_v_fit
+    add rsp, 16
+    jmp .Lqd_item
+.Lqd_done:
+    mov eax, [rip + q_ptab]     # a tab clicked (it opens a folded card)
+    test eax, eax
+    jz 1f
+    and dword ptr [r12 + CD_flags], ~CDF_FOLDED
+    mov rdi, r12
+    lea esi, [rax - 1]
+    call qc_tab
+1:  mov eax, [rip + q_prow]
+    test eax, eax
+    jz 2f
+    mov rdi, r12
+    lea esi, [rax - 1]
+    call qc_pick
+2:  mov esi, [rip + pend_act]
+    test esi, esi
+    jz 9f
+    mov rdi, rbx
+    call agentcard_answer       # the card may be gone after this
+9:  EPILOGUE
+
+# qc_draw's item helpers, called inside its frame (its locals 8 bytes further up): qd_btn_at(edi id) -> eax
+#   ui_btn over the item r15; qd_icon(edi id, r9d icon) -> eax ag_icon_btn there; qd_frame(r9d border, eax
+#   fill) the item's rounded frame
+qd_btn_at:
+    mov esi, [rsp + 8]
+    add esi, [r15 + LI_x]
+    mov edx, [rsp + 8 + 4]
+    add edx, [r15 + LI_y]
+    mov ecx, [r15 + LI_w]
+    mov r8d, [r15 + LI_h]
+    jmp ui_btn
+qd_icon:
+    mov esi, [rsp + 8]
+    add esi, [r15 + LI_x]
+    mov edx, [rsp + 8 + 4]
+    add edx, [r15 + LI_y]
+    mov ecx, [r15 + LI_w]
+    mov r8d, [r15 + LI_h]
+    jmp ag_icon_btn
+qd_frame:
+    sub rsp, 8
+    push rax
+    push rax
+    mov edi, [rsp + 32]
+    add edi, [r15 + LI_x]
+    mov esi, [rsp + 32 + 4]
+    add esi, [r15 + LI_y]
+    mov edx, [r15 + LI_w]
+    mov ecx, [r15 + LI_h]
+    PM r8d, MI_RADIUS
+    call gfx_frame
+    add rsp, 24
+    ret
+
+# qc_key(AS*, CD*, keysym, cp, mods) -> eax 1 taken (see "the question card" above)
+qc_key:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov r14d, ecx
+    mov r15d, r8d
+    test dword ptr [r12 + CD_flags], CDF_FOLDED
+    jz 1f
+    cmp r13d, KEY_ESCAPE        # folded: Escape is swallowed, Enter opens it
+    je .Lqk_yes
+    cmp r13d, KEY_RETURN
+    je 11f
+    cmp r13d, KEY_KP_ENTER
+    jne .Lqk_no
+11: and dword ptr [r12 + CD_flags], ~CDF_FOLDED
+    jmp .Lqk_yes
+1:  mov rdi, r12
+    call agentcard_live
+    test eax, eax
+    jnz 2f
+    cmp r13d, KEY_TAB           # locked: nothing but Tab (out to the box)
+    je .Lqk_no
+    jmp .Lqk_yes
+2:  mov rdi, r12
+    call qc_cur
+    test rax, rax
+    jz .Lqk_no
+    cmp dword ptr [r12 + CD_focus], CD_FIELD
+    jne .Lqk_rows
+    lea rdi, [rax + CDQ_other]  # in Other's field
+    mov [rsp], rdi
+    cmp r13d, KEY_ESCAPE
+    je .Lqk_no_answer
+    cmp r13d, KEY_TAB
+    je .Lqk_no
+    cmp r13d, KEY_RETURN
+    je 3f
+    cmp r13d, KEY_KP_ENTER
+    jne 4f
+3:  test r15d, MOD_SHIFT
+    jnz 6f
+    mov eax, [r12 + CD_tab]     # Enter: the next question
+    inc eax
+    cmp rax, [r12 + CD_qs + VEC_len]
+    jae .Lqk_yes
+    mov rdi, r12
+    mov esi, eax
+    call qc_tab
+    jmp .Lqk_yes
+4:  cmp r13d, KEY_DOWN
+    je 5f
+    cmp r13d, KEY_UP
+    jne 6f
+5:  mov rdi, [rsp]
+    call has_lf
+    test eax, eax
+    jnz 6f
+    mov esi, 1
+    cmp r13d, KEY_DOWN
+    je 51f
+    mov esi, -1
+51: mov rdi, r12
+    call qc_step
+    jmp .Lqk_yes
+6:  mov rdi, [rsp]
+    mov esi, r13d
+    mov edx, r14d
+    mov ecx, r15d
+    call ta_key
+    test eax, eax
+    jz .Lqk_no
+    jmp .Lqk_yes
+.Lqk_rows:
+    test r15d, MOD_CTRL | MOD_ALT | MOD_SUPER
+    jnz .Lqk_no
+    cmp r13d, KEY_ESCAPE
+    je .Lqk_no_answer
+    cmp r13d, KEY_DOWN
+    je 7f
+    cmp r13d, KEY_UP
+    je 71f
+    cmp r13d, KEY_LEFT
+    je 72f
+    cmp r13d, KEY_RIGHT
+    je 73f
+    cmp r13d, KEY_RETURN
+    je 74f
+    cmp r13d, KEY_KP_ENTER
+    je 74f
+    cmp r13d, ' '
+    je 74f
+    mov eax, r14d               # the character, else the key
+    test eax, eax
+    jnz 75f
+    mov eax, r13d
+75: cmp eax, '1'
+    jne .Lqk_no
+    jmp .Lqk_submit
+7:  mov esi, 1
+    jmp 76f
+71: mov esi, -1
+76: mov rdi, r12
+    call qc_step
+    jmp .Lqk_yes
+72: cmp dword ptr [r12 + CD_focus], CD_OPTS
+    jne .Lqk_no
+    mov eax, [r12 + CD_tab]
+    test eax, eax
+    jz .Lqk_yes
+    dec eax
+    mov rdi, r12
+    mov esi, eax
+    call qc_tab
+    jmp .Lqk_yes
+73: cmp dword ptr [r12 + CD_focus], CD_OPTS
+    jne .Lqk_no
+    mov eax, [r12 + CD_tab]
+    inc eax
+    cmp rax, [r12 + CD_qs + VEC_len]
+    jae .Lqk_yes
+    mov rdi, r12
+    mov esi, eax
+    call qc_tab
+    jmp .Lqk_yes
+74: cmp dword ptr [r12 + CD_focus], CD_OPTS
+    jne .Lqk_submit
+    mov rdi, r12
+    call qc_cur
+    mov esi, [rax + CDQ_sel]
+    mov rdi, r12
+    call qc_pick
+    jmp .Lqk_yes
+.Lqk_submit:
+    mov rdi, r12
+    call qc_complete
+    test eax, eax
+    jz .Lqk_yes                 # not every question has an answer: nothing
+    mov esi, CBA_SUBMIT
+    jmp .Lqk_answer
+.Lqk_no_answer:
+    mov esi, CBA_NO
+.Lqk_answer:
+    mov rdi, rbx
+    call agentcard_answer       # (the card is gone once its answer went)
+    jmp .Lqk_done
+.Lqk_yes:
+    and dword ptr [r12 + CD_flags], ~CDF_WHEEL
+.Lqk_done:
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+.Lqk_no:
+    xor eax, eax
+    EPILOGUE
+
+# q_push_esc(sb, cstr): the text, its line feeds as "\n"
+q_push_esc:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+1:  movzx esi, byte ptr [r12]
+    test esi, esi
+    jz 9f
+    inc r12
+    cmp esi, 10
+    jne 2f
+    mov rdi, rbx
+    mov esi, '\\'
+    call sb_push_byte
+    mov esi, 'n'
+2:  mov rdi, rbx
+    call sb_push_byte
+    jmp 1b
+9:  EPILOGUE
+
+# q_word(sb, cstr word, value): " WORD=VALUE" (WORD with its "=")
+q_word:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, edx
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r12d
+    call sb_push_u64
+    EPILOGUE
+
+# qc_dump(sb, CD*): print-agent-card's lines of a question card: "tab N HEADER answered=0|1 current=0|1" per
+#   question; for the one shown "question TEXT", "option N LABEL picked=0|1 sel=0|1" per row (Other last; sel:
+#   the row the keyboard and the preview are on), "other TEXT" while Other is picked, "preview none" or
+#   "preview beside|under<TAB>Preview: LABEL<TAB>BODY" (BODY the preview's Markdown, "No preview for this
+#   option"; its place at the width the card was drawn at), "submit enabled=0|1"
+qc_dump:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d
+1:  cmp r13, [r12 + CD_qs + VEC_len]
+    jae 2f
+    mov rax, [r12 + CD_qs + VEC_ptr]
+    mov r14, [rax + r13*8]
+    inc r13
+    mov rdi, rbx
+    lea rsi, [rip + .Lqw_tab]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r13d
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, [r14 + CDQ_header]
+    call sb_push_cstr
+    mov rdi, r14
+    call qc_answered
+    mov edx, eax
+    mov rdi, rbx
+    lea rsi, [rip + .Lqw_answered]
+    call q_word
+    xor edx, edx
+    lea eax, [r13 - 1]
+    cmp eax, [r12 + CD_tab]
+    sete dl
+    mov rdi, rbx
+    lea rsi, [rip + .Lqw_current]
+    call q_word
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    jmp 1b
+2:  mov rdi, r12
+    call qc_cur
+    test rax, rax
+    jz 9f
+    mov r14, rax
+    mov rdi, rbx
+    lea rsi, [rip + .Lqw_question]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [r14 + CDQ_text]
+    call q_push_esc
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    xor r13d, r13d
+3:  cmp r13, [r14 + CDQ_opts + VEC_len]
+    ja 4f
+    mov rdi, rbx
+    lea rsi, [rip + .Lqw_option]
+    call sb_push_cstr
+    lea esi, [r13 + 1]
+    mov rdi, rbx
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, r14
+    mov esi, r13d
+    call qc_label
+    mov rdi, rbx
+    mov rsi, rax
+    call sb_push_cstr
+    mov rdi, r14
+    mov esi, r13d
+    call qc_picked
+    mov edx, eax
+    mov rdi, rbx
+    lea rsi, [rip + .Lqw_picked]
+    call q_word
+    xor edx, edx
+    cmp r13d, [r14 + CDQ_sel]
+    sete dl
+    mov rdi, rbx
+    lea rsi, [rip + .Lqw_sel]
+    call q_word
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    inc r13
+    jmp 3b
+4:  cmp dword ptr [r14 + CDQ_otheron], 0
+    je 5f
+    mov rdi, rbx
+    lea rsi, [rip + .Lq_other_w]
+    lea rdx, [r14 + CDQ_other]
+    call push_tf
+5:  mov rdi, rbx
+    lea rsi, [rip + .Lqw_preview]
+    call sb_push_cstr
+    mov rdi, r14
+    call qc_has_preview
+    test eax, eax
+    jnz 6f
+    mov rdi, rbx
+    lea rsi, [rip + .Lqw_none]
+    call sb_push_cstr
+    jmp 8f
+6:  lea rsi, [rip + .Lqw_under]
+    mov eax, [r12 + CD_lastw]
+    test eax, eax
+    jnz 61f
+    mov eax, 400
+61: cmp eax, QC_BESIDE_W
+    jl 62f
+    lea rsi, [rip + .Lqw_beside]
+62: mov rdi, rbx
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, 9
+    call sb_push_byte
+    mov rdi, rbx
+    lea rsi, [rip + .Lq_preview]
+    call sb_push_cstr
+    mov rdi, r14
+    mov esi, [r14 + CDQ_sel]
+    call qc_label
+    mov rdi, rbx
+    mov rsi, rax
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, 9
+    call sb_push_byte
+    lea r15, [rip + .Lq_nopreview]
+    mov rdi, r14
+    mov esi, [r14 + CDQ_sel]
+    call qc_opt
+    test rax, rax
+    jz 7f
+    mov rdi, [rax + CDO_preview]
+    test rdi, rdi
+    jz 7f
+    call md_source
+    mov r15, rax
+7:  mov rdi, rbx
+    mov rsi, r15
+    call q_push_esc
+    mov rcx, [rbx + SB_len]     # without the line feed the Markdown ends with
+    cmp rcx, 2
+    jb 8f
+    mov rax, [rbx + SB_ptr]
+    cmp word ptr [rax + rcx - 2], 0x6e5c
+    jne 8f
+    sub qword ptr [rbx + SB_len], 2
+8:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, r12
+    call qc_complete
+    mov edx, eax
+    mov rdi, rbx
+    lea rsi, [rip + .Lqw_submit]
+    call q_word
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+9:  EPILOGUE
+
+# qc_input(sb, CD*): print-agent-input's line for a question card: "card=QUESTION options=A|B|Other"
+qc_input:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    lea rsi, [rip + .Ld_card]
+    call sb_push_cstr
+    mov rdi, r12
+    call qc_cur
+    test rax, rax
+    jz 9f
+    mov r13, rax
+    mov rdi, rbx
+    mov rsi, [r13 + CDQ_text]
+    call q_push_esc
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_options]
+    call sb_push_cstr
+    xor r14d, r14d
+1:  cmp r14, [r13 + CDQ_opts + VEC_len]
+    ja 9f
+    test r14, r14
+    jz 2f
+    mov rdi, rbx
+    mov esi, '|'
+    call sb_push_byte
+2:  mov rdi, r13
+    mov esi, r14d
+    call qc_label
+    mov rdi, rbx
+    mov rsi, rax
+    call sb_push_cstr
+    inc r14
+    jmp 1b
+9:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    EPILOGUE
+
+.section .rodata
+.Lq_empty: .asciz ""
+.Lq_other: .asciz "Other"
+.Lq_other_w: .asciz "other"
+.Lq_comma: .asciz ", "
+.Lq_text_lf: .asciz "text\n"
+.Lq_ph: .asciz "Type your answer\342\200\246"
+.Lq_preview: .asciz "Preview: "
+.Lq_nopreview: .asciz "No preview for this option"
+.Lwaiting_q: .asciz "Waiting for your answer\342\200\246"
+.Lw_options: .asciz "options"
+.Lqw_tab: .asciz "tab "
+.Lqw_answered: .asciz " answered="
+.Lqw_current: .asciz " current="
+.Lqw_question: .asciz "question "
+.Lqw_option: .asciz "option "
+.Lqw_picked: .asciz " picked="
+.Lqw_sel: .asciz " sel="
+.Lqw_preview: .asciz "preview "
+.Lqw_none: .asciz "none"
+.Lqw_beside: .asciz "beside"
+.Lqw_under: .asciz "under"
+.Lqw_submit: .asciz "submit enabled="
+
+.data
+.p2align 2
+.globl g_card_advance_ms
+g_card_advance_ms: .long CARD_ADVANCE_MS
+
+.bss
+.p2align 3
+qsb: .zero SB_SIZE              # an answer (qc_complete), a caption
+fsb: .zero SB_SIZE              # a preview as it is shown (q_fence)
+q_ptab: .long 0                 # a click on a tab (its question + 1), on a row (the row + 1), after the drawing
+q_prow: .long 0

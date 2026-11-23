@@ -286,8 +286,10 @@ c_agent_release:
 9:  xor eax, eax
     EPILOGUE
 
-# agent-card N | fold | details | dest: option N (from 1) of the open session's card (a rich card's button
-#   N once its lock is over, agentcard.s); a rich card's fold button, its Details, a click on its place
+# agent-card N | fold | details | dest | submit | close: option N (from 1) of the open session's card (a
+#   rich card's button N once its lock is over, agentcard.s; the question card's row N of the question it
+#   shows); a rich card's fold button, its Details, a click on its place; the question card's Submit
+#   answers and its ×
 c_agent_card:
     PROLOGUE
     call ai_set
@@ -451,9 +453,9 @@ state_named:
     EPILOGUE
 
 # agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES] [cache=MS]
-#   [card=MS] [keyed=MS]: shorter times (and a smaller cap, a smaller input queue, a prompt cache's
-#   lifetime, 0 the CLI's) for tests; card: a rich card's lock, keyed: how recent a key in the box keeps a
-#   new card from taking the keyboard
+#   [card=MS] [keyed=MS] [advance=MS]: shorter times (and a smaller cap, a smaller input queue, a prompt
+#   cache's lifetime, 0 the CLI's) for tests; card: a rich card's lock, keyed: how recent a key in the box
+#   keeps a new card from taking the keyboard, advance: the question card's move to the next question
 c_agent_timing:
     PROLOGUE
     call ai_set
@@ -1134,13 +1136,14 @@ c_agent_test_band:
 
 # ---- the rich cards (agentcard.s) ----
 
-# card_word(ptr, len) -> eax agentcard_toggle's what for "fold", "details", "dest", else -1
+# card_word(ptr, len) -> eax agentcard_toggle's what for "fold", "details", "dest", "submit", "close",
+#   else -1
 card_word:
     PROLOGUE
     mov r12, rdi
     mov r13, rsi
     xor ebx, ebx
-1:  cmp ebx, 3
+1:  cmp ebx, 5
     jae 8f
     lea rax, [rip + card_words]
     mov rdx, [rax + rbx*8]
@@ -1200,6 +1203,13 @@ c_agent_card_text:
     mov rdi, r12
     mov rsi, r13
     lea rdx, [rip + .Lw_card_edit]
+    call str_eq_cstr
+    test eax, eax
+    jnz 1f
+    mov ebx, 2                  # the question card's Other
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lw_card_other]
     call str_eq_cstr
     test eax, eax
     jz 8f
@@ -1270,11 +1280,15 @@ c_agent_focus:
 .Lw_card_fold: .asciz "fold"
 .Lw_card_details: .asciz "details"
 .Lw_card_dest: .asciz "dest"
+.Lw_card_submit: .asciz "submit"
+.Lw_card_close: .asciz "close"
+.Lw_card_other: .asciz "other"
 .Lw_focus_editor: .asciz "editor"
 .Lw_focus_panel: .asciz "panel"
 .Lw_focus_box: .asciz "box"
 .Lt_card: .asciz "card"
 .Lt_keyed: .asciz "keyed"
+.Lt_advance: .asciz "advance"
 .Lc_print_agent_cfg: .asciz "print-agent-cfg"
 .Lc_agent_models: .asciz "agent-models"
 .Lc_agent_cfg_set: .asciz "agent-cfg-set"
@@ -1389,6 +1403,7 @@ ai_ctl:
     .quad .Lc_agent_card_text, c_agent_card_text, .Lc_agent_focus, c_agent_focus
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
+    .quad .Lw_card_submit, .Lw_card_close                          # the question card's
 focus_words:                    # agent-focus's words and their focus
     .quad .Lw_focus_editor
     .long FOCUS_EDITOR, 0
@@ -1417,4 +1432,5 @@ timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_co
     .quad .Lt_eof, g_conn_eof_ms, .Lt_hold, g_drv_hold_ms, .Lt_guard, g_conn_max
     .quad .Lt_queue, g_conn_queue_max, .Lt_cache, g_cache_ttl_ms
     .quad .Lt_card, g_card_lock_ms, .Lt_keyed, g_card_keyed_ms     # the rich cards (agentcard.s)
+    .quad .Lt_advance, g_card_advance_ms                            # the question card's move on
     .quad 0, 0

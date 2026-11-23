@@ -1055,12 +1055,16 @@ class RequestTest(DrivenCase):
     def test_question_cards_in_order(self):
         self.start()
         self.chat('ask2', 'waiting')
-        self.assertEqual(self.card(), 'card=Which language? options=Python|Go|Rust')
+        # phase 2's question card: a tab per question, Other after the options, "Submit answers" sends
+        self.command('agent-timing advance=0')
+        self.assertEqual(self.card(), 'card=Which language? options=Python|Go|Rust|Other')
         self.command('agent-card 2')
-        self.assertEqual(self.card(), 'card=Which tools? options=git|make|docker')
+        self.assertEqual(self.card(), 'card=Which tools? options=git|make|docker|Other')
         self.assertIn(' requests=1 ', self.live())
         self.assertEqual(self.answers(), [])
         self.command('agent-card 3')
+        self.assertEqual(self.answers(), [])
+        self.command('agent-card submit')
         self.command('wait-agent ready')
         tid = self.tool_ids()
         self.assertEqual(self.answers(), [{'behavior': 'allow', 'toolUseID': tid[0], 'updatedInput': {

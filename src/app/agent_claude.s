@@ -2280,7 +2280,20 @@ h_can_use:
     call json_len
     mov eax, eax
     mov [r14 + AQ_count], rax
-    jmp 6f
+    mov rdi, rbx                # the question card (claude_cards.s); one rhun cannot show is denied
+    mov rsi, r14
+    mov rdx, r15
+    call claude_question_build
+    test eax, eax
+    jnz 6f
+    mov rdi, rbx
+    mov rsi, r14
+    lea rdx, [rip + .Lr_noshow]
+    xor ecx, ecx
+    call reply_deny
+    mov rdi, r14                # not in AL_reqs yet: a close the write caused did not free it
+    call agent_aq_free
+    EPILOGUE
 4:  mov rdi, [r14 + AQ_tool]
     lea rsi, [rip + .Lt_plan]
     call strcmp_eq
@@ -2392,6 +2405,8 @@ req_show:
     mov eax, [r12 + AQ_kind]
     cmp eax, AQK_QUESTION
     jne 2f
+    cmp qword ptr [r12 + AQ_card], 0    # the question card (claude_cards.s)
+    jne 22f
     mov rdi, rbx
     mov rsi, r12
     call show_question
@@ -2402,7 +2417,7 @@ req_show:
     je 3f
     cmp qword ptr [r12 + AQ_card], 0
     je 21f
-    mov rdi, rbx                # a rich card (claude_cards.s)
+22: mov rdi, rbx                # a rich card (claude_cards.s)
     mov rsi, r12
     call claude_card_show
     jmp 4f

@@ -545,5 +545,322 @@ class PermissionCardTest(CardCase):
         self.assertEqual(self.until_answered()[0]['behavior'], 'deny')
 
 
+# ---- the question card (task 10) ----
+
+LAYOUT_Q, CHECKS_Q, SIZE_Q = 'Which layout should the page use?', 'Which checks should run?', 'How big is it?'
+
+
+def fenced(preview):
+    """A preview as the extension shows it (webview index.js @5232059 `_8n`): its trailing line feeds cut, then
+    in a ```text fence unless a line of it opens a fence of its own."""
+    text = preview.rstrip('\n')
+    if re.search(r'^ {0,3}`{3,}[^`]*$', text, re.M):
+        return text
+    ticks = '`' * (max([2] + [len(run) for run in re.findall(r'`+', text)]) + 1)
+    return f'{ticks}text\n{text}\n{ticks}'
+
+
+class QuestionCardTest(CardCase):
+    """Task 10: AskUserQuestion as a card (ext-webview-ui.md 4.12, 4.13, 7.4; the real CLI's finding 23): a tab
+    per question, radio and checkbox rows, Other with its field, previews, "Submit answers"."""
+
+    def ask3(self, extra='', advance=0):
+        self.ask('ask3', extra=extra)
+        self.command(f'agent-timing advance={advance}')
+
+    def tabs(self):
+        """(header, answered, current) per tab."""
+        return [tuple(re.match(r'\d+ (.*) answered=(\d) current=(\d)$', line).groups())
+                for line in self.lines('tab')]
+
+    def current(self):
+        return next(i for i, (_, _, cur) in enumerate(self.tabs(), 1) if cur == '1')
+
+    def options(self):
+        """(label, picked, sel) per row of the current tab, Other last."""
+        return [tuple(re.match(r'\d+ (.*) picked=(\d) sel=(\d)$', line).groups()) for line in self.lines('option')]
+
+    def picked(self):
+        return [label for label, picked, _ in self.options() if picked == '1']
+
+    def preview(self):
+        """(place, caption, body) or None."""
+        line = self.lines('preview')[0]
+        return None if line == 'none' else tuple(line.split('\t'))
+
+    def submit_enabled(self):
+        return self.lines('submit') == ['enabled=1']
+
+    def test_tabs_and_answered_marks(self):
+        self.ask3()
+        head = self.head()
+        self.assertEqual((head['kind'], head['title'], head['focus'], head['keys']),
+                         ('questions', 'Questions', 'options', '1'))
+        self.assertEqual(self.tabs(), [('Layout', '0', '1'), ('Checks', '0', '0'), ('Size', '0', '0')])
+        self.assertEqual(self.lines('question'), [LAYOUT_Q])
+        self.assertEqual(self.options(), [('Sidebar', '0', '1'), ('Top bar', '0', '0'), ('None', '0', '0'),
+                                          ('Other', '0', '0')])
+        self.assertEqual(self.command('print-agent-input').splitlines()[1],
+                         f'card={LAYOUT_Q} options=Sidebar|Top bar|None|Other')
+        self.command('agent-card 2')                # Top bar: answered, on to the next tab
+        self.assertEqual(self.tabs(), [('Layout', '1', '0'), ('Checks', '0', '1'), ('Size', '0', '0')])
+        self.assertEqual(self.lines('question'), [CHECKS_Q])
+        self.keys('Left')
+        self.assertEqual(self.tabs(), [('Layout', '1', '1'), ('Checks', '0', '0'), ('Size', '0', '0')])
+        self.assertEqual(self.picked(), ['Top bar'])
+        self.keys('Right', 'Right', 'Right')        # no further than the last
+        self.assertEqual(self.current(), 3)
+        self.command('agent-card 1')                # the last tab: no move
+        self.assertEqual(self.tabs(), [('Layout', '1', '0'), ('Checks', '0', '0'), ('Size', '1', '1')])
+        self.command('agent-focus box')             # text in the box while it waits
+        self.command('agent-type hi')
+        self.assertEqual((self.lines('waiting'), self.head()['keys']), (['Waiting for your answer…'], '0'))
+        self.command('agent-card close')
+        self.until_answered()
+
+    def test_single_choice_advances(self):
+        self.ask3(advance=300)
+        self.command('agent-card 1')
+        self.assertEqual((self.current(), self.picked()), (1, ['Sidebar']))     # it shows the pick a moment
+        self.until(lambda: self.current() == 2, 'the move to the next tab', 3)
+        self.assertEqual(self.head()['focus'], 'options')
+        self.command('agent-card 1')                # a multi-select row stays
+        time.sleep(0.5)
+        self.assertEqual((self.current(), self.picked()), (2, ['lint']))
+        self.command('agent-timing advance=0')
+        self.keys('Left', 'Down', 'Space')          # at once with advance=0
+        self.assertEqual(self.current(), 2)
+        self.keys('Left')
+        self.assertEqual(self.picked(), ['Top bar'])
+        self.command('agent-card close')
+        self.until_answered()
+
+    def test_multi_select_joins_with_commas(self):
+        self.ask3()
+        self.command('agent-card 1')                # Sidebar
+        self.command('agent-card 3')                # types
+        self.command('agent-card 1')                # lint
+        self.command('agent-card 2')                # tests, then off again
+        self.command('agent-card 2')
+        self.assertEqual(self.picked(), ['lint', 'types'])
+        self.keys('Right')
+        self.command('agent-card 2')                # big
+        self.command('agent-card submit')
+        answer = self.until_answered()[0]
+        self.assertEqual(list(answer), ['behavior', 'updatedInput', 'toolUseID'])
+        self.assertEqual(answer['behavior'], 'allow')
+        self.assertEqual(answer['updatedInput'], {
+            'questions': self.fake_questions(),
+            'answers': {LAYOUT_Q: 'Sidebar', CHECKS_Q: 'lint, types', SIZE_Q: 'big'}})
+        self.command('wait-agent ready')            # the fake's reply is the answers it took
+        self.assertTrue(self.thread()[-1].startswith(chat.REPLY + f'{{"{SIZE_Q}": "big", "{CHECKS_Q}": "lint,'),
+                        self.thread())
+        self.assertEqual(self.card(), (None, []))
+
+    def fake_questions(self):
+        spec = importlib.util.spec_from_file_location('fake_claude_questions', chat.FAKE)
+        source = chat.FAKE.read_text(encoding='utf-8')
+        block = source[source.index('QUESTIONS_THREE = ['):source.index('\n\n\ndef s_ask3')]
+        scope = {}
+        exec(block, scope)
+        return scope['QUESTIONS_THREE']
+
+    def test_other_free_text(self):
+        self.ask3()
+        self.command('agent-card 4')                # Other on a single choice: its field takes the keys
+        self.assertEqual(self.head()['focus'], 'field')
+        self.assertEqual(self.picked(), ['Other'])
+        self.assertEqual(self.lines('other'), [''])
+        self.assertEqual(self.tabs()[0][1], '1')    # Other counts as an answer (the extension's rule)
+        self.keys('m', 'i', 'n', 'e')
+        self.assertEqual(self.lines('other'), ['mine'])
+        self.keys('Return')                         # Enter in Other: the next question
+        self.assertEqual((self.current(), self.head()['focus']), (2, 'options'))
+        self.command('agent-card 1')                # lint and Other on a multi-select
+        self.command('agent-card 4')
+        self.command('agent-card-text other and docs')
+        self.assertEqual(self.picked(), ['lint', 'Other'])
+        self.keys('Return')
+        self.command('agent-card 3')                # the last question: Other, and blanks are no answer
+        self.keys('Space', 'Space')
+        self.assertEqual(self.lines('other'), ['  '])
+        self.assertFalse(self.submit_enabled())
+        self.command('agent-card 1')                # a label instead: Other goes, its text stays
+        self.assertEqual(self.picked(), ['small'])
+        self.assertTrue(self.submit_enabled())
+        self.command('agent-card 3')
+        self.assertEqual(self.lines('other'), ['  '])
+        self.command('agent-card-text other huge')
+        self.assertTrue(self.submit_enabled())
+        self.command('agent-card submit')
+        answer = self.until_answered()[0]
+        self.assertEqual(answer['updatedInput']['answers'], {LAYOUT_Q: 'mine', CHECKS_Q: 'lint, and docs',
+                                                             SIZE_Q: 'huge'})
+
+    def test_submit_waits_for_every_answer(self):
+        self.ask3()
+        self.assertFalse(self.submit_enabled())
+        self.command('agent-card 1')
+        self.command('agent-card 1')
+        self.assertFalse(self.submit_enabled())
+        self.command('agent-card submit')
+        self.keys('1')
+        self.keys('Up')                             # Submit answers, from the first row up
+        self.assertEqual(self.head()['focus'], '1')
+        self.keys('Return')
+        time.sleep(0.3)
+        self.assertEqual(self.answers(), [])
+        self.assertIn(' requests=1 ', self.live())
+        self.keys('Right')                          # not from Submit
+        self.assertEqual(self.current(), 2)
+        self.keys('Down', 'Right')                  # the first row again, then the last tab
+        self.command('agent-card 1')
+        self.assertTrue(self.submit_enabled())
+        self.keys('1')
+        answer = self.until_answered()[0]
+        self.assertEqual(answer['updatedInput']['answers'], {LAYOUT_Q: 'Sidebar', CHECKS_Q: 'lint', SIZE_Q: 'small'})
+
+    def test_preview_beside_and_under(self):
+        questions = self.fake_questions()
+        sidebar, top = (fenced(o['preview']).replace('\n', '\\n') for o in questions[0]['options'][:2])
+        self.ask3(extra='[ui]\nagents_width = 480\n')
+        self.assertEqual(self.preview(), ('beside', 'Preview: Sidebar', sidebar))
+        self.keys('Down')
+        self.assertEqual(self.preview(), ('beside', 'Preview: Top bar', top))
+        self.assertEqual(top, 'Top bar\\n=======\\n\\n```\\n[a] [b] [c]\\n```')     # its own fence: as it is
+        self.keys('Down')
+        self.assertEqual(self.preview(), ('beside', 'Preview: None', 'No preview for this option'))
+        self.keys('Down')
+        self.assertEqual(self.preview(), ('beside', 'Preview: Other', 'No preview for this option'))
+        fit = self.command('print-agent-card-fit').splitlines()
+        self.keys('Right')                          # a multi-select question has none
+        self.assertIsNone(self.preview())
+        for line in fit:
+            if ' items=' not in line or 'p:' not in line:
+                continue
+            width = int(re.match(r'size=\d+ w=(\d+) ', line).group(1))
+            items = [(m.group(1), *map(int, m.group(3).split(','))) for m in
+                     re.finditer(r'([a-zA-Z])(\d*):([\d,]+);', line)]
+            pane = next(i for i in items if i[0] == 'p')
+            rows = [i for i in items if i[0] == 'o']
+            if width >= 480:
+                self.assertGreaterEqual(pane[1], max(r[1] + r[3] for r in rows), line)
+                self.assertLess(pane[2], max(r[2] + r[4] for r in rows), line)
+            else:
+                self.assertGreaterEqual(pane[2], max(r[2] + r[4] for r in rows), line)
+        self.command('agent-card close')
+        self.until_answered()
+        self.stop()
+        self.ask3(extra='[ui]\nagents_width = 240\n')
+        self.assertEqual(self.preview(), ('under', 'Preview: Sidebar', sidebar))
+        self.command('agent-card close')
+        self.until_answered()
+
+    def test_question_keys(self):
+        self.ask3()
+        self.keys('Down', 'Down', 'Down', 'Down')   # round the rows: Other, then Submit, then the first again
+        self.assertEqual(self.head()['focus'], '1')
+        self.keys('Down')
+        self.assertEqual((self.head()['focus'], self.options()[0][2]), ('options', '1'))
+        self.keys('Up', 'Up')                       # Submit, then Other
+        self.assertEqual([sel for _, _, sel in self.options()], ['0', '0', '0', '1'])
+        self.keys('Up', 'Return')                   # None, picked by Enter: on to Checks
+        self.assertEqual((self.current(), self.tabs()[0][1]), (2, '1'))
+        self.keys('Space', 'Down', 'Down', 'Space')     # lint and types
+        self.assertEqual(self.picked(), ['lint', 'types'])
+        self.keys('Space')                          # types off again
+        self.assertEqual(self.picked(), ['lint'])
+        self.keys('Down', 'Space')                  # Other: its field
+        self.assertEqual(self.head()['focus'], 'field')
+        self.keys('2', 'Left', 'x')                 # keys in the field are the field's
+        self.assertEqual((self.lines('other'), self.current()), (['x2'], 2))
+        self.keys('Return')                         # the next question
+        self.assertEqual(self.current(), 3)
+        self.keys('Left', 'Left', 'Left')
+        self.assertEqual(self.current(), 1)
+        self.keys('Right', 'Right', 'Down', 'Return')
+        self.assertTrue(self.submit_enabled())
+        self.keys('Down', 'Down')                   # Other, Submit
+        self.assertEqual(self.head()['focus'], '1')
+        self.keys('Return')
+        answer = self.until_answered()[0]
+        self.assertEqual(answer['updatedInput']['answers'], {LAYOUT_Q: 'None', CHECKS_Q: 'lint, x2', SIZE_Q: 'big'})
+
+    def test_close_denies(self):
+        self.ask3()
+        self.command('agent-card 1')
+        self.command('agent-card close')            # the ×: No, as the extension's onClose
+        answer = self.until_answered()[0]
+        self.assertEqual((answer['behavior'], answer['message'], answer['interrupt']), ('deny', chat.REJECTED, True))
+        self.command('wait-agent ready')
+        self.command('agent-prompt ask3')           # and Escape does the same
+        self.command('wait-agent waiting')
+        self.keys('Escape')
+        answer = self.until_answered(2)[1]
+        self.assertEqual((answer['behavior'], answer['interrupt']), ('deny', True))
+        self.command('wait-agent ready')
+        self.command('agent-timing card=1500')      # nothing in the first moments, × included
+        self.command('agent-prompt ask3')
+        self.command('wait-agent waiting')
+        self.assertEqual(self.head()['live'], '0')
+        self.command('agent-card close')
+        self.keys('Escape')
+        time.sleep(0.2)
+        self.assertEqual(len(self.answers()), 2)
+        self.until(lambda: self.head()['live'] == '1', 'the lock ends')
+        self.command('agent-card close')
+        self.assertEqual(self.until_answered(3)[2]['behavior'], 'deny')
+
+    def test_question_card_fits(self):
+        self.ask3()
+        for tab in (1, 2):
+            for line in self.command('print-agent-card-fit').splitlines():
+                size, width, h = map(int, re.match(r'size=(\d+) w=(\d+) h=(\d+) ', line).groups())
+                fx, fy, fw, fh = map(int, re.search(r' frame=([\d,]+)', line).group(1).split(','))
+                items = [(m.group(1), int(m.group(2) or 0), *map(int, m.group(3).split(',')))
+                         for m in re.finditer(r'([a-zA-Z])(\d*):([\d,]+);', line)]
+                what = f'tab {tab} size {size} width {width}'
+                self.assertEqual(fx + fw + fx, width, what)
+                for kind, n, x, y, w, ih in items:
+                    self.assertTrue(fx <= x and x + w <= fx + fw and fy <= y and y + ih <= fy + fh,
+                                    (what, kind, n, x, y, w, ih))
+                    self.assertGreaterEqual(w, 8, (what, kind, n))
+                boxes = [i for i in items if i[0] not in 'lk']
+                for i, a in enumerate(boxes):       # nothing overlaps
+                    for b in boxes[i + 1:]:
+                        apart = (a[2] + a[4] <= b[2] or b[2] + b[4] <= a[2] or a[3] + a[5] <= b[3] or
+                                 b[3] + b[5] <= a[3])
+                        self.assertTrue(apart, (what, a, b))
+                for kind, n, x, y, w, ih in items:  # a row's lines inside it, the button's in the button
+                    if kind in 'lk':
+                        box = next(i for i in items if i[0] == ('b' if kind == 'l' else 'o') and i[1] == n)
+                        self.assertTrue(box[2] <= x and x + w <= box[2] + box[4] and
+                                        box[3] <= y and y + ih <= box[3] + box[5], (what, kind, n))
+                kinds = [i[0] for i in items]
+                self.assertEqual(kinds.count('T'), 3, what)
+                self.assertEqual(kinds.count('o'), 4, what)
+                self.assertEqual((kinds.count('x'), kinds.count('f'), kinds.count('b')), (1, 1, 1), what)
+                self.assertEqual(kinds.count('p'), 1 if tab == 1 else 0, what)
+            self.keys('Right')
+        # at the largest text in the narrowest panel the card is cut: Down keeps the focused control in view
+        self.stop()
+        self.ask3(extra='[agents]\nfont_size = 32\n[ui]\nagents_width = 240\n')
+        head = self.head()
+        narrow = next(line for line in self.command('print-agent-card-fit').splitlines()
+                      if line.startswith('size=32 w=240 '))
+        self.assertLess(int(head['room']), int(re.search(r' h=(\d+)', narrow).group(1)))
+        for _ in range(5):
+            self.keys('Down')
+            head = self.head()
+            scroll, room, fy, fh = (int(head[k]) for k in ('scroll', 'room', 'fy', 'fh'))
+            if fh <= room:
+                self.assertTrue(scroll <= fy and fy + fh <= scroll + room, head)
+            else:
+                self.assertTrue(scroll <= fy <= scroll + room, head)
+        self.assertEqual(self.head()['focus'], 'options')
+        self.command('agent-card close')
+        self.until_answered()
+
+
 if __name__ == '__main__':
     unittest.main()

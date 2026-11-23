@@ -52,6 +52,10 @@
 .equ SG_ADDDIR, 4
 .equ SG_REMOVEDIR, 5
 .equ SG_SETMODE, 6
+.equ QS_MAX, 100000             # the question card: a question's or a label's bytes at most (sent back whole)
+.equ QHEAD_MAX, 400             #   a header's, a description's, a preview's (cut past it)
+.equ QDESC_MAX, 4000
+.equ QPREVIEW_MAX, 100000
 
 .bss
 .p2align 3
@@ -1829,8 +1833,16 @@ FN claude_reply
     je .Lcr_rule
     cmp eax, CBA_NO
     je .Lcr_no
+    cmp eax, CBA_SUBMIT             # the question card's "Submit answers"
+    je .Lcr_submit
     xor eax, eax
     EPILOGUE
+.Lcr_submit:
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call write_answers
+    jmp .Lcr_after
 .Lcr_yes:
     mov rdi, rbx
     mov rsi, r12
@@ -2189,6 +2201,324 @@ write_deny:
     mov rsi, r12
     call claude_reply_end
     EPILOGUE
+
+# ---------------------------------------------------------------- the question card
+#
+# AskUserQuestion (finding 23: questions {question, header, multiSelect, options [{label, description,
+# preview}]}, the previews Markdown) as a CDK_QUESTIONS card: a question per tab, its options and Other
+# (agentcard.s). A question that is not an object with a string "question", an option without a string
+# "label", more than CDQ_MAX questions or CDQ_OPTS_MAX options a question: rhun cannot show it (the caller
+# denies the request, as phase 1 does for cards it cannot show). The texts that go back as the answer's keys
+# and values (the question, the labels) are kept whole (past QS_MAX bytes: not shown); the header, the
+# descriptions and the previews are cut at a character's start. "Submit answers" allows with the input's
+# members kept and "answers" {question: "label" | "a, b" | the Other text} (agentcard_qtext); the × and
+# Escape are the card's No (claude_reply: phase 1's words, interrupt true, as the extension's onClose).
+#
+#   claude_question_build(AL*, AQ*, input jv) -> eax 1 the card made (AQ_card), 0 it cannot be shown
+
+# q_member(jv, key, max) -> rax ptr, rdx len of a string member (rdx cut to max bytes at a character's
+#   start), ecx 1 when it is a string (0: rax and rdx 0)
+q_member:
+    PROLOGUE
+    mov r12d, edx
+    call json_get
+    mov rbx, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_STR
+    jne 8f
+    mov rdi, rbx
+    call json_str
+    mov rbx, rax
+    mov rdi, rdx
+    mov rsi, rax
+    mov edx, r12d
+    call utf8_cut
+    mov rdx, rax
+    mov rax, rbx
+    mov ecx, 1
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    xor ecx, ecx
+    EPILOGUE
+
+# q_cstr(sb, ptr, len) -> rax the bytes as a cstr in sb
+q_cstr:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    call sb_clear
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    mov rdi, rbx
+    xor esi, esi
+    call sb_push_byte
+    mov rax, [rbx + SB_ptr]
+    EPILOGUE
+
+# FN claude_question_build(AL*, AQ*, input jv) -> eax 1 when its card is made (AQ_card), 0 when rhun cannot
+#   show it (nothing made). Locals: [rsp] the questions, [rsp + 8] a question, [rsp + 16] its options,
+#   [rsp + 24] its CDQ*, [rsp + 32] the option, [rsp + 40] the preview's bytes
+FN claude_question_build
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rdx
+    lea rsi, [rip + .Lk_questions_q]
+    call json_get
+    mov [rsp], rax
+    mov rdi, rax
+    call json_len
+    test eax, eax
+    jz .Lqb_no
+    cmp eax, CDQ_MAX
+    ja .Lqb_no
+    mov r15d, eax               # the questions
+    mov edi, CDK_QUESTIONS
+    call agentcard_new
+    mov r13, rax
+    mov [r12 + AQ_card], rax
+    mov [rax + CD_token], r12
+    lea rdx, [rip + .Lq_title_one]
+    cmp r15d, 1
+    je 1f
+    lea rdx, [rip + .Lq_title_many]
+1:  mov rdi, rdx
+    push rdx
+    push rdx
+    call strlen
+    pop rdx
+    pop rdx
+    mov rdi, r13
+    mov esi, CDT_TITLE
+    mov rcx, rax
+    call agentcard_text
+    mov rdi, r13
+    lea rsi, [rip + .Lq_submit]
+    mov edx, CBA_SUBMIT
+    xor ecx, ecx
+    call agentcard_btn
+    xor r14d, r14d
+.Lqb_q:
+    cmp r14d, r15d
+    jae .Lqb_done
+    mov rdi, [rsp]
+    mov esi, r14d
+    inc r14d
+    call json_at
+    mov [rsp + 8], rax
+    mov rdi, rax                # its text (an answer's key: whole)
+    lea rsi, [rip + .Lk_question_q]
+    mov edx, QS_MAX + 1
+    call q_member
+    test ecx, ecx
+    jz .Lqb_fail
+    cmp rdx, QS_MAX
+    ja .Lqb_fail
+    lea rdi, [rip + nsb]
+    mov rsi, rax
+    call q_cstr
+    mov rdi, [rsp + 8]          # its header
+    lea rsi, [rip + .Lk_header_q]
+    mov edx, QHEAD_MAX
+    call q_member
+    lea rdi, [rip + hsb]
+    mov rsi, rax
+    call q_cstr
+    mov rdi, [rsp + 8]
+    lea rsi, [rip + .Lk_multi_q]
+    call in_true
+    mov ecx, eax
+    mov rdi, r13
+    mov rsi, [rip + hsb + SB_ptr]
+    mov rdx, [rip + nsb + SB_ptr]
+    call agentcard_question
+    test rax, rax
+    jz .Lqb_fail
+    mov [rsp + 24], rax
+    mov rdi, [rsp + 8]          # its options
+    lea rsi, [rip + .Lk_options_q]
+    call json_get
+    mov [rsp + 16], rax
+    mov rdi, rax
+    call json_len
+    cmp eax, CDQ_OPTS_MAX
+    ja .Lqb_fail
+    mov r12d, eax
+    xor ebx, ebx
+.Lqb_o:
+    cmp ebx, r12d
+    jae .Lqb_q
+    mov rdi, [rsp + 16]
+    mov esi, ebx
+    inc ebx
+    call json_at
+    mov [rsp + 32], rax
+    mov rdi, rax                # its label (an answer: whole)
+    lea rsi, [rip + .Lk_label_q]
+    mov edx, QS_MAX + 1
+    call q_member
+    test ecx, ecx
+    jz .Lqb_fail
+    cmp rdx, QS_MAX
+    ja .Lqb_fail
+    lea rdi, [rip + hsb]
+    mov rsi, rax
+    call q_cstr
+    mov rdi, [rsp + 32]
+    lea rsi, [rip + .Lk_desc_q]
+    mov edx, QDESC_MAX
+    call q_member
+    lea rdi, [rip + nsb]
+    mov rsi, rax
+    call q_cstr
+    mov rdi, [rsp + 32]
+    lea rsi, [rip + .Lk_preview_q]
+    mov edx, QPREVIEW_MAX
+    call q_member
+    mov [rsp + 40], rdx
+    mov rcx, rax
+    mov r8, rdx
+    mov rdi, [rsp + 24]
+    mov rsi, [rip + hsb + SB_ptr]
+    mov rdx, [rip + nsb + SB_ptr]
+    call agentcard_option
+    jmp .Lqb_o
+.Lqb_done:
+    mov eax, 1
+    EPILOGUE
+.Lqb_fail:
+    mov rax, [r13 + CD_token]   # (r12 holds a count here)
+    mov qword ptr [rax + AQ_card], 0
+    mov rdi, r13
+    call agentcard_free
+.Lqb_no:
+    xor eax, eax
+    EPILOGUE
+
+# write_answers(AL*, AQ*, CD*) -> eax 1 written: {"behavior":"allow","updatedInput":{the input's members but
+#   "answers", "answers":{QUESTION:ANSWER,...}},"toolUseID":ID}, the answers from the card (agentcard_qtext)
+write_answers:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, [r12 + AQ_input]
+    mov rsi, [r12 + AQ_inlen]
+    mov edx, LINE_VALUES
+    mov ecx, LINE_DEPTH
+    call json_parse_lim
+    mov r14, rax
+    test rax, rax
+    jnz 1f
+    lea rdi, [rip + .Lq_noecho]
+    call strlen
+    mov rdi, rbx
+    mov rsi, r12
+    lea rdx, [rip + .Lq_noecho]
+    mov rcx, rax
+    xor r8d, r8d
+    call write_deny
+    EPILOGUE
+1:  mov rdi, rbx
+    mov rsi, r12
+    call claude_reply_begin
+    lea rdi, [rip + claude_cw]
+    lea rsi, [rip + .Lk_behavior]
+    call jw_key
+    lea rdi, [rip + claude_cw]
+    lea rsi, [rip + .Lv_allow]
+    call jw_cstr
+    lea rdi, [rip + claude_cw]
+    lea rsi, [rip + .Lk_updatedInput]
+    call jw_key
+    lea rdi, [rip + claude_cw]
+    call jw_obj
+    xor r15d, r15d
+2:  mov rdi, r14                # the input's members but its answers
+    call json_npairs
+    cmp r15d, eax
+    jae 3f
+    mov rdi, r14
+    mov esi, r15d
+    inc r15d
+    call json_pair
+    mov [rsp], rdx
+    mov rdi, rax
+    call json_str
+    mov [rsp + 8], rax
+    push rdx
+    push rdx
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + .Lk_answers_q]
+    call str_eq_cstr
+    pop rdx
+    pop rdx
+    test eax, eax
+    jnz 2b
+    lea rdi, [rip + claude_cw]
+    mov rsi, [rsp + 8]
+    call jw_keyn
+    lea rdi, [rip + claude_cw]
+    mov rsi, [rsp]
+    call jw_jv
+    jmp 2b
+3:  lea rdi, [rip + claude_cw]
+    lea rsi, [rip + .Lk_answers_q]
+    call jw_key
+    lea rdi, [rip + claude_cw]
+    call jw_obj
+    xor r15d, r15d
+4:  cmp r15, [r13 + CD_qs + VEC_len]
+    jae 5f
+    mov rax, [r13 + CD_qs + VEC_ptr]
+    mov r14, [rax + r15*8]
+    inc r15
+    mov rdi, [r14 + CDQ_text]
+    call strlen
+    lea rdi, [rip + claude_cw]
+    mov rsi, [r14 + CDQ_text]
+    mov rdx, rax
+    call jw_keyn
+    lea rdi, [rip + msb]
+    call sb_clear
+    mov rdi, r14
+    lea rsi, [rip + msb]
+    call agentcard_qtext
+    lea rdi, [rip + claude_cw]
+    mov rsi, [rip + msb + SB_ptr]
+    mov rdx, [rip + msb + SB_len]
+    call jw_str
+    jmp 4b
+5:  lea rdi, [rip + claude_cw]
+    call jw_end_obj             # the answers
+    lea rdi, [rip + claude_cw]
+    call jw_end_obj             # updatedInput
+    mov rdi, rbx
+    mov rsi, r12
+    call claude_reply_end
+    EPILOGUE
+
+.section .rodata
+.Lq_title_one: .asciz "Question"
+.Lq_title_many: .asciz "Questions"
+.Lq_submit: .asciz "Submit answers"
+.Lq_noecho: .asciz "rhun cannot pass this input back unchanged"
+.Lk_questions_q: .asciz "questions"
+.Lk_question_q: .asciz "question"
+.Lk_header_q: .asciz "header"
+.Lk_multi_q: .asciz "multiSelect"
+.Lk_options_q: .asciz "options"
+.Lk_label_q: .asciz "label"
+.Lk_desc_q: .asciz "description"
+.Lk_preview_q: .asciz "preview"
+.Lk_answers_q: .asciz "answers"
+.text
 
 .bss
 .p2align 3

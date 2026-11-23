@@ -1229,6 +1229,27 @@ def s_askx(prompt):
     s_ask(prompt, QUESTIONS_ONE, {'answers': {'Which color do you prefer?': 'Green'}, 'note': 'kept'})
 
 
+# the question card: three questions, the second multi-select, in finding 23's shape (options {label,
+# description, preview}, the previews Markdown strings, only on single-choice questions)
+QUESTIONS_THREE = [
+    {'question': 'Which layout should the page use?', 'header': 'Layout', 'multiSelect': False,
+     'options': [{'label': 'Sidebar', 'description': 'The links in a column on the left',
+                  'preview': '## Sidebar\n\n- the links in a column\n- the page beside them\n'},
+                 {'label': 'Top bar', 'description': 'The links in a row across the top',
+                  'preview': 'Top bar\n=======\n\n```\n[a] [b] [c]\n```'},
+                 {'label': 'None', 'description': 'No links at all'}]},
+    {'question': 'Which checks should run?', 'header': 'Checks', 'multiSelect': True,
+     'options': [{'label': 'lint', 'description': 'Style'}, {'label': 'tests', 'description': 'Unit tests'},
+                 {'label': 'types', 'description': 'Type checks'}]},
+    {'question': 'How big is it?', 'header': 'Size', 'multiSelect': False,
+     'options': [{'label': 'small', 'description': 'A page'}, {'label': 'big', 'description': 'A site'}]}]
+
+
+def s_ask3(prompt):
+    """the question card: three questions, one multi-select, previews on the first"""
+    s_ask(prompt, QUESTIONS_THREE)
+
+
 def nested(depth):
     value = 'end'
     for _ in range(depth):
@@ -1874,7 +1895,8 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'nosave': s_nosave, 'defno': s_defno, 'hook': s_hook, 'dirs': s_dirs, 'modeonly': s_modeonly,
              'mixed': s_mixed, 'sessiononly': s_sessiononly, 'bypass': s_bypass, 'pwsh': s_pwsh, 'net': s_net,
              'skill': s_skill, 'project': s_project, 'glob': s_glob, 'grep': s_grep, 'websearch': s_websearch,
-             'other': s_other}
+             'other': s_other,
+             'ask3': s_ask3}
 
 
 # three of 2.1.330's commands, as its initialize lists them (finding 22; the real list has every built-in,

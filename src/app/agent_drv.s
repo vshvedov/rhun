@@ -86,7 +86,7 @@
 .equ R_INFO, 6
 .equ ENV_TICK_MS, 50            # a start waiting for the login environment looks again this often
 .equ HOLD_MS, 10000             # how long a start waits for another holder of the conversation
-.equ PROMPT_CHARS, 50000        # a prompt's characters at most (the extension's limit)
+.equ SEND_CHARS, 50000        # a prompt's characters at most (the extension's limit)
 .equ ROWKEY_MAX, 80             # AL_rowkey's size
 .equ RS_QUEUE, 1                # queue_restore's: the prompts that waited for a start
 .equ RS_HELD, 2                 #   the messages held
@@ -558,7 +558,7 @@ FN agent_send
     mov rdx, r13
     call [r14 + DRV_send]
     jmp 9f
-2:  xor ecx, ecx                # at most PROMPT_CHARS characters (the extension's limit)
+2:  xor ecx, ecx                # at most SEND_CHARS characters (the extension's limit)
     xor edx, edx
 21: cmp rcx, r13
     jae 22f
@@ -569,7 +569,7 @@ FN agent_send
     je 21b
     inc rdx
     jmp 21b
-22: cmp rdx, PROMPT_CHARS
+22: cmp rdx, SEND_CHARS
     jbe 23f
     lea rdi, [rip + .Lprompt_long]
     call app_toast

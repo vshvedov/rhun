@@ -50,7 +50,7 @@
 .include "rhun.inc"
 
 .equ HIST_MAX, 100              # prompts the recall goes back through (the extension's)
-.equ PROMPT_UNITS, 50000        # a prompt's UTF-16 units at most (the extension's limit)
+.equ SEND_UNITS, 50000        # a prompt's UTF-16 units at most (the extension's limit)
 .equ MARKER_UNITS, 55           # "\n\n[Message truncated - exceeded 50,000 character limit]"
 .equ PAINT_MAX, 32              # painted ranges at most
 .equ KINDS_MAX, 8               # new conversations' drafts, by AS_kind
@@ -973,7 +973,7 @@ FN composer_check
 9:  mov ecx, r15d
     EPILOGUE
 
-# over(ptr, len) -> rax the UTF-16 units past PROMPT_UNITS (0 within it); a text ending with the CLI's own
+# over(ptr, len) -> rax the UTF-16 units past SEND_UNITS (0 within it); a text ending with the CLI's own
 #   truncation marker does not count it
 over:
     PROLOGUE
@@ -994,7 +994,7 @@ over:
     jz 1f
     sub rbx, MARKER_UNITS
 1:  xor eax, eax
-    sub rbx, PROMPT_UNITS
+    sub rbx, SEND_UNITS
     jle 9f
     mov rax, rbx
 9:  EPILOGUE
@@ -1289,7 +1289,7 @@ paint_find:
     mov rdi, r12
     mov rsi, r13
     call units
-    cmp rax, PROMPT_UNITS
+    cmp rax, SEND_UNITS
     ja 8f
     xor r14d, r14d              # where
 1:  lea rax, [r14 + rbx]

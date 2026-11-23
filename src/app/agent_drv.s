@@ -833,12 +833,12 @@ held_take:
     EPILOGUE
 
 # queue_dup(ptr, len) -> rax a prompt waiting for a start, as AL_queue keeps it: a cstr of the text, and
-#   after its NUL a serial of its own (8 bytes, never 0: agent_queued's id for it)
+#   after its NUL, at the next multiple of 8, a serial of its own (never 0: agent_queued's id for it)
 queue_dup:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
-    lea rdi, [rsi + 9]
+    lea rdi, [rsi + 16]
     call mem_alloc
     mov r13, rax
     mov rdi, rax
@@ -848,7 +848,9 @@ queue_dup:
     mov byte ptr [r13 + r12], 0
     inc qword ptr [rip + q_serial]
     mov rax, [rip + q_serial]
-    mov [r13 + r12 + 1], rax
+    lea rcx, [r12 + 8]
+    and rcx, -8
+    mov [r13 + rcx], rax
     mov rax, r13
     EPILOGUE
 
@@ -882,7 +884,9 @@ FN agent_queued
     mov rdi, rax
     call strlen
     mov rdx, rax
-    mov rcx, [r14 + rax + 1]    # (its serial, after the NUL)
+    lea rcx, [rax + 8]          # (its serial, after the NUL at the next multiple of 8: queue_dup)
+    and rcx, -8
+    mov rcx, [r14 + rcx]
     mov rax, r14
     EPILOGUE
 3:  xor eax, eax

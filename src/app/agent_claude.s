@@ -1868,7 +1868,7 @@ req_show:
 #   options' labels (at most 16). The input is parsed again (the arena is global: nothing may hold a value
 #   of an earlier parse). Locals: [rsp] the labels
 show_question:
-    PROLOGUE 136
+    PROLOGUE 144                # 16 labels; a multiple of 16 keeps the stack aligned
     mov rbx, rdi
     mov r12, rsi
     mov rdi, [r12 + AQ_input]

@@ -289,6 +289,25 @@ FN composer_key
     mov r12d, edi
     mov r13d, esi
     mov r14d, edx
+    cmp r14d, MOD_CTRL          # Ctrl+O: an open conversation's thinking rows open or close (7.2; the box
+    jne 0f                      #   of a new session's draft and a popup's field keep their keys)
+    mov eax, r12d
+    or eax, 0x20
+    cmp eax, 'o'
+    jne 0f
+    call agentpop_field
+    test rax, rax
+    jnz 0f
+    call agentext_new_active
+    test rax, rax
+    jnz 0f
+    call agents_viewed
+    test rax, rax
+    jz 0f
+    call agrow_think_toggle
+    mov eax, 1
+    EPILOGUE
+0:
     mov eax, r14d               # Ctrl+J: a line break in any agents box (never Toggle Panel)
     and eax, MOD_CTRL | MOD_ALT | MOD_SUPER | MOD_SHIFT
     cmp eax, MOD_CTRL

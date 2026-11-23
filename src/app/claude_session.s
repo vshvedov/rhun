@@ -2079,6 +2079,7 @@ apply_kept:
     mov rbx, rdi
     mov r14d, esi
     mov r15d, edx
+    mov r13d, [rbx + AL_cfg]    # (thinking switched while it started: kept_picks asks for it)
     call kept_picks
     test eax, eax
     jz 9f
@@ -2086,6 +2087,27 @@ apply_kept:
     test dword ptr [rbx + AL_cfg], CLP_FIRST
     jz 9f
     and dword ptr [rbx + AL_cfg], ~CLP_FIRST
+    test r13d, CLP_WAITTHINK    # the user's Claude Code settings ask for thinking summaries
+    jnz 0f                      #   (showThinkingSummaries): asked for at the start, with thinking on, as
+    test dword ptr [rbx + AL_cfg], CLP_SUMMARIES    # the extension's --thinking-display=summarized
+    jz 0f                       #   (open point 11; nothing is written to any settings)
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    cmp dword ptr [rax + AGC_think], 0
+    je 0f
+    mov rdi, rbx
+    call starting_up
+    test eax, eax
+    jnz 31f
+    mov rdi, rbx
+    call live_up
+    test eax, eax
+    jz 0f
+31: mov rdi, rbx
+    mov esi, 1
+    mov edx, 1
+    call cl_thinking
+0:  mov eax, 1
     test r14d, r14d
     jz 9f
     mov rdi, rbx

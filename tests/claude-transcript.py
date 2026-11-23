@@ -319,7 +319,7 @@ class RowTest(RowCase):
 
     def test_reply_faces(self):
         self.claude()
-        head, _ = self.drawn(1)
+        head, _ = self.drawn(2)                         # (row 1: the fixture's thinking, task 6)
         self.assertEqual(head['role'], 'agent')
         self.assertEqual(head['parsed'], '1')
         px = int(re.search(r' px=(\d+)', self.command('print-agents-metrics')).group(1))
@@ -1357,6 +1357,388 @@ class DiffTest(DiffCase):
         self.assertLess(edit_open, read_open * 1.5 + 0.3, times)
         self.assertLess(edit_step, read_step * 1.5 + 0.02, times)
         self.assertLess(edit_home, read_home * 1.5 + 0.05, times)
+
+
+# ---- thinking rows and todo lists (task 6): UI 3.10 (index.js aTt @5212014, the estimate's words AGe), 7.2
+# (Ctrl+O, _o @5925806), the todo list (DTt @5267995); finding 29 (thinking) and 28 (the todo tools)
+
+def thought(text, ms=None, display=None, kind='thinking'):
+    """An assistant line of a conversation's file with one thinking block, as 2.1.330 writes it."""
+    block = {'type': kind, 'thinking': text, 'signature': 'c2lnbmF0dXJl'} if kind == 'thinking' else \
+        {'type': kind, 'data': 'c2lnbmF0dXJl'}
+    line = {'type': 'assistant', 'message': {'model': MODEL, 'id': 'msg-t', 'role': 'assistant', 'content': [block]}}
+    if ms is not None:
+        line['thinkingDurationMs'] = ms
+    if display is not None:
+        line['thinkingDisplay'] = display
+    return line
+
+
+def todo_call(tid, *items):
+    """A TodoWrite call of (status, content) items."""
+    return call(tid, 'TodoWrite', {'todos': [{'content': c, 'status': s, 'activeForm': c} for s, c in items]})
+
+
+class ThinkCase(ToolCase):
+    """Thinking rows read through print-agent-rows, print-agent-row and print-agent-thread."""
+
+    def thinks(self, content=False):
+        """The open conversation's thinking rows: dicts of row, label, open, ms, tokens, live, h, text."""
+        out = []
+        for head, parts in self.rows_of('content' if content else ''):
+            m = re.match(r'(\d+) thinking ', head)
+            if not m:
+                continue
+            row = {'row': int(m.group(1)), 'text': None}
+            label = re.search(r' label=(.*?)(?= open=| ms=)', head)
+            row['label'] = label.group(1) if label else None
+            for key in ('open', 'ms', 'tokens', 'live', 'h'):
+                value = re.search(r' %s=(\S+)' % key, head)
+                row[key] = None if not value else (None if value.group(1) == '-' else int(value.group(1)))
+            for part in parts:
+                if part.startswith('text '):
+                    row['text'] = part[5:]
+            out.append(row)
+        return out
+
+    def engine(self):
+        line = self.command('print-agent-thread').strip()
+        return dict(word.split('=', 1) for word in line.split(' '))
+
+    def think_open(self):
+        return self.engine()['think'] == '1'
+
+
+class ThinkingTest(ThinkCase):
+    """Thinking rows: a static line with the CLI's default display, a button that opens its Markdown with
+    "summarized"; one open state for all of them (a click, Enter, Ctrl+O, the command)."""
+
+    def test_default_display_is_a_static_row(self):
+        self.start()
+        self.command('agent-new claude')
+        self.command('agent-prompt thinkslow 2500')
+        self.until(lambda: [t for t in self.thinks() if t['live'] and t['tokens'] >= 200], 'thinking streams')
+        t, = self.thinks()
+        self.assertRegex(t['label'], r'^Thinking\.\.\. · \d+ tokens$')
+        self.assertEqual(t['text'], None)
+        self.assertEqual(self.buttons(t['row']), {})                 # no text: no button
+        self.assertIn('thinking(live) ', self.thread())
+        self.command('wait-agent ready 15000')
+        t, = self.thinks()
+        self.assertEqual(t['live'], 0)
+        self.assertGreaterEqual(t['ms'], 2000)
+        self.assertEqual(t['label'], 'Thought for %ds' % ((t['ms'] + 500) // 1000))
+        self.assertEqual(self.buttons(t['row']), {})
+        self.assertIn('thinking(%ds) ' % ((t['ms'] + 500) // 1000), self.thread())
+        live = self.rows_of('content')
+        self.reread()
+        self.assertEqual(self.rows_of('content'), live)
+        t, = self.thinks()
+        self.assertEqual(self.buttons(t['row']), {})
+
+    def test_summarized_text_streams_and_opens(self):
+        self.start()
+        self.scenario('think A **bold** idea')
+        t, = self.thinks()
+        self.assertEqual((t['text'], t['label'], t['ms']), ('A **bold** idea', 'Thought for 3s', 3109))
+        self.assertIn(7, self.buttons(t['row']))                     # PART_TOGGLE
+        closed = self.drawn(t['row'])[1]
+        self.assertFalse([l for l in closed if 'bold idea' in l], closed)
+        self.command('agent-row-click %d toggle' % (t['row'] + 1))
+        self.assertTrue(self.think_open())
+        t2, = self.thinks()
+        self.assertEqual(t2['open'], 1)
+        self.assertGreater(t2['h'], t['h'])
+        opened = self.drawn(t['row'])[1]
+        self.assertTrue([l for l in opened if l.startswith('para ') and 'bold idea' in l], opened)
+        self.reread()
+        t3, = self.thinks()
+        self.assertEqual(t3['text'], 'A **bold** idea')
+        self.assertIn(7, self.buttons(t3['row']))
+
+    def stdin_order(self):
+        """(index of the first set_max_thinking_tokens with "summarized", index of the first prompt) in what
+        the fake read"""
+        lines = self.stdin()
+        ask = [i for i, m in enumerate(lines) if m.get('type') == 'control_request' and
+               m['request'].get('subtype') == 'set_max_thinking_tokens']
+        prompt = [i for i, m in enumerate(lines) if m.get('type') == 'user']
+        return [lines[i]['request'] for i in ask], ask[:1], prompt[:1]
+
+    def test_summaries_are_asked_at_a_start_when_the_setting_says_so(self):
+        local = self.project / '.claude'
+        local.mkdir()
+        (local / 'settings.local.json').write_text(json.dumps({'showThinkingSummaries': True}), encoding='utf-8')
+        self.start()
+        self.chat('hello')
+        asked, first, prompt = self.stdin_order()
+        self.assertEqual([(a['max_thinking_tokens'], a.get('thinking_display')) for a in asked],
+                         [(31999, 'summarized')])
+        self.assertLess(first[0], prompt[0])
+        self.stop()
+        (local / 'settings.local.json').write_text(json.dumps({}), encoding='utf-8')
+        self.start()
+        self.chat('hello')
+        self.assertEqual(self.stdin_order()[0][1:], [])           # the second start asked nothing
+        asked = [m for m in self.stdin() if m.get('type') == 'control_request' and
+                 m['request'].get('subtype') == 'set_max_thinking_tokens']
+        self.assertEqual(len(asked), 1, asked)                     # (the first start's)
+
+    def test_thinking_without_a_duration(self):
+        self.start()
+        self.scenario('think')
+        t, = self.thinks()
+        self.assertEqual((t['label'], t['ms'], t['text']), ('Thinking', None, None))
+        self.assertIn('thinking(-) ', self.thread())
+
+    def test_click_opens_all(self):
+        self.open_seeded([thought('first idea', 1200, 'summarized'), reply('one'),
+                          thought('second idea', 800, 'summarized'), reply('two')])
+        a, b = self.thinks()
+        self.assertEqual((a['label'], b['label']), ('Thought for 1s', 'Thought for 1s'))
+        self.command('agent-row-click %d' % (a['row'] + 1))
+        a2, b2 = self.thinks()
+        self.assertEqual((a2['open'], b2['open']), (1, 1))
+        self.assertGreater(b2['h'], b['h'])
+        self.command('agent-row-click %d toggle' % (b['row'] + 1))
+        self.assertEqual([t['open'] for t in self.thinks()], [0, 0])
+        self.assertEqual([t['h'] for t in self.thinks()], [a['h'], b['h']])
+
+    def test_enter_on_the_focused_row(self):
+        self.open_seeded([thought('an idea', 1200, 'summarized'), reply('one'), thought('', 900), reply('two')])
+        self.command('cmd focus_agents')
+        self.command('key Down')
+        self.assertEqual(self.engine()['focus'], '1')               # the first row with an action
+        self.command('key Down')
+        self.assertEqual(self.engine()['focus'], '1')               # a thinking row without text has none
+        self.command('key Return')
+        self.assertTrue(self.think_open())
+        self.command('key space')
+        self.assertFalse(self.think_open())
+
+    def test_ctrl_o_in_the_panel_and_in_the_box(self):
+        self.start()
+        self.scenario('think a thought')
+        self.command('cmd focus_agents')
+        self.command('key ctrl+o')
+        self.assertTrue(self.think_open())
+        self.command('key ctrl+o')
+        self.assertFalse(self.think_open())
+        self.command('key Tab')
+        self.assertIn(' focus=1 ', self.command('print-agent-input'))
+        self.command('type ab')
+        self.command('key ctrl+o')
+        self.assertTrue(self.think_open())
+        self.assertTrue(self.command('print-agent-input').startswith('input=ab focus=1 '),
+                        self.command('print-agent-input'))
+        self.command('agent-focus editor')
+        self.command('key ctrl+o')                                  # the editor's: Open File
+        self.assertTrue(self.think_open())
+        self.assertTrue(self.command('print-palette').startswith('field='), self.command('print-palette'))
+        self.command('key Escape')
+        self.command('cmd agents_toggle_thinking')                  # the palette's command
+        self.assertFalse(self.think_open())
+
+    def test_the_command_in_the_palette_and_a_when_clause(self):
+        self.start(extra='[keys]\nctrl+shift+u = agents_toggle_thinking when agentsFocus\n')
+        self.scenario('think a thought')
+        self.command('cmd command_palette')
+        self.command('type Expand or Collapse Thinking')
+        self.assertIn('Agents: Expand or Collapse Thinking', self.command('print-palette'))
+        self.command('key Escape')
+        self.command('agent-focus editor')
+        self.command('key ctrl+shift+u')
+        self.assertFalse(self.think_open())                         # the clause does not hold
+        self.command('cmd focus_agents')
+        self.command('key ctrl+shift+u')
+        self.assertTrue(self.think_open())
+
+    def test_open_thinking_is_markdown_and_parsed_once(self):
+        self.open_seeded([thought('# Plan\n\nFirst **check** the `code`.\n\n- one\n- two', 2000, 'summarized'),
+                          reply('done')])
+        t, = self.thinks()
+        n = t['row'] + 1
+        before = int(self.drawn(t['row'])[0]['parses'])
+        self.command('cmd agents_toggle_thinking')
+        head, lines = self.drawn(t['row'])
+        self.assertEqual(head['parsed'], '1')
+        self.assertTrue([l for l in lines if l.startswith('heading:1 Plan')], lines)
+        self.assertTrue([l for l in lines if l.strip().startswith('item ') and 'one' in l], lines)
+        parses = int(head['parses'])
+        self.assertEqual(parses, before + 1)
+        for _ in range(3):
+            self.command('print-frames')
+        self.command('resize 1100x800')
+        self.command('resize 1280x800')
+        self.assertEqual(int(self.drawn(t['row'])[0]['parses']), parses)
+        self.command('agent-row-click %d' % n)                       # closed and open again: kept
+        self.command('agent-row-click %d' % n)
+        self.assertEqual(int(self.drawn(t['row'])[0]['parses']), parses)
+
+    def test_opening_another_conversation_closes_them(self):
+        self.open_seeded([thought('an idea', 1200, 'summarized'), reply('one')])
+        self.command('cmd agents_toggle_thinking')
+        self.assertTrue(self.think_open())
+        self.command('cmd focus_agents')
+        self.command('key Escape')                                  # back to the list
+        self.command('print-agents 1')
+        self.assertFalse(self.think_open())
+        self.assertEqual(self.thinks()[0]['open'], 0)
+
+    def test_thinking_from_the_file(self):
+        self.open_seeded([thought('', 2400, 'updates'), reply('one'),
+                          thought('Weighing it.', 3109, 'summarized'), reply('two'),
+                          thought('', None, kind='redacted_thinking'), reply('three'),
+                          dict(thought('a subagent thinks', 100), isSidechain=True)])
+        a, b, c = self.thinks()
+        self.assertEqual((a['label'], a['text'], a['ms']), ('Thought for 2s', None, 2400))
+        self.assertEqual((b['label'], b['text']), ('Thought for 3s', 'Weighing it.'))
+        self.assertEqual((c['label'], c['text'], c['ms']), ('Thinking', None, None))
+        self.assertEqual(self.buttons(a['row']), {})
+        self.assertIn(7, self.buttons(b['row']))
+        self.assertEqual(self.buttons(c['row']), {})
+        self.assertEqual(self.thread()[1:], ['thinking(2s) ', 'agent(%s) one' % MODEL, 'thinking(3s) Weighing it.',
+                                             'agent two', 'thinking(-) ', 'agent three'])
+
+    def test_toggle_keeps_the_view(self):
+        lines = []
+        for i in range(60):
+            lines += [prompt('step %d' % i), thought('An idea about step %d.\n\nIt has **two** paragraphs.' % i,
+                                                     1000 + i, 'summarized'), reply('reply %d' % i)]
+        self.seed_lines(lines)
+        self.start()
+        self.open_listed()
+        self.command('cmd focus_agents')
+        self.command('key Home')
+        for _ in range(12):
+            self.command('key PageDown')
+        before = self.engine()['anchor']
+        self.assertNotEqual(before, '-')
+        self.command('key ctrl+o')
+        self.assertTrue(self.think_open())
+        self.assertEqual(self.engine()['anchor'], before)
+        self.command('key ctrl+o')
+        self.assertEqual(self.engine()['anchor'], before)
+
+
+class TodoTest(ThinkCase):
+    """A todo list in its call's row: a box an item (empty, a dash for the active one, a check for a done one,
+    its text struck through and muted), the text wrapped at the row's width."""
+
+    def items(self, n):
+        """The todo lines row n was drawn with: (state mark, x, y, w, h, text)."""
+        out = []
+        for line in self.drawn(n)[1]:
+            m = re.match(r'todo (\[.\]) (-?\d+),(-?\d+),(-?\d+),(-?\d+) ?(.*)$', line)
+            if m:
+                out.append((m.group(1),) + tuple(int(v) for v in m.group(2, 3, 4, 5)) + (m.group(6),))
+        return out
+
+    def test_boxes_and_strike(self):
+        self.open_seeded([todo_call('t1', ('completed', 'Read the notes'), ('in_progress', 'Write the code'),
+                                    ('pending', 'Run the tests'))])
+        c, = self.calls()
+        self.assertEqual(c['todo'], ['[x] Read the notes', '[-] Write the code', '[ ] Run the tests'])
+        items = self.items(c['row'])
+        self.assertEqual([(i[0], i[5]) for i in items], [('[x]', 'Read the notes'), ('[-]', 'Write the code'),
+                                                         ('[ ]', 'Run the tests')])
+        metrics = self.command('print-agents-metrics')
+        ui = int(re.search(r'points=(\d+)', metrics).group(1))
+        px = int(re.search(r' px=(\d+)', metrics).group(1))
+        xs = {i[1] for i in items}
+        self.assertEqual(len(xs), 1, items)                          # the texts in one column
+        tops = [i[2] for i in items]
+        self.assertEqual(tops, sorted(tops))
+        self.assertGreaterEqual(tops[1] - tops[0], items[0][4])       # one under the other
+        checks = [tuple(int(v) for v in l.split(' ')[1].split(','))
+                  for l in self.drawn(c['row'])[1] if l.startswith('check ')]
+        self.assertEqual(len(checks), 3, checks)
+        for (x, y, w, h), item in zip(checks, items):
+            self.assertEqual((w, h), (mi(14, px, ui), mi(14, px, ui)))
+            self.assertLess(x + w, item[1])                         # the box left of its text
+            self.assertLess(abs(y - item[2]), item[4])
+
+    def test_a_later_list_is_its_own_row(self):
+        self.open_seeded([todo_call('t1', ('in_progress', 'a'), ('pending', 'b')), result('t1', 'ok'),
+                          reply('working'),
+                          todo_call('t2', ('completed', 'a'), ('in_progress', 'b')), result('t2', 'ok')])
+        first, second = self.calls()
+        self.assertEqual((first['todo'], second['todo']), (['[-] a', '[ ] b'], ['[x] a', '[-] b']))
+        self.assertEqual(self.engine()['todo'], str(second['row']))
+        self.assertEqual([i[0] for i in self.items(first['row'])], ['[-]', '[ ]'])
+        self.assertEqual([i[0] for i in self.items(second['row'])], ['[x]', '[-]'])
+
+    def test_task_tools_give_the_list_as_it_stands(self):
+        self.start(env={'FAKE_CLAUDE_TASKS': '1'})
+        self.scenario('todo')
+        lists = [c for c in self.calls() if c['name'] == 'Update Todos']
+        self.assertEqual(len(lists), 4, lists)
+        fourth = lists[3]
+        self.assertEqual([(i[0], i[5]) for i in self.items(fourth['row'])], [('[x]', 'a'), ('[ ]', 'b'),
+                                                                             ('[ ]', 'c')])
+        self.assertEqual(self.engine()['todo'], str(fourth['row']))
+        self.reread()
+        again = [c for c in self.calls() if c['name'] == 'Update Todos'][3]
+        self.assertEqual([(i[0], i[5]) for i in self.items(again['row'])], [('[x]', 'a'), ('[ ]', 'b'),
+                                                                            ('[ ]', 'c')])
+        self.assertEqual(self.engine()['todo'], str(again['row']))
+
+    def test_todo_rows_fit(self):
+        long = 'a todo item whose words run on for a while so that it wraps at any panel width ' * 3
+        self.open_seeded([todo_call('t1', ('completed', long), ('in_progress', 'short'), ('pending', long)),
+                          thought('Some thinking text that wraps when it is open in a narrow panel. ' * 4, 1500,
+                                  'summarized'), thought('', 700)])
+        self.command('cmd agents_toggle_thinking')
+        ui = int(re.search(r'points=(\d+)', self.command('print-agents-metrics')).group(1))
+        blocks, current = [], None
+        for line in self.command('print-agent-rows-fit').splitlines():
+            if line.startswith('size='):
+                current = (dict(w.split('=', 1) for w in line.split(' ')), [])
+                blocks.append(current)
+            else:
+                current[1].append(line.strip())
+        self.assertEqual(len(blocks), 25 * 34 * 3)
+        seen = set()
+        for head, parts in blocks:
+            size, tw, h = int(head['size']), int(head['tw']), int(head['h'])
+            boxes = []
+            for p in parts:
+                words = p.split(' ')
+                kind = words[0] if words[0] != 'button' else 'button' + words[1]
+                seen.add(kind)
+                x, y, w, hh = (int(v) for v in words[-1].split(','))
+                self.assertGreaterEqual(x, 0, (head, p))
+                self.assertLessEqual(x + w, tw, (head, p))
+                self.assertLessEqual(y + hh, h, (head, p))
+                if kind.startswith('button'):
+                    self.assertGreaterEqual(hh, mi(16, size, ui) - 1, (head, p))
+                boxes.append((kind, x, y, w, hh))
+            texts = [b for b in boxes if not b[0].startswith('button')]
+            buttons = [b for b in boxes if b[0].startswith('button')]
+            for group in (texts, buttons):
+                for i, a in enumerate(group):
+                    for b in group[i + 1:]:
+                        overlap = (a[1] < b[1] + b[3] and b[1] < a[1] + a[3] and
+                                   a[2] < b[2] + b[4] and b[2] < a[2] + a[4] and a[3] and b[3] and a[4] and b[4])
+                        self.assertFalse(overlap, (head, a, b))
+        self.assertTrue({'todo', 'check', 'label', 'button7', 'text'} <= seen, seen)
+
+
+class ThinkParityTest(ThinkCase):
+    """ParityTest's comparison for the thinking scenarios (PARITY has `think TEXT` and `todo` in both forms)."""
+
+    compare = ParityTest.compare
+
+    def test_thinking_rows_from_the_file_equal_rows_from_the_stream(self):
+        self.start()
+        for prompt in ('think', 'think A **bold** idea', 'thinkslow 600', 'tool2', 'slow'):
+            with self.subTest(prompt):
+                if prompt == 'tool2':
+                    self.scenario(prompt, ('1', '1'))
+                else:
+                    self.scenario(prompt)
+                dump = self.compare(prompt.split()[0])
+                self.assertIn('thinking ', dump)
 
 
 if __name__ == '__main__':

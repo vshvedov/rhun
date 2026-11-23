@@ -529,7 +529,8 @@ FN claude_ingest
     EPILOGUE
 
 # ing_assistant(AS*, record): its content blocks: text (a reply row, read from a file only), tool_use (a
-#   call), thinking (not shown yet), any other type (an unknown block's row); under a call only the calls
+#   call), thinking and redacted_thinking (a thinking row), any other type (an unknown block's row); under a
+#   call only the calls
 ing_assistant:
     PROLOGUE 48
     mov rbx, rdi
@@ -598,16 +599,30 @@ ing_assistant:
     mov ecx, [rsp + 16]
     call agents_reply_add
     jmp 2b
-4:  mov rdi, [rsp + 24]         # thinking: its own rows come with task 6
+4:  mov rdi, [rsp + 24]         # thinking: a thinking row (its text: summarized; "" by default)
     lea rsi, [rip + .Lv_thinking]
     call json_is
     test eax, eax
-    jnz 2b
-    mov rdi, [rsp + 24]
-    lea rsi, [rip + .Lv_redacted]
+    jz 41f
+    mov rdi, r15
+    lea rsi, [rip + .Lv_thinking]
+    call jstr
+    mov rcx, rdx
+    mov rdx, rax
+    jmp 42f
+41: mov rdi, [rsp + 24]         # redacted_thinking (the API's schema only: never recorded): a static
+    lea rsi, [rip + .Lv_redacted]   #   "Thinking" row, nothing of its data
     call json_is
     test eax, eax
-    jnz 2b
+    jz 43f
+    xor edx, edx
+    xor ecx, ecx
+42: mov rdi, rbx
+    mov rsi, r12
+    lea r8d, [r14 - 1]
+    call think_block
+    jmp 2b
+43:
     mov rdi, [rsp + 24]         # any other block: "Unsupported content type: TYPE"
     call json_str
     test rdx, rdx
@@ -620,6 +635,119 @@ ing_assistant:
     call agents_row_add
     jmp 2b
 9:  EPILOGUE
+
+# think_block(AS*, record, text ptr, len, the block's place in the record): a thinking row with the record's
+#   duration (thinking_duration_ms in the stream, thinkingDurationMs in the file; -1 none). From a file a row
+#   (an empty text too: "Thought for Ns"); from the stream the row that streamed under its key (h_stream made
+#   it) gets its finished text and ends, or a finished row of its own when none streamed
+think_block:
+    PROLOGUE 112
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov [rsp], r8d
+    mov rdi, r12
+    lea rsi, [rip + .Lk_think_ms]
+    call jnum_or
+    cmp eax, -1
+    jne 1f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_think_ms_file]
+    call jnum_or
+1:  mov [rsp + 4], eax          # its milliseconds
+    cmp dword ptr [rip + cb_flags], ING_LIVE
+    jne 5f
+    mov r15, [rbx + AS_live]
+    test r15, r15
+    jz 5f
+    lea rdi, [r15 + AL_msgid]   # its key, as the stream's: "MESSAGE_ID#INDEX" (agent_claude.s item_key)
+    call strlen
+    cmp rax, 63
+    jbe 2f
+    mov eax, 63
+2:  mov [rsp + 8], rax
+    lea rdi, [rsp + 16]
+    lea rsi, [r15 + AL_msgid]
+    mov rdx, rax
+    call memcpy
+    mov rax, [rsp + 8]
+    mov byte ptr [rsp + 16 + rax], '#'
+    inc rax
+    mov [rsp + 8], rax
+    mov eax, [rsp]
+    add rax, [r15 + AL_block]
+    lea rdi, [rsp + 16]
+    add rdi, [rsp + 8]
+    mov rsi, rax
+    call dec_into
+    add [rsp + 8], rax
+    mov rdi, r15
+    lea rsi, [rsp + 16]
+    mov rdx, [rsp + 8]
+    mov rcx, r13
+    mov r8, r14
+    mov r9d, 1
+    call ev_thought
+    mov rdi, r15
+    mov rsi, rax
+    mov edx, [rsp + 4]
+    mov ecx, -1
+    call ev_thought_end
+    EPILOGUE
+5:  mov rdi, rbx                # from a file
+    mov esi, R_THINK
+    mov rdx, r13
+    mov rcx, r14
+    xor r8d, r8d
+    call agents_row_add
+    test rax, rax
+    js 9f
+    imul rax, rax, AM_SIZE
+    add rax, [rbx + AS_msgs + VEC_ptr]
+    mov ecx, [rsp + 4]
+    mov [rax + AM_ms], ecx
+9:  EPILOGUE
+
+# jnum_or(obj, key cstr) -> eax the member's value when it is a number from 0 to 2^31 - 1, else -1
+jnum_or:
+    PROLOGUE
+    call json_get
+    mov rbx, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_NUM
+    jne 8f
+    mov rdi, rbx
+    call json_int
+    test rax, rax
+    js 8f
+    cmp rax, 0x7fffffff
+    ja 8f
+    EPILOGUE
+8:  mov eax, -1
+    EPILOGUE
+
+# dec_into(buf, n) -> rax the bytes of n in decimal written at buf
+dec_into:
+    mov rax, rsi
+    mov r8, rdi
+    mov ecx, 10
+    xor r9d, r9d
+1:  xor edx, edx
+    div rcx
+    add edx, '0'
+    push rdx
+    inc r9
+    test rax, rax
+    jnz 1b
+    mov rax, r9
+2:  pop rdx
+    mov [r8], dl
+    inc r8
+    dec r9
+    jnz 2b
+    ret
 
 # ing_user(AS*, record): the results of calls into their rows (found by id); from a file also the user's
 #   prompts (a prompt stops the calls of the turn before it that still wait), the interrupt marks, nothing
@@ -3691,6 +3819,8 @@ answer_tails: .quad .Lvtt1, .Lvtt2, 0
 .Lv_tool_result: .asciz "tool_result"
 .Lv_text: .asciz "text"
 .Lv_thinking: .asciz "thinking"
+.Lk_think_ms: .asciz "thinking_duration_ms"
+.Lk_think_ms_file: .asciz "thinkingDurationMs"
 .Lv_redacted: .asciz "redacted_thinking"
 .Lv_completed: .asciz "completed"
 .Lv_in_progress: .asciz "in_progress"

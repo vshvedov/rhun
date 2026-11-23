@@ -121,6 +121,8 @@ F MD_compact, 4         # headings at 1.4, 1.25 and 1.1 times the text (md_set_c
 F MD_fns, VEC_SIZE      # MDN: footnote definitions, by their labels (the first pass)
 F MD_fnused, 4          # footnote numbers given (in order of first use)
 F MD_fnpad, 4
+F MD_muted, 4           # its text in the muted colour where it would be the text colour (md_set_muted)
+F MD_mutedpad, 4
 ENDSTRUCT MD_SIZE
 
 # a footnote definition (MD_fns)
@@ -1739,6 +1741,13 @@ FN md_set_compact
     jz 1f
     mov [rdi + MD_compact], esi
     mov dword ptr [rdi + MD_width], -1
+1:  ret
+
+# md_set_muted(m, on): its text drawn in the muted colour (links and code keep theirs); the layout stays
+FN md_set_muted
+    test rdi, rdi
+    jz 1f
+    mov [rdi + MD_muted], esi
 1:  ret
 
 # md_set_base(m, ptr, len): the absolute folder relative links name (a trailing / left out); an
@@ -6553,7 +6562,12 @@ FN md_draw
     mov r15d, [r13 + MDI_x]
     add r15d, [rsp]             # its left on screen
     mov eax, [r13 + MDI_color]
-    lea rcx, [rip + g_theme]
+    cmp eax, T_FG               # a muted document: its text muted (thinking)
+    jne 0f
+    cmp dword ptr [rbx + MD_muted], 0
+    je 0f
+    mov eax, T_MUTED
+0:  lea rcx, [rip + g_theme]
     mov eax, [rcx + rax*4]
     mov [rsp + 32], eax         # its color
     mov eax, [r13 + MDI_kind]

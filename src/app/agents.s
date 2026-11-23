@@ -3068,6 +3068,7 @@ open_session:
     mov [rip + th_aas], rbx
     mov rdi, -1                 # no row focused in it yet
     call agrow_focus_set
+    call agrow_think_reset      # its thinking rows closed
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
@@ -3310,7 +3311,8 @@ dump_typed:
     mov esi, '-'
     call sb_push_byte
     jmp 43f
-42: xor edx, edx
+42: add eax, 500                # rounded, as the label (Math.round)
+    xor edx, edx
     mov ecx, 1000
     div ecx
     mov rdi, r15
@@ -3512,7 +3514,15 @@ th_keys:
     je 2f
     cmp r12d, KEY_DOWN
     je 3f
-    jmp 8f
+    cmp r14d, MOD_CTRL          # Ctrl+O (Ctrl, not Cmd): the thinking rows open or close (7.2)
+    jne 8f
+    mov eax, r12d
+    or eax, 0x20
+    cmp eax, 'o'
+    jne 8f
+    call agrow_think_toggle
+    mov eax, 1
+    EPILOGUE
 1:  test r14d, MOD_CTRL | MOD_ALT | MOD_SUPER | MOD_SHIFT
     jnz 6f
     cmp r12d, KEY_HOME
@@ -4185,7 +4195,12 @@ FN agents_row_add
     PROLOGUE
     mov rbx, rdi
     mov r12, [rbx + AS_msgs + VEC_len]
+    cmp esi, R_THINK            # thinking without text is still a row ("Thought for Ns")
+    sete al
+    movzx eax, al
+    mov [rip + keep_empty], eax
     call add_msg
+    mov dword ptr [rip + keep_empty], 0
     mov rax, -1
     cmp [rbx + AS_msgs + VEC_len], r12
     je 9f
@@ -6190,6 +6205,12 @@ FN agents_thread_dump
     lea rsi, [rip + .Lt_folds]
     mov rdx, [rbx + AS_folds + VEC_len]
     call td_num
+    lea rsi, [rip + .Lt_todo]   # the latest row with a todo list
+    movsxd rdx, dword ptr [rbx + AS_todo]
+    cmp qword ptr [rbx + AS_msgs + VEC_len], 0
+    jne 8f
+    mov rdx, -1
+8:  call td_opt
     mov rdi, r15
     mov esi, 10
     call sb_push_byte
@@ -6251,6 +6272,7 @@ td_opt:
 .Lt_sticky: .asciz " sticky="
 .Lt_calls: .asciz " calls="
 .Lt_folds: .asciz " folds="
+.Lt_todo: .asciz " todo="
 .text
 
 # wrap(face, text, len, x, y, width, lh, color, draw) -> lines   (args via stack frame struct at rdi)
@@ -6771,6 +6793,10 @@ panel_px:
     mov rax, [rip + ag_fui]
     mov eax, [rax + FACE_px]
     ret
+
+# FN agents_msg_doc(AM*) -> rax its Markdown, as msg_doc gives a reply's (agentrows.s: open thinking)
+FN agents_msg_doc
+    jmp msg_doc
 
 # msg_doc(msg) -> rax a reply's Markdown, parsed now when it has none or its text changed since, and
 #   at the panel's text size

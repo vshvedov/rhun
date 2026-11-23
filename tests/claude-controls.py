@@ -1850,8 +1850,10 @@ class ModelTest(ModelCase):
         self.chat('hello')
         self.command('agent-thinking off')
         self.command('agent-thinking on')
-        self.until(lambda: len(self.thinking()) == 2, 'both')
-        self.assertEqual(self.thinking(), [{'max_thinking_tokens': 0, 'thinking_display': None},
+        self.until(lambda: len(self.thinking()) == 3, 'all three')
+        # the start asks for summaries too (phase 3 task 6, open point 11), before the first prompt
+        self.assertEqual(self.thinking(), [{'max_thinking_tokens': 31999, 'thinking_display': 'summarized'},
+                                           {'max_thinking_tokens': 0, 'thinking_display': None},
                                            {'max_thinking_tokens': 31999, 'thinking_display': 'summarized'}])
 
     def test_no_thinking_switch_by_default(self):

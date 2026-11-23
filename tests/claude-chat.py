@@ -858,7 +858,7 @@ class ResumeTest(DrivenCase):
         self.seed()
         self.start()
         old = self.open_listed()
-        self.assertEqual(len(old), 6, old)
+        self.assertEqual(len(old), 7, old)              # with the fixture's thinking row (phase 3 task 6)
         self.command('agent-prompt hello')
         self.command('wait-agent ready')
         starts = self.starts()

@@ -3248,6 +3248,84 @@ def s_pause(prompt):
 SCENARIOS.update({'linger': s_linger, 'asklinger': s_asklinger, 'pause': s_pause})
 
 
+# ---- Phase 3 task 6 (thinking and todo lists): thinking that lasts, in finding 29's two displays, with the
+# duration its record carries (19-thinking), for the live label and the cost of a streaming thinking row.
+
+def thinking_block(mid, pieces, delay, display):
+    """A thinking block of these text pieces (the "updates" display: empty pieces), delay seconds apart: each
+    delta then a thinking_tokens record (the "updates" deltas carry their estimate as well, as recorded); the
+    record with the whole text, thinking_duration_ms and thinking_display. False when an interrupt cut it."""
+    started = time.monotonic()
+    stream_event({'type': 'content_block_start', 'index': 0,
+                  'content_block': {'type': 'thinking', 'thinking': '', 'signature': ''}}, thinking_display=display)
+    estimate, said = 0, ''
+    for piece in pieces:
+        if interrupted_now():
+            return False
+        step = max(1, len(piece) // 4) if piece else 50
+        estimate += step
+        delta = {'type': 'thinking_delta', 'thinking': piece}
+        if display == 'updates':
+            delta['estimated_tokens'] = estimate
+        stream_event({'type': 'content_block_delta', 'index': 0, 'delta': delta}, thinking_display=display)
+        thinking_tokens(estimate, step)
+        said += piece
+        time.sleep(delay)
+    stream_event({'type': 'content_block_delta', 'index': 0, 'delta': {'type': 'signature_delta',
+                                                                      'signature': 'c2lnbmF0dXJl'}})
+    assistant(mid, {'type': 'thinking', 'thinking': said, 'signature': 'c2lnbmF0dXJl'},
+              thinking_duration_ms=int((time.monotonic() - started) * 1000), thinking_display=display)
+    stream_event({'type': 'content_block_stop', 'index': 0})
+    return True
+
+
+def s_thinkslow(prompt):
+    """thinkslow [MS]: the default display's thinking (no text) for about MS ms (default 1500), an estimate
+    every 100 ms, then a short reply"""
+    words = prompt.split()
+    ms = int(words[1]) if len(words) > 1 else 1500
+    mid = message_start()
+    if thinking_block(mid, [''] * max(1, ms // 100), 0.1, 'updates') and text(mid, 1, ['thought ', 'slowly']):
+        message_end()
+        result('thought slowly')
+    else:
+        cut_off()
+
+
+def s_thinkstream(prompt):
+    """thinkstream [PIECES [MS]]: summarized thinking whose Markdown text (paragraphs, lists, code) streams in
+    PIECES deltas (default 2000) MS milliseconds apart (default 5), then a short reply"""
+    words = prompt.split()
+    count = int(words[1]) if len(words) > 1 else 2000
+    delay = (int(words[2]) if len(words) > 2 else 5) / 1000
+    parts = []
+    for i in range(count):
+        step = i % 30
+        if step == 0:
+            parts.append('**Step %d.** ' % (i // 30))
+        elif step < 14:
+            parts.append('I weigh what the reader needs ' if step % 2 else 'and what it costs. ')
+        elif step == 14:
+            parts.append('\n\n- a point\n')
+        elif step < 18:
+            parts.append('- another point %d\n' % step)
+        elif step == 18:
+            parts.append('\n')
+        else:
+            parts.append('then `a check` ' if step % 3 else 'and a sentence. ')
+        if step == 29:
+            parts.append('\n\n')
+    mid = message_start()
+    if thinking_block(mid, parts, delay, 'summarized') and text(mid, 1, ['thought ', 'it ', 'through']):
+        message_end()
+        result('thought it through')
+    else:
+        cut_off()
+
+
+SCENARIOS.update({'thinkslow': s_thinkslow, 'thinkstream': s_thinkstream})
+
+
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already
 DISCARDED = [False]                 # FAKE_CLAUDE_DISCARD_HELD: one held message was marked to be discarded
 QUIET = set()                       # FAKE_CLAUDE_NO_LIFECYCLE=local: the uuids of the CLI's own commands

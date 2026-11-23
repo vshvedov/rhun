@@ -15,7 +15,9 @@
 #   the waiting calls, the row focus, a pending click)
 #   agrow_est(AS*, row) -> eax fix, edx lines, ecx bytes; agrow_h(AS*, row, w) -> eax;
 #   agrow_draw(AS*, row, x, y, w, h); agrow_slot(row, child) -> eax; agrow_follow(); agrow_key(AS*, keysym,
-#   cp, mods) -> eax; agrow_focus() -> rax; agrow_focus_set(row); agrow_think() -> eax;
+#   cp, mods) -> eax; agrow_focus() -> rax; agrow_focus_set(row); agrow_think() -> eax (thinking is open);
+#   agrow_think_toggle() (all thinking rows open or close: a click, Enter, Ctrl+O), agrow_think_reset() (another
+#   conversation is opened), agents_toggle_thinking() ("Agents: Expand or Collapse Thinking");
 #   agrow_code_face() -> rax FACE*; agrow_dump(sb, AS*, from, n, content); agrow_fit_dump(sb);
 #   agrow_row_dump(sb, AS*, row)
 .include "rhun.inc"
@@ -48,7 +50,8 @@ ENDSTRUCT RW_SIZE
 .equ ERR_CHARS, 2000            # an error's text in the row (the extension's): then "…"
 .equ BIG_UNITS, 250             # a text longer (UTF-16 units) or of more than 3 lines is a button (V7)
 .equ ERR_LINES, 10
-.equ UNSUPPORTED_LEN, 26        # .Lunsupported's bytes              # an error's clip when it is a button: 10 lines of its face
+.equ ID_AG_MD, 0x480000         # agents.s's: a row's Markdown links, + (row & 255) << 12 (open thinking's too)
+.equ UNSUPPORTED_LEN, 26       # .Lunsupported's bytes              # an error's clip when it is a button: 10 lines of its face
 
 .data
 .p2align 3
@@ -60,6 +63,7 @@ pend_row: .quad -1              # a click's or a key's action, run after the fra
 pend_id: .quad 0
 pend_part: .long 0
 think_open: .long 0
+pend_think: .long 0             # a click on a thinking row's label: all of them open or close after the frame
 code_px: .long 0
 code_gen: .long 0
 code_face: .zero FACE_SIZE      # agrow_code_face's
@@ -539,9 +543,18 @@ FN agrow_done
     call agrow_touch
     EPILOGUE
 
-# FN agrow_touch(AS*, AT*): it changed: its row is measured again
+# FN agrow_touch(AS*, AT*): it changed: its row is measured again; a top-level call that has todo items now
+#   (the task tools' list comes with their result) is the latest todo row when none later is
 FN agrow_touch
-    mov dword ptr [rsi + AT_h], -1
+    cmp qword ptr [rsi + AT_up], 0
+    jne 1f
+    cmp qword ptr [rsi + AT_items + VEC_len], 0
+    je 1f
+    mov eax, [rsi + AT_row]
+    cmp eax, [rdi + AS_todo]
+    jl 1f
+    mov [rdi + AS_todo], eax
+1:  mov dword ptr [rsi + AT_h], -1
     inc dword ptr [rsi + AT_rev]
     movsxd rsi, dword ptr [rsi + AT_row]
     jmp agents_msg_changed
@@ -1467,7 +1480,12 @@ FN agrow_est
     mov r12, [rbx + AM_x]
     test r12, r12
     jnz 2f
-    mov edx, [rbx + AM_nl]      # a line row: the small face's lines
+    cmp dword ptr [rbx + AM_role], R_THINK
+    jne 0f
+    mov rdi, rbx                # thinking: its label line; open, its text's lines too
+    call think_est
+    EPILOGUE
+0:  mov edx, [rbx + AM_nl]      # a line row: the small face's lines
     inc edx
     mov rcx, [rbx + AM_len]
     cmp rcx, 16777216
@@ -1517,7 +1535,80 @@ FN agrow_est
 51: lea eax, [r13 + r15]
     xor edx, edx
     xor ecx, ecx
+    mov r14, [r12 + AT_items + VEC_len]     # a todo list: a line an item at least, its texts wrap
+    test r14, r14
+    jz 9f
+    mov r13d, eax
+    mov eax, [rip + g_pmt + 4*MI_4]
+    lea ecx, [r14 + 1]
+    imul eax, ecx
+    add r13d, eax
+    xor r15d, r15d
+    xor ebx, ebx
+6:  cmp rbx, r14
+    jae 7f
+    imul rax, rbx, ATI_SIZE
+    add rax, [r12 + AT_items + VEC_ptr]
+    mov rdi, [rax + ATI_text]
+    call strlen
+    add r15, rax
+    inc rbx
+    jmp 6b
+7:  mov eax, r13d
+    mov edx, r14d
+    mov ecx, r15d
 9:  EPILOGUE
+
+# think_est(AM*) -> eax, edx, ecx: a thinking row's estimate parts: closed (or without text) its label line
+#   and paddings, exact; open with text also its text's lines and bytes
+think_est:
+    PROLOGUE
+    mov rbx, rdi
+    call think_line_h
+    add eax, [rip + g_pmt + 4*MI_4]
+    add eax, [rip + g_pmt + 4*MI_4]
+    xor edx, edx
+    xor ecx, ecx
+    cmp dword ptr [rip + think_open], 0
+    je 9f
+    mov r12d, eax
+    mov rdi, rbx
+    call think_has_text
+    test eax, eax
+    mov eax, r12d
+    jz 9f
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov edx, [rbx + AM_nl]
+    inc edx
+    mov rcx, [rbx + AM_len]
+    cmp rcx, 16777216
+    jbe 9f
+    mov ecx, 16777216
+9:  EPILOGUE
+
+# think_line_h() -> eax a thinking row's label line: the text face's line, at least MI_20
+think_line_h:
+    mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_lineh]
+    mov ecx, [rip + g_pmt + 4*MI_20]
+    cmp eax, ecx
+    cmovl eax, ecx
+    ret
+
+# think_has_text(AM*) -> eax 1 when a thinking row has text (more than blanks): a button that opens it
+think_has_text:
+    mov rdx, [rdi + AM_text]
+    mov rcx, [rdi + AM_len]
+    xor eax, eax
+    test rdx, rdx
+    jz 9f
+1:  test rcx, rcx
+    jz 9f
+    dec rcx
+    cmp byte ptr [rdx + rcx], ' '
+    jbe 1b
+    mov eax, 1
+9:  ret
 
 # est_text(SB*, line h) -> eax a body text's estimated height: its lines up to the clip, and a gap; 0 none
 est_text:
@@ -1562,7 +1653,17 @@ FN agrow_h
     call row_of
     cmp qword ptr [rax + AM_x], 0
     jne 1f
+    cmp dword ptr [rax + AM_role], R_THINK
+    jne 0f
+    mov dword ptr [rip + lr_mode], LM_MEASURE
     mov rdi, rbx
+    mov rsi, r12
+    xor edx, edx
+    xor ecx, ecx
+    mov r8d, r13d
+    call think_lay
+    EPILOGUE
+0:  mov rdi, rbx
     mov rsi, r12
     xor edx, edx
     xor ecx, ecx
@@ -1590,6 +1691,8 @@ FN agrow_draw
     call row_of
     cmp qword ptr [rax + AM_x], 0
     jne 1f
+    cmp dword ptr [rax + AM_role], R_THINK
+    je 0f
     mov rdi, rbx
     mov rsi, r12
     mov edx, r13d
@@ -1597,6 +1700,19 @@ FN agrow_draw
     mov r8d, r15d
     mov r9d, LM_DRAW
     call line_lay
+    jmp 2f
+0:  mov rdi, r12                # thinking: its label is a button (a slot for its id)
+    xor esi, esi
+    call agrow_slot
+    mov [rip + lr_slot], eax
+    mov dword ptr [rip + lr_mode], LM_DRAW
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    mov ecx, r14d
+    mov r8d, r15d
+    call think_lay
+    mov dword ptr [rip + lr_mode], LM_MEASURE
     jmp 2f
 1:  mov rdi, r12
     xor esi, esi
@@ -1789,6 +1905,264 @@ line_lay:
     add rsp, 16
 9:  mov eax, [rsp + RW_SIZE + 4]
     EPILOGUE
+
+# ---------------- thinking ----------------
+#
+# think_lay(AS*, row, x, y, w) -> eax a thinking row's height, laid out in lr_mode (its slot in lr_slot): the
+#   label line, muted ("Thinking..." and the estimate while it streams, "Thought for Ns", "Thinking"), the dot
+#   in the pad before it; with text a chevron after the label and the line a button (PART_TOGGLE: every
+#   thinking row of the conversation opens or closes, after the frame); open, its text as Markdown under it
+#   (compact, muted; parsed when first laid out open and again when its text changed, as a reply is).
+#   Closed it is exact without any text laid out. Frame: [rsp] x, [4] y, [8] w, [12] has text, [16] the
+#   line's height, [20] the label's width, [24] the chevron's x, [28] the text's height, [32] its top drawn,
+#   [36] its height drawn, [40] its scroll
+think_lay:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, rsi
+    mov [rsp], edx
+    mov [rsp + 4], ecx
+    mov [rsp + 8], r8d
+    mov [rip + lr_row], r12
+    mov qword ptr [rip + lr_at], 0
+    mov [rip + lr_x], edx
+    mov [rip + lr_y], ecx
+    mov [rip + lr_w], r8d
+    call row_of
+    mov r14, rax
+    mov rdi, rax
+    call think_has_text
+    mov [rsp + 12], eax
+    call think_line_h
+    mov [rsp + 16], eax
+    mov r13d, [rsp + 4]         # cy
+    add r13d, [rip + g_pmt + 4*MI_4]
+    lea rdi, [rip + ys]         # the label
+    call sb_clear
+    lea rdi, [rip + ys]
+    mov rsi, r14
+    call think_label
+    mov rax, [rip + ys + SB_ptr]
+    mov [rip + ln_ptr], rax
+    mov rax, [rip + ys + SB_len]
+    mov [rip + ln_len], rax
+    mov rdi, [rip + ag_fui]
+    mov rsi, [rip + ln_ptr]
+    mov rdx, [rip + ln_len]
+    call text_width
+    mov ecx, [rsp + 8]          # the room for it: the row less the chevron
+    cmp dword ptr [rsp + 12], 0
+    je 1f
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    sub ecx, [rip + g_pmt + 4*MI_16]
+1:  test ecx, ecx
+    jns 11f
+    xor ecx, ecx
+11: cmp eax, ecx
+    cmovg eax, ecx
+    mov [rsp + 20], eax
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    jne 2f
+    test dword ptr [r14 + AM_flags], AMF_LIVE   # streaming in a conversation rhun drives: it blinks
+    jz 12f                      #   (the one tick: on 4 ticks, off 4)
+    mov rdi, rbx
+    call agents_session_live
+    test eax, eax
+    jz 12f
+    call agspin_seen
+    call agspin_phase
+    test eax, 4
+    jnz 2f
+12: mov edi, [rsp]              # the dot, muted
+    mov esi, r13d
+    mov edx, [rsp + 16]
+    COLOR ecx, T_MUTED
+    call row_dot
+2:  mov rdi, [rip + ag_fui]
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 16]
+    mov r8, [rip + ln_ptr]
+    mov r9, [rip + ln_len]
+    COLOR eax, T_MUTED
+    mov r10d, [rsp + 20]
+    inc r10d
+    push r10
+    push rax
+    call fit_text
+    add rsp, 16
+    lea rdi, [rip + .Lk_label]
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 20]
+    mov r8d, [rsp + 16]
+    xor r9d, r9d
+    call lay_line
+    cmp dword ptr [rsp + 12], 0
+    je 4f
+    mov eax, [rsp]              # the chevron: right when closed, down when open
+    add eax, [rsp + 20]
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov [rsp + 24], eax
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    jne 3f
+    mov edi, IC_CHEV_R
+    cmp dword ptr [rip + think_open], 0
+    je 21f
+    mov edi, IC_CHEV_D
+21: mov esi, [rsp + 24]
+    PM ecx, MI_16
+    mov edx, [rsp + 16]
+    sub edx, ecx
+    sar edx, 1
+    add edx, r13d
+    COLOR r8d, T_MUTED
+    call icon_draw
+3:  mov edx, [rsp + 24]         # the button: the label and the chevron, MI_16 high at least
+    add edx, [rip + g_pmt + 4*MI_16]
+    sub edx, [rsp]
+    mov eax, [rsp + 8]
+    cmp edx, eax
+    cmovg edx, eax
+    mov ecx, [rsp + 16]
+    mov eax, [rip + g_pmt + 4*MI_16]
+    cmp ecx, eax
+    cmovl ecx, eax
+    mov edi, [rsp]
+    mov esi, r13d
+    call think_btn
+4:  add r13d, [rsp + 16]
+    cmp dword ptr [rsp + 12], 0
+    je 8f
+    cmp dword ptr [rip + think_open], 0
+    je 8f
+    add r13d, [rip + g_pmt + 4*MI_4]    # open: the text
+    mov rdi, r14
+    call agents_msg_doc
+    mov r15, rax
+    mov rdi, rax
+    mov esi, 1
+    call md_set_muted
+    mov rdi, r15
+    mov esi, [rsp + 8]
+    call md_layout
+    mov [rsp + 28], eax
+    mov eax, [rip + lr_mode]
+    cmp eax, LM_DRAW
+    je 5f
+    cmp eax, LM_DUMP
+    je 6f
+    cmp eax, LM_FIT
+    jne 7f
+    lea rdi, [rip + .Lk_text]   # the fit: its box
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 28]
+    xor r9d, r9d
+    call lay_line
+    jmp 7f
+6:  mov rdi, r15                # print-agent-row: its blocks as drawn
+    mov rsi, [rip + lr_out]
+    mov edx, [rsp]
+    mov ecx, r13d
+    call md_row_dump
+    jmp 7f
+5:  mov eax, r13d               # drawn: the part in view
+    mov ecx, eax
+    add ecx, [rsp + 28]
+    mov edx, [rip + g_cv + CV_cy0]
+    cmp edx, eax
+    cmovl edx, eax
+    mov r8d, [rip + g_cv + CV_cy1]
+    cmp r8d, ecx
+    cmovg r8d, ecx
+    sub r8d, edx
+    jle 7f
+    mov [rsp + 32], edx
+    mov [rsp + 36], r8d
+    sub edx, eax
+    mov [rsp + 40], edx
+    mov eax, r12d               # its links' ids: the range a reply of its index would have
+    and eax, 255
+    shl eax, 12
+    add eax, ID_AG_MD
+    push rax
+    push rax
+    mov rdi, r15
+    mov esi, [rsp + 16]
+    mov edx, [rsp + 16 + 32]
+    mov ecx, [rsp + 16 + 8]
+    mov r8d, [rsp + 16 + 36]
+    mov r9d, [rsp + 16 + 40]
+    call md_draw                # (a link in thinking is not followed)
+    add rsp, 16
+7:  add r13d, [rsp + 28]
+8:  add r13d, [rip + g_pmt + 4*MI_4]
+    mov eax, r13d
+    sub eax, [rsp + 4]
+    EPILOGUE
+
+# think_btn(x, y, w, h): a thinking row's label as a button (PART_TOGGLE of the unit laid out): drawn, a click
+#   asks for every thinking row to open or close after the frame; written out as lay_btn writes a button
+think_btn:
+    PROLOGUE 16
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    je 1f
+    mov r8d, ecx
+    mov ecx, edx
+    mov edx, esi
+    mov esi, edi
+    mov edi, PART_TOGGLE
+    call lay_btn
+    EPILOGUE
+1:  mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    mov [rsp + 12], ecx
+    mov edi, PART_TOGGLE
+    call part_id
+    test eax, eax
+    js 9f
+    mov edi, eax
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 12]
+    call ui_btn
+    test eax, UB_HOVER
+    jz 2f
+    mov dword ptr [rip + g_cursor], CUR_POINTER
+2:  test eax, UB_CLICK
+    jz 9f
+    mov dword ptr [rip + pend_think], 1
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# FN agrow_think_toggle(): the open conversation's thinking rows open or close, all of them (a click, Enter,
+#   Ctrl+O, "Agents: Expand or Collapse Thinking"); every height that depends on it is measured again
+FN agrow_think_toggle
+    xor dword ptr [rip + think_open], 1
+    jmp agents_view_changed
+
+# FN agrow_think_reset(): closed again (another conversation is opened)
+FN agrow_think_reset
+    mov dword ptr [rip + pend_think], 0
+    cmp dword ptr [rip + think_open], 0
+    je 1f
+    mov dword ptr [rip + think_open], 0
+    jmp agents_view_changed
+1:  ret
+
+# FN agents_toggle_thinking(): "Agents: Expand or Collapse Thinking": with a conversation open in the panel,
+#   its thinking rows open or close (the keys stay where they are)
+FN agents_toggle_thinking
+    PROLOGUE
+    call agents_viewed
+    test rax, rax
+    jz 9f
+    call agrow_think_toggle
+9:  EPILOGUE
 
 # ---------------- a call's row ----------------
 #
@@ -2830,9 +3204,231 @@ tr_lay:
     mov edx, PART_PRE
 84: call pend_set
 81: add r13d, [rsp + 44]
-82: add r13d, [rip + g_pmt + 4*MI_4]
+82: mov edi, [rsp]              # the todo list
+    mov esi, r13d
+    mov edx, [rsp + 8]
+    call todo_lay
+    add r13d, eax
+    add r13d, [rip + g_pmt + 4*MI_4]
     mov eax, r13d
     sub eax, [rsp + 4]
+9:  EPILOGUE
+
+# todo_lay(x, y, w) -> eax the height of lr_at's todo list (0 without items), laid out in lr_mode (DTt): a
+#   line an item, a box of MI_14 (empty; a dash for the active item; a check for a done one, its text muted
+#   and struck through), the text in the panel's face wrapped at the room left; MI_4 above and between
+#   them. Written out: "todo [ ]|[-]|[x] X,Y,W,H TEXT" and "check X,Y,W,H" an item. Frame after the RW:
+#   [0] x, [4] y, [8] w, [12] the box, [16] the texts' x, [20] their width, [24] a line, [28] cy, [32] the
+#   box's y, [36] its state, [40] its lines, [48] its text
+todo_lay:
+    PROLOGUE RW_SIZE + 64
+    mov [rsp + RW_SIZE], edi
+    mov [rsp + RW_SIZE + 4], esi
+    mov [rsp + RW_SIZE + 8], edx
+    mov r15, [rip + lr_at]
+    xor eax, eax
+    cmp qword ptr [r15 + AT_items + VEC_len], 0
+    je 9f
+    mov eax, [rip + g_pmt + 4*MI_14]
+    mov [rsp + RW_SIZE + 12], eax
+    add eax, [rip + g_pmt + 4*MI_8]
+    mov ecx, [rsp + RW_SIZE]
+    add ecx, eax
+    mov [rsp + RW_SIZE + 16], ecx
+    mov ecx, edx
+    sub ecx, eax
+    cmp ecx, 1
+    jge 1f
+    mov ecx, 1
+1:  mov [rsp + RW_SIZE + 20], ecx
+    mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_lineh]
+    mov [rsp + RW_SIZE + 24], eax
+    mov eax, [rsp + RW_SIZE + 4]
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov [rsp + RW_SIZE + 28], eax
+    xor ebx, ebx
+.Ltd_item:
+    cmp rbx, [r15 + AT_items + VEC_len]
+    jae .Ltd_end
+    imul rax, rbx, ATI_SIZE
+    add rax, [r15 + AT_items + VEC_ptr]
+    mov ecx, [rax + ATI_state]
+    cmp ecx, TODO_DONE
+    jbe 2f
+    xor ecx, ecx
+2:  mov [rsp + RW_SIZE + 36], ecx
+    mov rax, [rax + ATI_text]
+    mov [rsp + RW_SIZE + 48], rax
+    mov [rsp + RW_text], rax
+    mov rdi, rax
+    call strlen
+    mov [rsp + RW_len], rax
+    mov rax, [rip + ag_fui]     # its text: measured first
+    mov [rsp + RW_face], rax
+    mov eax, [rsp + RW_SIZE + 16]
+    mov [rsp + RW_x], eax
+    mov eax, [rsp + RW_SIZE + 28]
+    mov [rsp + RW_y], eax
+    mov eax, [rsp + RW_SIZE + 20]
+    mov [rsp + RW_w], eax
+    mov eax, [rsp + RW_SIZE + 24]
+    mov [rsp + RW_lh], eax
+    COLOR eax, T_FG
+    cmp dword ptr [rsp + RW_SIZE + 36], TODO_DONE
+    jne 3f
+    COLOR eax, T_MUTED
+3:  mov [rsp + RW_color], eax
+    mov dword ptr [rsp + RW_draw], 0
+    mov dword ptr [rsp + RW_max], 0
+    mov qword ptr [rsp + RW_out], 0
+    mov eax, [rip + g_cv + CV_cy0]
+    mov [rsp + RW_top], eax
+    mov eax, [rip + g_cv + CV_cy1]
+    mov [rsp + RW_bot], eax
+    lea rdi, [rsp]
+    call rw_wrap
+    mov [rsp + RW_SIZE + 40], eax
+    mov eax, [rsp + RW_SIZE + 24]   # the box: centred on the first line
+    sub eax, [rsp + RW_SIZE + 12]
+    sar eax, 1
+    add eax, [rsp + RW_SIZE + 28]
+    mov [rsp + RW_SIZE + 32], eax
+    mov eax, [rip + lr_mode]
+    cmp eax, LM_DRAW
+    je .Ltd_draw
+    cmp eax, LM_DUMP
+    jb .Ltd_next
+    mov rax, [rsp + RW_SIZE + 48]   # written out
+    mov [rip + ln_ptr], rax
+    mov rax, [rsp + RW_len]
+    mov [rip + ln_len], rax
+    mov eax, [rsp + RW_SIZE + 36]
+    lea rcx, [rip + todo_kinds]
+    mov rdi, [rcx + rax*8]
+    mov esi, [rsp + RW_SIZE + 16]
+    mov edx, [rsp + RW_SIZE + 28]
+    mov ecx, [rsp + RW_SIZE + 20]
+    mov r8d, [rsp + RW_SIZE + 40]
+    imul r8d, [rsp + RW_SIZE + 24]
+    xor r9d, r9d
+    call lay_line
+    mov qword ptr [rip + ln_len], 0
+    lea rdi, [rip + .Lk_check]
+    mov esi, [rsp + RW_SIZE]
+    mov edx, [rsp + RW_SIZE + 32]
+    mov ecx, [rsp + RW_SIZE + 12]
+    mov r8d, ecx
+    xor r9d, r9d
+    call lay_line
+    jmp .Ltd_next
+.Ltd_draw:
+    COLOR eax, T_BG             # the box (the extension's checkbox: a 1 px frame, 2 px corners)
+    push rax
+    push rax
+    mov edi, [rsp + 16 + RW_SIZE]
+    mov esi, [rsp + 16 + RW_SIZE + 32]
+    mov edx, [rsp + 16 + RW_SIZE + 12]
+    mov ecx, edx
+    PM r8d, MI_2
+    COLOR r9d, T_MUTED
+    call gfx_frame
+    add rsp, 16
+    mov eax, [rsp + RW_SIZE + 36]
+    cmp eax, TODO_DONE
+    je 4f
+    cmp eax, TODO_ACTIVE
+    jne 5f
+    mov eax, [rsp + RW_SIZE + 12]   # active: a dash across its middle
+    mov ecx, eax
+    shr ecx, 3
+    cmp ecx, 1
+    jge 31f
+    mov ecx, 1
+31: mov edi, eax
+    shr edi, 2
+    add edi, [rsp + RW_SIZE]
+    mov esi, eax
+    sub esi, ecx
+    sar esi, 1
+    add esi, [rsp + RW_SIZE + 32]
+    mov edx, eax
+    shr edx, 1
+    COLOR r8d, T_FG
+    call gfx_fill
+    jmp 5f
+4:  mov edi, IC_CHECK           # done: a check
+    mov esi, [rsp + RW_SIZE]
+    mov edx, [rsp + RW_SIZE + 32]
+    mov ecx, [rsp + RW_SIZE + 12]
+    COLOR r8d, T_MUTED
+    call icon_draw
+5:  mov dword ptr [rsp + RW_draw], 1    # its text, drawn (a done one's lines kept to strike them)
+    cmp dword ptr [rsp + RW_SIZE + 36], TODO_DONE
+    jne 51f
+    lea rdi, [rip + ys]
+    call sb_clear
+    lea rax, [rip + ys]
+    mov [rsp + RW_out], rax
+51: lea rdi, [rsp]
+    call rw_wrap
+    cmp dword ptr [rsp + RW_SIZE + 36], TODO_DONE
+    jne .Ltd_next
+    mov r12, [rip + ys + SB_ptr]    # struck through: a line over each line's text
+    mov r13, r12
+    add r13, [rip + ys + SB_len]
+    mov r14d, [rsp + RW_SIZE + 28]
+6:  cmp r12, r13
+    jae .Ltd_next
+    mov rdi, r12
+    mov rsi, r13
+    sub rsi, r12
+    mov edx, 10
+    call mem_chr_n
+    mov [rsp + RW_SIZE + 56], rax
+    mov rdi, [rip + ag_fui]
+    mov rsi, r12
+    mov rdx, rax
+    sub rdx, r12
+    call text_width
+    mov edx, eax
+    mov rax, [rip + ag_fui]
+    mov esi, [rax + FACE_ascent]
+    imul esi, esi, 2
+    mov ecx, 3
+    push rdx
+    mov eax, esi
+    xor edx, edx
+    div ecx
+    pop rdx
+    lea esi, [r14 + rax]
+    mov edi, [rsp + RW_SIZE + 16]
+    mov rax, [rip + ag_fui]
+    mov ecx, [rax + FACE_px]
+    shr ecx, 4
+    cmp ecx, 1
+    jge 61f
+    mov ecx, 1
+61: COLOR r8d, T_MUTED
+    call gfx_fill
+    add r14d, [rsp + RW_SIZE + 24]
+    mov r12, [rsp + RW_SIZE + 56]
+    inc r12
+    jmp 6b
+.Ltd_next:
+    mov eax, [rsp + RW_SIZE + 40]
+    imul eax, [rsp + RW_SIZE + 24]
+    cmp eax, [rsp + RW_SIZE + 12]
+    jge 7f
+    mov eax, [rsp + RW_SIZE + 12]
+7:  add eax, [rip + g_pmt + 4*MI_4]
+    add [rsp + RW_SIZE + 28], eax
+    inc rbx
+    jmp .Ltd_item
+.Ltd_end:
+    mov eax, [rsp + RW_SIZE + 28]
+    sub eax, [rsp + RW_SIZE + 4]
+    sub eax, [rip + g_pmt + 4*MI_4]     # the last gap: the row's own pad follows
 9:  EPILOGUE
 
 # small_line(kind cstr, text cstr, h, button): a muted line of the small face at lr_x, lr_cy, cut at the
@@ -2980,7 +3576,11 @@ pend_at:
 #   end): a text opens in a tab or its tab is found again, a link is followed, a command is copied
 FN agrow_follow
     PROLOGUE 16
-    cmp dword ptr [rip + pend_part], 0
+    cmp dword ptr [rip + pend_think], 0
+    je 0f
+    mov dword ptr [rip + pend_think], 0     # a thinking row's label: all of them open or close
+    call agrow_think_toggle
+0:  cmp dword ptr [rip + pend_part], 0
     je 9f
     call agents_viewed
     mov rbx, rax
@@ -3466,9 +4066,15 @@ has_action:
     test r12, r12
     jnz 1f
     mov ecx, [rax + AM_role]
-    mov eax, PART_TOGGLE
     cmp ecx, R_THINK
-    je 9f
+    jne 0f
+    mov rdi, rax                # thinking: only one with text opens
+    call think_has_text
+    test eax, eax
+    jz 9f
+    mov eax, PART_TOGGLE
+    EPILOGUE
+0:  mov eax, PART_TOGGLE
     cmp ecx, R_COMPACT
     je 9f
     xor eax, eax
@@ -3547,8 +4153,15 @@ FN agrow_key
     test eax, eax
     jz 8f
     cmp eax, PART_TOGGLE
-    je 8f                       # (thinking and compaction rows open in their own tasks)
-    mov r14d, eax
+    jne 0f
+    mov rdi, rbx                # thinking: all of them open or close (a compaction marker: task 8)
+    mov rsi, r13
+    call row_of
+    cmp dword ptr [rax + AM_role], R_THINK
+    jne 8f
+    call agrow_think_toggle
+    jmp 8f
+0:  mov r14d, eax
     mov rdi, rbx
     mov rsi, r13
     call row_of
@@ -3636,13 +4249,26 @@ FN agrow_click
     mov rsi, r12
     call row_of
     mov rsi, [rax + AM_x]
-    xor eax, eax
     test rsi, rsi
+    jnz 2f
+    cmp dword ptr [rax + AM_role], R_THINK
+    jne 8f
+    cmp r13d, PART_TOGGLE       # a thinking row with text: as a click on its label
+    jne 8f
+    mov rdi, rax
+    call think_has_text
+    test eax, eax
     jz 9f
-    mov rdi, r12
+    mov dword ptr [rip + pend_think], 1
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+2:  mov rdi, r12
     mov edx, r13d
     call pend_set
     mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
 9:  EPILOGUE
 
 # FN agrow_by_id(AS*, id ptr, len) -> rax a call of the conversation by its id: in AS_calls, else a row's
@@ -3721,8 +4347,26 @@ FN agrow_row_dump
     call row_of
     mov r13, rax
     cmp qword ptr [r13 + AM_x], 0
-    je 5f
-    mov eax, [r13 + AM_dser]
+    jne 4f
+    cmp dword ptr [r13 + AM_role], R_THINK
+    jne 5f
+    mov eax, [r13 + AM_dser]    # thinking: "label X,Y,W,H T", its button, its text's blocks when open
+    cmp eax, [rip + th_serial]
+    jne 9f
+    mov rdi, r12
+    call slot_find
+    mov [rip + lr_slot], eax
+    mov [rip + lr_out], r15
+    mov dword ptr [rip + lr_mode], LM_DUMP
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, [r13 + AM_dx]
+    mov ecx, [r13 + AM_dy]
+    mov r8d, [rip + th_textw]
+    call think_lay
+    mov dword ptr [rip + lr_mode], LM_MEASURE
+    jmp 9f
+4:  mov eax, [r13 + AM_dser]
     cmp eax, [rip + th_serial]
     jne 9f                      # not drawn in the last frame
     mov rdi, r12
@@ -4269,6 +4913,17 @@ FN agrow_dump
 54: mov rdi, rbx
     mov esi, 10
     call sb_push_byte
+    mov rdi, r14                # its text (summarized thinking), the first line
+    call think_has_text
+    test eax, eax
+    jz 8f
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_text]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [r14 + AM_text]
+    mov rdx, [r14 + AM_len]
+    call push_line
     jmp 8f
 .Ldmp_compact:
     mov rdi, rbx
@@ -4324,21 +4979,62 @@ push_opt:
 1:  mov esi, '-'
     jmp sb_push_byte
 
-# think_label(sb, AM*): a thinking row's label: "Thinking..." while it streams, "Thought for Ns" with its time,
-#   else "Thinking"
+# think_label(sb, AM*): a thinking row's label (aTt): "Thinking..." while it streams, with " · " and the
+#   estimate when there is one ("N tokens", from 1000 on "N.Nk tokens": AGe); "Thought for Ns" with its time
+#   (rounded, as Math.round), else "Thinking"
 think_label:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
-    lea rsi, [rip + .Lthinking_live]
     test dword ptr [r12 + AM_flags], AMF_LIVE
-    jnz 8f
-    mov eax, [r12 + AM_ms]
+    jz 1f
+    lea rsi, [rip + .Lthinking_live]
+    call sb_push_cstr
+    mov eax, [r12 + AM_n]
+    test eax, eax
+    jle 9f
+    mov rdi, rbx
+    lea rsi, [rip + .Lthink_sep]
+    call sb_push_cstr
+    mov r13d, [r12 + AM_n]
+    cmp r13d, 1000
+    jae 2f
+    mov rdi, rbx
+    mov esi, r13d
+    call sb_push_u64
+    jmp 3f
+2:  lea eax, [r13 + 50]         # tenths of thousands, rounded (toFixed(1))
+    xor edx, edx
+    mov ecx, 100
+    div ecx
+    mov r13d, eax
+    xor edx, edx
+    mov ecx, 10
+    div ecx
+    mov r14d, edx
+    mov rdi, rbx
+    mov esi, eax
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, '.'
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, r14d
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, 'k'
+    call sb_push_byte
+3:  mov rdi, rbx
+    lea rsi, [rip + .Lthink_tokens]
+    call sb_push_cstr
+9:  EPILOGUE
+1:  mov eax, [r12 + AM_ms]
     test eax, eax
     js 7f
     lea rsi, [rip + .Lthought]
     call sb_push_cstr
     mov eax, [r12 + AM_ms]
+    add eax, 500
     xor edx, edx
     mov ecx, 1000
     div ecx
@@ -4436,7 +5132,17 @@ FN agrow_fit_dump
     mov r8d, [rsp + 4]
     call tr_lay
     jmp 42f
-41: mov rdi, r15                # a line row: its one box
+41: cmp dword ptr [rax + AM_role], R_THINK
+    jne 43f
+    mov dword ptr [rip + lr_mode], LM_FIT   # thinking: its label, its button, its text when open
+    mov rdi, r15
+    mov rsi, r14
+    xor edx, edx
+    xor ecx, ecx
+    mov r8d, [rsp + 4]
+    call think_lay
+    jmp 42f
+43: mov rdi, r15                # a line row: its one box
     mov rsi, r14
     xor edx, edx
     xor ecx, ecx
@@ -4555,6 +5261,14 @@ FN agrow_fit_dump
 .Lthinking_live: .asciz "Thinking..."
 .Lthought: .asciz "Thought for "
 .Lthinking: .asciz "Thinking"
+.Lthink_sep: .asciz " \302\267 "
+.Lthink_tokens: .asciz " tokens"
+.Lk_label: .asciz "label"
+.Lk_text: .asciz "text"
+.Lk_check: .asciz "check"
+.Lk_todo0: .asciz "todo [ ]"
+.Lk_todo1: .asciz "todo [-]"
+.Lk_todo2: .asciz "todo [x]"
 .Lf_size: .asciz "size="
 .Lf_w: .asciz " w="
 .Lf_row: .asciz " row="
@@ -4603,6 +5317,7 @@ state_names: .quad .Ls_running, .Ls_ok, .Ls_failed, .Ls_denied, .Ls_stopped
 kind_names: .quad .Lr_unknown, .Lr_user, .Lr_agent, .Lr_tool, .Lr_result, .Lr_error, .Lr_info, .Lr_thinking
     .quad .Lr_meta, .Lr_compact, .Lr_unknown_k
 todo_marks: .quad .Lt_todo0, .Lt_todo1, .Lt_todo2
+todo_kinds: .quad .Lk_todo0, .Lk_todo1, .Lk_todo2
 am_names:                       # print-agent-rows' flag words: {word, flag}
     .quad .Lw_pill, AMF_PILL, .Lw_queued, AMF_QUEUED, .Lw_failed, AMF_FAILED, .Lw_notice, AMF_NOTICE
     .quad .Lw_echo, AMF_ECHO, .Lw_chips, AMF_CHIPS, .Lw_open, AMF_OPEN, 0, 0

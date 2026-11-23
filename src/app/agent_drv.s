@@ -34,7 +34,9 @@
 #   events drivers call (AL* first): ev_note(al, role, ptr, len), ev_failed(al, ptr, len) (could not
 #     start or broke: ALS_FAILED, an error row, the prompts that waited back in the box), ev_ready(al)
 #     (handshake done: the prompts that waited go), ev_text(al, key ptr, key len, ptr, len, replace) (a
-#     block's reply text), ev_request(al, AQ*, prompt ptr, len, opts, n) (a
+#     block's reply text), ev_thought(al, key ptr, key len, ptr, len, replace) -> row (a block's thinking, its
+#     row live while it streams), ev_thought_end(al, row, ms, tokens) (it is finished), ev_thought_tokens(al,
+#     n) (the estimate of the thinking that streams), ev_request(al, AQ*, prompt ptr, len, opts, n) (a
 #     request's card: WAITING), ev_request_gone(al, AQ*) (it is answered or withdrawn: its card goes, it
 #     leaves AL_reqs and is freed), ev_mode(al, ptr, len), ev_turn_end(al, TE_*, ptr, len),
 #     ev_closed(al, err) (the process is gone: OFF unless FAILED, the requests it waited on go with an
@@ -2116,6 +2118,187 @@ FN ev_text
 8:  mov qword ptr [rbx + AL_row], -1
 9:  EPILOGUE
 
+# FN ev_thought(al, key ptr, key len, ptr, len, replace) -> rax the row's index (-1 none): thinking of a
+#   content block under its item key, as ev_text: a new thinking row (R_THINK; live while it streams; it may
+#   have no text at all: the default display sends none), more text for the row of that key (an empty piece
+#   changes nothing: no row is measured again), or (replace) its finished text in place of what streamed. A
+#   finished text without a row of its key is a row of its own. ev_thought_end finishes the row
+FN ev_thought
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov r15, r8
+    mov [rsp], r9
+    mov rdi, rbx
+    call thought_row
+    test rax, rax
+    js 3f
+    mov [rsp + 8], rax
+    cmp qword ptr [rsp], 0
+    jne 2f
+    test r15, r15
+    jz 1f
+    mov rdi, [rbx + AL_as]      # more text
+    mov rsi, rax
+    mov rdx, r14
+    mov rcx, r15
+    call agents_msg_append
+1:  mov rax, [rsp + 8]
+    EPILOGUE
+2:  mov rdi, [rbx + AL_as]      # the finished text
+    mov rsi, rax
+    mov rdx, r14
+    mov rcx, r15
+    call agents_msg_set
+    mov rax, [rsp + 8]
+    EPILOGUE
+3:  mov rdi, rbx                # a row of its own
+    call ev_thought_cut
+    mov rdi, [rbx + AL_as]
+    mov esi, R_THINK
+    mov rdx, r14
+    mov rcx, r15
+    xor r8d, r8d
+    call agents_msg_add
+    mov [rsp + 8], rax
+    test rax, rax
+    js 9f
+    cmp qword ptr [rsp], 0
+    jne 8f                      # finished already
+    mov rdi, [rbx + AL_as]
+    mov rsi, rax
+    mov edx, AMF_LIVE
+    call agents_row_flag
+    mov rax, [rsp + 8]
+    mov [rbx + AL_row], rax
+    mov byte ptr [rbx + AL_rowkey], 0
+    cmp r13, ROWKEY_MAX
+    jae 8f
+    lea rdi, [rbx + AL_rowkey]
+    mov rsi, r12
+    mov rdx, r13
+    mov byte ptr [rdi + rdx], 0
+    call memmove
+8:  mov rax, [rsp + 8]
+9:  EPILOGUE
+
+# thought_row(al, key ptr, key len) -> rax the thinking row that streams under that key (AL_row), -1
+thought_row:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rax, -1
+    mov r14, [rbx + AL_row]
+    test r14, r14
+    js 9f
+    cmp byte ptr [rbx + AL_rowkey], 0
+    je 9f
+    mov rdi, [rbx + AL_as]
+    cmp r14, [rdi + AS_msgs + VEC_len]
+    jae 9f
+    imul rcx, r14, AM_SIZE
+    add rcx, [rdi + AS_msgs + VEC_ptr]
+    cmp dword ptr [rcx + AM_role], R_THINK
+    jne 9f
+    lea rdi, [rbx + AL_rowkey]
+    call strlen
+    mov rcx, rax
+    mov rax, -1
+    cmp rcx, r13
+    jne 9f
+    lea rdi, [rbx + AL_rowkey]
+    mov rsi, r12
+    mov rdx, r13
+    call memeq
+    mov rcx, rax
+    mov rax, -1
+    test ecx, ecx
+    jz 9f
+    mov rax, r14
+9:  EPILOGUE
+
+# FN ev_thought_end(al, row, ms, tokens): a thinking row is finished: how long it took (-1 unknown) and the
+#   tokens it took (-1: as estimated); it streams no more and its fold is told
+FN ev_thought_end
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov r14d, ecx
+    mov rdi, [rbx + AL_as]
+    test r12, r12
+    js 9f
+    cmp r12, [rdi + AS_msgs + VEC_len]
+    jae 9f
+    imul rax, r12, AM_SIZE
+    add rax, [rdi + AS_msgs + VEC_ptr]
+    cmp dword ptr [rax + AM_role], R_THINK
+    jne 9f
+    mov [rax + AM_ms], r13d
+    test r14d, r14d
+    js 1f
+    mov [rax + AM_n], r14d
+1:  and dword ptr [rax + AM_flags], ~AMF_LIVE
+    cmp [rbx + AL_row], r12
+    jne 2f
+    mov qword ptr [rbx + AL_row], -1
+    mov byte ptr [rbx + AL_rowkey], 0
+2:  mov rdi, [rbx + AL_as]
+    mov rsi, r12
+    call agents_msg_changed
+    mov rdi, [rbx + AL_as]
+    mov rsi, r12
+    mov edx, ATS_RUNNING
+    mov ecx, ATS_OK
+    call agfold_state
+9:  EPILOGUE
+
+# FN ev_thought_tokens(al, n): the estimate of the thinking that streams now (its label's "N tokens"): drawn
+#   again, nothing measured again
+FN ev_thought_tokens
+    mov rax, [rdi + AL_row]
+    test rax, rax
+    js 9f
+    mov rcx, [rdi + AL_as]
+    cmp rax, [rcx + AS_msgs + VEC_len]
+    jae 9f
+    imul rax, rax, AM_SIZE
+    add rax, [rcx + AS_msgs + VEC_ptr]
+    cmp dword ptr [rax + AM_role], R_THINK
+    jne 9f
+    test dword ptr [rax + AM_flags], AMF_LIVE
+    jz 9f
+    mov [rax + AM_n], esi
+    mov dword ptr [rip + g_dirty], 1
+9:  ret
+
+# FN ev_thought_cut(al): the thinking row that streams (a turn ended, another block began without its record)
+#   is streaming no more: "Thinking", or its time if it had one
+FN ev_thought_cut
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rbx + AL_row]
+    test r12, r12
+    js 9f
+    mov rdi, [rbx + AL_as]
+    cmp r12, [rdi + AS_msgs + VEC_len]
+    jae 9f
+    imul rax, r12, AM_SIZE
+    add rax, [rdi + AS_msgs + VEC_ptr]
+    cmp dword ptr [rax + AM_role], R_THINK
+    jne 9f
+    test dword ptr [rax + AM_flags], AMF_LIVE
+    jz 9f
+    and dword ptr [rax + AM_flags], ~AMF_LIVE
+    mov qword ptr [rbx + AL_row], -1
+    mov byte ptr [rbx + AL_rowkey], 0
+    mov rsi, r12
+    call agents_msg_changed
+9:  EPILOGUE
+
 # FN ev_request(al, AQ*, prompt ptr, len, opts cstr*, n) -> eax 1 shown: the request's card on the
 #   session (the one at the head of AL_reqs); the state is WAITING
 FN ev_request
@@ -2493,6 +2676,7 @@ FN ev_turn_end
     mov r12d, esi
     mov r13, rdx
     mov r14, rcx
+    call ev_thought_cut            # thinking still streaming (an interrupt cut it) streams no more
     cmp r12d, TE_ERROR
     jne 1f
     test r14, r14

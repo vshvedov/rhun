@@ -1588,6 +1588,8 @@ h_stream:
     mov rdi, rbx
     mov rsi, rax
     call set_msgid
+    mov rdi, rbx                # (thinking of the message before that never finished streams no more)
+    call ev_thought_cut
     mov qword ptr [rbx + AL_row], -1
     mov byte ptr [rbx + AL_rowkey], 0
     EPILOGUE
@@ -1602,12 +1604,20 @@ h_stream:
     mov rdi, rax
     lea rsi, [rip + .Lk_type]
     call json_get
+    mov r14, rax
     mov rdi, rax
     lea rsi, [rip + .Lv_text]
     call json_is
     test eax, eax
     jnz 1f
-    mov qword ptr [rbx + AL_row], -1    # another kind of block: text streams into no row now
+    mov rdi, r14
+    lea rsi, [rip + .Lv_thinking]
+    call json_is
+    test eax, eax
+    jnz 2f
+    mov rdi, rbx                # another kind of block: thinking still streaming streams no more, text
+    call ev_thought_cut         #   streams into no row now
+    mov qword ptr [rbx + AL_row], -1
     mov byte ptr [rbx + AL_rowkey], 0
     EPILOGUE
 1:  mov rdi, rbx
@@ -1620,6 +1630,16 @@ h_stream:
     xor r9d, r9d
     call ev_text
     EPILOGUE
+2:  mov rdi, rbx                # thinking: its row, live (the default display: no text ever comes)
+    mov rsi, [rbx + AL_block]
+    call item_key
+    mov rdi, rbx
+    mov rsi, rax
+    lea rcx, [rip + .Lempty]
+    xor r8d, r8d
+    xor r9d, r9d
+    call ev_thought
+    EPILOGUE
 .Lhs_delta:
     mov rdi, r13
     lea rsi, [rip + .Lk_delta]
@@ -1628,7 +1648,13 @@ h_stream:
     mov rdi, rax
     lea rsi, [rip + .Lk_type]
     call json_get
+    mov r15, rax
     mov rdi, rax
+    lea rsi, [rip + .Lv_thinking_delta]
+    call json_is
+    test eax, eax
+    jnz .Lhs_thought
+    mov rdi, r15
     lea rsi, [rip + .Lv_text_delta]
     call json_is
     test eax, eax
@@ -1651,6 +1677,39 @@ h_stream:
     mov rdx, r13
     xor r9d, r9d
     call ev_text
+    EPILOGUE
+.Lhs_thought:                   # thinking_delta: its text (summarized; "" by default) and its estimate
+    mov rdi, r14
+    lea rsi, [rip + .Lk_estimated]
+    call json_get
+    mov r15, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_NUM
+    jne 1f
+    mov rdi, r15
+    call json_int
+    mov rdi, rbx
+    mov esi, eax
+    call ev_thought_tokens
+1:  mov rdi, r13
+    lea rsi, [rip + .Lk_index]
+    call jint
+    mov rdi, rbx
+    mov rsi, rax
+    call item_key
+    mov r12, rax
+    mov r13, rdx
+    mov rdi, r14
+    lea rsi, [rip + .Lv_thinking]
+    call jstr
+    mov rdi, rbx
+    mov rsi, r12
+    mov rcx, rax
+    mov r8, rdx
+    mov rdx, r13
+    xor r9d, r9d
+    call ev_thought
     EPILOGUE
 
 # h_assistant(AL*, record): finished content blocks (one record a block, the message's id, no index: it
@@ -1812,7 +1871,26 @@ h_system:
     lea rsi, [rip + .Lk_subtype]
     call json_get
     mov r13, rax
+    mov rdi, rax                # thinking_tokens: the estimate of the thinking that streams (finding 29)
+    lea rsi, [rip + .Lv_thinking_tokens]
+    call json_is
+    test eax, eax
+    jz 0f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_estimated]
+    call json_get
+    mov r14, rax
     mov rdi, rax
+    call json_type
+    cmp eax, JT_NUM
+    jne 9f
+    mov rdi, r14
+    call json_int
+    mov rdi, rbx
+    mov esi, eax
+    call ev_thought_tokens
+    jmp 9f
+0:  mov rdi, r13
     lea rsi, [rip + .Lv_init]
     call json_is
     test eax, eax
@@ -3568,6 +3646,10 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lv_block_start: .asciz "content_block_start"
 .Lv_block_delta: .asciz "content_block_delta"
 .Lv_text_delta: .asciz "text_delta"
+.Lv_thinking_delta: .asciz "thinking_delta"
+.Lv_thinking: .asciz "thinking"
+.Lv_thinking_tokens: .asciz "thinking_tokens"
+.Lk_estimated: .asciz "estimated_tokens"
 .Lv_init: .asciz "init"
 .Lv_status: .asciz "status"
 .Lv_success: .asciz "success"

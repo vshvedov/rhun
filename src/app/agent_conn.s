@@ -512,7 +512,10 @@ flush:
 
 # on_in(fd, revents, conn): stdin can take more, or its reader is gone. With nothing queued an error
 #   is checked again (the descriptor's number may be another's by now) and then closes the input: a
-#   watch with no events still reports it, at every poll.
+#   watch with no events still reports it, at every poll (Linux; macOS reports nothing: the next write
+#   finds it). A child whose input went that way may be gone while another process keeps its stdout
+#   open: reaping starts as at the end of stdout (and the stop sequence g_conn_eof_ms later if it runs
+#   on: nobody can talk to it).
 on_in:
     PROLOGUE
     mov rbx, rdx
@@ -536,6 +539,14 @@ on_in:
     jz 9f
     mov rdi, rbx
     call close_input
+    cmp dword ptr [rbx + CN_state], CN_UP
+    jne 9f                      # stopping: reaping runs already
+    cmp qword ptr [rbx + CN_eof_at], 0
+    jne 9f
+    call time_ms
+    mov [rbx + CN_eof_at], rax
+    mov [rbx + CN_reap_from], rax
+    mov qword ptr [rbx + CN_reap_at], 0
     jmp 9f
 5:  mov rdi, rbx
     call flush

@@ -20,7 +20,8 @@ F AM_dx, 4              # where it was drawn last (its text's left, its top on s
 F AM_dy, 4              #   frame of the conversation (th_serial)
 F AM_dser, 4
 F AM_flags, 4           # AMF_*
-F AM_qid, 8             # a queued row's message: its uuid's first 8 bytes (agent_queued), 0 none
+F AM_qid, 8             # a queued row's message (agent_queued): a held one's uuid's first 8 bytes, a
+                        #   waiting prompt's serial; 0 none
 F AM_mute, 8            # as drawn last: the byte its text is muted from (a prompt's truncation marker), -1
 ENDSTRUCT AM_SIZE
 .equ AMF_PILL, 1                # a centred one-line pill ("Switched to NAME")

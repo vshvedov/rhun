@@ -98,6 +98,7 @@
 lives: .zero VEC_SIZE           # AL*: every live record
 jsb: .zero SB_SIZE              # the prompts that waited, joined; a new conversation's path
 uuid_n: .quad 0                 # agent_uuid's counter (no /dev/urandom)
+q_serial: .quad 0               # the last serial a prompt waiting for a start got (queue_dup)
 trust_answered: .long 0         # the window's answer to the trust card was given (a project asks once)
 
 .data
@@ -660,7 +661,7 @@ FN agent_send
     jae 9f
     mov rdi, r12
     mov rsi, r13
-    call mem_dup
+    call queue_dup
     mov r14, rax
     lea rdi, [r15 + AL_queue]
     mov esi, 8
@@ -831,9 +832,30 @@ held_take:
     mov rdx, r14
     EPILOGUE
 
-# FN agent_queued(AS* or 0, i) -> rax ptr, rdx len, rcx the first 8 bytes of its uuid (a held one's; 0 for
-#   a prompt waiting for a start) of its i-th message that has not started (those that
-#   wait for a start first, then those held), or rax 0 past the last: what agents.s draws queued
+# queue_dup(ptr, len) -> rax a prompt waiting for a start, as AL_queue keeps it: a cstr of the text, and
+#   after its NUL a serial of its own (8 bytes, never 0: agent_queued's id for it)
+queue_dup:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    lea rdi, [rsi + 9]
+    call mem_alloc
+    mov r13, rax
+    mov rdi, rax
+    mov rsi, rbx
+    mov rdx, r12
+    call memmove
+    mov byte ptr [r13 + r12], 0
+    inc qword ptr [rip + q_serial]
+    mov rax, [rip + q_serial]
+    mov [r13 + r12 + 1], rax
+    mov rax, r13
+    EPILOGUE
+
+# FN agent_queued(AS* or 0, i) -> rax ptr, rdx len, rcx which message it is (a held one's: the first 8 bytes
+#   of its uuid; a prompt waiting for a start: its serial, queue_dup) of its i-th message that has not
+#   started (those that wait for a start first, then those held), or rax 0 past the last: what agents.s
+#   draws queued
 FN agent_queued
     PROLOGUE
     xor eax, eax
@@ -860,8 +882,8 @@ FN agent_queued
     mov rdi, rax
     call strlen
     mov rdx, rax
+    mov rcx, [r14 + rax + 1]    # (its serial, after the NUL)
     mov rax, r14
-    xor ecx, ecx
     EPILOGUE
 3:  xor eax, eax
     cmp r12, [rbx + AL_held + VEC_len]

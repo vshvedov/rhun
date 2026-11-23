@@ -2971,6 +2971,7 @@ ENDSTRUCT AL_SIZE
 .equ ALF_HOLDOK, 1024           # this start is past the holder check (none, or Open here anyway)
 .equ ALF_AUTHWAIT, 2048         # a start waits for the sign-in state (DRV_auth)
 .equ ALF_ASKAGAIN, 4096         # a start the user asked for: a cached "not signed in" is asked again
+.equ ALF_RESTART, 8192          # a prompt came while its program was ending: a new start when it is gone
 .equ AL_QUEUE_MAX, 4            # prompts waiting for "ready"
 # AQ: a request the agent waits on (the plan's PR: that prefix is the Problems tab's)
 STRUCT

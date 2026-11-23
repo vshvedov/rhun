@@ -26,7 +26,8 @@ permission mode, default "default"); FAKE_CLAUDE_INIT_MS (a delay before initial
 FAKE_CLAUDE_RESUME (unknown: every --resume id is unknown, as fixture 11); FAKE_CLAUDE_LINGER_MS (an unknown
 --resume exits that long after its result; `mute` runs that long after closing its stdout); FAKE_CLAUDE_FORK_LATE (a copy's file, the source's history, is
 written with its first transcript line rather than at its start: unrecorded, so rhun must handle both);
-FAKE_CLAUDE_NUMERIC_IDS (its requests' ids are numbers from 7); FAKE_CLAUDE_SCENARIO (every prompt runs
+FAKE_CLAUDE_NUMERIC_IDS (its requests' ids are numbers from 7); FAKE_CLAUDE_EOF_MS (how long it takes to exit
+once its stdin closed and its turn ended); FAKE_CLAUDE_SCENARIO (every prompt runs
 that scenario, whatever its first word); FAKE_CLAUDE_UNSAVED_MARK (`unsaved` stopped saves only the
 interrupt mark, not the prompt);
 FAKE_CLAUDE_USER_LATE_MS (a turn's user line reaches the transcript only when a SIGTERM stops the process,
@@ -51,6 +52,7 @@ import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -976,7 +978,8 @@ def s_gone(prompt):
     """a permission request, while the process has closed its stdin (the main loop does that when it reads
     this prompt) and runs on for FAKE_CLAUDE_LINGER_MS (default 30 s) before it exits: rhun's answer finds
     no reader (unrecorded: the CLI closes its stdin only as it exits); "gone reply": a plain reply instead,
-    so the next prompt finds no reader"""
+    so the next prompt finds no reader; "gone exit": the process exits once the request is out, while a
+    process it started keeps its stdout open"""
     if prompt.split()[1:2] == ['reply']:
         final('ok: ' + prompt)
     else:
@@ -1278,6 +1281,14 @@ for raw in sys.stdin:
         log(error=traceback.format_exc())
         traceback.print_exc()
     if message.get('type') == 'user' and prompt_text(message).split()[:1] == ['gone']:
+        if prompt_text(message).split()[1:2] == ['exit']:
+            # `gone exit`: the request goes out, then a process of its own keeps stdout open (10 s) and
+            # this one exits as a crash, its stdin closed with it
+            with COND:
+                while not PENDING:
+                    COND.wait(0.05)
+            subprocess.Popen(['sleep', '10'], stdin=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            crash(3)
         os.close(sys.stdin.fileno())         # `gone`: nobody reads what rhun writes from here on
         time.sleep(int(ENV.get('FAKE_CLAUDE_LINGER_MS', '30000')) / 1000)
         break
@@ -1286,4 +1297,5 @@ with COND:                                   # at EOF the turn running finishes 
     COND.notify_all()
     while BUSY[0] or QUEUE:
         COND.wait(0.1)
+time.sleep(int(ENV.get('FAKE_CLAUDE_EOF_MS', '0')) / 1000)
 leave(EXIT_STATUS[0])

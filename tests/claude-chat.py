@@ -980,6 +980,17 @@ class RequestTest(DrivenCase):
         self.command('agent-prompt hello')          # rhun goes on
         self.assertIsNone(self.process.poll())
 
+    @unittest.skipIf(sys.platform == 'darwin', 'macOS reports no error on a pipe whose reader is gone: '
+                     'the next write finds it (test_an_answer_nobody_reads)')
+    def test_a_child_gone_while_another_keeps_its_stdout(self):
+        # its stdout stays open, so it ends no stream: the closed stdin starts the reaping
+        self.start()
+        self.chat('gone exit', 'failed', 5000)
+        live = self.live()
+        self.assertIn(' requests=0 ', live)
+        self.assertIn('report=Claude Code ended (exit status 3)', live)
+        self.assertIsNone(self.card())
+
     def test_a_prompt_nobody_reads(self):
         # the same for a prompt: a break under its write is a failed turn, not a turn that never ends
         self.start()
@@ -1427,6 +1438,22 @@ class LifeTest(DrivenCase):
         self.gone(pid)
         self.assertNotIn(str(pid), self.uproc_pids())
         self.assertTrue(self.thread()[-1].startswith('error Claude Code ended'), self.thread())
+
+    def test_a_send_while_it_ends_starts_it_again(self):
+        # the idle stop (here agent-release) is under way when the user sends: the prompt waits for the
+        # end and goes to a new start, as the next Send after the end would
+        self.start(env={'FAKE_CLAUDE_EOF_MS': '1500'})
+        self.chat('hello')
+        self.command('agent-release')
+        self.command('agent-prompt again')
+        self.assertIn(' queued=1 ', self.live())
+        self.assertEqual(self.command('print-agent-input').split(' ')[0], 'input=')
+        self.assertEqual(self.thread()[-1], 'user again')
+        self.until(lambda: len(self.starts()) == 2, 'a second start', 15)
+        self.until(lambda: self.thread()[-1].endswith(' ok: again'), 'the reply', 15)
+        self.assertEqual(self.prompts(), ['hello', 'again'])
+        self.assertTrue(self.starts()[1]['argv'][-1].startswith('--resume='), self.starts()[1]['argv'])
+        self.assertEqual([r for r in self.thread() if r.startswith('user')], ['user hello', 'user again'])
 
     def test_a_release_with_a_card_up_ends_off(self):
         self.start()

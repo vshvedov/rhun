@@ -37,7 +37,8 @@
 #     request's card: WAITING), ev_request_gone(al, AQ*) (it is answered or withdrawn: its card goes, it
 #     leaves AL_reqs and is freed), ev_mode(al, ptr, len), ev_turn_end(al, TE_*, ptr, len),
 #     ev_closed(al, err) (the process is gone: OFF unless FAILED, the requests it waited on go with an
-#     info row, the conversation read again from its file)
+#     info row, the conversation read again from its file; prompts sent while it was ending start it
+#     again)
 #
 #   agent_aq_free(AQ*)                        a request a driver made but never kept
 #
@@ -409,7 +410,7 @@ FN agent_send
     mov [r15 + AL_used], rax
     mov eax, [r15 + AL_state]
     cmp eax, ALS_READY
-    je .Las_now
+    je .Las_ready
     cmp eax, ALS_STARTING
     je .Las_queue
     cmp eax, ALS_HELD           # its start waits for the user's answer: the prompt waits with it
@@ -445,6 +446,14 @@ FN agent_send
     call user_row
     mov eax, SEND_QUEUED
     jmp 9f
+.Las_ready:
+    cmp dword ptr [r15 + AL_cn + CN_state], CN_UP
+    jne .Las_restart
+    cmp dword ptr [r15 + AL_cn + CN_fd_in], 0
+    jge .Las_now
+.Las_restart:                   # its program is ending (the idle stop, the cap) or takes no input any
+    or dword ptr [r15 + AL_flags], ALF_RESTART  #   more: the prompt waits, a new start follows its end
+    jmp .Las_queue              #   (ev_closed), as the next Send after it would
 .Las_now:
     and dword ptr [r15 + AL_flags], ~(ALF_DRAFT | ALF_UNANSWERED)
     mov rdi, r15                # a notice of rhun's goes with the next prompt
@@ -1649,9 +1658,17 @@ FN ev_closed
 1:  mov qword ptr [rbx + AL_turns], 0
     mov qword ptr [rbx + AL_row], -1
     mov byte ptr [rbx + AL_rowkey], 0
-    and dword ptr [rbx + AL_flags], ~(ALF_STOP_ASKED | ALF_ENDING)
+    mov r15d, [rbx + AL_flags]  # prompts sent while it was ending: it starts again for them
+    and r15d, ALF_RESTART
+    and dword ptr [rbx + AL_flags], ~(ALF_STOP_ASKED | ALF_ENDING | ALF_RESTART)
+    cmp qword ptr [rbx + AL_queue + VEC_len], 0
+    jne 11f
+    xor r15d, r15d
+11: test r15d, r15d
+    jnz 12f
     mov rdi, rbx                # prompts that waited for a start rhun ended go back in the box
     call queue_restore
+12:
     mov rdi, rbx                # nobody waits for an answer now: the cards go
     call reqs_drop
     mov r13d, eax
@@ -1681,10 +1698,34 @@ FN ev_closed
     mov rcx, [rbx + AL_report + SB_len]
     xor r8d, r8d
     call agents_msg_add
-    jmp 9f
+9:  test r15d, r15d             # the start again; the prompts' rows after the file's, as agent_send's
+    jz 10f
+    mov rdi, rbx
+    call agent_start
+    test eax, eax
+    jz 10f                      # failed: the prompts are in the box (ev_failed)
+    xor r13d, r13d
+91: cmp r13, [rbx + AL_queue + VEC_len]
+    jae 10f
+    mov rax, [rbx + AL_queue + VEC_ptr]
+    mov r14, [rax + r13*8]
+    inc r13
+    mov rdi, r14
+    call strlen
+    mov rdi, r12
+    mov esi, R_USER
+    mov rdx, r14
+    mov rcx, rax
+    xor r8d, r8d
+    call agents_msg_add
+    jmp 91b
 8:  mov edi, r13d               # no file to read again: the rows the stream fed stay
     call closed_note
-9:  mov dword ptr [rip + g_dirty], 1
+    test r15d, r15d
+    jz 10f
+    mov rdi, rbx                # and the prompts' rows with them: the start again
+    call agent_start
+10: mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
 # closed_note(n): ev_closed (rbx AL*): when n requests were left unanswered, an info row says so

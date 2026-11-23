@@ -193,6 +193,12 @@ said) and "supportedDialogKinds":["fable_overage_consent_prompt","auto_mode_serv
     not declare ("never with {behavior: "cancelled"}, which is a real settlement treated as the user
     dismissing the dialog"; an error answer is discarded and the dialog stays pending until the CLI's
     deadline or a control_cancel_request).
+26. (Found by tests/claude-real.py, 2026-11-23.) A command's description in initialize's commands can hold
+    line ends: the claude-api skill's has several ("...\nTRIGGER ...\nSKIP ..."); of about 200 commands
+    on this machine (built-ins, skills, plugins) 40 have descriptions over 400 bytes, the longest about
+    1400. rhun's menu row is one line, so line ends and other control characters become spaces when a
+    command is kept (as the extension's one-line row shows them); the fake's
+    FAKE_CLAUDE_COMMANDS_CHANGED knows that skill by name.
 
 Other things learned
 

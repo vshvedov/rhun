@@ -638,6 +638,17 @@ class MenuTest(MenuCase):
         self.command('key Return')
         self.until(lambda: '/usr/bin' in self.prompts(), 'the path is sent')
 
+    def test_a_description_with_line_ends_is_one_line(self):
+        # the real CLI's claude-api skill has line ends in its description (finding 26): its row shows one
+        # line, the line ends as spaces, as the extension's one-line row shows it; the state file keeps that
+        self.start(env={'FAKE_CLAUDE_COMMANDS_CHANGED': 'compact,claude-api'})
+        self.chat('hello')
+        self.until(lambda: 'claude-api' in self.command('print-agent-cfg'), 'the changed list')
+        self.command('agent-type /claude')
+        flat = 'Reference for the Claude API TRIGGER when the code imports it. SKIP otherwise.'
+        self.assertIn(('Slash Commands', '/claude-api', flat, '-', '-'), self.rows())
+        self.assertIn(f'claude-api\t{flat}\t', self.command('print-agent-cfg'))
+
     def test_no_matching_commands_lets_enter_send(self):
         self.ready()
         self.command('agent-type /zzz')

@@ -984,11 +984,15 @@ FN agentcfg_cmd
     mov edx, DESC_MAX
     call cut_dup
     mov [rbx + ACM_desc], rax
+    mov rdi, rax
+    call one_line
     mov rdi, [rsp]
     mov rsi, [rbp + 16]
     mov edx, HINT_MAX
     call cut_dup
     mov [rbx + ACM_hint], rax
+    mov rdi, rax
+    call one_line
     mov rdi, [rbp + 24]
     mov esi, HINT_MAX
     call cut_dup0
@@ -1009,6 +1013,23 @@ FN agentcfg_cmd
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
+
+# one_line(cstr or 0): its control characters (line ends, tabs) become spaces, in place: a row shows one line
+#   (the real CLI's skill descriptions have line ends; the extension's row shows them as spaces)
+one_line:
+    test rdi, rdi
+    jz 9f
+1:  movzx eax, byte ptr [rdi]
+    test eax, eax
+    jz 9f
+    cmp eax, 0x20
+    jb 2f
+    cmp eax, 0x7f
+    jne 3f
+2:  mov byte ptr [rdi], ' '
+3:  inc rdi
+    jmp 1b
+9:  ret
 
 # utf8_cut_rev(ptr, len, max) -> rax the length to keep (utf8_cut with the usual argument order)
 utf8_cut_rev:

@@ -59,7 +59,8 @@ every result carry the state; without it initialize has no reason, as before); F
 the first turn after /fast turned fast mode on gets system/notification "fast-mode-overage-rejected" and fast mode
 goes off, as the CLI binary's text has it); FAKE_CLAUDE_COMMANDS_CHANGED (comma-separated names:
 the system/commands_changed that follows initialize lists these instead, the known ones as initialize has
-them, the others as skills "Skill NAME", as the real list has skills initialize lacks); FAKE_CLAUDE_REFUSE_HELD (the first message written
+them, claude-api as the real skill with line ends in its description (finding 26), the others as skills
+"Skill NAME", as the real list has skills initialize lacks); FAKE_CLAUDE_REFUSE_HELD (the first message written
 with a uuid while another waits or runs is refused: lifecycle refused, never run, logged {"refused": UUID});
 FAKE_CLAUDE_DISCARD_HELD (the first such message is queued, then, when its turn would start, lifecycle
 discarded, never run, logged {"discarded": UUID}); FAKE_CLAUDE_NO_LIFECYCLE (no command_lifecycle at all:
@@ -2068,6 +2069,10 @@ COMMANDS = [{'name': 'compact', 'description': 'Clear history but keep a summary
             {'name': 'usage', 'description': "Show session cost, plan usage, and what's contributing to your limits",
              'argumentHint': '', 'aliases': ['cost', 'stats']}]
 COMMANDS_SENT = [False]
+# a skill whose description has line ends, as 2.1.330 lists the claude-api skill (finding 26): only through
+# FAKE_CLAUDE_COMMANDS_CHANGED
+SKILLS = [{'name': 'claude-api', 'description': 'Reference for the Claude API\nTRIGGER when the code imports it.\n'
+                                               'SKIP otherwise.', 'argumentHint': ''}]
 
 
 def changed_commands():
@@ -2075,7 +2080,7 @@ def changed_commands():
     names = [n for n in ENV.get('FAKE_CLAUDE_COMMANDS_CHANGED', '').split(',') if n]
     if not names:
         return COMMANDS
-    known = {c['name']: c for c in COMMANDS}
+    known = {c['name']: c for c in COMMANDS + SKILLS}
     return [known.get(n, {'name': n, 'description': 'Skill ' + n, 'argumentHint': ''}) for n in names]
 
 SUGGEST = [False]                   # initialize's promptSuggestions

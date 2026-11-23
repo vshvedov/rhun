@@ -6,12 +6,20 @@ temporary folder from fixed seeds.
     python3 tools/perf-baseline.py                       # build/rhun
     python3 tools/perf-baseline.py --binary OLD --binary NEW
     python3 tools/perf-baseline.py --json results.json   # medians, for a later comparison
+    python3 tools/perf-baseline.py --samples all.json    # every round's value, and every key's time
+    python3 tools/perf-baseline.py --chat                # and Claude Code's chat, with the fake CLI
 
 Times are medians of --runs rounds (default 5); each round times every build once, in turns, so
 caches and the machine's load treat them alike. A time is a whole headless process, less a run of
 the same setup without the measured steps where that makes sense; it includes the scripted
 commands' own frames, not putting frames on a screen. The idle counts (frames, main loop passes)
 are counts, not times.
+
+A Claude conversation open in the panel (an old one, nothing started) is measured on every build;
+--chat adds what needs the chat (a build that has it), with tests/scripts/fake-claude.py as the CLI:
+loop passes once a process ran and was released, and the time from a key in the prompt box to the
+frame that shows it (control `key`: sent, handled, then the command's frame, then `ok`) while the
+fake streams a long Markdown reply (scenario `stream`) and with nothing streaming.
 """
 import argparse
 import json
@@ -30,20 +38,29 @@ ROOT = Path(__file__).resolve().parents[1]
 CONFIG = ('[ui]\nagents_panel = {agents}\nsidebar = {sidebar}\n[editor]\ncursor_blink = false\n'
           '[terminal]\nshell = /bin/sh\n[files]\nrestore_session = false\nrestore_project = false\n'
           '[updates]\ncheck = false\n[git]\nenabled = false\n')
+FAKE = ROOT / 'tests/scripts/fake-claude.py'
+# the chat's runs start the fake, never a claude of the machine's
+CLAUDE = '[claude]\nwrapper = %s\nexecutable = %s\n' % (Path(sys.executable).resolve().as_posix(), FAKE.as_posix())
 
 
 class Bench:
     def __init__(self, exe, work, runs):
         self.exe, self.work, self.runs = exe, work, runs
 
-    def environment(self, home, agents, sidebar):
-        """the environment of a run with its own HOME and XDG folders, the config written afresh"""
+    def environment(self, home, agents, sidebar, chat=False):
+        """the environment of a run with its own HOME and XDG folders, the config written afresh; chat: the
+        fake as Claude Code, its log in HOME, none of a surrounding Claude Code session's variables"""
         (home / 'config/rhun').mkdir(parents=True, exist_ok=True)
         (home / 'config/rhun/config').write_text(
-            CONFIG.format(agents=str(agents).lower(), sidebar=str(sidebar).lower()), encoding='utf-8')
+            CONFIG.format(agents=str(agents).lower(), sidebar=str(sidebar).lower()) + (CLAUDE if chat else ''),
+            encoding='utf-8')
         shutil.rmtree(home / 'state', ignore_errors=True)
-        return dict(os.environ, HOME=home.as_posix(), XDG_CONFIG_HOME=(home / 'config').as_posix(),
-                    XDG_STATE_HOME=(home / 'state').as_posix())
+        env = dict(os.environ, HOME=home.as_posix(), XDG_CONFIG_HOME=(home / 'config').as_posix(),
+                   XDG_STATE_HOME=(home / 'state').as_posix())
+        if chat:
+            env = {k: v for k, v in env.items() if not k.startswith(('CLAUDE', 'ANTHROPIC'))}
+            env.update(TERM='dumb', FAKE_CLAUDE_LOG=(home / 'fake-claude.log').as_posix())
+        return env
 
     def run(self, target, actions=(), size='1280x800', scale='1', agents=False, sidebar=True, home=None):
         """seconds for one run of rhun TARGET with the script's actions, then quit"""
@@ -66,11 +83,10 @@ class Bench:
         """ms per step: (setup + n steps) less setup alone"""
         return (self.median(target, setup + step * n, **kwargs) - self.median(target, setup, **kwargs)) / n * 1000
 
-    def idle_passes(self, target, home, agents, settle=3, seconds=10):
-        """main loop passes in SECONDS of an idle window on TARGET, SETTLE seconds after it started, run
-        through the control socket (a script's waits poll on their own, not in the main loop). The
-        pass the second print-loop-stats wakes is not counted: a window that never woke shows 0."""
-        env = self.environment(home, agents, True)
+    def controlled(self, target, home, agents, body, chat=False):
+        """body(command) on a window on TARGET driven through the control socket; command(line) sends one
+        command and returns its output (an error answer raises). The window is quit at the end."""
+        env = self.environment(home, agents, True, chat)
         # a socket's path is short (104 bytes on macOS): its own folder under /tmp
         with tempfile.TemporaryDirectory(prefix='rhun-perf-', dir='/tmp') as sockets:
             control = Path(sockets) / 'control'
@@ -79,7 +95,7 @@ class Bench:
                                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             try:
-                client.settimeout(30)
+                client.settimeout(60)
                 deadline = time.monotonic() + 30
                 while True:
                     try:
@@ -91,17 +107,18 @@ class Bench:
                         time.sleep(0.01)
                 reader = client.makefile('r', encoding='utf-8')
 
-                def passes():
-                    client.sendall(b'print-loop-stats\n')
-                    reply = reader.readline()
-                    if reader.readline() != 'ok\n' or not reply.startswith('passes='):
-                        raise RuntimeError('print-loop-stats: %r' % reply)
-                    return int(reply.split()[0].split('=')[1])
+                def command(line):
+                    client.sendall((line + '\n').encode('utf-8'))
+                    output = []
+                    while True:
+                        reply = reader.readline()
+                        if reply == 'ok\n':
+                            return ''.join(output)
+                        if reply in ('', 'error\n'):
+                            raise RuntimeError('%s: %r' % (line, ''.join(output) + reply))
+                        output.append(reply)
 
-                time.sleep(settle)
-                before = passes()
-                time.sleep(seconds)
-                after = passes()
+                value = body(command)
                 client.sendall(b'quit\n')
                 process.wait(timeout=30)
                 reader.close()
@@ -110,7 +127,69 @@ class Bench:
                 if process.poll() is None:
                     process.kill()
                     process.wait()
-        return after - before - 1
+        return value
+
+    def idle_passes(self, target, home, agents, settle=3, seconds=10, setup=(), chat=False):
+        """main loop passes in SECONDS of an idle window on TARGET, SETTLE seconds after it started (and
+        after the SETUP commands), run through the control socket (a script's waits poll on their own,
+        not in the main loop). The pass the second print-loop-stats wakes is not counted: a window that
+        never woke shows 0. setup may be a function of command."""
+        def body(command):
+            def passes():
+                reply = command('print-loop-stats')
+                if not reply.startswith('passes='):
+                    raise RuntimeError('print-loop-stats: %r' % reply)
+                return int(reply.split()[0].split('=')[1])
+            if callable(setup):
+                setup(command)
+            else:
+                for line in setup:
+                    command(line)
+            time.sleep(settle)
+            before = passes()
+            time.sleep(seconds)
+            return passes() - before - 1
+        return self.controlled(target, home, agents, body, chat)
+
+    def key_to_frame(self, target, home, keys=100, seed=3):
+        """ms from sending a key in a new Claude conversation's prompt box to the answer that follows the
+        frame showing it, KEYS times while the fake streams a long reply, then KEYS times once it ended;
+        the keys alternate a letter and BackSpace, 20 to 60 ms apart"""
+        rng = random.Random(seed)
+
+        def body(command):
+            def live():
+                return command('print-agent-live').split('\n')[0]
+
+            def times():
+                out = []
+                for i in range(keys):
+                    time.sleep(rng.uniform(0.02, 0.06))
+                    start = time.perf_counter()
+                    command('key a' if i % 2 == 0 else 'key BackSpace')
+                    out.append((time.perf_counter() - start) * 1000)
+                return out
+            command('agent-new claude')
+            command('agent-prompt stream 3000 5')
+            command('wait-agent working 20000')
+            deadline = time.monotonic() + 20         # until the reply streams (after the tool's row)
+            while not any(line.startswith('agent') for line in command('print-agents').splitlines()):
+                if time.monotonic() > deadline:
+                    raise RuntimeError('no reply streamed: ' + live())
+                time.sleep(0.05)
+            if ' focus=1 ' not in command('print-agent-input'):
+                command('key Tab')
+            if ' focus=1 ' not in command('print-agent-input'):
+                raise RuntimeError('the prompt box has not the keys')
+            streaming = times()
+            if not live().startswith('state=working '):
+                raise RuntimeError('the stream ended before the keys did: ' + live())
+            command('wait-agent ready 120000')
+            if ' focus=1 ' not in command('print-agent-input'):
+                raise RuntimeError('the prompt box lost the keys')
+            quiet = times()
+            return streaming, quiet
+        return self.controlled(target, home, True, body, chat=True)
 
 
 def fixtures(work):
@@ -169,8 +248,8 @@ def long_conversation(project, seed=0):
     return ''.join(json.dumps(line) + '\n' for line in lines)
 
 
-def measure(exe, work):
-    """one sample of every workload"""
+def measure(exe, work, chat=False):
+    """one sample of every workload (chat: and the chat's)"""
     f = FIXTURES
     b = Bench(exe, work, 1)
     moves = lambda n: ['move %d 600' % (500 + i % 2) for i in range(n)]
@@ -239,7 +318,75 @@ def measure(exe, work):
     if os.name != 'nt':
         results['idle loop passes in 10 s, agents panel shown'] = b.idle_passes([project], home, True)
         results['idle loop passes in 10 s, agents panel hidden'] = b.idle_passes([project], home, False)
+        # the old conversation open in the panel (a build with the chat: its box, nothing started)
+        home, project = claude_project(work, 'open')
+        results['idle loop passes in 10 s, a Claude conversation open'] = b.idle_passes(
+            [project], home, True, setup=['wait-agents', 'print-agents 1'], chat=True)
+        log = home / 'fake-claude.log'
+        results['Claude processes started, conversation open'] = len(
+            log.read_text(encoding='utf-8').splitlines()) if log.exists() else 0
+    if chat and os.name != 'nt' and has_chat(b, work):
+        home, project = claude_project(work, 'released')
+
+        def released(command):
+            command('wait-agents')
+            command('print-agents 1')
+            command('agent-prompt hello')
+            command('wait-agent ready 20000')
+            command('agent-release')
+            command('wait-agent off 20000')
+            deadline = time.monotonic() + 20
+            while ' pid=1 ' in command('print-agent-live'):
+                if time.monotonic() > deadline:
+                    raise RuntimeError('the process was not reaped')
+                time.sleep(0.05)
+            time.sleep(5)                       # discovery reads the file that changed
+        results['idle loop passes in 10 s, the conversation after a process ran and was released'] = (
+            b.idle_passes([project], home, True, setup=released, chat=True))
+        home, project = claude_project(work, 'keys')
+        streaming, quiet = b.key_to_frame([project], home)
+        KEYS.setdefault(exe, []).append({'streaming': streaming, 'quiet': quiet})
+        results['key to frame while a reply streams, median (ms)'] = statistics.median(streaming)
+        results['key to frame while a reply streams, worst (ms)'] = max(streaming)
+        results['key to frame, nothing streaming, median (ms)'] = statistics.median(quiet)
+        results['key to frame, nothing streaming, worst (ms)'] = max(quiet)
     return results
+
+
+KEYS = {}                                   # every key's time of the --chat runs, by build
+CHAT = {}                                   # whether a build has the chat, by build
+
+
+def has_chat(b, work):
+    """whether b's build has Claude Code's chat (it knows print-agent-live): --chat skips one without"""
+    if b.exe not in CHAT:
+        def probe(command):
+            try:
+                command('print-agent-live')
+                return True
+            except RuntimeError:
+                return False
+        home, project = claude_project(work, 'probe')
+        CHAT[b.exe] = b.controlled([project], home, True, probe, chat=True)
+    return CHAT[b.exe]
+
+
+def claude_project(work, name):
+    """a fresh HOME and project, the project's one old Claude conversation (the agents fixture)"""
+    home = work / ('chat-home-' + name)
+    project = work / ('chat-project-' + name)
+    shutil.rmtree(home, ignore_errors=True)
+    shutil.rmtree(project, ignore_errors=True)
+    project.mkdir()
+    slug = ''.join(c if c.isalnum() else '-' for c in project.as_posix())
+    sessions = home / '.claude/projects' / slug
+    sessions.mkdir(parents=True)
+    session = sessions / 's1.jsonl'
+    session.write_text((ROOT / 'tests/data/agents/claude.jsonl').read_text(encoding='utf-8')
+                       .replace('@PROJECT@', project.as_posix()), encoding='utf-8')
+    old = time.time() - 86400 * 3
+    os.utime(session, (old, old))
+    return home, project
 
 
 def main():
@@ -248,6 +395,8 @@ def main():
     parser.add_argument('--binary', action='append', help='rhun to time (repeat to compare)')
     parser.add_argument('--runs', type=int, default=5)
     parser.add_argument('--json', help='write the results here')
+    parser.add_argument('--samples', help="write every round's value here (and every key's time)")
+    parser.add_argument('--chat', action='store_true', help="measure Claude Code's chat too (the fake CLI)")
     args = parser.parse_args()
     binaries = args.binary or [str(ROOT / 'build/rhun')]
     with tempfile.TemporaryDirectory(prefix='rhun-perf-') as temporary:
@@ -261,15 +410,20 @@ def main():
             print('round %d of %d...' % (round + 1, args.runs), file=sys.stderr)
             order = binaries[round % len(binaries):] + binaries[:round % len(binaries)]
             for exe in order:
-                for name, value in measure(exe, work).items():
+                for name, value in measure(exe, work, args.chat).items():
                     samples[exe].setdefault(name, []).append(value)
         table = {names[exe]: {name: statistics.median(values) for name, values in samples[exe].items()}
                  for exe in binaries}
-    names = list(next(iter(table.values())))
-    width = max(map(len, names))
+        if args.samples:
+            Path(args.samples).write_text(json.dumps(
+                {names[exe]: {'rounds': samples[exe], 'keys': KEYS.get(exe, [])} for exe in binaries},
+                indent=1) + '\n', encoding='utf-8')
+    names = list(dict.fromkeys(name for column in table.values() for name in column))  # a build without the chat
+    width = max(map(len, names))                                                      # has no chat rows
     print(' ' * width + ''.join('  %18s' % k.split(' (')[0] for k in table))
     for name in names:
-        print(name.ljust(width) + ''.join('  %18.2f' % column[name] for column in table.values()))
+        print(name.ljust(width) + ''.join('  %18.2f' % column[name] if name in column else '  %18s' % '-'
+                                          for column in table.values()))
     if args.json:
         Path(args.json).write_text(json.dumps(table, indent=2) + '\n', encoding='utf-8')
 

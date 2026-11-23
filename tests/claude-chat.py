@@ -1762,6 +1762,31 @@ class EdgeTest(DrivenCase):
         self.chat('hello', 'ready', 20000)
         self.assertEqual(len(self.starts()), 1)
 
+    def test_a_sign_in_question_ended_early_is_asked_again(self):
+        # the project changes while `claude auth status` has not answered: it ends, and the next start
+        # asks again rather than wait for the old one's time to run out
+        self.start(env={'FAKE_CLAUDE_AUTH_MS': '20000'})
+        self.command('agent-new claude')
+        self.command('agent-type x')
+        self.until(lambda: len(self.auths()) == 1, 'the sign-in question')
+        first = self.auths()[0]['pid']
+        other = self.work / 'other'
+        other.mkdir()
+        self.command(f'open {other}')
+        self.until(lambda: not alive(first), 'the question ends', 5)
+        self.command('agent-new claude')
+        self.command('agent-type y')
+        self.until(lambda: len(self.auths()) == 2, 'asked again', 5)
+
+    def test_chat_off_ends_the_sign_in_question(self):
+        self.start(env={'FAKE_CLAUDE_AUTH_MS': '20000'})
+        self.command('agent-new claude')
+        self.command('agent-type x')
+        self.until(lambda: len(self.auths()) == 1, 'the sign-in question')
+        pid = self.auths()[0]['pid']
+        self.config.write_text(self.BASE + self.claude_section('chat = false\n'), encoding='utf-8')
+        self.until(lambda: not alive(pid), 'the question ends', 8)
+
     def test_an_authentication_error_shows_sign_in(self):
         self.start()
         self.chat('autherr')

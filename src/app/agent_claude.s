@@ -727,10 +727,14 @@ au_answer:
 9:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
-# FN claude_auth_end(): the status question, if one runs, ends (its watch, its pipe, its process)
+# FN claude_auth_end(): the status question, if one runs, ends (its watch, its pipe, its process); one
+#   ended before its answer is asked again next time (au_answer and the timeout set the state after)
 FN claude_auth_end
     PROLOGUE
-    mov edi, [rip + au_fd]
+    cmp dword ptr [rip + au_state], AU_ASKING
+    jne 0f
+    mov dword ptr [rip + au_state], AU_UNKNOWN
+0:  mov edi, [rip + au_fd]
     test edi, edi
     js 1f
     call watch_remove

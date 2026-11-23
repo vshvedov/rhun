@@ -2017,7 +2017,12 @@ FN agent_drv_apply
     mov rdi, r13
     call agents_resync
     jmp 1b
-8:  call agentext_drivers_changed
+8:  mov edi, AG_CLAUDE           # chat with Claude Code off: its sign-in question, if it runs, ends
+    call agent_drv_for_kind
+    test rax, rax
+    jnz 9f
+    call claude_auth_end
+9:  call agentext_drivers_changed
     EPILOGUE
 
 # FN agent_live_dump(sb, AS* or 0): "state=… pid=0|1 sid=… mode=… queued=N requests=N new=0|1 scroll=N

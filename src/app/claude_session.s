@@ -14,8 +14,18 @@
 #   claude_lifecycle(AL*, record)           command_lifecycle: a held message started or will not run
 #   claude_replay(AL*, record)              a user record with isReplay: a held message started
 #   claude_start_mode(AL*) -> rax cstr|0    a start's --permission-mode, through the bypass gate
-#   claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra,
-#     claude_set_thinking: the driver table's entries for the later tasks (0 until then)
+#   claude_modes(AS* or 0, AMD** out) -> eax n, rdx the current mode's AMD* or 0   the modes offered now
+#     (ext-webview-ui.md 2.1, 2.2): default, acceptEdits, plan; dontAsk first only while it is current; auto
+#     last while the model supports it (or it is current) and no policy forbids it; bypassPermissions last
+#     only through rhun's gate ([claude] allow_bypass_permissions) and no policy against it. The current
+#     one: the mode in effect, else the conversation's kept one, else what its start would pass
+#   claude_set_mode(AL*, id) -> eax 1 asked  running: set_permission_mode (the label follows at once, the
+#     answer settles it); starting: asked once initialize is answered; else kept for the next start. Bypass
+#     only through the gate
+#   claude_mode_answer(AL*, response, picked), claude_init_mode(AL*, ptr, len) -> rax ptr, rdx len,
+#     claude_init_ask(AL*)                  set_permission_mode's answers, a pick made while it started
+#   claude_set_model, claude_set_effort, claude_set_ultra, claude_set_thinking: the driver table's
+#     entries for the later tasks (0 until then)
 #   claude_menu(AS* or 0, APM** out) -> eax n   the command menu's actions (agentpop.s), each with its rule
 #   claude_action(AL* or 0, act, ptr, len) -> eax 1 done   the driver's part of a local command: /plan,
 #     fast mode (/fast as a prompt), Settings at Claude Code's rows, the help docs (asked before they open)
@@ -27,11 +37,20 @@
 .equ ERRORS_MAX, 50             # settings errors looked at
 .equ R_INFO_ROW, 6              # agents.s's info row (R_INFO)
 .equ R_INFO, 6                  # agents.s's info row
+.equ MODES_N, 6                 # mode_tbl's entries
+.equ CLP_NOAUTO, 1              # AL_cfg: get_settings' effective settings forbid auto mode,
+.equ CLP_NOBYPASS, 2            #   bypassPermissions;
+.equ CLP_MODEWAIT, 4            #   a mode was picked while the program started (claude_init_mode)
 
 .bss
 .p2align 3
 asb: .zero SB_SIZE              # a command's aliases, joined
 effort_sfx: .zero 48            # the Effort row's "(Level)"
+offered: .zero AMD_SIZE * MODES_N   # claude_modes' list
+prev_al: .quad 0                # the last pick asked of a running program: its AL and the mode before it
+prev_mode: .zero 32             #   (a refusal puts it back)
+pend_al: .quad 0                # a pick made while the program started, asked once initialize is answered
+pend_mode: .zero 32
 bsb: .zero SB_SIZE              # the settings band's text
 
 .text
@@ -565,7 +584,10 @@ FN claude_settings_answer
     mov rdi, rbx
     mov esi, r14d
     call ev_ultra
-5:  mov rdi, r12
+5:  mov rdi, rbx                # the policies the modes follow (effective settings)
+    mov rsi, r12
+    call policies
+    mov rdi, r12
     lea rsi, [rip + .Lk_errors]
     call json_get
     mov r13, rax
@@ -587,6 +609,50 @@ FN claude_settings_answer
     mov rcx, [rip + bsb + SB_len]
     call ev_band
 9:  EPILOGUE
+
+# policies(AL*, get_settings' response): AL_cfg's CLP_NOAUTO (effective.permissions.disableAutoMode or
+#   effective.disableAutoMode "disable") and CLP_NOBYPASS (effective.permissions.disableBypassPermissionsMode
+#   "disable"), as the extension reads them (webview index.js @3779200, @3421530)
+policies:
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, rsi
+    lea rsi, [rip + .Lk_effective]
+    call json_get
+    mov r12, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lk_permissions]
+    call json_get
+    mov r13, rax
+    and dword ptr [rbx + AL_cfg], ~(CLP_NOAUTO | CLP_NOBYPASS)
+    mov rdi, r13
+    lea rsi, [rip + .Lk_no_auto]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_disable]
+    call json_is
+    test eax, eax
+    jnz 1f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_no_auto]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_disable]
+    call json_is
+    test eax, eax
+    jz 2f
+1:  or dword ptr [rbx + AL_cfg], CLP_NOAUTO
+2:  mov rdi, r13
+    lea rsi, [rip + .Lk_no_bypass]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_disable]
+    call json_is
+    test eax, eax
+    jz 3f
+    or dword ptr [rbx + AL_cfg], CLP_NOBYPASS
+3:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
 
 # band_text(errors array): bsb = "Settings file failed to parse: FILE — MESSAGE (+N more file|files).
 #   Permission rules and other settings from this file|these files are not in effect." (the files
@@ -834,17 +900,434 @@ FN claude_start_mode
     lea rax, [rip + .Lv_default]
     EPILOGUE
 
+# ---- permission modes (task 5) ----
+
+# mode_entry(id cstr) -> rax its mode_tbl entry (AMD), or 0 for an unknown id
+mode_entry:
+    PROLOGUE
+    mov r12, rdi
+    lea rbx, [rip + mode_tbl]
+    xor r13d, r13d
+    test r12, r12
+    jz 8f
+1:  cmp r13d, MODES_N
+    jae 8f
+    mov rdi, r12
+    mov rsi, [rbx + AMD_id]
+    call strcmp_eq
+    test eax, eax
+    jnz 9f
+    add rbx, AMD_SIZE
+    inc r13d
+    jmp 1b
+8:  xor ebx, ebx
+9:  mov rax, rbx
+    EPILOGUE
+
+# bypass_ok(AL* or 0) -> eax 1 when bypassPermissions may be offered, passed or asked for: rhun's gate
+#   ([claude] allow_bypass_permissions) and no policy against it
+bypass_ok:
+    xor eax, eax
+    cmp dword ptr [rip + cfg_claude_allow_bypass], 0
+    je 9f
+    mov eax, 1
+    test rdi, rdi
+    jz 9f
+    test dword ptr [rdi + AL_cfg], CLP_NOBYPASS
+    jz 9f
+    xor eax, eax
+9:  ret
+
+# gated(mode cstr) -> rax the mode, or default for bypassPermissions without the gate
+gated:
+    PROLOGUE
+    mov rbx, rdi
+    lea rsi, [rip + .Lv_bypass]
+    call strcmp_eq
+    test eax, eax
+    jz 9f
+    xor edi, edi
+    call bypass_ok
+    test eax, eax
+    jnz 9f
+    lea rbx, [rip + .Lv_default]
+9:  mov rax, rbx
+    EPILOGUE
+
+# cur_mode(AS* or 0) -> rax the conversation's mode (a cstr), or 0 when nothing says: the mode in effect
+#   (AL_mode: the program's report or the user's pick), else the conversation's kept one (once the record is
+#   read; nothing is read for it), else what a start would pass (the project's remembered default when
+#   initial_mode is empty, else initial_mode); a kept bypassPermissions without the gate is default, as a
+#   start passes it
+cur_mode:
+    PROLOGUE
+    mov rbx, rdi
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov r13, rax
+    test rbx, rbx
+    jz 3f
+    mov r12, [rbx + AS_live]
+    test r12, r12
+    jz 3f
+    lea rax, [r12 + AL_mode]
+    cmp byte ptr [rax], 0
+    jne 9f
+    cmp byte ptr [r12 + AL_sid], 0
+    je 3f
+    mov rdi, r13
+    lea rsi, [r12 + AL_sid]
+    call agentcfg_conv_mode
+    test rax, rax
+    jnz 5f
+3:  cmp dword ptr [rip + cfg_claude_initial_mode], 0
+    jne 4f
+    lea rax, [r13 + AGC_newmode]
+    cmp byte ptr [rax], 0
+    jne 5f
+4:  call claude_mode
+    EPILOGUE
+5:  mov rdi, rax
+    call gated
+9:  EPILOGUE
+
+# FN claude_modes(AS* or 0, AMD** out) -> eax how many modes are offered now (in Shift+Tab's order, the
+#   current one flagged AMDF_CURRENT), rdx the current mode's entry (shown even when it is not offered) or 0
+FN claude_modes
+    PROLOGUE 16
+    mov rbx, rdi
+    mov [rsp], rsi
+    call cur_mode
+    mov r12, rax                # the current mode's id, or 0
+    xor r14d, r14d              # its entry
+    test rax, rax
+    jz 1f
+    mov rdi, rax
+    call mode_entry
+    mov r14, rax
+1:  xor r13d, r13d              # offered
+    mov rdi, r12
+    lea rsi, [rip + .Lv_dont_ask]
+    call is_mode
+    test eax, eax
+    jz 2f
+    lea rdi, [rip + .Lv_dont_ask]
+    call offer
+2:  lea rdi, [rip + .Lv_default]
+    call offer
+    lea rdi, [rip + .Lv_accept]
+    call offer
+    lea rdi, [rip + .Lv_plan]
+    call offer
+    xor eax, eax                # auto: no policy against it, and the model has it or it is current
+    test rbx, rbx
+    jz 3f
+    mov rax, [rbx + AS_live]
+3:  test rax, rax
+    jz 4f
+    test dword ptr [rax + AL_cfg], CLP_NOAUTO
+    jnz 6f
+4:  mov rdi, r12
+    lea rsi, [rip + .Lv_auto]
+    call is_mode
+    test eax, eax
+    jnz 5f
+    mov rdi, rbx
+    call cur_model
+    test rax, rax
+    jz 6f
+    test dword ptr [rax + AMO_flags], AMOF_AUTO
+    jz 6f
+5:  lea rdi, [rip + .Lv_auto]
+    call offer
+6:  xor edi, edi                # bypassPermissions: rhun's gate, and no policy against it
+    test rbx, rbx
+    jz 7f
+    mov rdi, [rbx + AS_live]
+7:  call bypass_ok
+    test eax, eax
+    jz 8f
+    lea rdi, [rip + .Lv_bypass]
+    call offer
+8:  mov rax, [rsp]
+    lea rcx, [rip + offered]
+    mov [rax], rcx
+    mov eax, r13d
+    mov rdx, r14
+    EPILOGUE
+
+# is_mode(id cstr or 0, mode cstr) -> eax 1 when they are the same
+is_mode:
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    jmp strcmp_eq
+1:  ret
+
+# offer(id cstr) using claude_modes' r12 (the current id) and r13 (the count): its entry next in offered,
+#   AMDF_CURRENT when it is the current one
+offer:
+    push rbx
+    push r14
+    push r15
+    mov r15, rdi
+    call mode_entry
+    mov rbx, rax
+    imul r14, r13, AMD_SIZE
+    lea rcx, [rip + offered]
+    add r14, rcx
+    mov rax, [rbx + AMD_id]
+    mov [r14 + AMD_id], rax
+    mov rax, [rbx + AMD_label]
+    mov [r14 + AMD_label], rax
+    mov rax, [rbx + AMD_desc]
+    mov [r14 + AMD_desc], rax
+    mov eax, [rbx + AMD_color]
+    mov [r14 + AMD_color], eax
+    mov dword ptr [r14 + AMD_flags], 0
+    mov rdi, r12
+    mov rsi, r15
+    call is_mode
+    test eax, eax
+    jz 1f
+    mov dword ptr [r14 + AMD_flags], AMDF_CURRENT
+1:  inc r13d
+    pop r15
+    pop r14
+    pop rbx
+    ret
+
+# FN claude_set_mode(AL*, id cstr) -> eax 1 when it was asked for or kept: running, set_permission_mode
+#   (cl_set_mode; the label follows at once, the answer settles it: claude_mode_answer); starting, kept and
+#   asked once initialize is answered; else kept for the conversation's next start (nothing starts). An
+#   unknown id, and bypassPermissions without the gate, are refused (0)
+FN claude_set_mode
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rsi
+    call mode_entry
+    test rax, rax
+    jz .Lsm_no
+    mov rdi, r12
+    lea rsi, [rip + .Lv_bypass]
+    call strcmp_eq
+    test eax, eax
+    jz 1f
+    mov rdi, rbx
+    call bypass_ok
+    test eax, eax
+    jz .Lsm_no
+1:  mov rdi, r12
+    call strlen
+    mov r13, rax
+    mov eax, [rbx + AL_state]
+    cmp eax, ALS_READY
+    je 2f
+    cmp eax, ALS_WORKING
+    je 2f
+    cmp eax, ALS_WAITING
+    je 2f
+    cmp eax, ALS_STARTING       # not running: kept for its start (the start passes it), and the label
+    jne 3f
+    or dword ptr [rbx + AL_cfg], CLP_MODEWAIT   # (a process starting now is asked once it answers)
+3:  mov rdi, rbx
+    call claude_sid
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call ev_mode
+    mov rdi, rbx                # the user's pick is the conversation's
+    call agent_mode_keep
+    mov rdi, r12
+    call picked_default
+    jmp .Lsm_yes
+2:  cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 3b
+    mov [rip + prev_al], rbx    # what a refusal puts back
+    lea rdi, [rip + prev_mode]
+    lea rsi, [rbx + AL_mode]
+    call cstr_copy
+    mov rdi, rbx
+    mov rsi, r12
+    call cl_set_mode
+    test eax, eax
+    jz .Lsm_no
+    mov rdi, rbx                # the label follows at once (Shift+Tab goes on from it)
+    mov rsi, r12
+    mov rdx, r13
+    call ev_mode
+    mov rdi, rbx
+    call agent_mode_keep
+.Lsm_yes:
+    mov eax, 1
+    EPILOGUE
+.Lsm_no:
+    xor eax, eax
+    EPILOGUE
+
+# picked_default(id cstr): a mode the user picked among default, auto and acceptEdits is the project's
+#   default for new conversations when [claude] initial_mode is empty (agentcfg's newmode)
+picked_default:
+    PROLOGUE
+    mov rbx, rdi
+    cmp dword ptr [rip + cfg_claude_initial_mode], 0
+    jne 9f
+    lea r12, [rip + default_modes]
+1:  mov rsi, [r12]
+    test rsi, rsi
+    jz 9f
+    add r12, 8
+    mov rdi, rbx
+    call strcmp_eq
+    test eax, eax
+    jz 1b
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov r12, rax
+    mov rdi, rbx
+    call strlen
+    mov rcx, rax
+    mov rdi, r12
+    mov esi, AGF_NEWMODE
+    mov rdx, rbx
+    call agentcfg_set
+    mov rdi, r12
+    call agentcfg_save
+9:  EPILOGUE
+
+# FN claude_mode_answer(AL*, control_response's response, picked): set_permission_mode's answer {"mode": M}
+#   is the mode in effect (a request for the mode in force gets no status line: finding 10); a pick
+#   also becomes the project's default (picked_default). Refused, a pick's toast says why ("Failed to set
+#   mode: …") and the mode before it comes back
+FN claude_mode_answer
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r15d, edx
+    mov rdi, rsi
+    lea rsi, [rip + .Lk_subtype]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_success]
+    call json_is
+    test eax, eax
+    jz 5f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_response]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lk_mode]
+    call jstr
+    test rdx, rdx
+    jz 9f
+    cmp rdx, 31
+    ja 9f
+    mov r13, rax
+    mov r14, rdx
+    mov rdi, rbx
+    mov rsi, rax
+    call ev_mode
+    test r15d, r15d
+    jz 9f
+    lea rdi, [rbx + AL_mode]    # (ev_mode's copy, not the parse arena's text)
+    call picked_default
+    EPILOGUE
+5:  test r15d, r15d
+    jz 9f
+    lea rdi, [rip + bsb]
+    call sb_clear
+    lea rdi, [rip + bsb]
+    lea rsi, [rip + .Lm_failed]
+    call sb_push_cstr
+    mov rdi, r12
+    lea rsi, [rip + .Lk_error]
+    call jstr
+    lea rdi, [rip + bsb]
+    mov rsi, rax
+    call sb_push
+    lea rdi, [rip + bsb]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + bsb + SB_ptr]
+    call app_toast
+    cmp [rip + prev_al], rbx
+    jne 9f
+    mov qword ptr [rip + prev_al], 0
+    lea rdi, [rip + prev_mode]
+    call strlen
+    mov rdx, rax
+    mov rdi, rbx
+    lea rsi, [rip + prev_mode]
+    call ev_mode
+9:  EPILOGUE
+
+# FN claude_init_mode(AL*, mode ptr, len) -> rax ptr, rdx len: the mode to show once initialize is answered:
+#   a pick made while the program started (when it differs from the one it started in: it is asked for by
+#   claude_init_ask), else the one it reports
+FN claude_init_mode
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    test dword ptr [rbx + AL_cfg], CLP_MODEWAIT
+    jz 9f
+    and dword ptr [rbx + AL_cfg], ~CLP_MODEWAIT
+    lea r14, [rbx + AL_mode]    # the pick (AL_mode holds it until initialize's report)
+    cmp byte ptr [r14], 0
+    je 9f
+    mov rdi, r14
+    call strlen
+    cmp rax, r13
+    jne 1f
+    mov rdi, r14
+    mov rsi, r12
+    mov rdx, r13
+    call memeq
+    test eax, eax
+    jnz 9f                      # it started in it
+1:  mov rdi, r14
+    call mode_entry
+    test rax, rax
+    jz 9f
+    mov [rip + pend_al], rbx
+    lea rdi, [rip + pend_mode]
+    mov rsi, r14
+    call cstr_copy
+    lea r12, [rip + pend_mode]
+    mov rdi, r12
+    call strlen
+    mov r13, rax
+9:  mov rax, r12
+    mov rdx, r13
+    EPILOGUE
+
+# FN claude_init_ask(AL*): the pick claude_init_mode kept is asked for (through the gate), before any prompt
+FN claude_init_ask
+    PROLOGUE
+    mov rbx, rdi
+    cmp [rip + pend_al], rbx
+    jne 9f
+    mov qword ptr [rip + pend_al], 0
+    lea rdi, [rip + pend_mode]
+    lea rsi, [rip + .Lv_bypass]
+    call strcmp_eq
+    test eax, eax
+    jz 1f
+    mov rdi, rbx
+    call bypass_ok
+    test eax, eax
+    jz 9f
+1:  mov qword ptr [rip + prev_al], 0
+    mov rdi, rbx
+    lea rsi, [rip + pend_mode]
+    call cl_set_mode
+9:  EPILOGUE
+
 # ---- the driver table's entries for later tasks ----
 
-# FN claude_modes(AS*, AMD** out) -> eax 0; claude_set_mode(AL*, id), claude_set_model(AL*, value),
-#   claude_set_effort(AL*, id), claude_set_ultra(AL*, on), claude_set_thinking(AL*, on), claude_action(AL*,
-#   act, ptr, len) -> eax 0: nothing asked yet
-FN claude_modes
-    xor eax, eax
-    ret
-FN claude_set_mode
-    xor eax, eax
-    ret
+# FN claude_set_model(AL*, value), claude_set_effort(AL*, id), claude_set_ultra(AL*, on),
+#   claude_set_thinking(AL*, on) -> eax 0: nothing asked yet
 FN claude_set_model
     xor eax, eax
     ret
@@ -1183,6 +1666,47 @@ FN claude_action
 .p2align 3
 default_levels: .quad .Le_low_id, .Le_medium_id, .Le_high_id, 0
 dropped_states: .quad .Lv_cancelled, .Lv_discarded, .Lv_refused, 0     # a held message will not run
+default_modes: .quad .Lv_default, .Lv_auto, .Lv_accept, 0    # a pick of these is the project's default
+# the permission modes (ext-webview-ui.md 2.1; webview index.js @5779560): id, label, description, the box
+#   frame's colour (index.css's data-permission-mode focus rings: the claude-orange default is rhun's accent,
+#   acceptEdits the foreground, plan VS Code's focus border (rhun's info blue: the accent is default's),
+#   auto and bypassPermissions the error colour), flags
+mode_tbl:
+    .quad .Lv_dont_ask, .Lml_dont_ask, .Lmd_dont_ask
+    .long T_ACCENT, 0
+    .quad .Lv_default, .Lml_default, .Lmd_default
+    .long T_ACCENT, 0
+    .quad .Lv_accept, .Lml_accept, .Lmd_accept
+    .long T_FG, 0
+    .quad .Lv_plan, .Lml_plan, .Lmd_plan
+    .long T_INFO, 0
+    .quad .Lv_auto, .Lml_auto, .Lmd_auto
+    .long T_ERROR, 0
+    .quad .Lv_bypass, .Lml_bypass, .Lmd_bypass
+    .long T_ERROR, 0
+.Lv_dont_ask: .asciz "dontAsk"
+.Lv_accept: .asciz "acceptEdits"
+.Lv_auto: .asciz "auto"
+.Lml_dont_ask: .asciz "Don't ask"
+.Lmd_dont_ask: .asciz "Claude will deny actions that need approval instead of asking"
+.Lml_default: .asciz "Manual"
+.Lmd_default: .asciz "Claude will ask for approval before making each edit"
+.Lml_accept: .asciz "Edit automatically"
+.Lmd_accept: .asciz "Claude will edit your selected text or the whole file"
+.Lml_plan: .asciz "Plan"
+.Lmd_plan: .asciz "Claude will explore the code and present a plan before editing"
+.Lml_auto: .asciz "Auto"
+.Lmd_auto: .asciz "Claude will approve actions that pass a safety check and pause for anything risky"
+.Lml_bypass: .asciz "Bypass permissions"
+.Lmd_bypass: .asciz "Claude will not ask for approval before running potentially dangerous commands"
+.Lm_failed: .asciz "Failed to set mode: "
+.Lk_effective: .asciz "effective"
+.Lk_permissions: .asciz "permissions"
+.Lk_no_auto: .asciz "disableAutoMode"
+.Lk_no_bypass: .asciz "disableBypassPermissionsMode"
+.Lv_disable: .asciz "disable"
+.Lk_mode: .asciz "mode"
+.Lk_error: .asciz "error"
 effort_labels:
     .quad .Le_low_id, .Le_low, .Le_medium_id, .Le_medium, .Le_high_id, .Le_high
     .quad .Le_xhigh_id, .Le_xhigh, .Le_max_id, .Le_max, 0, 0

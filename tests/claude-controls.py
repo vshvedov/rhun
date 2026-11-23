@@ -6,6 +6,7 @@ folders, an environment without CLAUDE* or ANTHROPIC* variables, and a config wh
 starts the fake. Nothing here writes the user's own Claude Code settings: the fake's config folder is the
 test's HOME."""
 import importlib.util
+import json
 from pathlib import Path
 import re
 import unittest
@@ -841,6 +842,350 @@ class BandTest(MenuCase):
         self.assertGreater(self.room(), 0)                            # the room for 5 lines is all drawn
         self.assertIn('box=1', self.command('print-agent-input'))
         self.assertEqual(self.thread()[-1], chat.REPLY + 'ok: hello')
+
+
+MODES = ['Manual', 'Edit automatically', 'Plan']
+MODE_DESC = {
+    "Don't ask": 'Claude will deny actions that need approval instead of asking',
+    'Manual': 'Claude will ask for approval before making each edit',
+    'Edit automatically': 'Claude will edit your selected text or the whole file',
+    'Plan': 'Claude will explore the code and present a plan before editing',
+    'Auto': 'Claude will approve actions that pass a safety check and pause for anything risky',
+    'Bypass permissions': 'Claude will not ask for approval before running potentially dangerous commands',
+}
+BYPASS = 'info Bypass permissions is off in Settings > Claude Code.'
+
+
+class ModeCase(MenuCase):
+    """The modes picker, the footer under the box (print-agents-foot) and the requests the fake read."""
+
+    def modes(self):
+        """The modes picker's rows (label, flags), opened as its button opens it, then closed."""
+        self.command('agent-modes')
+        menu = self.menu()
+        self.assertTrue(menu.startswith('popup=modes '), menu)
+        self.assertIn('\nsection Modes\t⇧ + tab to switch\n', menu)
+        rows = self.rows()
+        for _, label, desc, _, _ in rows:
+            self.assertEqual(desc, MODE_DESC[label])
+        self.command('key Escape')
+        return [(r[1], r[4]) for r in rows]
+
+    def labels_offered(self):
+        return [label for label, _ in self.modes()]
+
+    def asked(self):
+        """The modes set_permission_mode asked for, in order."""
+        return [m['request']['mode'] for m in self.stdin()
+                if m.get('type') == 'control_request' and m['request'].get('subtype') == 'set_permission_mode']
+
+    def mode(self):
+        return re.search(r' mode=(\S*)', self.live()).group(1)
+
+    def foot(self):
+        """print-agents-foot's first line: the mode, the frame's colour, where the buttons are, the label."""
+        first = self.command('print-agents-foot').splitlines()[0]
+        head, label = first.split(' label=', 1)
+        out = dict(word.split('=', 1) for word in head.split(' '))
+        out['label'] = label
+        return out
+
+    def argv_modes(self):
+        return [[a for a in s['argv'] if a.startswith('--permission-mode=')] for s in self.starts()]
+
+    def conv_mode(self, sid):
+        match = re.search(r'^conv %s\s+(\S+)$' % re.escape(sid), self.command('print-agent-cfg'), re.M)
+        return match.group(1) if match else None
+
+    def newmode(self):
+        match = re.search(r'^newmode (\S*)$', self.command('print-agent-cfg'), re.M)
+        return match.group(1) if match else None
+
+
+class ModeTest(ModeCase):
+    def test_offered_modes(self):
+        self.ready()
+        rows = self.modes()
+        self.assertEqual(rows, [('Manual', 'check'), ('Edit automatically', '-'), ('Plan', '-')])
+        self.assertEqual(self.foot()['label'], 'Manual')
+        self.quit()
+        self.start(env={'FAKE_CLAUDE_MODELS': 'auto'})
+        self.chat('hello')
+        self.assertEqual(self.labels_offered(), MODES + ['Auto'])
+        self.quit()
+        self.start(self.claude_section('allow_bypass_permissions = true\n'))
+        self.chat('hello')
+        self.assertEqual(self.labels_offered(), MODES + ['Bypass permissions'])
+
+    def test_dont_ask_only_when_current(self):
+        self.start(env={'FAKE_CLAUDE_MODE': 'dontAsk'})
+        self.chat('hello')
+        self.assertEqual(self.mode(), 'dontAsk')
+        self.assertEqual(self.modes(), [("Don't ask", 'check'), ('Manual', '-'), ('Edit automatically', '-'),
+                                        ('Plan', '-')])
+        self.assertEqual(self.foot()['label'], "Don't ask")
+        self.command('key shift+Tab')
+        self.until(lambda: self.mode() == 'default', 'the next mode')
+        self.assertEqual(self.asked(), ['default'])
+        self.assertEqual(self.labels_offered(), MODES)
+
+    def test_shift_tab_cycles_and_wraps(self):
+        self.ready()
+        self.assertIn('focus=1', self.command('print-agent-input'))
+        for key in ('shift+Tab', 'ISO_Left_Tab'):
+            for _ in range(3):
+                self.command('key ' + key)
+            self.until(lambda: len(self.asked()) % 3 == 0 and self.asked(), 'three requests')
+            self.until(lambda: self.mode() == 'default', 'back to Manual')
+        self.assertEqual(self.asked(), ['acceptEdits', 'plan', 'default'] * 2)
+        self.assertEqual(self.box(), '')                             # nothing typed into the box
+        self.assertEqual(self.prompts(), ['hello'])
+
+    def test_same_mode_answer_without_status(self):
+        # the CLI answers a request for the mode in force without a system/status line (finding 10): the
+        # answer is what the label and the kept mode follow
+        self.ready()
+        sid = self.sid()
+        self.command('agent-mode acceptEdits')
+        self.until(lambda: self.mode() == 'acceptEdits', 'the mode')
+        self.command('agent-mode acceptEdits')
+        self.until(lambda: len(self.asked()) == 2, 'asked again')
+        self.command('wait 200')
+        self.assertEqual(self.mode(), 'acceptEdits')
+        self.assertEqual(self.foot()['label'], 'Edit automatically')
+        self.assertEqual(self.conv_mode(sid), 'acceptEdits')
+        self.command('key shift+Tab')                                # the next one follows the answer
+        self.until(lambda: len(self.asked()) == 3, 'the next mode')
+        self.assertEqual(self.asked(), ['acceptEdits', 'acceptEdits', 'plan'])
+        self.until(lambda: self.mode() == 'plan', 'plan')
+
+    def test_a_mode_picked_before_a_start_is_passed(self):
+        self.seed('s1')
+        self.start()
+        self.open_listed()
+        self.command('agent-mode plan')
+        self.assertEqual(self.foot()['label'], 'Plan')
+        self.assertEqual(self.starts(), [])
+        self.assertEqual(re.findall(r'\b\d+\b', self.command('print-uproc')), [])
+        self.assertIn(' pid=0 ', self.command('print-agent-live'))
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.argv_modes(), [['--permission-mode=plan']])
+        self.assertEqual(self.mode(), 'plan')
+        self.assertEqual(self.asked(), [])                           # it was passed, not asked for
+        # a new conversation's draft becomes the conversation the pick is for, and nothing starts
+        self.command('agent-new claude')
+        self.command('agent-mode acceptEdits')
+        self.assertEqual(len(self.starts()), 1)
+        self.command('agent-prompt again')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.argv_modes()[-1], ['--permission-mode=acceptEdits'])
+
+    def test_a_conversation_keeps_its_mode(self):
+        self.ready()
+        sid = self.sid()
+        self.command('agent-mode plan')
+        self.until(lambda: self.mode() == 'plan', 'plan')
+        self.command('agent-release')
+        self.until_gone()
+        self.quit()
+        self.start()
+        self.open_listed()
+        self.command('agent-prompt again')
+        self.command('wait-agent ready 10000')
+        self.assertIn('--resume=' + sid, self.starts()[-1]['argv'])
+        self.assertEqual(self.argv_modes()[-1], ['--permission-mode=plan'])
+
+    def test_the_picked_default_applies_to_new_conversations(self):
+        self.ready()
+        self.assertEqual(self.newmode(), '-')
+        self.command('agent-mode plan')                              # plan is no default for new ones
+        self.until(lambda: self.mode() == 'plan', 'plan')
+        self.assertEqual(self.newmode(), '-')
+        self.command('agent-mode acceptEdits')
+        self.until(lambda: self.mode() == 'acceptEdits', 'acceptEdits')
+        self.assertEqual(self.newmode(), 'acceptEdits')
+        self.chat('again')
+        self.assertEqual(self.argv_modes()[-1], ['--permission-mode=acceptEdits'])
+        self.quit()
+        # with [claude] initial_mode set, that is what new conversations start in, and a pick keeps it so
+        self.start(self.claude_section('initial_mode = plan\n'))
+        self.chat('hello')
+        self.assertEqual(self.argv_modes()[-1], ['--permission-mode=plan'])
+        self.command('agent-mode default')
+        self.until(lambda: self.mode() == 'default', 'default')
+        self.assertEqual(self.newmode(), 'acceptEdits')
+        self.chat('third')
+        self.assertEqual(self.argv_modes()[-1], ['--permission-mode=plan'])
+
+    def test_bypass_needs_the_setting_everywhere(self):
+        self.ready()
+        self.assertNotIn('Bypass permissions', self.labels_offered())
+        for _ in range(4):
+            self.command('key shift+Tab')
+        self.until(lambda: len(self.asked()) == 4, 'four requests')
+        self.assertEqual(self.asked(), ['acceptEdits', 'plan', 'default', 'acceptEdits'])
+        out, ok = self.reply('agent-mode bypassPermissions')
+        self.assertFalse(ok, out)
+        self.command('wait 200')
+        self.assertNotIn('bypassPermissions', self.asked())
+        # a remembered default of bypass starts in default, and says why
+        self.command('agent-cfg-set newmode bypassPermissions')
+        self.chat('again')
+        self.assertEqual(self.argv_modes()[-1], ['--permission-mode=default'])
+        self.assertIn(BYPASS, self.thread())
+        self.quit()
+        # initial_mode = bypassPermissions without the setting: default, and the info row
+        self.start(self.claude_section('initial_mode = bypassPermissions\n'))
+        self.chat('hello')
+        self.assertEqual(self.argv_modes()[-1], ['--permission-mode=default'])
+        self.assertIn(BYPASS, self.thread())
+        self.quit()
+        # with the setting: offered, passed with its flag, and asked for
+        self.start(self.claude_section('allow_bypass_permissions = true\n'))
+        self.chat('hello')
+        argv = self.starts()[-1]['argv']
+        self.assertIn('--allow-dangerously-skip-permissions', argv)
+        self.assertIn('Bypass permissions', self.labels_offered())
+        sid = self.sid()
+        self.command('agent-mode bypassPermissions')
+        self.until(lambda: self.mode() == 'bypassPermissions', 'bypass')
+        self.assertEqual(self.conv_mode(sid), 'bypassPermissions')
+        self.command('agent-release')
+        self.until_gone()
+        self.quit()
+        # the conversation's remembered bypass mode, the setting gone: default and the info row
+        self.start()
+        self.listed()
+        self.command('print-agents 1')                              # the newest: the one in bypass
+        self.command('agent-prompt again')
+        self.command('wait-agent ready 10000')
+        self.assertIn('--resume=' + sid, self.starts()[-1]['argv'])
+        self.assertEqual(self.argv_modes()[-1], ['--permission-mode=default'])
+        self.assertIn(BYPASS, self.thread())
+        self.assertNotIn('Bypass permissions', self.labels_offered())
+        no_setting = [s['argv'] for s in self.starts()
+                      if '--allow-dangerously-skip-permissions' not in s['argv']]
+        self.assertEqual(len(no_setting), len(self.starts()) - 1)
+        for argv in no_setting:
+            self.assertNotIn('--permission-mode=bypassPermissions', argv)
+
+    def test_policies_take_auto_and_bypass_away(self):
+        # the settings the program reports (get_settings' effective) can forbid both; this is the test's
+        # own HOME, the fake's config folder
+        (self.work / '.claude').mkdir(exist_ok=True)
+        (self.work / '.claude/settings.json').write_text(json.dumps(
+            {'permissions': {'disableBypassPermissionsMode': 'disable', 'disableAutoMode': 'disable'}}),
+            encoding='utf-8')
+        self.start(self.claude_section('allow_bypass_permissions = true\n'), env={'FAKE_CLAUDE_MODELS': 'auto'})
+        self.chat('hello')
+        self.until(lambda: self.labels_offered() == MODES, 'the policies')
+        out, ok = self.reply('agent-mode bypassPermissions')
+        self.assertFalse(ok, out)
+        self.assertEqual(self.asked(), [])
+
+    def test_a_refused_mode_says_why_and_goes_back(self):
+        # a process started without --allow-dangerously-skip-permissions cannot switch to bypass (finding
+        # 10): the setting turned on while it runs offers it, the CLI refuses, the toast says so
+        self.ready()
+        sid = self.sid()
+        self.config.write_text(self.BASE + self.claude_section('allow_bypass_permissions = true\n'),
+                               encoding='utf-8')
+        self.until(lambda: 'Bypass permissions' in self.labels_offered(), 'the reload')
+        self.command('agent-mode bypassPermissions')
+        self.until(lambda: self.asked() == ['bypassPermissions'], 'asked')
+        self.until(lambda: self.mode() == 'default', 'back to the mode before')
+        self.assertEqual(self.command('print-toast').strip(),
+                         'toast=Failed to set mode: Cannot set permission mode to bypassPermissions because the '
+                         'session was not launched with --dangerously-skip-permissions')
+        self.assertEqual(self.foot()['label'], 'Manual')
+        self.assertIn(self.conv_mode(sid), (None, 'default'))
+
+    def test_mode_button_and_menu_button(self):
+        self.ready()
+        foot = self.foot()
+        self.assertEqual((foot['mode'], foot['label']), ('default', 'Manual'))
+        ring = foot['ring']
+        x, y = foot['mode_at'].split(',')
+        self.command(f'move {x} {y}')
+        self.command('wait 700')
+        self.assertIn('Claude will ask for approval before making each edit. Click to change, or press '
+                      'Shift+Tab to cycle.', self.command('print-tip'))
+        self.command(f'click {x} {y}')
+        self.assertEqual(self.head()['popup'], 'modes')
+        self.command('agent-menu-pick 2')                            # Edit automatically
+        self.until(lambda: self.mode() == 'acceptEdits', 'picked')
+        self.assertEqual(self.asked(), ['acceptEdits'])
+        self.assertTrue(self.menu().startswith('popup=none'))
+        foot = self.foot()
+        self.assertEqual(foot['label'], 'Edit automatically')
+        self.assertNotEqual(foot['ring'], ring)
+        mx, my = foot['menu_at'].split(',')
+        self.command(f'move {mx} {my}')
+        self.command('wait 700')
+        self.assertIn('Show command menu (/)', self.command('print-tip'))
+        self.command(f'click {mx} {my}')
+        head = self.head()
+        self.assertEqual((head['popup'], head['filter']), ('menu', ''))
+        self.command(f'click {mx} {my}')                            # again: it closes
+        self.assertTrue(self.menu().startswith('popup=none'))
+
+    def test_the_frame_takes_the_modes_colour(self):
+        self.ready()
+        rings = {}
+        for mode in ('default', 'acceptEdits', 'plan'):
+            self.command('agent-mode ' + mode)
+            self.until(lambda: self.mode() == mode, mode)
+            rings[mode] = self.foot()['ring']
+        self.assertEqual(len(set(rings.values())), 3, rings)
+
+    def test_plan_command_switches_the_mode(self):
+        self.ready()
+        self.command('agent-prompt /plan')
+        self.until(lambda: self.mode() == 'plan', 'plan')
+        self.assertEqual(self.asked(), ['plan'])
+        self.command('agent-prompt /plan')
+        self.assertIn('info Already in plan mode. No plan written yet.', self.thread())
+        self.command('agent-mode default')
+        self.until(lambda: self.mode() == 'default', 'default')
+        self.command('agent-prompt /plan write the tests')
+        self.until(lambda: 'write the tests' in self.prompts(), 'the description goes as a prompt')
+        self.assertEqual(self.asked(), ['plan', 'default', 'plan'])
+
+    def test_mode_controls_fit(self):
+        self.ready()
+        self.command('agent-mode acceptEdits')                       # the longest label of the three
+        self.until(lambda: self.mode() == 'acceptEdits', 'acceptEdits')
+        lines = self.command('print-agents-foot').splitlines()[1:]
+        self.assertEqual(len(lines), 25 * 34)
+        cut = 0
+        for line in lines:
+            r = {k: int(v) for k, v in (f.split('=') for f in line.split(' label=')[0].split())}
+            label = line.split(' label=', 1)[1]
+            what = line
+            rects = {name: (r[name + '_x'], r[name + '_y'], r[name + '_w'], r[name + '_h'])
+                     for name in ('send', 'mode', 'menu')}
+            for name, (x, y, w, h) in rects.items():
+                self.assertGreater(w, 0, what)
+                self.assertGreater(h, 0, what)
+                self.assertGreaterEqual(x, 0, what)
+                self.assertLessEqual(x + w, r['w'], what)
+                self.assertGreaterEqual(y, 0, what)
+                self.assertLessEqual(y + h, r['h'], what)
+            names = list(rects)
+            for i, a in enumerate(names):
+                for b in names[i + 1:]:
+                    ax, ay, aw, ah = rects[a]
+                    bx, by, bw, bh = rects[b]
+                    apart = ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay
+                    self.assertTrue(apart, f'{a} and {b} overlap: {what}')
+            self.assertGreaterEqual(r['mode_w'], r['menu_w'], what)  # room for its dot and a cut label
+            self.assertTrue(label == 'Edit automatically' or label.endswith('…'), what)
+            cut += label != 'Edit automatically'
+        at = {(int(re.search(r'size=(\d+)', l).group(1)), int(re.search(r' w=(\d+)', l).group(1))): l
+              for l in lines}
+        self.assertTrue(at[13, 380].endswith(' label=Edit automatically'), at[13, 380])
+        self.assertGreater(cut, 0)                                   # a large font in a narrow panel cuts it
 
 
 class SeamWordsTest(unittest.TestCase):

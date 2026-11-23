@@ -1942,6 +1942,13 @@ FN ui_textarea
     cmp dword ptr [rsp + 16], 0
     je 3f
     COLOR r9d, T_ACCENT
+    mov eax, [rbx + TF_ring]    # its owner's colour for the frame (a theme slot + 1)
+    test eax, eax
+    jz 3f
+    cmp eax, T_COUNT
+    ja 3f
+    lea r10, [rip + g_theme]
+    mov r9d, [r10 + rax*4 - 4]
 3:  COLOR eax, T_INPUT
     push rax
     push rax

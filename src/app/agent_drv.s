@@ -1992,15 +1992,66 @@ reqs_drop:
 9:  mov eax, r13d
     EPILOGUE
 
-# FN ev_mode(al, ptr, len): the permission mode the agent reports (the label by the box)
+# FN ev_mode(al, ptr, len): the permission mode in effect (the footer's mode button): the agent reports it,
+#   or the user picked it. A change from a mode in effect before is the conversation's to keep
+#   (agent_mode_keep); the mode a process starts in is what its start chose, not kept for it
 FN ev_mode
+    PROLOGUE 48
+    mov rbx, rdi
     cmp rdx, 31
     jbe 1f
     mov edx, 31
-1:  lea rdi, [rdi + AL_mode]
+1:  mov r12, rsi
+    mov r13, rdx
+    lea rdi, [rsp]              # the mode before
+    lea rsi, [rbx + AL_mode]
+    call cstr_copy
+    lea rdi, [rbx + AL_mode]
+    mov rsi, r12
+    mov rdx, r13
     mov byte ptr [rdi + rdx], 0
+    call memmove
     mov dword ptr [rip + g_dirty], 1
-    jmp memmove
+    cmp byte ptr [rsp], 0
+    je 9f
+    lea rdi, [rsp]
+    lea rsi, [rbx + AL_mode]
+    call strcmp_eq
+    test eax, eax
+    jnz 9f
+    mov rdi, rbx
+    call agent_mode_keep
+9:  EPILOGUE
+
+# FN agent_mode_keep(al): the mode in effect is the conversation's, passed at its next start (its driver's
+#   record, agentcfg.s: saved when it changed)
+FN agent_mode_keep
+    PROLOGUE
+    mov rbx, rdi
+    cmp byte ptr [rbx + AL_sid], 0
+    je 9f
+    cmp byte ptr [rbx + AL_mode], 0
+    je 9f
+    mov rdi, rbx
+    call live_cfg
+    mov r12, rax
+    mov rdi, rax
+    lea rsi, [rbx + AL_sid]
+    call agentcfg_conv
+    lea r13, [rax + ACH_mode]
+    mov rdi, r13
+    lea rsi, [rbx + AL_mode]
+    call strcmp_eq
+    test eax, eax
+    jnz 8f
+    mov rdi, r13
+    lea rsi, [rbx + AL_mode]
+    call cstr_copy
+    mov rdi, r12
+    call agentcfg_dirty
+8:  mov rdi, r12                # (a conversation new to the record is a change too)
+    call agentcfg_save
+9:  EPILOGUE
 
 # FN ev_config(al): the driver's lists changed (agentcfg.s): its record is saved
 FN ev_config

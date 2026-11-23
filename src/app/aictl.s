@@ -860,6 +860,59 @@ c_print_agent_menu:
     xor eax, eax
     EPILOGUE
 
+# agent-modes: the modes picker, as the footer's mode button opens it; error without a box of a built-in
+#   driver that has modes
+c_agent_modes:
+    PROLOGUE
+    call ai_set
+    mov edi, APP_MODES
+    xor esi, esi
+    xor edx, edx
+    call agentpop_open
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# agent-mode ID: the box's conversation takes that mode as the picker gives it (foot_mode_set: only a mode
+#   offered now); error when it is refused
+c_agent_mode:
+    PROLOGUE 48
+    call ai_set
+    call ai_arg
+    test rdx, rdx
+    jz 8f
+    cmp rdx, 40
+    jae 8f
+    lea rdi, [rsp]
+    mov rsi, rax
+    mov byte ptr [rdi + rdx], 0
+    call memmove
+    call agentext_box_owner
+    test edx, edx
+    jz 8f
+    mov rdi, rax
+    lea rsi, [rsp]
+    call foot_mode_set
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# print-agents-foot: the footer under the box (foot_dump)
+c_print_agents_foot:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call foot_dump
+    xor eax, eax
+    EPILOGUE
+
 # print-agent-bands: the open conversation's bands (bands_dump)
 c_print_agent_bands:
     PROLOGUE
@@ -932,6 +985,9 @@ c_agent_test_band:
 .Lc_print_agent_menu: .asciz "print-agent-menu"
 .Lc_print_agent_bands: .asciz "print-agent-bands"
 .Lc_agent_test_band: .asciz "agent-test-band"
+.Lc_agent_modes: .asciz "agent-modes"
+.Lc_agent_mode: .asciz "agent-mode"
+.Lc_print_agents_foot: .asciz "print-agents-foot"
 .Lb_error: .asciz "error"
 .Lb_settings: .asciz "settings"
 .Lb_auth: .asciz "auth"
@@ -1013,6 +1069,9 @@ ai_ctl:
     .quad .Lc_agent_menu, c_agent_menu, .Lc_agent_menu_pick, c_agent_menu_pick
     .quad .Lc_print_agent_menu, c_print_agent_menu, .Lc_print_agent_bands, c_print_agent_bands
     .quad .Lc_agent_test_band, c_agent_test_band
+    # the footer and the permission modes (agentfoot.s)
+    .quad .Lc_agent_modes, c_agent_modes, .Lc_agent_mode, c_agent_mode
+    .quad .Lc_print_agents_foot, c_print_agents_foot
     .quad 0, 0
 cfg_fields:                     # agent-cfg-set's words: the word, the AGF_*, whether it is an int
     .quad .Lf_model

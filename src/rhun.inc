@@ -1414,7 +1414,7 @@ F TF_id, 4
 F TF_top, 4             # text area: the first visual row shown
 F TF_width, 4           # text area: available text width in pixels
 F TF_prefx, 4           # text area: preferred x for vertical motion, -1 = none
-F TF_pad, 4
+F TF_ring, 4            # text area: its frame's colour while it has the keys, a theme slot + 1 (0: T_ACCENT)
 F TF_revision, 8        # content or destination lifecycle mutation
 F TF_face, 8            # text area: the face it measures and draws in, 0 the interface's
 F TF_paint, 8           # text area: 0, or ranges {start 8, end 8, kind 4, pad 4} ending start -1 drawn
@@ -2970,7 +2970,7 @@ F AL_report, SB_SIZE    # why it failed (shown as an error row, print-agent-live
 F AL_out, VEC_SIZE      # requests rhun sent and awaits: {n, act} 16-byte slots
 F AL_next, 8            # the number of rhun's next request
 F AL_hold_until, 8      # time_ms the wait for another holder ends (agent_holder.s)
-F AL_cfg, 8             # the driver's own
+F AL_cfg, 8             # the driver's own (Claude's: CLP_* bits, claude_session.s)
 F AL_turns, 8           # prompts written whose turn has not ended (READY when none is left)
 F AL_rowkey, 80         # cstr: the item key of AL_row (ev_text), empty when no row takes more text
 F AL_own, 8             # AQ*: rhun's own card on the session (held, trust, sign-in, a failed start), or 0
@@ -3247,6 +3247,7 @@ ENDSTRUCT APM_SIZE
 .equ APS_COUNT, 7
 .equ ID_AGPOP, 0x8800           # the panel's popup: + its row (0 .. 0x3fe), + 0x3ff its filter field
 .equ ID_AGBAND, 0x8c00          # the bands above the box: + BK_* their x
+.equ ID_AGFOOT, 0x8d00          # the footer under the box: + FOOT_* its controls (agentfoot.s)
 
 # ---- rich cards of driven sessions (src/app/agentcard.s) ----
 STRUCT

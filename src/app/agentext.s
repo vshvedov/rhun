@@ -24,9 +24,7 @@ hidden_names: .zero VEC_SIZE    # cstr OWNER/NAME of the sources switched off in
 qual: .zero SB_SIZE
 num: .zero 32
 tmp: .zero SB_SIZE
-mode_sb: .zero SB_SIZE           # the mode label (mode_label)
 lay_box: .long 0                # box_fit: the box's width
-lay_mode: .long 0               #   the mode label's room (its gap included), 0: not shown
 lay_btn: .long 0                #   Send's (or Stop's) width: MI_64 with its word, MI_32 an icon
 lay_below: .long 0              #   1: Send (and the mode label) on a row under the box
 lay_min: .long 0                #   the least the box is given
@@ -3023,47 +3021,11 @@ any_card_draw:
 1:  call card_draw
     EPILOGUE
 
-# mode_label(AS* or 0) -> rax "mode: X" in mode_sb, or 0: the permission mode a driven session reports
-mode_label:
-    PROLOGUE
-    xor eax, eax
-    test rdi, rdi
-    jz 9f
-    mov rbx, [rdi + AS_live]
-    test rbx, rbx
-    jz 9f
-    cmp byte ptr [rbx + AL_mode], 0
-    je 9f
-    lea rdi, [rip + mode_sb]
-    call sb_clear
-    lea rdi, [rip + mode_sb]
-    lea rsi, [rip + .Lmode_head]
-    call sb_push_cstr
-    lea rdi, [rip + mode_sb]
-    lea rsi, [rbx + AL_mode]
-    call sb_push_cstr
-    mov rax, [rip + mode_sb + SB_ptr]
-9:  EPILOGUE
-
-# mode_w(AS* or 0) -> eax the room the mode label takes left of Send (with its gap), 0 without one
-mode_w:
-    PROLOGUE
-    call mode_label
-    test rax, rax
-    jz 9f
-    mov rdi, [rip + ag_fsmall]
-    mov rsi, [rip + mode_sb + SB_ptr]
-    mov rdx, [rip + mode_sb + SB_len]
-    call text_width
-    add eax, [rip + g_pmt + 4*MI_8]
-9:  EPILOGUE
-
 # box_fit(w, AS* or 0): the prompt row across the panel's width w, in lay_*. In a row: the box (from
-#   MI_12 in), the mode label, Send with its word (MI_64), ending MI_40 - MI_8 - MI_12 before the right
-#   edge. The box gets at least lay_min: four MI_32 (about ten characters), or the whole row when the
-#   panel is narrower. Short of that the mode label goes first, then Send becomes an icon (MI_32), then
-#   Send goes on a row under the box (with the mode label left of it when there is room) and the box
-#   takes the whole row
+#   MI_12 in), Send with its word (MI_64), ending MI_40 - MI_8 - MI_12 before the right edge. The box gets
+#   at least lay_min: four MI_32 (about ten characters), or the whole row when the panel is narrower.
+#   Short of that Send becomes an icon (MI_32), then Send goes on a row under the box and the box takes the
+#   whole row. The permission mode is the footer's (agentfoot.s)
 box_fit:
     PROLOGUE
     mov r12d, edi
@@ -3077,43 +3039,26 @@ box_fit:
     cmovg eax, r13d
     mov [rip + lay_min], eax
     mov dword ptr [rip + lay_below], 0
-    mov rdi, rbx
-    call mode_w
-    mov r14d, eax               # the mode label's room
     mov r15d, [rip + g_pmt + 4*MI_64]
-1:  mov eax, r12d               # in a row: w - mode - Send - MI_40
-    sub eax, r14d
+1:  mov eax, r12d               # in a row: w - Send - MI_40
     sub eax, r15d
     sub eax, [rip + g_pmt + 4*MI_40]
     cmp eax, [rip + lay_min]
     jge 8f
-    test r14d, r14d
-    jz 2f
-    xor r14d, r14d              # without the mode label
-    jmp 1b
-2:  cmp r15d, [rip + g_pmt + 4*MI_32]
+    cmp r15d, [rip + g_pmt + 4*MI_32]
     je 3f
     mov r15d, [rip + g_pmt + 4*MI_32]   # Send as an icon
     jmp 1b
 3:  mov dword ptr [rip + lay_below], 1  # Send under the box
     mov r15d, [rip + g_pmt + 4*MI_64]
     cmp r15d, r13d
-    jle 4f
-    mov r15d, [rip + g_pmt + 4*MI_32]
-4:  mov rdi, rbx                # the mode label left of it, when it fits
-    call mode_w
-    mov r14d, eax
-    mov eax, r13d
-    sub eax, r15d
-    cmp r14d, eax
     jle 5f
-    xor r14d, r14d
+    mov r15d, [rip + g_pmt + 4*MI_32]
 5:  mov eax, r13d
     test eax, eax
     jg 8f
     mov eax, 1
 8:  mov [rip + lay_box], eax
-    mov [rip + lay_mode], r14d
     mov [rip + lay_btn], r15d
     EPILOGUE
 
@@ -3172,7 +3117,7 @@ input_h:
 
 # FN agentext_box_dump(sb): print-agents-box: for the open session (its mode label) at every panel size 8
 #   to 32 and every panel width 240 to 900 in steps of 20, box_fit's layout, a line each: "size=S w=W
-#   x=X box=B min=M mode=0|1 btn_x=BX btn_w=BW below=0|1 h=H" (x the box's left, BX Send's, from the
+#   x=X box=B min=M btn_x=BX btn_w=BW below=0|1 h=H" (x the box's left, BX Send's, from the
 #   panel's left; H the prompt row's height). The setting is the user's again after it
 FN agentext_box_dump
     PROLOGUE 16
@@ -3222,14 +3167,6 @@ FN agentext_box_dump
     call sb_push_cstr
     mov rdi, rbx
     mov esi, [rip + lay_min]
-    call sb_push_u64
-    mov rdi, rbx
-    lea rsi, [rip + .Lbd_mode]
-    call sb_push_cstr
-    xor esi, esi
-    cmp dword ptr [rip + lay_mode], 0
-    setne sil
-    mov rdi, rbx
     call sb_push_u64
     mov rdi, rbx
     lea rsi, [rip + .Lbd_btn_x]
@@ -3323,24 +3260,49 @@ FN agentext_placeholder_dump
     call sb_push_byte
     EPILOGUE
 
-# send_x(x) -> eax where Send starts for a panel whose left is x (box_fit's lay_*): right of the box and
-#   the mode label, or at the right end of the row under the box
+# send_x(x) -> eax where Send starts for a panel whose left is x (box_fit's lay_*): right of the box, or
+#   at the right end of the row under the box
 send_x:
     lea eax, [rdi]
     add eax, [rip + g_pmt + 4*MI_12]
     add eax, [rip + lay_box]
     cmp dword ptr [rip + lay_below], 0
     jne 1f
-    add eax, [rip + lay_mode]
     add eax, [rip + g_pmt + 4*MI_8]
     ret
 1:  sub eax, [rip + lay_btn]
     ret
 
+# FN agentext_send_at(w, AS* or 0) -> eax Send's x, edx its y, ecx its width, r8d its height (from the panel's
+#   left and the prompt row's top), r9d the prompt row's height (input_h): what print-agents-foot checks the
+#   footer against
+FN agentext_send_at
+    PROLOGUE
+    call input_h
+    mov r13d, eax
+    xor edi, edi
+    call send_x
+    mov r14d, eax
+    PM r15d, MI_10              # the box's top, and Send's when it is beside the box
+    cmp dword ptr [rip + lay_below], 0
+    je 1f
+    call below_h                # under the box: below its bottom, MI_8 down
+    mov ecx, r13d
+    sub ecx, [rip + g_pmt + 4*MI_20]
+    sub ecx, eax
+    add r15d, ecx
+    add r15d, [rip + g_pmt + 4*MI_8]
+1:  mov eax, r14d
+    mov edx, r15d
+    mov ecx, [rip + lay_btn]
+    PM r8d, MI_32
+    mov r9d, r13d
+    EPILOGUE
+
 # FN agentext_bottom_draw(AS* or 0 for a new session, x, y, w, h): the card, then the prompt box with
 #   Send, or Stop while the session works
 FN agentext_bottom_draw
-    PROLOGUE 64                 # [rsp + 48] the mode label's room
+    PROLOGUE 64
     mov rbx, rdi
     mov [rsp], esi
     mov [rsp + 4], edx
@@ -3448,7 +3410,7 @@ FN agentext_bottom_draw
     call ui_text_v_fit
     add rsp, 16
     jmp 9f
-3:  # the box (box_fit: the mode label and Send beside it, or under it in a narrow panel)
+3:  # the box (box_fit: Send beside it, or under it in a narrow panel), its frame in the mode's colour
     mov edi, [rsp + 8]
     mov rsi, rbx
     call input_h
@@ -3457,11 +3419,12 @@ FN agentext_bottom_draw
     mov ecx, [rsp]
     add ecx, eax
     mov [rsp + 28], ecx         # box x
-    mov eax, [rip + lay_mode]
-    mov [rsp + 48], eax         # the mode label's room, left of Send
     mov ecx, [rip + lay_box]
     mov [rsp + 32], ecx         # box w
     mov dword ptr [rip + in_tf + TF_id], ID_AI_CARD + 34
+    mov rdi, rbx
+    call foot_ring
+    mov [rip + in_tf + TF_ring], eax
     mov edx, [rsp + 16]
     add edx, [rip + g_pmt + 4*MI_10]
     mov [rsp + 36], edx         # box y
@@ -3527,23 +3490,7 @@ FN agentext_bottom_draw
     add edx, [rsp + 24]
     mov ecx, [rsp + 8]
     call foot_draw
-    cmp dword ptr [rsp + 48], 0 # a small muted "mode: X" left of Send
-    je 51f
-    mov rdi, rbx
-    call mode_label
-    mov rdi, [rip + ag_fsmall]
-    mov esi, [rsp + 52]
-    sub esi, [rsp + 48]
-    mov edx, [rsp + 56]
-    PM ecx, MI_32
-    mov r8, [rip + mode_sb + SB_ptr]
-    mov r9, [rip + mode_sb + SB_len]
-    COLOR eax, T_MUTED
-    push rax
-    push rax
-    call ui_text_v
-    add rsp, 16
-51: # Send, or Stop while it works (an icon when narrow: an arrow, a square)
+    # Send, or Stop while it works (an icon when narrow: an arrow, a square)
     mov edi, ID_AI_CARD + 32
     lea r12, [rip + .Lb_send]
     test rbx, rbx
@@ -3931,12 +3878,16 @@ FN agentext_new_draw
     xor esi, esi
     call input_h
     mov [rsp + 16], eax
-    mov r8d, eax                # the box at the bottom
+    xor edi, edi                # and its footer (a built-in driver's draft has one)
+    mov esi, [rsp + 8]
+    call foot_h
+    add [rsp + 16], eax
+    mov r8d, [rsp + 16]         # the box at the bottom
     xor edi, edi                # no session yet
     mov esi, [rsp]
     mov edx, [rsp + 4]
     add edx, [rsp + 12]
-    sub edx, eax
+    sub edx, r8d
     mov ecx, [rsp + 8]
     call agentext_bottom_draw
     cmp qword ptr [rip + new_kind], 0
@@ -4224,12 +4175,10 @@ FN agentext_prompts_gone
 .Lbd_x: .asciz " x="
 .Lbd_box: .asciz " box="
 .Lbd_min: .asciz " min="
-.Lbd_mode: .asciz " mode="
 .Lbd_btn_x: .asciz " btn_x="
 .Lbd_btn_w: .asciz " btn_w="
 .Lbd_below: .asciz " below="
 .Lbd_h: .asciz " h="
-.Lmode_head: .asciz "mode: "
 .Lb_stop: .asciz "Stop"
 .Lnew_head: .asciz "New "
 .Lnew_tail: .asciz " session"

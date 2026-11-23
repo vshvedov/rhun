@@ -1225,9 +1225,10 @@ class BoxLayoutTest(DrivenCase):
     def test_the_box_keeps_its_room_at_every_size_and_width(self):
         self.start()
         self.chat('hello')
-        self.assertIn(' mode=default ', self.live())     # the mode label takes its room
+        self.assertIn(' mode=default ', self.live())     # the mode is the footer's (print-agents-foot)
         rows = [{k: int(v) for k, v in (f.split('=') for f in line.split())}
                 for line in self.command('print-agents-box').splitlines()]
+        self.assertNotIn('mode', rows[0])
         self.assertEqual(len(rows), 25 * 34)            # sizes 8 to 32, widths 240 to 900 by 20
         for r in rows:
             what = repr(r)
@@ -1239,8 +1240,7 @@ class BoxLayoutTest(DrivenCase):
             if not r['below']:
                 self.assertGreaterEqual(r['btn_x'], r['x'] + r['box'], what)
         at = {(r['size'], r['w']): r for r in rows}
-        self.assertEqual((at[13, 380]['mode'], at[13, 380]['below']), (1, 0))   # the default: all in a row
-        self.assertEqual(at[32, 380]['mode'], 0)                                # the label goes first
+        self.assertEqual((at[13, 380]['btn_w'], at[13, 380]['below']), (64, 0))  # the default: all in a row
         self.assertEqual(at[32, 240]['below'], 1)                               # then Send under the box
         self.assertGreater(at[32, 240]['h'], at[32, 900]['h'])
 

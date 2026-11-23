@@ -42,9 +42,10 @@
 .equ TRIM_AT, 1 << 20           # a record above this gives the arena's big block back (json_trim)
 .equ ERR_TAIL, 2000             # bytes of stderr an error row shows at most
 .equ OA_INIT, 1                 # what an answer rhun waits for answers (AL_out's act)
-.equ OA_MODE, 2                 # set_permission_mode (nothing is done with its answer)
+.equ OA_MODE, 2                 # set_permission_mode rhun asks for itself (before allowing ExitPlanMode)
 .equ OA_STOP, 3                 # interrupt (its answer is not needed: the turn's result follows)
 .equ OA_SETTINGS, 4             # get_settings (claude_settings_answer)
+.equ OA_PICK, 5                 # set_permission_mode the user asked for (claude_mode_answer)
 .equ QUESTION_OPTS, 16          # a question's card shows its first 16 options
 .equ R_ASSIST, 2                # the roles of agents.s's messages
 .equ R_INFO, 6
@@ -2565,8 +2566,44 @@ req_kept:
     mov eax, 1
 9:  ret
 
+# FN cl_set_mode(AL*, mode cstr) -> eax 1 written: set_permission_mode {mode} the user asked for (its answer:
+#   claude_mode_answer, picked)
+FN cl_set_mode
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov esi, OA_PICK
+    call req_begin
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_set_mode]
+    call jw_cstr
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_mode]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, r12
+    call jw_cstr
+    mov rdi, rbx
+    call req_end
+    EPILOGUE
+
+# FN claude_sid(AL*) -> eax 1 when AL_sid is the conversation's id (an existing one's from its file's name,
+#   as a start takes it), 0 when it has none
+FN claude_sid
+    mov eax, 1
+    cmp byte ptr [rdi + AL_sid], 0
+    jne 1f
+    test dword ptr [rdi + AL_flags], ALF_NEW
+    jnz 2f
+    jmp resume_sid
+2:  xor eax, eax
+1:  ret
+
 # set_mode_default(AL*): {"type":"control_request","request_id":"rN","request":{"subtype":
-#   "set_permission_mode","mode":"default"}} (its answer is not waited for: system/status reports the mode)
+#   "set_permission_mode","mode":"default"}} (its answer, as system/status, reports the mode)
 set_mode_default:
     PROLOGUE
     mov rbx, rdi
@@ -2869,7 +2906,7 @@ h_cancel:
 9:  EPILOGUE
 
 # h_response(AL*, record): the answer to one of rhun's requests ("rN"); initialize's ends the handshake
-#   (set_permission_mode's is not used: system/status reports the mode)
+#   (set_permission_mode's mode is in effect: claude_mode_answer)
 h_response:
     PROLOGUE
     mov rbx, rdi
@@ -2896,7 +2933,17 @@ h_response:
     mov rsi, r12
     call claude_settings_answer
     jmp 9f
-2:  cmp eax, OA_INIT
+2:  xor edx, edx                # set_permission_mode: the mode it answers is in effect (no status line
+    cmp eax, OA_MODE            #   comes when it was already: finding 10); a refused pick says why
+    je 21f
+    mov edx, 1
+    cmp eax, OA_PICK
+    jne 22f
+21: mov rdi, rbx
+    mov rsi, r12
+    call claude_mode_answer
+    jmp 9f
+22: cmp eax, OA_INIT
     jne 9f
     mov rdi, r12
     lea rsi, [rip + .Lk_subtype]
@@ -2914,6 +2961,9 @@ h_response:
     call jstr
     test rdx, rdx
     jz 1f
+    mov rdi, rbx                # a mode picked while it started is asked for below (claude_session.s)
+    mov rsi, rax
+    call claude_init_mode
     mov rdi, rbx
     mov rsi, rax
     call ev_mode
@@ -2925,6 +2975,10 @@ h_response:
     call claude_init_answer
     mov rdi, rbx                # then what is in effect; a write that broke has ended the start
     call send_get_settings
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
+    mov rdi, rbx                # the mode picked while it started, before any prompt goes
+    call claude_init_ask
     cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
     jne 9f
     mov rdi, rbx
@@ -3088,7 +3142,7 @@ err_tail:
 .p2align 3
 .globl claude_drv
 claude_drv:
-    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST | DRVC_QUEUE
+    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST | DRVC_QUEUE | DRVC_MODES
     .quad .Lname, cl_start, cl_send, cl_stop, cl_answer, cl_release, cl_held, cl_auth, cl_terminal
     .quad claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra
     .quad claude_set_thinking, claude_reply, claude_action

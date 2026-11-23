@@ -886,7 +886,8 @@ emit:
     call row_push
 9:  EPILOGUE
 
-# build_modes(): the modes the driver offers now, the current one checked
+# build_modes(): the header "Modes" with its hint "⇧ + tab to switch" (ext-webview-ui.md 2.3), then the
+#   modes the driver offers now, the current one checked
 build_modes:
     PROLOGUE 16
     mov edi, [rip + pop_dkind]
@@ -901,6 +902,14 @@ build_modes:
     mov r13, [rsp]
     test r13, r13
     jz 9f
+    test r12d, r12d
+    jz 9f
+    lea rax, [rip + .Lm_modes]
+    mov [rip + tmpl + PR_label], rax
+    lea rax, [rip + .Lm_modes_hint]
+    mov [rip + tmpl + PR_trail], rax
+    mov dword ptr [rip + tmpl + PR_kind], APK_SECTION
+    call row_push
     xor r14d, r14d
 1:  cmp r14d, r12d
     jae 9f
@@ -1584,16 +1593,12 @@ enter:
     call agentpop_close
     jmp .Le_taken
 .Le_mode:
-    mov r12, [rbx + PR_arg]
-    call live_of_owner
-    mov r13, rax
+    mov r12, [rbx + PR_arg]     # (its id is the driver's static text: it outlives the list)
+    mov r13, [rip + pop_owner]
     call agentpop_close
-    test r13, r13
-    jz .Le_taken
-    mov rax, [r13 + AL_drv]
     mov rdi, r13
     mov rsi, [r12 + AMD_id]
-    call [rax + DRV_set_mode]
+    call foot_mode_set
     jmp .Le_taken
 .Le_model:
     mov r12, [rbx + PR_arg]
@@ -2359,7 +2364,28 @@ row_geom:
     jle 1f
     mov eax, ecx
 1:  mov [rip + lay_lw], eax
-    EPILOGUE
+    mov rsi, [rbx + PR_trail]   # a header's hint at the right, in what the label leaves (MI_16 at least)
+    test rsi, rsi
+    jz 9f
+    lea r14d, [r12 + rax]
+    add r14d, [rip + g_pmt + 4*MI_8]
+    mov rdi, rsi
+    call strlen
+    mov rdx, rax
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rbx + PR_trail]
+    call text_width
+    mov ecx, r13d
+    sub ecx, r14d
+    cmp ecx, [rip + g_pmt + 4*MI_16]
+    jl 9f
+    cmp eax, ecx
+    cmovg eax, ecx
+    mov [rip + lay_tw], eax
+    mov ecx, r13d
+    sub ecx, eax
+    mov [rip + lay_tx], ecx
+9:  EPILOGUE
 
 # fix_scroll(): pop_scroll within the rows, the selected row shown when the keys moved to it
 fix_scroll:
@@ -2682,7 +2708,19 @@ draw_row:
     mov edx, [rsp + 4]
     mov ecx, [rsp + 8]
     call text_at_y
-    xor eax, eax
+    cmp dword ptr [rip + lay_tw], 0 # a header's hint
+    je 1f
+    mov eax, [rip + lay_tx]
+    mov [rip + lay_lx], eax
+    mov eax, [rip + lay_tw]
+    mov [rip + lay_lw], eax
+    COLOR r10d, T_MUTED
+    mov rdi, [rbx + PR_trail]
+    mov rax, [rip + ag_fsmall]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    call text_at_y
+1:  xor eax, eax
     EPILOGUE
 
 # text_at(cstr, face rax, colour r10d) using [rsp + 4 + 8] y and [rsp + 8 + 8] h of draw_row's frame: the
@@ -2765,7 +2803,7 @@ draw_switch:
 # ---- tests ----
 
 # FN agentpop_dump(sb): "popup=menu|modes|models filter=T sel=N owner=SID" (sel 0 none, owner - a draft's), then
-#   "section NAME", "row N LABEL\tDESC\tTRAIL\tFLAGS" (N from 1 among the rows the keys stop on; - for none;
+#   "section NAME" (a header's hint after a tab), "row N LABEL\tDESC\tTRAIL\tFLAGS" (N from 1 among the rows the keys stop on; - for none;
 #   FLAGS of check, off, on, switch, levels=ID), "empty T", "foot T"; "popup=none" when closed. Then the box's
 #   argument hint (composer_hint_dump)
 FN agentpop_dump
@@ -2860,6 +2898,17 @@ FN agentpop_dump
     call sb_push_cstr
     mov rdi, rbx
     mov rsi, [r14 + PR_label]
+    call sb_push_cstr
+    mov rsi, [r14 + PR_trail]   # a header's hint after a tab
+    test rsi, rsi
+    jz 9f
+    cmp dword ptr [r14 + PR_kind], APK_SECTION
+    jne 9f
+    mov rdi, rbx
+    mov esi, 9
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, [r14 + PR_trail]
     call sb_push_cstr
     jmp 9f
 2:  inc r13d
@@ -3105,6 +3154,8 @@ empty: .byte 0
 .Ls_support: .asciz "Support"
 .Ls_slash: .asciz "Slash Commands"
 .Lnone: .asciz "No matching commands"
+.Lm_modes: .asciz "Modes"
+.Lm_modes_hint: .asciz "\342\207\247 + tab to switch"
 .Lph_filter: .asciz "Filter actions\342\200\246"
 .Lv: .asciz "v"
 .Lsp: .asciz " "

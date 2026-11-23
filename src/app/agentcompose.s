@@ -2,8 +2,9 @@
 # hint drawn after a command's name.
 #
 #   composer_key(keysym, cp, mods) -> eax 1 taken   agentext_input_key asks it first: a key in a driven box
-#                                       is a writer's action (the driver's record is read), and an open
-#                                       popup takes its keys first (Escape closes it before anything else)
+#                                       is a writer's action (the driver's record is read); Shift+Tab cycles
+#                                       the permission mode; an open popup takes its keys first (Escape
+#                                       closes it before anything else)
 #   composer_owner(AS* new owner)       the box changes owner: the popup closes (the text is the caller's)
 #   composer_hint(TF*, kind) -> rax cstr or 0   the argument hint for the box's text: it is "/NAME " and NAME
 #                                       a command with one in the driver's record (nothing is read for it)
@@ -22,7 +23,9 @@ hint_y: .long 0
 
 .text
 
-# FN composer_key(keysym, cp, mods) -> eax 1 when the key was taken before the text area's
+# FN composer_key(keysym, cp, mods) -> eax 1 when the key was taken before the text area's: Shift+Tab
+#   (KEY_TAB with Shift, or KEY_ISO_LEFT_TAB) cycles the permission mode (agentfoot.s) unless the button
+#   menu's filter has the keys; then an open popup's keys
 FN composer_key
     PROLOGUE
     mov r12d, edi
@@ -35,6 +38,21 @@ FN composer_key
     call agentcfg_get
     mov rdi, rax
     call agentcfg_need
+    test r14d, MOD_CTRL | MOD_ALT | MOD_SUPER
+    jnz 1f
+    cmp r12d, KEY_ISO_LEFT_TAB
+    je 2f
+    cmp r12d, KEY_TAB
+    jne 1f
+    test r14d, MOD_SHIFT
+    jz 1f
+2:  call agentpop_field         # the button menu's field takes its own keys
+    test rax, rax
+    jnz 1f
+    call foot_mode_cycle
+    test eax, eax
+    jz 1f
+    EPILOGUE
 1:  call agentpop_kind
     test eax, eax
     jz 8f

@@ -3103,6 +3103,25 @@ class ReviewProtocolTest(ModelCase):
         self.command('wait-agent ready 10000')
         self.until(lambda: 'get_plan' in self.last_start(), 'get_plan after the failure')
 
+    def test_a_refused_pick_where_no_mode_was_reported_is_not_kept(self):
+        # R12: initialize reports no mode; auto picked while it starts is refused: the conversation keeps no
+        # mode (not auto), and its next start does not pass auto
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '800', 'FAKE_CLAUDE_NO_INIT_MODE': '1', 'FAKE_CLAUDE_MODELS': 'auto',
+                        'FAKE_CLAUDE_REFUSE_AUTO': '1'})
+        self.chat('hello', ms=15000)                    # the lists (auto is offered), then a start again
+        sid = self.sid()
+        self.released()
+        self.command('agent-prompt again')
+        self.command('agent-mode auto')
+        self.assertEqual(self.conv_mode(sid), 'auto')   # kept while it is asked
+        self.command('wait-agent ready 10000')
+        self.until(lambda: 'Failed to set mode' in self.command('print-toast'), 'the refusal')
+        self.assertIsNone(self.conv_mode(sid))
+        self.released()
+        self.command('agent-prompt third')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.argv_modes()[-1], [])
+
     def test_a_long_resolved_id_is_cut(self):
         # 2.1: a model's resolvedModel is kept at most 63 bytes, in memory and in the state file
         self.start(env={'FAKE_CLAUDE_MODELS': 'longresolved'})

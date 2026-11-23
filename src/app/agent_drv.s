@@ -2151,15 +2151,28 @@ FN ev_mode
 9:  EPILOGUE
 
 # FN agent_mode_keep(al): the mode in effect is the conversation's, passed at its next start (its driver's
-#   record, agentcfg.s: saved when it changed)
+#   record, agentcfg.s: saved when it changed). None known (a pick refused or kept out by the gate where the
+#   program reported none): the conversation keeps none, rather than the mode that did not hold
 FN agent_mode_keep
     PROLOGUE
     mov rbx, rdi
     cmp byte ptr [rbx + AL_sid], 0
     je 9f
     cmp byte ptr [rbx + AL_mode], 0
-    je 9f
+    jne 1f
     mov rdi, rbx
+    call live_cfg
+    mov r12, rax
+    mov rdi, rax
+    call agentcfg_need
+    mov rdi, r12
+    lea rsi, [rbx + AL_sid]
+    call agentcfg_conv_mode
+    test rax, rax
+    jz 9f
+    mov byte ptr [rax], 0
+    jmp 7f
+1:  mov rdi, rbx
     call live_cfg
     mov r12, rax
     mov rdi, rax
@@ -2174,7 +2187,7 @@ FN agent_mode_keep
     mov rdi, r13
     lea rsi, [rbx + AL_mode]
     call cstr_copy
-    mov rdi, r12
+7:  mov rdi, r12
     call agentcfg_dirty
 8:  mov rdi, r12                # (a conversation new to the record is a change too)
     call agentcfg_save

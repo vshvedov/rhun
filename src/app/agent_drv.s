@@ -249,6 +249,8 @@ live_free:
     call sb_free
     mov rdi, [rbx + AL_cdir]
     call mem_free
+    mov rdi, [rbx + AL_unsent]  # prompts never given back go with their session
+    call mem_free
     mov rax, [rbx + AL_as]
     mov qword ptr [rax + AS_live], 0
     mov dword ptr [rax + AS_state], AGS_IDLE
@@ -339,9 +341,51 @@ queue_restore:
     mov rsi, [rip + jsb + SB_ptr]
     mov rdx, [rip + jsb + SB_len]
     call agentext_restore
-    mov rdi, rbx
+    test eax, eax
+    jnz 8f
+    mov rdi, [rbx + AL_unsent]  # the box is another conversation's: kept for this one's box (after what
+    test rdi, rdi               #   was kept already), given back when it is opened (agent_unsent_take)
+    jz 7f
+    call strlen
+    mov r12, rax
+    mov rdi, [rip + jsb + SB_ptr]
+    call strlen
+    lea rdi, [r12 + rax + 3]
+    call mem_alloc
+    mov r13, rax
+    mov rdi, rax
+    mov rsi, [rbx + AL_unsent]
+    call cstr_copy
+    mov rdi, rax
+    lea rsi, [rip + .Lblank]
+    call cstr_copy
+    mov rdi, rax
+    mov rsi, [rip + jsb + SB_ptr]
+    call cstr_copy
+    mov rdi, [rbx + AL_unsent]
+    call mem_free
+    mov [rbx + AL_unsent], r13
+    jmp 8f
+7:  mov rdi, [rip + jsb + SB_ptr]
+    mov rsi, [rip + jsb + SB_len]
+    call mem_dup
+    mov [rbx + AL_unsent], rax
+8:  mov rdi, rbx
     call queue_free
 9:  EPILOGUE
+
+# FN agent_unsent_take(AS* or 0) -> rax the prompts of that session that never went and could not go back
+#   in its box then (queue_restore), now the caller's (mem_free it), or 0
+FN agent_unsent_take
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    mov rcx, [rdi + AS_live]
+    test rcx, rcx
+    jz 1f
+    mov rax, [rcx + AL_unsent]
+    mov qword ptr [rcx + AL_unsent], 0
+1:  ret
 
 # FN agent_closed(AS*): its row is freed: the box forgets it, and a live record ends with its program
 FN agent_closed

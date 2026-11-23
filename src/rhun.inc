@@ -2946,6 +2946,7 @@ F AL_own, 8             # AQ*: rhun's own card on the session (held, trust, sign
 F AL_hold_at, 8         # time_ms the holder is read again (ALF_HOLDWAIT)
 F AL_fork, 40           # cstr: a copy's source conversation (ALF_FORK)
 F AL_cdir, 8            # owned cstr: the Claude folder its program was first started with, or 0
+F AL_unsent, 8          # owned cstr: prompts that never went, for its box when it is opened again, or 0
 ENDSTRUCT AL_SIZE
 .equ TE_DONE, 0                 # ev_turn_end's reasons
 .equ TE_ERROR, 1

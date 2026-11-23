@@ -2051,6 +2051,44 @@ class EdgeTest(DrivenCase):
                          [TERM_PROMPT, f"field='{program}' auth login"])
         self.command('key Escape')
 
+    def unsent(self, leave):
+        """A prompt waits for a slow sign-in answer that says no; leave() goes elsewhere meanwhile. Coming back
+        to the conversation, the prompt that never went is in its box. Returns the toast then."""
+        self.seed()
+        mode = self.work / 'auth-mode'
+        mode.write_text('out', encoding='utf-8')
+        self.start(env={'FAKE_CLAUDE_AUTH': '@' + str(mode), 'FAKE_CLAUDE_AUTH_MS': '1500'})
+        self.command('cmd focus_agents')
+        self.command('wait-agents')
+        self.chat('hello', None)
+        self.assertIn(' queued=1 ', self.live())
+        leave()
+        time.sleep(2.5)                             # the answer came: not signed in, the start failed
+        self.command('cmd focus_agents')
+        rows = [line for line in self.command('print-agents').splitlines() if line.startswith('Claude')]
+        n = next(i for i, row in enumerate(rows) if row.endswith(': New conversation')) + 1
+        self.command(f'print-agents {n}')
+        self.command('wait 50')
+        self.assertTrue(self.command('print-agent-input').startswith('input=hello '),
+                        self.command('print-agent-input'))
+        self.assertEqual(self.starts(), [])
+        return self.command('print-toast').strip()
+
+    def test_a_prompt_that_never_went_comes_back_from_another_conversation(self):
+        def other():
+            self.command(f'click {BACK[0]} {BACK[1]}')
+            rows = [line for line in self.command('print-agents').splitlines() if line.startswith('Claude')]
+            n = next(i for i, row in enumerate(rows) if not row.endswith(': New conversation')) + 1
+            self.command(f'print-agents {n}')
+            self.command('wait 50')
+        self.assertEqual(self.unsent(other), 'toast=A prompt that was not sent is back in the box.')
+
+    def test_a_prompt_that_never_went_comes_back_from_the_list(self):
+        self.unsent(lambda: self.command(f'click {BACK[0]} {BACK[1]}'))
+
+    def test_a_prompt_that_never_went_comes_back_with_the_panel(self):
+        self.unsent(lambda: self.command('cmd toggle_agents'))
+
     def test_signed_in_starts(self):
         self.start()
         self.chat('hello')

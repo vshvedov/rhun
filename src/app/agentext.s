@@ -2132,9 +2132,9 @@ FN agentext_ext_send
 9:  mov eax, r15d
     EPILOGUE
 
-# FN agentext_restore(AS*, ptr, len): text that did not go goes back in the box when the box is that
-#   session's (a driver's start failed or was stopped with prompts waiting): before what the box holds
-#   now, a blank line between, so neither is lost
+# FN agentext_restore(AS*, ptr, len) -> eax 1 done: text that did not go goes back in the box when the box
+#   is that session's (a driver's start failed or was stopped with prompts waiting): before what the box
+#   holds now, a blank line between, so neither is lost. 0: the box is another's (the caller keeps it)
 FN agentext_restore
     PROLOGUE
     mov rbx, rdi
@@ -2168,7 +2168,10 @@ FN agentext_restore
     mov rdx, r13
     call tf_set
     mov dword ptr [rip + g_dirty], 1
-9:  EPILOGUE
+    mov eax, 1
+    EPILOGUE
+9:  xor eax, eax
+    EPILOGUE
 
 # FN agentext_prompt_reply(ext, id, ok, body, len) -> eax 1 when it answered the prompt in flight:
 #   a new session's id opens it once listed; a refusal puts the text back in the box
@@ -2379,6 +2382,27 @@ prompts_ok:
 9:  mov eax, r12d
     EPILOGUE
 
+# unsent_back(AS*): the box became the session's (emptied): prompts of its that never went (its start
+#   failed while another was open) come back in it, with a toast
+unsent_back:
+    PROLOGUE
+    call agent_unsent_take
+    test rax, rax
+    jz 9f
+    mov rbx, rax
+    mov rdi, rax
+    call strlen
+    lea rdi, [rip + in_tf]
+    mov rsi, rbx
+    mov rdx, rax
+    call tf_set
+    mov rdi, rbx
+    call mem_free
+    lea rdi, [rip + .Lunsent_back]
+    call app_toast
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
 # FN agentext_opened(AS*): a session opened: no new one is written, and the box is its own (a box
 #   that belonged to another session is emptied)
 FN agentext_opened
@@ -2395,6 +2419,8 @@ FN agentext_opened
     jne 9f                      # the session its own first prompt started: the text stays
     lea rdi, [rip + in_tf]
     call tf_clear
+    mov rdi, rbx
+    call unsent_back
 9:  EPILOGUE
 
 # FN agentext_remote_line(AS*) -> eax 1 when the session shows "Chat is not available in remote windows
@@ -3160,6 +3186,8 @@ FN agentext_bottom_draw
     inc qword ptr [rip + in_gen]
     lea rdi, [rip + in_tf]
     call tf_clear
+    mov rdi, rbx
+    call unsent_back
 1:  mov edi, [rsp]
     mov esi, [rsp + 4]
     mov edx, [rsp + 8]
@@ -3968,6 +3996,7 @@ FN agentext_prompts_gone
 .Ld_placeholder: .asciz "placeholder="
 .Lb_send: .asciz "Send"
 .Lrestore_gap: .asciz "\n\n"
+.Lunsent_back: .asciz "A prompt that was not sent is back in the box."
 .Lbd_size: .asciz "size="
 .Lbd_w: .asciz " w="
 .Lbd_x: .asciz " x="

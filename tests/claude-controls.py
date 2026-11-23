@@ -2882,6 +2882,58 @@ class ReviewProtocolTest(ModelCase):
         self.until(lambda: self.pills(), 'a pill')
         self.assertEqual(self.pills(), ['Switched to Default (recommended)'])
 
+    def test_a_refused_first_prompt_is_in_the_box_only(self):
+        # P6: the first prompt that waited for the start, refused by the connection's queue without breaking
+        # it: back in the box, no row
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '500'})
+        self.command('agent-timing queue=1000')
+        self.command('agent-new claude')
+        long = 'long ' + 'x' * 2000
+        self.command('agent-prompt ' + long)
+        self.command('wait-agent ready 10000')
+        self.command('wait 100')
+        self.assertNotIn('user ' + long[:50], ' '.join(self.thread()))
+        self.assertTrue(self.command('print-agent-input').startswith('input=' + long + ' '))
+        # the same for a prompt sent while it is ready
+        self.command('agent-timing queue=%d' % (16 << 20))
+        self.command('key ' + chat.MOD + '+a')
+        self.command('key BackSpace')
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready 10000')
+        self.command('agent-timing queue=1000')
+        self.command('agent-prompt ' + long)
+        self.command('wait 100')
+        self.assertEqual([r for r in self.thread() if r.startswith('user ')], ['user hello'])
+        self.assertTrue(self.command('print-agent-input').startswith('input=' + long + ' '))
+
+    def test_a_held_message_without_a_start_report(self):
+        # 4.1: a held message that runs without command_lifecycle or replay (a command the CLI answers itself)
+        # is a row once its turn ended; the next message's turn runs (Stop stops it, the idle stop waits);
+        # its end puts nothing back in the box
+        self.start(env={'FAKE_CLAUDE_NO_LIFECYCLE': '1'})
+        self.chat('held', 'working')
+        self.command('agent-prompt /context')
+        self.until(lambda: self.held_count() == 1, 'held')
+        self.command('wait-agent ready 20000')
+        self.until(lambda: 'user /context' in self.thread(), 'its row')
+        self.assertEqual(self.held_count(), 0)
+        self.assertEqual([l for l in self.command('print-agents').splitlines() if l.startswith('queued ')], [])
+        # the next one runs, as a turn: working, and Stop interrupts it
+        self.command('agent-timing idle=300')
+        self.command('agent-prompt held')
+        self.command('wait-agent working 5000')
+        self.command('wait 600')                        # past the idle stop: a running turn is not idle
+        self.assertIn('state=working ', self.live())
+        self.command('agent-stop')
+        self.until(lambda: [r for r in self.stdin() if r.get('type') == 'control_request'
+                            and r['request']['subtype'] == 'interrupt'], 'the interrupt')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(len(self.starts()), 1)
+        # its end (the idle stop) puts nothing back
+        self.until_gone()
+        self.assertTrue(self.command('print-agent-input').startswith('input= '))
+        self.assertNotIn('A queued message was not sent.', self.command('print-toast'))
+
 
 if __name__ == '__main__':
     unittest.main()

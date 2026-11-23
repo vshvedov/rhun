@@ -629,7 +629,12 @@ FN agent_send
     mov eax, SEND_FAILED        # refused, or the write broke (its close reported it)
     test ecx, ecx
     jz 9f
-    mov rdi, r15
+    cmp dword ptr [r15 + AL_state], ALS_READY
+    jne 41f
+    mov rdi, r15                # nothing ran (the others held ended unreported): a turn runs from now
+    mov esi, ALS_WORKING
+    call agent_state_set
+41: mov rdi, r15
     lea rsi, [rsp]
     mov rdx, r12
     mov rcx, r13
@@ -673,7 +678,6 @@ FN agent_send
     and dword ptr [r15 + AL_flags], ~(ALF_DRAFT | ALF_UNANSWERED)
     mov rdi, r15                # a notice of rhun's goes with the next prompt
     call own_drop
-    call user_row
     mov rdi, r15                # WORKING before the write: a connection that breaks under it is a turn
     mov esi, ALS_WORKING        #   that failed (the driver's close reports it, FAILED)
     call agent_state_set
@@ -686,9 +690,11 @@ FN agent_send
     mov rax, [r15 + AL_drv]
     call [rax + DRV_send]
     test eax, eax
+    jz 7f
+    call user_row               # written: its row (a prompt refused or lost stays in the box alone)
     mov eax, SEND_OK
-    jnz .Las_sent
-    cmp dword ptr [r15 + AL_state], ALS_WORKING
+    jmp .Las_sent
+7:  cmp dword ptr [r15 + AL_state], ALS_WORKING
     jne 8f                      # it broke: FAILED already
     mov rdi, r15                # refused, nothing went: ready again
     mov esi, ALS_READY
@@ -1358,7 +1364,8 @@ cap_room:
 8:  mov eax, 1
 9:  EPILOGUE
 
-# is_idle(AL*) -> eax 1 when its program runs with nothing to do: READY, no request, no prompt waiting
+# is_idle(AL*) -> eax 1 when its program runs with nothing to do: READY, no request, no prompt waiting,
+#   none held, no turn whose end has not come
 is_idle:
     xor eax, eax
     cmp dword ptr [rdi + AL_state], ALS_READY
@@ -1368,6 +1375,10 @@ is_idle:
     cmp qword ptr [rdi + AL_reqs + VEC_len], 0
     jne 1f
     cmp qword ptr [rdi + AL_queue + VEC_len], 0
+    jne 1f
+    cmp qword ptr [rdi + AL_held + VEC_len], 0
+    jne 1f
+    cmp qword ptr [rdi + AL_turns], 0
     jne 1f
     inc eax
 1:  ret
@@ -1714,7 +1725,7 @@ FN ev_note
 #   (DRVC_QUEUE) the others are held, drawn queued until each starts (ev_started), else each is a row as it
 #   goes. They go WORKING: a connection that breaks under a write is a turn that failed, and its close (the
 #   driver's: ev_failed, ev_closed) has put the prompts back in the box and freed them before the write
-#   returns. One the driver refuses goes back in the box. Locals: [rsp] the uuid (40 bytes)
+#   returns. One the driver refuses goes back in the box, with no row. Locals: [rsp] the uuid (40 bytes)
 FN ev_ready
     PROLOGUE 48
     mov rbx, rdi
@@ -1739,20 +1750,13 @@ FN ev_ready
     mov r15, rax
     lea rdi, [rsp]
     call agent_uuid
-    test r13d, r13d             # the first that goes, or each when they cannot be held: a row now
-    jz 21f
+    mov dword ptr [rsp + 40], 0 # the first that goes, or each when they cannot be held: a row once
+    test r13d, r13d             #   written; the others held
+    jz 23f
     mov rax, [rbx + AL_drv]
     test dword ptr [rax + DRV_caps], DRVC_QUEUE
-    jnz 22f
-21: mov rdi, [rbx + AL_as]
-    mov esi, R_USER
-    mov rdx, r14
-    mov rcx, r15
-    xor r8d, r8d
-    call agents_msg_add
-    mov dword ptr [rsp + 40], 0 # shown as a row: not held
-    jmp 23f
-22: mov dword ptr [rsp + 40], 1
+    jz 23f
+    mov dword ptr [rsp + 40], 1
 23: mov rdi, rbx
     mov rsi, r14
     mov rdx, r15
@@ -1762,14 +1766,21 @@ FN ev_ready
     cmp dword ptr [rbx + AL_state], ALS_WORKING
     jne 9f                      # it broke: the queue is gone (ev_failed), the state set
     test eax, eax
-    jz 25f                      # refused: it stays in the queue, back in the box below
+    jz 25f                      # refused: it stays in the queue, back in the box below (no row)
     cmp dword ptr [rsp + 40], 0
-    je 24f
+    je 22f
     mov rdi, rbx
     lea rsi, [rsp]
     mov rdx, r14
     mov rcx, r15
     call held_add
+    jmp 24f
+22: mov rdi, [rbx + AL_as]
+    mov esi, R_USER
+    mov rdx, r14
+    mov rcx, r15
+    xor r8d, r8d
+    call agents_msg_add
 24: mov r13d, 1
     mov rax, [rbx + AL_queue + VEC_ptr]
     mov qword ptr [rax + r12*8], 0
@@ -2342,7 +2353,17 @@ FN ev_turn_end
     je 3f
     dec qword ptr [rbx + AL_turns]
     jnz 9f
-3:  and dword ptr [rbx + AL_flags], ~ALF_UNANSWERED
+3:  cmp qword ptr [rbx + AL_held + VEC_len], 0
+    je 32f
+    mov r15, [rbx + AL_held + VEC_ptr]  # every message written has ended: one still held ran without a
+    lea rdi, [r15 + AH_uuid]    #   word that it started (a command the program answers itself, without
+    call strlen                 #   lifecycle or replay): its row joins now
+    mov rdi, rbx
+    lea rsi, [r15 + AH_uuid]
+    mov rdx, rax
+    call ev_started
+    jmp 3b
+32: and dword ptr [rbx + AL_flags], ~ALF_UNANSWERED
     mov rdi, rbx                # requests the turn left behind go with their card (Claude withdraws
     call reqs_drop              #   them first; a card nobody waits for must not stay), an info row
     test eax, eax               #   saying so (again after a re-read: ALF_UNANSWERED)

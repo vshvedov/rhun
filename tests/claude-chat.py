@@ -1590,7 +1590,9 @@ class LifeTest(DrivenCase):
         self.gone(pid, 15)
         self.until(lambda: self.box() == '0', 'the box is gone')
         self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
-        self.assertEqual(self.thread()[0], 'user slow')     # the file's rows
+        # the file's rows (read again; under emulation the read can come as the fake writes its first line:
+        # the panel's poll reads the rest)
+        self.until(lambda: self.thread()[:1] == ['user slow'], "the file's rows", 10)
         self.config.write_text(self.BASE + self.claude_section('chat = true\n'), encoding='utf-8')
         self.until(lambda: self.box() == '1', 'the box is back', 15)
         self.assertEqual(len(self.starts()), 1)

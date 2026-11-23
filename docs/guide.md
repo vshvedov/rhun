@@ -123,7 +123,11 @@ turning the chat off or switching off **Claude Code** in Settings > Agents (`[ag
 takes Claude Code's conversations out of the list) ends every Claude Code process rhun started;
 switching off another provider leaves them running. A process that ends by itself during a
 turn leaves an error row such as "Claude Code ended (exit status 2)" with the last lines it printed,
-and prompts that were still waiting go back into the box; the next prompt starts it again.
+and prompts that were still waiting go back into the box; the next prompt starts it again. Prompts
+that go back while the conversation is not the open one (another is open, the list is shown or the
+panel is closed) are kept for it and are put back in its box when you open it again, with "A prompt
+that was not sent is back in the box." Opening another folder, turning the chat off or quitting
+rhun before that drops them.
 
 While rhun talks to Claude Code, the rows come from the process. When the process ends, the
 conversation is read again from Claude Code's own file, so the panel shows what the file holds. A
@@ -180,11 +184,11 @@ seconds, counts as signed in. When it is not signed in, or a turn fails because 
 refused, the prompt goes back into the box and a card says "Claude Code is not signed in." with
 **Sign In**. Sign In opens the prompt "Run in the terminal: Enter, or Esc" with `claude auth login`
 in it (the **Claude Code program** in place of `claude` when one is set, with `~/` written out as
-your home folder): Enter runs it in rhun's terminal. When `env.CLAUDE_CONFIG_DIR` is set, the
-command starts with `CLAUDE_CONFIG_DIR=FOLDER ` (on Windows, where the terminal runs PowerShell,
-`$env:CLAUDE_CONFIG_DIR=FOLDER; `), so the sign-in goes to the folder rhun's Claude Code uses. No
-other `env.` line goes there, as the command stays in the shell's history. The card stays until the
-next Send, which asks again.
+your home folder): Enter runs it in rhun's terminal. When an absolute `env.CLAUDE_CONFIG_DIR` is
+set, the command starts with `CLAUDE_CONFIG_DIR=FOLDER ` (on Windows, where the terminal runs
+PowerShell, `$env:CLAUDE_CONFIG_DIR=FOLDER; `), so the sign-in goes to the folder rhun's Claude Code
+uses. No other `env.` line goes there, as the command stays in the shell's history. The card stays
+until the next Send, which asks again.
 
 When a start fails, an error row says why, such as "Claude Code was not found. Install it, or set
 its path in Settings > Claude Code.", and a card says "Claude Code could not start." (followed by
@@ -246,20 +250,25 @@ font_size = 0
 - `font_size` (**Font size**, under Agents): see [Text size](#text-size) below.
 
 Otherwise Claude Code gets your environment: rhun's own when rhun was started from a terminal or
-runs on Windows, else the one your login shell gives, without the variables a Claude Code that started rhun leaves in it
-(`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `TRACEPARENT`, `TRACESTATE`), and with
-`CLAUDE_CODE_ENTRYPOINT=rhun` and `MCP_CONNECTION_NONBLOCKING=true`, which an `env.` line does not
-change.
+runs on Windows, else the one your login shell gives, without the variables a Claude Code that
+started rhun leaves in it (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `TRACEPARENT`, `TRACESTATE`),
+and with `CLAUDE_CODE_ENTRYPOINT=rhun` and `MCP_CONNECTION_NONBLOCKING=true`, which an `env.` line
+does not change.
 
 Claude Code's folder, where rhun reads its conversations and its records of running sessions, is
-the first of: an absolute `env.CLAUDE_CONFIG_DIR`; the `CLAUDE_CONFIG_DIR` of the environment Claude
-Code gets, when it is not empty; `.claude` in the home folder Claude Code gets, which is a
-non-empty `env.HOME`, else that environment's `HOME`. Until rhun has your login shell's environment
-it looks in its own, and when the login shell's names another folder the list is made again from
-that one. A conversation stays in the folder its process was first started with: until another
-folder is opened, the chat or the Claude Code provider is switched off, or rhun quits, its file,
-the check for another Claude Code and its next starts use that folder, even after the config names
-another one.
+the first of: an absolute `env.CLAUDE_CONFIG_DIR`; an absolute `CLAUDE_CONFIG_DIR` in the
+environment Claude Code gets; `.claude` in the home folder Claude Code gets, which is a non-empty
+`env.HOME`, else that environment's `HOME`. A `CLAUDE_CONFIG_DIR` that is empty or not absolute,
+from an `env.` line or the environment, is not passed to Claude Code, and a log line says so
+without its value: Claude Code and rhun both use the next choice. Until rhun has your login shell's
+environment it looks in its own, and when the login shell's names another folder the list is made
+again from that one.
+
+A conversation from the list lives in the folder its file is in, a copy made by **Continue in a
+copy** in its source's, and a new conversation in the folder the order above gives at its first
+start. Until another folder is opened, the chat or the Claude Code provider is switched off, or
+rhun quits, its file, the check for another Claude Code and its starts use that folder, even after
+the config names another one.
 
 ### Markdown replies
 

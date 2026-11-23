@@ -17,6 +17,7 @@
 .equ ID_TRUST_X, 0x200d           # and its close button
 .equ PM_RECENT, 3                 # the project menu's first recent folder
 .equ ID_TAB, 0x2100              # + index
+.equ TABS_AT_MAX, 64             # tabs whose drawn place print-tabs-at names
 .equ ID_TABX, 0x2400             # + index
 .equ ID_SPLIT_L, 0x2700
 .equ ID_SPLIT_R, 0x2701
@@ -81,8 +82,13 @@ tab_drag_w: .long 0
 .p2align 3
 tab_drag_kind: .quad 0           # the tab pressed: a drag follows it while it is the one at g_active
 tab_drag_doc: .quad 0
+tab_drag_slot: .quad 0           #   and its TAB_flags >> TF_VIEW_SHIFT (views, Markdown tabs: no document)
 menu_tab_kind: .quad 0           # the tab whose menu is open (tab_menu_tab)
 menu_tab_doc: .quad 0
+menu_tab_slot: .quad 0
+.globl g_tabs_cx, g_tabs_cy
+g_tabs_cx: .zero 4 * TABS_AT_MAX # each tab's middle as drawn last (print-tabs-at), the first TABS_AT_MAX
+g_tabs_cy: .zero 4 * TABS_AT_MAX           # its TAB_flags >> TF_VIEW_SHIFT: which of the tabs without a document it is
 g_side_px: .long 0
 g_agents_px: .long 0
 dlg_kind: .long 0                # 0 none, 1 close tab, 2 quit, 3 open another project, 4 app_confirm, 5 close all
@@ -4457,7 +4463,21 @@ tab_draw:
     mov [rsp + 8], ecx
     mov [rsp + 12], r8d
     mov [rsp + 32], r9d
-    mov dword ptr [rsp + 16], 0 # UB_* of the tab
+    cmp rbx, TABS_AT_MAX        # its middle, as drawn last (print-tabs-at)
+    jae 0f
+    test r9d, r9d
+    jnz 0f
+    mov eax, ecx
+    shr eax, 1
+    add eax, esi
+    lea r10, [rip + g_tabs_cx]
+    mov [r10 + rbx*4], eax
+    mov eax, r8d
+    shr eax, 1
+    add eax, edx
+    lea r10, [rip + g_tabs_cy]
+    mov [r10 + rbx*4], eax
+0:  mov dword ptr [rsp + 16], 0 # UB_* of the tab
     mov dword ptr [rsp + 28], 0 # and of its button
     mov rdi, rbx
     call tab_at
@@ -4489,6 +4509,9 @@ tab_draw:
     mov [rip + tab_drag_kind], rax
     mov rax, [r15 + TAB_doc]
     mov [rip + tab_drag_doc], rax
+    mov rax, [r15 + TAB_flags]
+    shr rax, TF_VIEW_SHIFT
+    mov [rip + tab_drag_slot], rax
     mov rdi, rbx
     call app_activate_tab
 1:  test dword ptr [rsp + 16], UB_RPRESS
@@ -4745,6 +4768,10 @@ tab_drag_step:
     mov rcx, [rax + TAB_doc]
     cmp rcx, [rip + tab_drag_doc]
     jne .Lds_end
+    mov rcx, [rax + TAB_flags]
+    shr rcx, TF_VIEW_SHIFT
+    cmp rcx, [rip + tab_drag_slot]
+    jne .Lds_end
     cmp dword ptr [rip + tab_drag], 0
     jne 1f
     mov eax, [rip + g_mx]
@@ -4880,6 +4907,9 @@ tab_menu_open:
     mov [rip + menu_tab_kind], rcx
     mov rcx, [rax + TAB_doc]
     mov [rip + menu_tab_doc], rcx
+    mov rcx, [rax + TAB_flags]
+    shr rcx, TF_VIEW_SHIFT
+    mov [rip + menu_tab_slot], rcx
     lea rdi, [rip + tab_menu]
     test dword ptr [rax + TAB_flags], TF_PIN
     jz 1f
@@ -4889,7 +4919,8 @@ tab_menu_open:
     mov dword ptr [rip + g_menu_keys], 1
     EPILOGUE
 
-# tab_menu_tab() -> the index of the tab the menu is for, or -1 once it closed
+# tab_menu_tab() -> the index of the tab the menu is for, or -1 once it closed: its kind, its document and,
+#   for tabs without one that come in numbers (an extension's views, rhun's Markdown tabs), its slot
 tab_menu_tab:
     xor eax, eax
     mov rcx, [rip + g_tabs + VEC_ptr]
@@ -4900,6 +4931,10 @@ tab_menu_tab:
     jne 2f
     mov rdx, [rcx + TAB_doc]
     cmp rdx, [rip + menu_tab_doc]
+    jne 2f
+    mov rdx, [rcx + TAB_flags]
+    shr rdx, TF_VIEW_SHIFT
+    cmp rdx, [rip + menu_tab_slot]
     je 4f
 2:  add rcx, TAB_SIZE
     inc rax

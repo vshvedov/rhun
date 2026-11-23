@@ -1542,6 +1542,38 @@ c_print_project:
 
 # print-tabs: "tabs=^a | *b | c", the tab strip in order with pinned tabs marked ^ and the active tab
 #   starred
+# print-tabs-at: "X,Y" for each tab (the first 64), its middle as the strip drew it last, space-separated
+c_print_tabs_at:
+    PROLOGUE
+    xor ebx, ebx
+1:  cmp rbx, [rip + g_tabs + VEC_len]
+    jae 4f
+    cmp ebx, 64
+    jae 4f
+    test ebx, ebx
+    jz 2f
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+2:  lea rdi, [rip + out]
+    lea rax, [rip + g_tabs_cx]
+    mov esi, [rax + rbx*4]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, ','
+    call sb_push_byte
+    lea rdi, [rip + out]
+    lea rax, [rip + g_tabs_cy]
+    mov esi, [rax + rbx*4]
+    call sb_push_u64
+    inc ebx
+    jmp 1b
+4:  lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    EPILOGUE
+
 c_print_tabs:
     PROLOGUE
     lea rdi, [rip + out]
@@ -2395,6 +2427,7 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Lc_print_project: .asciz "print-project"
 .Lc_print_panels: .asciz "print-panels"
 .Lc_print_tabs: .asciz "print-tabs"
+.Lc_print_tabs_at: .asciz "print-tabs-at"
 .Lc_print_palette: .asciz "print-palette"
 .Lc_print_menu: .asciz "print-menu"
 .Lc_print_tip: .asciz "print-tip"
@@ -2476,7 +2509,7 @@ ctl_table:
     .quad .Lc_wait_update, c_wait_update, .Lc_print_update, c_print_update
     .quad .Lc_print_frames, c_print_frames, .Lc_print_loop_stats, c_print_loop_stats
     .quad .Lc_print_project, c_print_project
-    .quad .Lc_print_panels, c_print_panels, .Lc_print_tabs, c_print_tabs
+    .quad .Lc_print_panels, c_print_panels, .Lc_print_tabs, c_print_tabs, .Lc_print_tabs_at, c_print_tabs_at
     .quad .Lc_print_palette, c_print_palette, .Lc_print_menu, c_print_menu
     .quad .Lc_print_tip, c_print_tip, .Lc_print_toast, c_print_toast, .Lc_print_link, c_print_link
     .quad .Lc_print_term_cell, c_print_term_cell, .Lc_print_scroll, c_print_scroll

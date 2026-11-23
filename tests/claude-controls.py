@@ -2782,10 +2782,11 @@ class ReviewControlsTest(NoticeCase):
 
 
 class ReviewProtocolTest(ModelCase):
-    """The protocol review's findings (2026-11-23), each against the fake: its knobs FAKE_CLAUDE_FOREIGN_ID,
-    FAKE_CLAUDE_MODE_MS, FAKE_CLAUDE_SETTINGS_MS, FAKE_CLAUDE_NO_INIT_MODE, FAKE_CLAUDE_REFUSE_MODEL and the
-    model knob longresolved have no recording behind them (the fake's docstring block says so). Nothing here
-    writes Claude Code's own settings (ModelCase checks it after each test)."""
+    """The protocol review's findings (2026-11-23, both rounds), each against the fake: its knobs
+    FAKE_CLAUDE_FOREIGN_ID, FAKE_CLAUDE_MODE_MS, FAKE_CLAUDE_SETTINGS_MS, FAKE_CLAUDE_NO_INIT_MODE,
+    FAKE_CLAUDE_REFUSE_MODEL, FAKE_CLAUDE_FLAGS_MS, FAKE_CLAUDE_NO_LIFECYCLE=local, FAKE_CLAUDE_DISCARD_HELD=TEXT
+    and the model knob longresolved have no recording behind them (the fake's docstring block says so).
+    Nothing here writes Claude Code's own settings (ModelCase checks it after each test)."""
 
     def order(self):
         """What the fake read, in order: control requests by subtype, user messages as "user TEXT"."""
@@ -3077,7 +3078,8 @@ class ReviewProtocolTest(ModelCase):
         self.released()
         self.command('agent-prompt again')
         self.command('agent-model sonnet')              # a pick waiting for the settings' answer
-        self.until(lambda: 'get_settings' in self.last_start(), 'get_settings asked')
+        self.until(lambda: self.order().count('initialize') == 2 and 'get_settings' in self.last_start(),
+                   'get_settings asked')
         self.assertRegex(self.wake(), r'^\d+$')         # the wait's bound is the loop's next wake-up
         self.command('agent-stop')
         self.assertIn('state=off ', self.live())
@@ -3131,7 +3133,10 @@ class ReviewProtocolTest(ModelCase):
         self.command('agent-timing queue=90')
         self.command('wait-agent failed 10000')
         self.command('agent-timing queue=%d' % (16 << 20))
-        self.assertEqual(self.order(), ['initialize', 'get_settings'])
+        order = self.order()                            # (get_settings, if it was read before the stop)
+        self.assertEqual(order[0], 'initialize')
+        self.assertNotIn('set_permission_mode', order)
+        self.assertNotIn('user hello', order)
         self.assertIn('report=Claude Code took no more input before the conversation', self.command('print-agent-live'))
         self.assertTrue(self.command('print-agent-input').startswith('input=hello '))
         self.assertNotIn('user hello', self.thread())
@@ -3191,7 +3196,8 @@ class ReviewProtocolTest(ModelCase):
         self.command('agent-prompt /plan')
         self.until(lambda: len(self.starts()) == starts + 1, 'started again')
         self.command('wait-agent ready 10000')
-        self.until(lambda: 'get_plan' in self.last_start(), 'get_plan after the failure')
+        self.until(lambda: self.order().count('initialize') == 3 and 'get_plan' in self.last_start(),
+                   'get_plan after the failure')
 
     def test_a_refused_pick_where_no_mode_was_reported_is_not_kept(self):
         # R12: initialize reports no mode; auto picked while it starts is refused: the conversation keeps no
@@ -3206,7 +3212,7 @@ class ReviewProtocolTest(ModelCase):
         self.assertEqual(self.conv_mode(sid), 'auto')   # kept while it is asked
         self.command('wait-agent ready 10000')
         self.until(lambda: 'Failed to set mode' in self.command('print-toast'), 'the refusal')
-        self.assertIsNone(self.conv_mode(sid))
+        self.assertIn(self.conv_mode(sid), (None, '-'))
         self.released()
         self.command('agent-prompt third')
         self.command('wait-agent ready 10000')

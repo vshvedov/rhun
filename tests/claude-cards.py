@@ -908,7 +908,8 @@ class PlanTest(CardCase):
         self.assertEqual((head['kind'], head['title'], head['focus']), ('plan', 'Accept this plan?', '1'))
         self.assertEqual(lines, ['hint Select text in the preview to add comments',
                                  *(f'button {i} {label}' for i, label in enumerate(PLAN_BUTTONS, 1)), 'field '])
-        self.assertIn('agent # Plan', self.thread())                # the plan row stays, as in phase 1
+        self.assertNotIn('agent # Plan', self.thread())             # phase 3: the plan is the call's row
+        self.assertIn('\n  in 4/34 # Plan\n', self.command('print-agent-rows content 1 1'))
         self.assertEqual(self.command('print-agent-input').splitlines()[1],
                          'card=Accept this plan? options=' + '|'.join(PLAN_BUTTONS))
         self.command('agent-card 3')

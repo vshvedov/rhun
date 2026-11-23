@@ -533,7 +533,9 @@ class ChatTest(DrivenCase):
         self.assertEqual(self.stdin()[0], {'type': 'control_request', 'request_id': 'r1',
                                            'request': {'subtype': 'initialize', 'hooks': None,
                                                        'promptSuggestions': True, 'supportedDialogKinds': [
-                                                           'fable_overage_consent_prompt', 'auto_mode_server_fallback']}})
+                                                           'fable_overage_consent_prompt', 'auto_mode_server_fallback'],
+                                                       'perTaskStopAffordance': True,
+                                                       'forwardNestedSubagentToolCalls': True}})
         # then what is in effect (tests/claude-controls.py), then the prompt, with its uuid (phase 2)
         self.assertEqual(self.stdin()[1], {'type': 'control_request', 'request_id': 'r2',
                                            'request': {'subtype': 'get_settings'}})
@@ -974,6 +976,12 @@ class RequestTest(DrivenCase):
         return [block['id'] for r in records if r.get('type') == 'assistant'
                 for block in r['message']['content'] if block.get('type') == 'tool_use']
 
+    def call_state(self, row):
+        """A call's row (print-agent-rows, from 0): its state and whether it shows an OUT."""
+        lines = self.command('print-agent-rows %d 1' % row).splitlines()
+        state = re.search(r' state=(\S+)', lines[0]).group(1)
+        return state, any(line.strip().startswith('out ') for line in lines[1:])
+
     def responses(self):
         """The control_response lines the fake read."""
         return [m['response'] for m in self.stdin() if m.get('type') == 'control_response']
@@ -1014,8 +1022,9 @@ class RequestTest(DrivenCase):
         self.assertFalse((self.project / 'approved.txt').exists())
         # a deny that interrupts ends the turn (the real CLI: its interrupt mark, then an aborted_tools result)
         streamed = self.thread()
-        self.assertEqual(streamed, ['user tool', 'tool(Bash) touch approved.txt', 'result ' + REJECTED[:60],
-                                    'info Interrupted'])
+        # phase 3: the rejection is the call's state (the standard rejection shows no text: no result line)
+        self.assertEqual(streamed, ['user tool', 'tool(Bash) touch approved.txt', 'info Interrupted'])
+        self.assertEqual(self.call_state(1), ('denied', False))
         self.command('agent-prompt hello')          # and the conversation goes on
         self.command('wait-agent ready')
         self.assertEqual(self.thread(), streamed + ['user hello', REPLY + 'ok: hello'])   # its first reply
@@ -1078,7 +1087,9 @@ class RequestTest(DrivenCase):
         self.assertIn(' mode=plan ', self.live())
         self.assertEqual(self.card(), 'card=Accept this plan? options=Yes, and auto-accept|Yes, and manually approve '
                                       'edits|No, keep planning')      # phase 2's plan card (task 11)
-        self.assertEqual(self.thread(), ['user plan', 'tool(ExitPlanMode) ', 'agent # Plan'])
+        # phase 3: the plan is the call's row (its IN), not a reply row of its own
+        self.assertEqual(self.thread(), ['user plan', 'tool(ExitPlanMode) '])
+        self.assertIn('\n  in 4/34 # Plan\n', self.command('print-agent-rows content 1 1'))
         self.command('agent-card 2')                # manually approve edits: the default mode, then the allow
         self.command('wait-agent ready')
         lines = [m for m in self.stdin() if m.get('type') in ('control_request', 'control_response')]
@@ -1111,7 +1122,8 @@ class RequestTest(DrivenCase):
         self.assertEqual(self.answers(), [])
         self.assertEqual(self.responses(), [])
         self.assertEqual(self.thread(), ['user withdraw', 'tool(Bash) touch withdrawn.txt', 'info Withdrawn by Claude',
-                                         'result ' + REJECTED[:60], REPLY + 'done'])
+                                         REPLY + 'done'])
+        self.assertEqual(self.call_state(1), ('denied', False))     # phase 3: the rejection is the call's state
 
     def test_unknown_request_gets_an_error_reply(self):
         self.start()

@@ -291,6 +291,18 @@ cl_start:
     call claude_dialog_kinds
     lea rdi, [rip + cw]
     call jw_end_arr
+    lea rdi, [rip + cw]         # the two members the extension always sends (P 2.2; finding 34: for an
+    lea rsi, [rip + .Lk_task_stop]      #   agent of depth 1 they change nothing visible)
+    call jw_key
+    lea rdi, [rip + cw]
+    mov esi, 1
+    call jw_bool
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_nested]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov esi, 1
+    call jw_bool
     mov rdi, rbx                # a child gone already breaks the connection here: its close reports the
     call req_end                #   failed start (cl_close: ev_failed, ev_closed), the state says so
     mov eax, 1
@@ -1411,9 +1423,10 @@ auth_error:
 
 # ---- reading ----
 
-# cl_line(CN*, ptr, len): one record from claude, dispatched on its type
+# cl_line(CN*, ptr, len): one record from claude, dispatched on its type; the rows it makes carry the
+#   record's time (its timestamp, else the clock)
 cl_line:
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, [rdi + CN_ctx]
     mov r13, rdx
     mov rdi, rsi
@@ -1438,9 +1451,31 @@ cl_line:
     jnz 2f
     add r12, 16
     jmp 1b
-2:  mov rdi, rbx
+2:  mov rax, [rbx + AL_as]
+    mov [rsp], rax
+    mov rdi, r14
+    lea rsi, [rip + .Lk_timestamp]
+    call jstr
+    xor ecx, ecx
+    test rdx, rdx
+    jz 3f
+    mov rdi, rax
+    mov rsi, rdx
+    call agtime_iso
+    mov rcx, rax
+3:  test rcx, rcx
+    jnz 4f
+    call agtime_now
+    mov rcx, rax
+4:  mov rdi, [rsp]
+    mov rsi, rcx
+    call agents_stamp
+    mov rdi, rbx
     mov rsi, r14
     call [r12 + 8]              # handler(AL*, record)
+    mov rdi, [rsp]              # (a handler may free the live record, never the conversation)
+    xor esi, esi
+    call agents_stamp
 8:  cmp r13, TRIM_AT
     jbe 9f
     call json_trim
@@ -1621,17 +1656,28 @@ h_stream:
 # h_assistant(AL*, record): finished content blocks (one record a block, the message's id, no index: it
 #   is the block the latest content_block_start began). The record's model is noted as the file reader
 #   notes it (agents_reply_model); a text block's text replaces what streamed under its key and its row
-#   gets the label the file would give it; thinking is not shown. Locals: [rsp] the model, [rsp + 8] its
-#   length, [rsp + 16] and [rsp + 24] the message id, then a block's key
+#   gets the label the file would give it; the other blocks (calls, unknown blocks) go to claude_ingest. A
+#   record sent again is dropped; a subagent's reaches claude_ingest and nothing else. Locals: [rsp] the
+#   model, [rsp + 8] its length, [rsp + 16] and [rsp + 24] the message id, then a block's key, [rsp + 32]
+#   the record
 h_assistant:
-    PROLOGUE 32
+    PROLOGUE 48
     mov rbx, rdi
     mov r12, rsi
-    mov rdi, rsi
-    call is_sub
+    mov [rsp + 32], rsi
+    call claude_seen            # a record sent again (finding 30): dropped
     test eax, eax
     jnz 9f
-    mov rdi, rbx                # the context in use and the prompt cache (claude_session.s)
+    mov rdi, r12
+    call is_sub
+    test eax, eax
+    jz 0f
+    mov rdi, [rbx + AL_as]      # a subagent's: its calls under their parent, nothing else (not the context
+    mov rsi, r12                #   numbers, not the model's label)
+    mov edx, ING_LIVE
+    call claude_ingest
+    jmp 9f
+0:  mov rdi, rbx                # the context in use and the prompt cache (claude_session.s)
     mov rsi, r12
     call claude_frame
     mov rdi, r12
@@ -1674,7 +1720,7 @@ h_assistant:
 3:  mov rdi, r14
     call json_len
     cmp r15d, eax
-    jae 9f
+    jae 8f
     mov rdi, r14
     mov esi, r15d
     call json_at
@@ -1709,43 +1755,35 @@ h_assistant:
     mov rdx, [rsp + 8]
     mov rcx, rax
     call agents_reply_model
-    jmp 7f
-5:  mov rdi, r13                # a tool call: its row, as the file reader shows it
-    lea rsi, [rip + .Lv_tool_use]
-    call json_is
-    test eax, eax
-    jz 7f
-    mov rdi, r12
-    lea rsi, [rip + .Lk_input]
-    call json_get
-    mov rdi, rax
-    call agents_tool_summary
-    mov [rsp + 16], rax
-    mov [rsp + 24], rdx
-    mov rdi, r12
-    lea rsi, [rip + .Lk_name]
-    call jstr
-    mov rdi, rbx
-    mov rsi, rax
-    mov rdx, [rsp + 16]
-    mov rcx, [rsp + 24]
-    call ev_tool
-7:  inc r15d
+5:  inc r15d
     jmp 3b
+8:  mov rdi, [rbx + AL_as]      # the record's other blocks: calls, unknown blocks (claude_blocks.s)
+    mov rsi, [rsp + 32]
+    mov edx, ING_LIVE
+    call claude_ingest
 9:  EPILOGUE
 
-# h_user(AL*, record): what Claude sends as the user's: a tool's results as result rows, as the file
-#   reader shows them. The user's own prompts (rhun showed them when sent), notices and a subagent's records
-#   are not shown; a replayed copy (isReplay) says a held message started (claude_replay)
+# h_user(AL*, record): what Claude sends as the user's: a tool's results go into their calls' rows
+#   (claude_ingest), as the file reader puts them. The user's own prompts (rhun showed them when sent) and
+#   notices are not shown; a replayed copy (isReplay) says a held message started (claude_replay); a
+#   subagent's records reach claude_ingest and nothing else
 h_user:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
-    mov rdi, rsi
-    call is_sub
+    call claude_seen            # a record sent again (finding 30): dropped
     test eax, eax
     jnz 9f
-    mov rdi, rbx                # a request goes out: the prompt cache's clock (claude_session.s)
+    mov rdi, r12
+    call is_sub
+    test eax, eax
+    jz 1f
+    mov rdi, [rbx + AL_as]      # a subagent's: its results into its calls, nothing else (no request clock)
+    mov rsi, r12
+    mov edx, ING_LIVE
+    call claude_ingest
+    jmp 9f
+1:  mov rdi, rbx                # a request goes out: the prompt cache's clock (claude_session.s)
     call claude_asked
     mov rdi, r12
     lea rsi, [rip + .Lk_isReplay]
@@ -1758,47 +1796,10 @@ h_user:
     mov rsi, r12
     call claude_replay
     jmp 9f
-2:  mov rdi, r12
-    lea rsi, [rip + .Lk_isMeta]
-    call json_get
-    mov rdi, rax
-    call json_type
-    cmp eax, JT_TRUE
-    je 9f
-    mov rdi, r12
-    lea rsi, [rip + .Lk_message]
-    call json_get
-    mov rdi, rax
-    lea rsi, [rip + .Lk_content]
-    call json_get
-    mov r13, rax
-    xor r14d, r14d
-1:  mov rdi, r13
-    call json_len
-    cmp r14d, eax
-    jae 9f
-    mov rdi, r13
-    mov esi, r14d
-    call json_at
-    mov r15, rax
-    inc r14d
-    mov rdi, rax
-    lea rsi, [rip + .Lk_type]
-    call json_get
-    mov rdi, rax
-    lea rsi, [rip + .Lv_tool_result]
-    call json_is
-    test eax, eax
-    jz 1b
-    mov rdi, r15
-    lea rsi, [rip + .Lk_content]
-    call json_get
-    mov rdi, rax
-    call agents_text_of
-    mov rdi, rbx
-    mov rsi, rax
-    call ev_result_row
-    jmp 1b
+2:  mov rdi, [rbx + AL_as]      # results into their calls' rows (claude_blocks.s)
+    mov rsi, r12
+    mov edx, ING_LIVE
+    call claude_ingest
 9:  EPILOGUE
 
 # h_system(AL*, record): init (the session's id, its folder, the mode) and status (the mode)
@@ -2337,17 +2338,7 @@ h_can_use:
     test eax, eax
     jz 5f
     mov dword ptr [r14 + AQ_kind], AQK_PLAN
-    mov rdi, r15                # the plan, as a reply above its card
-    lea rsi, [rip + .Lk_plan]
-    call jstr
-    test rdx, rdx
-    jz 41f
-    mov rdi, rbx
-    mov esi, R_ASSIST
-    mov rcx, rdx
-    mov rdx, rax
-    call ev_note
-41: mov rdi, rbx                # plan review: its rich card (claude_cards.s)
+    mov rdi, rbx                # plan review: its rich card (claude_cards.s; the plan is the call's row)
     mov rsi, r14
     call claude_plan_build
     jmp 6f
@@ -3533,6 +3524,9 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lk_hooks: .asciz "hooks"
 .Lk_suggestions: .asciz "promptSuggestions"
 .Lk_dialog_kinds: .asciz "supportedDialogKinds"
+.Lk_task_stop: .asciz "perTaskStopAffordance"
+.Lk_nested: .asciz "forwardNestedSubagentToolCalls"
+.Lk_timestamp: .asciz "timestamp"
 .Lk_uuid: .asciz "uuid"
 .Lk_message: .asciz "message"
 .Lk_model: .asciz "model"

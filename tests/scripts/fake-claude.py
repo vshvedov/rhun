@@ -2778,17 +2778,23 @@ def s_bg(prompt):
         task_end(task, 'completed', 'completed')
 
 
+# a subagent's own model and context (its records must move neither the reply labels nor the context numbers:
+# made different from the main agent's so a test can tell; 21-agent's ran haiku under haiku)
+SUB_MODEL = 'claude-haiku-5-5'
+SUB_USAGE = {'input_tokens': 6, 'cache_creation_input_tokens': 0, 'cache_read_input_tokens': 34588, 'output_tokens': 12}
+
+
 def sub_record(agent, kind, block, parent_text=False):
     """A subagent's record (34): in the stream with parent_tool_use_id and agent_id, no stream_event, a tool's
     result without tool_use_result; in its own file (isSidechain, agentId), never the conversation's."""
-    record = {'type': kind, 'message': ({'model': current_model(), 'id': agent['mid'], 'type': 'message',
+    record = {'type': kind, 'message': ({'model': SUB_MODEL, 'id': agent['mid'], 'type': 'message',
                                          'role': 'assistant', 'content': [block], 'stop_reason': None,
-                                         'usage': usage()} if kind == 'assistant'
+                                         'usage': SUB_USAGE} if kind == 'assistant'
                                         else {'role': 'user', 'content': [block]}),
               'parent_tool_use_id': agent['tid'], 'agent_id': agent['task_id'], 'session_id': SID,
               'uuid': str(uuid.uuid4()), 'timestamp': now_iso()}
     emit(record)
-    message = {'id': agent['mid'], 'model': current_model(), 'content': [block]} if kind == 'assistant' else \
+    message = {'id': agent['mid'], 'model': SUB_MODEL, 'content': [block]} if kind == 'assistant' else \
         {'content': [block]}
     transcript({'type': kind, 'message': message}, path=agent['file'], chain=agent['chain'], agent=agent['task_id'])
 

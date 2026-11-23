@@ -220,7 +220,24 @@ FN main
 6:  mov rdi, rbx
     mov esi, 10
     call sb_push_byte
-    mov edi, 1
+    # json_pretty: as JSON.stringify(v, null, 2); deeper than 64 levels "…"
+    lea r12, [rip + pretty_cases]
+7:  mov rdi, [r12]
+    test rdi, rdi
+    jz 8f
+    call strlen
+    mov rdi, [r12]
+    mov rsi, rax
+    call json_parse
+    mov rsi, rax
+    mov rdi, rbx
+    call json_pretty
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    add r12, 8
+    jmp 7b
+8:  mov edi, 1
     mov rsi, [rbx + SB_ptr]
     mov rdx, [rbx + SB_len]
     call write_all
@@ -319,7 +336,10 @@ c_objcomma: .asciz "{\"a\":1 \"b\":2}"
 c_four: .asciz "[1,2,3]"
 c_unterminated: .asciz "\"abc"
 c_escend: .asciz "\"abc\\\""
+c_pretty: .asciz "{\"a\":[1,{\"b\":\"x\\\"y\\n\"}],\"e\":{},\"f\":[],\"n\":null,\"t\":true,\"u\":\"é😀\",\"x\":-2.5e3}"
+c_scalar: .asciz "\"plain\""
 .p2align 3
+pretty_cases: .quad c_pretty, c_scalar, c_deep10, c_deep70, c_four, 0
 cases:
     .quad c_all, 0, 0, 200
     .quad c_deep70, 0, 0, 200

@@ -554,6 +554,56 @@ FN agrow_summary
     jmp agents_msg_set
 1:  ret
 
+# FN agrow_tag(AS*, AT*, ptr, len): a top-level row's name as its source names the call (print-agents'
+#   "tool(NAME)"; the header shows AT_name)
+FN agrow_tag
+    cmp qword ptr [rsi + AT_up], 0
+    jne 1f
+    movsxd rsi, dword ptr [rsi + AT_row]
+    jmp agents_row_name
+1:  ret
+
+# FN agrow_stop(AS*): the calls of the turn that still wait for a result are stopped (a prompt read from a
+#   file, a turn's end): they stay findable by id, so a result that still comes is taken. A call that ran
+#   under another one only leaves the list: an agent runs on after its turn
+FN agrow_stop
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12, [rbx + AS_wait + VEC_len]
+    jae 8f
+    mov rax, [rbx + AS_wait + VEC_ptr]
+    mov r13, [rax + r12*8]
+    inc r12
+    cmp qword ptr [r13 + AT_up], 0
+    jne 1b
+    cmp dword ptr [r13 + AT_state], ATS_RUNNING
+    jne 1b
+    mov dword ptr [r13 + AT_state], ATS_STOPPED
+    mov rdi, rbx
+    movsxd rsi, dword ptr [r13 + AT_row]
+    mov edx, ATS_RUNNING
+    mov ecx, ATS_STOPPED
+    call agfold_state
+    mov rdi, rbx
+    mov rsi, r13
+    call agrow_touch
+    jmp 1b
+8:  mov qword ptr [rbx + AS_wait + VEC_len], 0
+    EPILOGUE
+
+# out_hidden(AT*) -> eax 1 when OUT is kept only for the tab its note opens (a note, a title and OUT: the
+#   note is the button, OUT is not drawn)
+out_hidden:
+    xor eax, eax
+    cmp qword ptr [rdi + AT_note], 0
+    je 9f
+    cmp qword ptr [rdi + AT_title], 0
+    je 9f
+    cmp qword ptr [rdi + AT_out + SB_len], 0
+    setne al
+9:  ret
+
 # FN agrow_num(AT*, ATV_*, value): its state, flags on or off, the link's lines, the count its result gave
 FN agrow_num
     cmp esi, ATV_STATE
@@ -2318,6 +2368,10 @@ body_lay:
 3:  add r13d, r14d
     add r13d, [rip + g_pmt + 4*MI_4]
 .Lbl_out:
+    mov rdi, r15
+    call out_hidden
+    test eax, eax
+    jnz .Lbl_end
     cmp qword ptr [r15 + AT_out + SB_len], 0
     je .Lbl_end
     mov eax, [rsp + 8]          # OUT
@@ -2688,6 +2742,10 @@ tr_lay:
     jne 71f
     cmp qword ptr [r15 + AT_out + SB_len], 0
     je 8f
+    mov rdi, r15
+    call out_hidden
+    test eax, eax
+    jnz 8f
 71: add r13d, [rip + g_pmt + 4*MI_6]
     cmp dword ptr [rip + lr_mode], LM_DRAW
     jne 72f
@@ -3975,6 +4033,9 @@ call_dump:
     mov rdi, rbx
     mov rsi, [rax + AT_id]
     call sb_push_cstr
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
     mov rdi, rbx
     mov rsi, [rsp + 8]
     mov rdx, r15

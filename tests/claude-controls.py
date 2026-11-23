@@ -452,7 +452,9 @@ class QueueTest(CfgCase):
         self.assertIn('--max-thinking-tokens=31999', argv)
         self.assertEqual([a for a in argv if a.startswith(('--model', '--effort', '--thinking', '--allow-'))], [])
         self.assertEqual(start['env']['CLAUDE_CODE_QUESTION_PREVIEW_FORMAT'], 'markdown')
-        self.assertEqual(self.initialize(), [{'promptSuggestions': True, 'supportedDialogKinds': DIALOG_KINDS}])
+        self.assertEqual(self.initialize(), [{'promptSuggestions': True, 'supportedDialogKinds': DIALOG_KINDS,
+                                             'perTaskStopAffordance': True,       # phase 3 task 4
+                                             'forwardNestedSubagentToolCalls': True}])
         # the project's choices, the remembered default mode and the bypass setting at the next start
         self.command('agent-cfg-set model sonnet')
         self.command('agent-cfg-set effort low')
@@ -489,7 +491,9 @@ class QueueTest(CfgCase):
     def test_suggestions_off_in_initialize(self):
         self.start(self.claude_section('prompt_suggestions = false\n'))
         self.chat('hello')
-        self.assertEqual(self.initialize(), [{'promptSuggestions': False, 'supportedDialogKinds': DIALOG_KINDS}])
+        self.assertEqual(self.initialize(), [{'promptSuggestions': False, 'supportedDialogKinds': DIALOG_KINDS,
+                                             'perTaskStopAffordance': True,       # phase 3 task 4
+                                             'forwardNestedSubagentToolCalls': True}])
 
 
 SECTIONS = ['Context', 'Model', 'Customize', 'Settings', 'Support', 'Slash Commands']
@@ -2417,9 +2421,6 @@ class SeamWordsTest(unittest.TestCase):
             '.Lclaude_name': {'agent_badge', 'agents_dump'},
             'claude_dir_moved': {'agents_tick'},
             'claude_index_envp': {'index_start'},
-            # the file reader's own Claude loops: phase 3 task 4 moves them to claude_blocks.s
-            '.Ltool_use': {'ingest_line'},
-            '.Ltool_result': {'ingest_line'},
         },
         'agentext.s': {
             'AG_CLAUDE': {'agentext_list_buttons', 'agentext_remote_line'},

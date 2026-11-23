@@ -34,8 +34,7 @@
 #   events drivers call (AL* first): ev_note(al, role, ptr, len), ev_failed(al, ptr, len) (could not
 #     start or broke: ALS_FAILED, an error row, the prompts that waited back in the box), ev_ready(al)
 #     (handshake done: the prompts that waited go), ev_text(al, key ptr, key len, ptr, len, replace) (a
-#     block's reply text), ev_tool(al, name, ptr, len) (a finished tool call: its summary),
-#     ev_result_row(al, ptr, len) (a tool's output), ev_request(al, AQ*, prompt ptr, len, opts, n) (a
+#     block's reply text), ev_request(al, AQ*, prompt ptr, len, opts, n) (a
 #     request's card: WAITING), ev_request_gone(al, AQ*) (it is answered or withdrawn: its card goes, it
 #     leaves AL_reqs and is freed), ev_mode(al, ptr, len), ev_turn_end(al, TE_*, ptr, len),
 #     ev_closed(al, err) (the process is gone: OFF unless FAILED, the requests it waited on go with an
@@ -296,6 +295,8 @@ live_free:
     mov rdi, [rbx + AL_cdir]
     call mem_free
     mov rdi, [rbx + AL_unsent]  # prompts never given back go with their session
+    call mem_free
+    mov rdi, [rbx + AL_dseen]   # the driver's own block (Claude's record uuids)
     call mem_free
     mov rdi, rbx
     call live_lists_free
@@ -2114,37 +2115,6 @@ FN ev_text
 8:  mov qword ptr [rbx + AL_row], -1
 9:  EPILOGUE
 
-# FN ev_tool(al, name cstr or 0, ptr, len): a finished tool call: its row (the name, "tool" without one),
-#   the summary of its input as the file reader shows it
-FN ev_tool
-    mov rdi, [rdi + AL_as]
-    mov r8, rsi
-    test r8, r8
-    jnz 1f
-    lea r8, [rip + .Ltool]
-1:  mov esi, R_TOOL
-    jmp agents_msg_add
-
-# FN ev_result_row(al, ptr, len): a tool's output, as a result row (none when it is empty: the file
-#   reader shows none)
-FN ev_result_row
-    PROLOGUE
-    mov rbx, [rdi + AL_as]
-    mov r12, rsi
-    mov r13, rdx
-    mov rdi, rsi
-    mov rsi, rdx
-    call trim
-    test rdx, rdx
-    jz 9f
-    mov rdi, rbx
-    mov esi, R_RESULT
-    mov rdx, r12
-    mov rcx, r13
-    xor r8d, r8d
-    call agents_msg_add
-9:  EPILOGUE
-
 # FN ev_request(al, AQ*, prompt ptr, len, opts cstr*, n) -> eax 1 shown: the request's card on the
 #   session (the one at the head of AL_reqs); the state is WAITING
 FN ev_request
@@ -2541,7 +2511,9 @@ FN ev_turn_end
     mov rcx, rax
     xor r8d, r8d
     call agents_msg_add
-2:  and dword ptr [rbx + AL_flags], ~ALF_STOP_ASKED
+2:  mov rdi, [rbx + AL_as]      # the turn's calls still waiting for a result are stopped (agentrows.s)
+    call agrow_stop
+    and dword ptr [rbx + AL_flags], ~ALF_STOP_ASKED
     mov qword ptr [rbx + AL_row], -1
     mov byte ptr [rbx + AL_rowkey], 0
     call time_ms

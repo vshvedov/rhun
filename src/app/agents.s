@@ -1691,16 +1691,6 @@ interrupt_mark:
     call str_eq_cstr
 9:  EPILOGUE
 
-# add_interrupted(s): the "Interrupted" row
-add_interrupted:
-    PROLOGUE
-    mov esi, R_INFO
-    lea rdx, [rip + .Linterrupted]
-    mov ecx, 11
-    xor r8d, r8d
-    call add_msg
-    EPILOGUE
-
 tool_field:
     PROLOGUE
     mov rbx, rdi
@@ -1799,17 +1789,14 @@ FN ingest_line
     call agent_ingest
     jmp .Lil_ret
 .Lil_user:
-    # the kind's reader first (agent_drv.s readers): when it made the line's rows, only the title is read
-    #   below. (A reader must not parse while it reads: the title reads the record after it.)
+    # the kind's reader makes the line's rows (agent_drv.s readers: claude_blocks.s); only the weak title
+    #   from a prompt is read here, after it (a reader must not parse while it reads)
     cmp dword ptr [rsp], 0
     je 0f
     mov rdi, rbx
     mov rsi, r12
     mov edx, ING_FILE
     call agent_ingest
-    test eax, eax
-    jz 0f
-    mov dword ptr [rsp], 0
 0:  # skip meta / command records
     mov rdi, r12
     lea rsi, [rip + .LisMeta]
@@ -1828,7 +1815,7 @@ FN ingest_line
     mov rdi, rax
     call json_type
     cmp eax, JT_STR
-    jne .Lil_user_arr
+    jne .Lil_ret
     mov rdi, r13
     call json_str
     cmp byte ptr [rax], '<'
@@ -1839,189 +1826,32 @@ FN ingest_line
     mov rsi, rdx
     call interrupt_mark
     test eax, eax
-    jnz .Lil_mark
+    jnz .Lil_ret
     mov rdi, rbx
     mov rsi, r14
     mov rdx, r15
     xor ecx, ecx
     call set_title
-    cmp dword ptr [rsp], 0
-    je .Lil_ret
-    mov rdi, rbx
-    mov esi, R_USER
-    mov rdx, r14
-    mov rcx, r15
-    xor r8d, r8d
-    call add_msg
-    jmp .Lil_ret
-.Lil_user_arr:
-    cmp dword ptr [rsp], 0
-    je .Lil_ret
-    xor r14d, r14d
-2:  mov rdi, r13
-    call json_len
-    cmp r14d, eax
-    jae .Lil_ret
-    mov rdi, r13
-    mov esi, r14d
-    call json_at
-    mov r15, rax
-    mov rdi, rax
-    lea rsi, [rip + .Ltype]
-    call json_get
-    mov [rsp + 8], rax
-    mov rdi, rax
-    lea rsi, [rip + .Ltool_result]
-    call json_is
-    test eax, eax
-    jz 3f
-    mov rdi, r15
-    lea rsi, [rip + .Lcontent]
-    call json_get
-    mov rdi, rax
-    call text_of
-    mov rdi, rbx
-    mov esi, R_RESULT
-    mov rcx, rdx
-    mov rdx, rax
-    xor r8d, r8d
-    call add_msg
-    jmp 4f
-3:  mov rdi, [rsp + 8]
-    lea rsi, [rip + .Ltext]
-    call json_is
-    test eax, eax
-    jz 4f
-    mov rdi, r15
-    lea rsi, [rip + .Ltext]
-    call json_get
-    mov rdi, rax
-    call json_str
-    cmp byte ptr [rax], '<'
-    je 4f
-    mov [rsp + 16], rax
-    mov [rsp + 24], rdx
-    mov rdi, rax
-    mov rsi, rdx
-    call interrupt_mark
-    test eax, eax
-    jz 31f
-    mov rdi, rbx
-    call add_interrupted
-    jmp 4f
-31: mov rdi, rbx
-    mov esi, R_USER
-    mov rdx, [rsp + 16]
-    mov rcx, [rsp + 24]
-    xor r8d, r8d
-    call add_msg
-4:  inc r14d
-    jmp 2b
-.Lil_mark:                      # the interrupt mark as a string: no title, the Interrupted row
-    cmp dword ptr [rsp], 0
-    je .Lil_ret
-    mov rdi, rbx
-    call add_interrupted
     jmp .Lil_ret
 .Lil_assist:
-    cmp dword ptr [rsp], 0      # the kind's reader first, as for a user line
-    je 0f
-    mov rdi, rbx
-    mov rsi, r12
-    mov edx, ING_FILE
-    call agent_ingest
-    test eax, eax
-    jz 0f
-    mov dword ptr [rsp], 0
-0:  mov rdi, r12
+    mov rdi, r12                # the model, then the kind's reader (its replies' labels follow the model)
     lea rsi, [rip + .Lmessage]
     call json_get
-    mov r13, rax
     mov rdi, rax
     lea rsi, [rip + .Lmodel]
     call json_get
     mov rdi, rax
     call json_str
-    xor ecx, ecx                # Claude Code's own notices ("<synthetic>") are no model's replies
-    test rdx, rdx
-    jz 11f
-    cmp byte ptr [rax], '<'
-    sete cl
-11: mov [rsp + 32], ecx
     mov rdi, rbx
     mov rsi, rax
     call note_model
     cmp dword ptr [rsp], 0
     je .Lil_ret
-    mov rdi, r13
-    lea rsi, [rip + .Lcontent]
-    call json_get
-    mov r13, rax
-    xor r14d, r14d
-5:  mov rdi, r13
-    call json_len
-    cmp r14d, eax
-    jae .Lil_ret
-    mov rdi, r13
-    mov esi, r14d
-    call json_at
-    mov r15, rax
-    mov rdi, rax
-    lea rsi, [rip + .Ltype]
-    call json_get
-    mov [rsp + 8], rax
-    mov rdi, rax
-    lea rsi, [rip + .Ltext]
-    call json_is
-    test eax, eax
-    jz 6f
-    mov rdi, r15
-    lea rsi, [rip + .Ltext]
-    call json_get
-    mov rdi, rax
-    call json_str
-    mov [rsp + 16], rax
-    mov [rsp + 24], rdx
-    xor r8d, r8d
-    cmp dword ptr [rsp + 32], 0
-    jne 12f
     mov rdi, rbx
-    mov rsi, rax
-    call reply_label
-    mov r8, rax
-12: mov rdi, rbx
-    mov esi, R_ASSIST
-    mov rdx, [rsp + 16]
-    mov rcx, [rsp + 24]
-    call add_msg
-    jmp 7f
-6:  mov rdi, [rsp + 8]
-    lea rsi, [rip + .Ltool_use]
-    call json_is
-    test eax, eax
-    jz 7f
-    mov rdi, r15
-    lea rsi, [rip + .Lname]
-    call json_get
-    mov rdi, rax
-    call json_str
-    mov [rsp + 16], rax
-    mov rdi, r15
-    lea rsi, [rip + .Linput]
-    call json_get
-    mov rdi, rax
-    call tool_summary
-    mov r8, [rsp + 16]
-    test r8, r8
-    jnz 61f
-    lea r8, [rip + .Ltool]
-61: mov rdi, rbx
-    mov esi, R_TOOL
-    mov rcx, rdx
-    mov rdx, rax
-    call add_msg
-7:  inc r14d
-    jmp 5b
+    mov rsi, r12
+    mov edx, ING_FILE
+    call agent_ingest
+    jmp .Lil_ret
 .Lil_opencode:
     mov rdi, r12
     lea rsi, [rip + .Loc_part]
@@ -4357,6 +4187,25 @@ FN agents_row_flag
     or [rax + AM_flags], edx
     jmp agents_msg_changed
 1:  ret
+
+# FN agents_row_name(AS*, index, ptr, len): a row's name (AM_name: a tool row's "tool(NAME)" in print-agents)
+FN agents_row_name
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    cmp r12, [rbx + AS_msgs + VEC_len]
+    jae 9f
+    mov rdi, r13
+    mov rsi, r14
+    call mem_dup
+    imul rcx, r12, AM_SIZE
+    add rcx, [rbx + AS_msgs + VEC_ptr]
+    mov rdi, [rcx + AM_name]
+    mov [rcx + AM_name], rax
+    call mem_free
+9:  EPILOGUE
 
 # FN agents_msg_append(AS*, index, ptr, len): more text for that message (streaming)
 FN agents_msg_append
@@ -8562,8 +8411,6 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lmark_stop: .asciz "[Request interrupted by user]"
 .Lmark_tool: .asciz "[Request interrupted by user for tool use]"
 .Linterrupted: .asciz "Interrupted"
-.Ltool_result: .asciz "tool_result"
-.Ltool_use: .asciz "tool_use"
 .Lname: .asciz "name"
 .Linput: .asciz "input"
 .Lpayload: .asciz "payload"

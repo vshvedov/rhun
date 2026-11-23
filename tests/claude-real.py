@@ -14,8 +14,8 @@ conversation under the real ~/.claude/projects/<slug of the temporary project>. 
 test reads a credential: the only look at the sign-in is `claude auth status --json`, of which only
 "loggedIn" is kept, never printed beyond yes or no.
 
-rhun finds the conversation's file under its own HOME: <its HOME>/.claude/projects/<slug> is a symbolic
-link to that one real folder (made before rhun starts), so rhun sees nothing else of ~/.claude.
+rhun finds the conversation's file there too: its Claude folder follows the HOME the child gets (the
+env.HOME pair), so it reads the real ~/.claude/projects/<slug> and sessions/ (nothing else of ~/.claude).
 
 The project is a fresh git repository with one file in a temporary folder (RHUN_REAL_CLAUDE_TMP, or the
 system's), outside any rhun checkout. At the end the real ~/.claude/projects folders named after the
@@ -159,8 +159,7 @@ class RealCase(chat.DrivenCase):
         real.mkdir(parents=True, exist_ok=True)
         type(self).made.append(real)
         home = self.work / 'home'
-        (home / '.claude/projects').mkdir(parents=True)
-        (home / '.claude/projects' / name).symlink_to(real, target_is_directory=True)
+        home.mkdir()
         self.real_folder = real
         self.config = self.work / 'config/rhun/config'
         self.config.parent.mkdir(parents=True)

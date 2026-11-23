@@ -23,7 +23,8 @@
 #   claude_mode() -> rax the --permission-mode value of [claude] initial_mode, or 0 (the CLI's own)
 #   claude_mode_alias(ptr, len) -> rax ptr, rdx len: the initial_mode value config.s looks up
 #   claude_dir(sb) -> eax 1: appended, the first of an absolute env.CLAUDE_CONFIG_DIR, the environment's
-#                   CLAUDE_CONFIG_DIR (not empty), "$HOME/.claude"; 0 without any. The environment is
+#                   CLAUDE_CONFIG_DIR (not empty), "$HOME/.claude" (HOME: an env.HOME pair, else the
+#                   environment's); 0 without any. The environment is
 #                   the one claude gets (uproc_env_get): the login shell's once known, rhun's own until
 #                   then. The one source for the driver, the holder check and discovery
 #   claude_dir_pin(cstr or 0)  claude_dir gives that folder until it is called with 0: a conversation's
@@ -301,7 +302,16 @@ config_dir_pair:
 # FN claude_config_dir_value() -> rax the value of [claude] env.CLAUDE_CONFIG_DIR (a cstr, borrowed until
 #   the config is read again), or 0 when it is not set
 FN claude_config_dir_value
+    lea rdi, [rip + .Lconfig_dir_eq]
+    mov esi, CONFIG_DIR_LEN
+    jmp pair_value
+
+# pair_value(name_eq, len) -> rax the value of the [claude] env pair "NAME=" (len bytes with its '='
+#   names it), or 0
+pair_value:
     PROLOGUE
+    mov r13, rdi
+    mov r14, rsi
     xor ebx, ebx
 1:  xor eax, eax
     cmp rbx, [rip + pairs + VEC_len]
@@ -310,12 +320,12 @@ FN claude_config_dir_value
     mov r12, [rax + rbx*8]
     inc rbx
     mov rdi, r12
-    lea rsi, [rip + .Lconfig_dir_eq]
-    mov edx, CONFIG_DIR_LEN
+    mov rsi, r13
+    mov rdx, r14
     call memeq
     test eax, eax
     jz 1b
-    lea rax, [r12 + CONFIG_DIR_LEN]
+    lea rax, [r12 + r14]
 9:  EPILOGUE
 
 # claude_env() -> envp (see the top of the file)
@@ -604,8 +614,16 @@ FN claude_dir
     mov r12, rax
     xor r13d, r13d
     jmp 3f
-2:  lea rdi, [rip + .Lhome]
+2:  lea rdi, [rip + .Lhome_eq]   # the HOME claude gets: an env.HOME pair, else the environment's
+    mov esi, 5
+    call pair_value
+    test rax, rax
+    jz 21f
+    cmp byte ptr [rax], 0
+    jne 22f
+21: lea rdi, [rip + .Lhome]
     call uproc_env_get
+22:
     test rax, rax
     jz 8f
     mov r12, rax
@@ -924,6 +942,7 @@ places:
 .Lconfig_dir_eq: .ascii "CLAUDE_CONFIG_DIR="
 .Lconfig_dir: .asciz "CLAUDE_CONFIG_DIR"
 .Lhome: .asciz "HOME"
+.Lhome_eq: .ascii "HOME="
 .Ldot_claude: .asciz "/.claude"
 .Lprojects: .asciz "/projects/"
 .Ljsonl: .asciz ".jsonl"

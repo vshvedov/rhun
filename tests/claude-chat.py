@@ -587,6 +587,18 @@ class ChatTest(DrivenCase):
         self.assertFalse(b.exists() and list(b.glob('projects/*/*.jsonl')))
         self.assertEqual(self.thread()[-2:], ['user again', 'agent ok: again'])
 
+    def test_an_env_home_pair_names_the_claude_folder(self):
+        # [claude] env.HOME (no CLAUDE_CONFIG_DIR): claude writes under that HOME's .claude, rhun looks there
+        home = self.work / 'other-home'
+        home.mkdir()
+        self.start(self.claude_section(f'env.HOME = {home}\n'))
+        self.chat('hello')
+        sid = self.sid()
+        transcript = home / '.claude/projects' / slug(self.project) / (sid + '.jsonl')
+        self.assertTrue(transcript.exists())
+        self.assertEqual(self.command(f'print-claude-path {self.project} {sid}'), f'{transcript}\n')
+        self.assertRegex(self.live(), r' new=0\b')
+
     def test_text_streams_into_one_row(self):
         self.start()
         self.chat('slow', 'working')

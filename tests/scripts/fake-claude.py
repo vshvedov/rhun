@@ -62,7 +62,8 @@ them, the others as skills "Skill NAME", as the real list has skills initialize 
 with a uuid while another waits or runs is refused: lifecycle refused, never run, logged {"refused": UUID});
 FAKE_CLAUDE_DISCARD_HELD (the first such message is queued, then, when its turn would start, lifecycle
 discarded, never run, logged {"discarded": UUID}); FAKE_CLAUDE_NO_LIFECYCLE (no command_lifecycle at all:
-only the replay says a message started);
+only the replay says a message started); FAKE_CLAUDE_ULTRATHINK (system/init says ultrathink_available true:
+unrecorded, 2.1.330 said false on this account);
 FAKE_CLAUDE_ECHO_ENV (comma-separated names whose values the log's start record shows, besides
 CLAUDE_CODE_ENTRYPOINT, CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, MCP_CONNECTION_NONBLOCKING, TRACEPARENT and
 TRACESTATE);
@@ -1873,7 +1874,8 @@ def system_init():
           'model': current_model() + '[1m]', 'permissionMode': MODE, 'slash_commands': ['compact', 'context', 'usage'],
           'apiKeySource': ENV.get('FAKE_CLAUDE_KEYSRC', 'none'), 'claude_code_version': '2.1.330',
           'output_style': 'default', 'capabilities': ['interrupt_receipt_v1', 'msg_lifecycle_v1'],
-          'uuid': str(uuid.uuid4()), 'fast_mode_state': FAST[0], 'ultrathink_available': False})
+          'uuid': str(uuid.uuid4()), 'fast_mode_state': FAST[0],
+          'ultrathink_available': bool(ENV.get('FAKE_CLAUDE_ULTRATHINK'))})
 
 
 def turn(entry):

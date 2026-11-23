@@ -226,7 +226,8 @@ FN agent_live_state
     mov eax, [rcx + AL_state]
 1:  ret
 
-# FN agent_state_set(AL*, state): AL_state, and AS_state as the list and the box read it
+# FN agent_state_set(AL*, state): AL_state, and AS_state as the list and the box read it; a turn starting
+#   (WORKING) takes the agent's suggestion away
 FN agent_state_set
     mov [rdi + AL_state], esi
     lea rax, [rip + ags_of]
@@ -234,7 +235,16 @@ FN agent_state_set
     mov rcx, [rdi + AL_as]
     mov [rcx + AS_state], eax
     mov dword ptr [rip + g_dirty], 1
-    ret
+    cmp esi, ALS_WORKING        # a turn starts: the agent's suggestion goes
+    jne 1f
+    cmp qword ptr [rdi + AL_suggest], 0
+    je 1f
+    push rdi
+    mov rdi, [rdi + AL_suggest]
+    call mem_free
+    pop rdi
+    mov qword ptr [rdi + AL_suggest], 0
+1:  ret
 
 # live_free(AL*): the program ends (conn_close), everything the record owns goes, AS_live is 0
 live_free:
@@ -2928,6 +2938,7 @@ ext_drv:
     .quad ext_auth, ext_release
     .quad ext_none, ext_none, ext_none, ext_none, ext_none, ext_none, ext_none, ext_none
     .quad ext_none              # DRV_menu: no command menu (agentpop.s)
+    .quad 0                     # DRV_hint: the box's own placeholder
 kind_names: .quad .Lk_claude, .Lk_codex, .Lk_grok, .Lk_opencode
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 state_names: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed

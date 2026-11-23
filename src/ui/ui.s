@@ -1887,6 +1887,108 @@ FN ta_key
     xor eax, eax
     EPILOGUE
 
+# ta_paint_row(tf, x, y, h, start, end): a text area's row [start, end) drawn by parts: the bytes of a
+#   painted range (TF_paint: {start 8, end 8, kind 4, pad 4} ending start -1) a glyph at a time in the cycling
+#   colours across the range (PAINT_RAINBOW: the extension's seven, for a dark or a light theme), the rest in
+#   T_FG. Locals: [rsp] the pen's x, [rsp+4] y, [rsp+8] h, [rsp+16] a part's end, [rsp+24] a glyph's colour
+ta_paint_row:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
+    mov r12, r8
+    mov r13, r9
+    mov rdi, rbx
+    call tf_text
+    mov r14, rax
+.Lpr_part:
+    cmp r12, r13
+    jae .Lpr_done
+    mov r15, [rbx + TF_paint]   # the range holding r12, else the next one's start
+    mov rcx, r13
+1:  mov rax, [r15]
+    cmp rax, -1
+    je 3f
+    cmp rax, r12
+    ja 2f
+    cmp [r15 + 8], r12
+    ja .Lpr_glyph
+    jmp 4f
+2:  cmp rax, rcx
+    cmovb rcx, rax
+4:  add r15, 24
+    jmp 1b
+3:  mov [rsp + 16], rcx         # plain bytes up to there
+    call ta_face
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    lea r8, [r14 + r12]
+    mov r9, [rsp + 16]
+    sub r9, r12
+    COLOR eax, T_FG
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    mov [rsp], eax
+    mov r12, [rsp + 16]
+    jmp .Lpr_part
+.Lpr_glyph:                     # one glyph of the range at r15: its colour by its place in the range
+    mov rcx, [r15]
+    xor r8d, r8d                # the range's glyphs
+    xor r9d, r9d                # those before r12
+5:  cmp rcx, [r15 + 8]
+    jae 6f
+    movzx eax, byte ptr [r14 + rcx]
+    and eax, 0xc0
+    cmp eax, 0x80
+    je 51f
+    inc r8d
+    cmp rcx, r12
+    jae 51f
+    inc r9d
+51: inc rcx
+    jmp 5b
+6:  imul eax, r9d, 7
+    xor edx, edx
+    test r8d, r8d
+    jz 61f
+    div r8d
+61: cmp eax, 6
+    jbe 62f
+    mov eax, 6
+62: lea rcx, [rip + rainbow_dark]
+    cmp dword ptr [rip + g_theme_dark], 0
+    jne 63f
+    lea rcx, [rip + rainbow_light]
+63: mov eax, [rcx + rax*4]
+    mov [rsp + 24], eax
+    lea rdi, [r14 + r12]
+    mov rsi, r13
+    sub rsi, r12
+    call utf8_decode
+    lea rax, [r12 + rdx]
+    mov [rsp + 16], rax
+    call ta_face
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    lea r8, [r14 + r12]
+    mov r9, [rsp + 16]
+    sub r9, r12
+    mov eax, [rsp + 24]
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    mov [rsp], eax
+    mov r12, [rsp + 16]
+    jmp .Lpr_part
+.Lpr_done:
+    EPILOGUE
+
 # ui_textarea(tf, x, y, w, h, focused, placeholder): always wrap at the available
 # width, keeping the caret's visual row in view; the mouse places the cursor -> UB bits
 FN ui_textarea
@@ -2124,6 +2226,8 @@ FN ui_textarea
 8:  mov r9, r13
     sub r9, r12
     jz 81f
+    cmp qword ptr [rbx + TF_paint], 0
+    jne .Lta_paint              # a field with painted ranges (TF_paint) draws its rows by parts
     call ta_face
     mov esi, [rsp + 36]
     mov edx, [rsp + 76]
@@ -2134,12 +2238,23 @@ FN ui_textarea
     push rax
     call ui_text_v
     add rsp, 16
-81: cmp r13, r15
+81:
+.Lta_row_done:
+    cmp r13, r15
     jae .Lta_caret
     inc dword ptr [rsp + 48]
     mov eax, [rsp + 32]
     add [rsp + 76], eax
     jmp .Lta_line
+.Lta_paint:
+    mov rdi, rbx
+    mov esi, [rsp + 36]
+    mov edx, [rsp + 76]
+    mov ecx, [rsp + 32]
+    mov r8, r12
+    mov r9, r13
+    call ta_paint_row
+    jmp .Lta_row_done
 .Lta_caret:
     cmp dword ptr [rsp + 16], 0
     je 9f
@@ -2163,6 +2278,10 @@ f_100: .float 100.0
 f_min_scale: .float 0.5
 f_big: .float 1.55
 f_huge: .float 3.4
+rainbow_dark:                   # PAINT_RAINBOW: the extension's --app-ultrathink-rainbow, dark and light
+    .long 0xffeb5f57, 0xfff58b57, 0xfffac35f, 0xff91c882, 0xff82aadc, 0xff9b82c8, 0xffc882b4
+rainbow_light:
+    .long 0xffc8322d, 0xffcd5f1e, 0xffa57800, 0xff2d823c, 0xff2864b9, 0xff5a41aa, 0xffa53c82
 # logical sizes for MI_* indices
 metric_values:
     .long 1, 2, 3, 4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48

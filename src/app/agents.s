@@ -43,6 +43,7 @@ ENDSTRUCT AM_SIZE
 
 .equ ROUTINE_GAP, 2000          # ms from one routine discovery run to the next
 .equ INDEX_TIMEOUT, 60000       # ms a discovery run may take before it is stopped
+.equ TRUNCATED_LEN, 53          # .Ltruncated's bytes
 
 .bss
 .p2align 3
@@ -3556,6 +3557,40 @@ FN agents_reply_nth
     mov ecx, r13d
     EPILOGUE
 
+# FN agents_user_nth(AS*, n) -> rax ptr, rdx len of its n-th last prompt (1 the latest; past them: rax 0): the
+#   rows of the user's text (role R_USER, not blank), what the box's recall goes back through
+FN agents_user_nth
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d
+    mov r14, [rbx + AS_msgs + VEC_len]
+1:  test r14, r14
+    jz 8f
+    dec r14
+    imul r15, r14, AM_SIZE
+    add r15, [rbx + AS_msgs + VEC_ptr]
+    cmp dword ptr [r15 + AM_role], R_USER
+    jne 1b
+    mov rax, [r15 + AM_text]
+    test rax, rax
+    jz 1b
+    xor ecx, ecx
+2:  cmp rcx, [r15 + AM_len]
+    jae 1b                      # blank
+    cmp byte ptr [rax + rcx], ' '
+    ja 3f
+    inc rcx
+    jmp 2b
+3:  inc r13
+    cmp r13, r12
+    jne 1b
+    mov rdx, [r15 + AM_len]
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    EPILOGUE
+
 # FN agents_msg_add(AS*, role, ptr, len, name cstr or 0) -> rax the new message's index, or -1 when
 #   nothing was added: a row of a session rhun drives (an empty one stays: streamed text fills it)
 FN agents_msg_add
@@ -4190,6 +4225,7 @@ F WR_color, 4
 F WR_draw, 4
 F WR_top, 4
 F WR_bot, 4
+F WR_mute, 8            # the byte drawn muted from on (a prompt's truncation marker), -1 none
 ENDSTRUCT WR_SIZE
 
 wrap:
@@ -4278,6 +4314,28 @@ wrap:
     mov r8, [rsp + 8]
     sub r8, r13
     mov r9d, [rbx + WR_color]
+    mov rax, [rbx + WR_mute]    # muted from WR_mute on
+    test rax, rax
+    js 51f
+    cmp rax, [rsp + 8]
+    jae 51f
+    cmp rax, r13
+    ja 52f
+    COLOR r9d, T_MUTED
+51: call text_draw
+    jmp 5f
+52: mov [rsp + 40], edx         # the line's part before it, then the rest muted
+    mov r8, rax
+    sub r8, r13
+    call text_draw
+    mov esi, eax
+    mov edx, [rsp + 40]
+    mov rdi, [rbx + WR_face]
+    mov rcx, [rbx + WR_text]
+    add rcx, [rbx + WR_mute]
+    mov r8, [rsp + 8]
+    sub r8, [rbx + WR_mute]
+    COLOR r9d, T_MUTED
     call text_draw
 5:  inc r15d
     mov r12, [rsp + 16]
@@ -4551,6 +4609,7 @@ th_prepare:
 # wr_setup(WR*) using rbx = msg, r12d = width. Measuring (msg_height) and drawing (draw_msg) share it,
 # so a message wraps the same in both.
 wr_setup:
+    mov qword ptr [rdi + WR_mute], -1
     mov rax, [rbx + AM_text]
     mov [rdi + WR_text], rax
     mov rax, [rbx + AM_len]
@@ -5399,7 +5458,17 @@ draw_msg:
     jz 32f
     COLOR eax, T_MUTED
 32: mov [rsp + WR_color], eax
-    mov dword ptr [rsp + WR_draw], 1
+    cmp dword ptr [rbx + AM_role], R_USER       # a prompt the CLI cut: its marker muted
+    jne 33f
+    mov rdi, [rbx + AM_text]
+    mov rsi, [rbx + AM_len]
+    test rdi, rdi
+    jz 33f
+    lea rdx, [rip + .Ltruncated]
+    mov ecx, TRUNCATED_LEN
+    call str_find
+    mov [rsp + WR_mute], rax
+33: mov dword ptr [rsp + WR_draw], 1
     mov eax, [rip + g_cv + CV_cy0]
     mov [rsp + WR_top], eax
     mov eax, [rip + g_cv + CV_cy1]
@@ -6330,6 +6399,7 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lgk_meta: .asciz "_meta"
 .Lgk_model: .asciz "modelId"
 .Ldot: .asciz "  \302\267  "
+.Ltruncated: .ascii "[Message truncated - exceeded 50,000 character limit]"   # the CLI's marker
 .Llive: .asciz "  \302\267  live"
 .Lnow: .asciz "just now"
 .Lago: .asciz " ago"

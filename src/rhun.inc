@@ -3075,6 +3075,7 @@ F DRV_set_thinking, 8   # (AL*, esi on) -> eax 1 asked
 F DRV_reply, 8          # (AL*, AQ*, CD*) -> eax 1 written: a rich card's answer (the card holds the choice)
 F DRV_action, 8         # (AL*, esi ACT_*, rdx arg ptr, rcx len) -> eax 1 done: its part of a local command
 F DRV_menu, 8           # (AS* or 0, APM** out) -> eax n: the command menu's actions (agentpop.s), 0 none
+F DRV_hint, 8           # cstr: the box's placeholder until the window's first Send of this driver, or 0
 ENDSTRUCT DRV_SIZE
 # AMD: a permission mode (a driver's static table)
 STRUCT

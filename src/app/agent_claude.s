@@ -1809,7 +1809,18 @@ h_system:
     mov rsi, r12
     call claude_commands_changed
     jmp 9f
-1:  mov rdi, r12                # the id it runs under: ours (--session-id), else it is taken
+1:  mov rdi, r12                # "ultrathink" painted in the box while the session offers it (finding 21)
+    lea rsi, [rip + .Lk_ultrathink]
+    call json_get
+    mov rdi, rax
+    call json_bool
+    lea rsi, [rip + .Lv_ultrathink]
+    test eax, eax
+    jnz 11f
+    lea rsi, [rip + .Lempty]
+11: mov rdi, rbx
+    call ev_word
+    mov rdi, r12                # the id it runs under: ours (--session-id), else it is taken
     lea rsi, [rip + .Lk_session_id]
     call jstr
     test rdx, rdx
@@ -1858,6 +1869,21 @@ h_system:
     mov rdi, rbx
     mov rsi, rax
     call ev_mode
+9:  EPILOGUE
+
+# h_suggestion(AL*, record): prompt_suggestion {suggestion} (finding 19): the box's placeholder until the next
+#   turn or Send, Tab takes it ([claude] prompt_suggestions off: initialize asked for none; one is dropped)
+h_suggestion:
+    PROLOGUE
+    cmp dword ptr [rip + cfg_claude_prompt_suggestions], 0
+    je 9f
+    mov rbx, rdi
+    mov rdi, rsi
+    lea rsi, [rip + .Lk_suggestion]
+    call jstr
+    mov rdi, rbx
+    mov rsi, rax
+    call ev_suggest
 9:  EPILOGUE
 
 # set_path(AL*, cwd cstr): the session's transcript path is the one Claude Code gives AL_sid in that folder
@@ -3248,11 +3274,13 @@ claude_drv:
     .quad claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra
     .quad claude_set_thinking, claude_reply, claude_action
     .quad claude_menu
+    .quad .Lhint                # DRV_hint
 cl_types:
     .quad .Lv_stream_event, h_stream, .Lv_assistant, h_assistant, .Lv_system, h_system
     .quad .Lv_result, h_result, .Lv_control_request, h_request, .Lv_control_response, h_response
     .quad .Lv_user, h_user, .Lv_cancel, h_cancel
     .quad .Lv_lifecycle, claude_lifecycle       # task 3: a message's lifecycle (claude_session.s)
+    .quad .Lv_suggestion, h_suggestion          # the prompt Claude suggests next (finding 19)
     .quad 0, 0
 perm_qs:                        # a permission card's question: the tool, before its summary, after it
     .quad .Lt_bash, .Lq_bash, .Lempty, .Lt_edit, .Lq_edit, .Lq_mark, .Lt_multiedit, .Lq_edit, .Lq_mark
@@ -3263,6 +3291,11 @@ opts_plan: .quad .Lo_yes, .Lo_keep
 cl_flags:
     .quad .La_outf, .La_sj, .La_verbose, .La_inf, .La_sj, .La_partial, .La_ppt, .La_replay, 0
 .Lname: .asciz "Claude Code"
+.Lhint: .asciz "Ask Claude to edit\xe2\x80\xa6"
+.Lv_suggestion: .asciz "prompt_suggestion"
+.Lk_suggestion: .asciz "suggestion"
+.Lk_ultrathink: .asciz "ultrathink_available"
+.Lv_ultrathink: .asciz "ultrathink"
 .La_outf: .asciz "--output-format"
 .La_inf: .asciz "--input-format"
 .La_sj: .asciz "stream-json"

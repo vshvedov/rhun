@@ -632,6 +632,17 @@ c_print_agent_placeholder:
     xor eax, eax
     EPILOGUE
 
+# print-agent-composer: "draft=0|1 paint=START-END|-" of a driven conversation's box (composer_dump), nothing
+#   for a draft's or an extension session's
+c_print_agent_composer:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call composer_dump
+    xor eax, eax
+    EPILOGUE
+
 # print-agents-box: the prompt row's layout at every panel size and width (agentext_box_dump)
 c_print_agents_box:
     PROLOGUE
@@ -1121,6 +1132,7 @@ c_agent_test_band:
 .Lc_print_agents_metrics: .asciz "print-agents-metrics"
 .Lc_print_agents_box: .asciz "print-agents-box"
 .Lc_print_agent_placeholder: .asciz "print-agent-placeholder"
+.Lc_print_agent_composer: .asciz "print-agent-composer"
 .Lc_print_sh_quote: .asciz "print-sh-quote"
 .Lc_agent_test_append: .asciz "agent-test-append"
 .Lc_agents_source: .asciz "agents-source"
@@ -1194,6 +1206,8 @@ ai_ctl:
     # the model, effort, Ultracode and thinking (task 6)
     .quad .Lc_agent_model, c_agent_model, .Lc_agent_effort, c_agent_effort
     .quad .Lc_agent_ultra, c_agent_ultra, .Lc_agent_thinking, c_agent_thinking
+    # the composer (agentcompose.s)
+    .quad .Lc_print_agent_composer, c_print_agent_composer
     .quad 0, 0
 cfg_fields:                     # agent-cfg-set's words: the word, the AGF_*, whether it is an int
     .quad .Lf_model

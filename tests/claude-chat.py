@@ -1208,14 +1208,16 @@ class BoxLayoutTest(DrivenCase):
         return self.command('print-agent-placeholder').rstrip('\n')
 
     def test_the_placeholder_names_the_box_and_is_cut_with_an_ellipsis(self):
-        self.start()
+        # (no prompt suggestion after the turn: it would be the placeholder, tests/claude-controls.py)
+        self.start(self.claude_section('prompt_suggestions = false\n'))
         self.command('cmd focus_agents')
         self.command('agent-new claude')
         self.assertEqual(self.placeholder(), 'placeholder=Start a conversation')
         self.command('agent-prompt hello')
         self.command('wait-agent ready')
         self.assertEqual(self.placeholder(), 'placeholder=Message Claude Code')
-        self.config.write_text(self.BASE + self.claude_section() + '[ui]\nagents_width = 240\n'
+        self.config.write_text(self.BASE + self.claude_section('prompt_suggestions = false\n') +
+                               '[ui]\nagents_width = 240\n'
                                '[agents]\nfont_size = 30\n', encoding='utf-8')
         self.until(lambda: self.placeholder() != 'placeholder=Message Claude Code', 'the reload', 10)
         text = self.placeholder()[len('placeholder='):]

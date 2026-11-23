@@ -232,8 +232,8 @@ class ConfigTest(CfgCase):
         requests = [m['request']['subtype'] for m in self.stdin() if m.get('type') == 'control_request']
         self.assertEqual(requests, ['initialize', 'get_settings'])
         live = self.command('print-agent-live')
-        self.assertIn(' model=claude-opus-5-5 effort=high ultra=0 think=1 fast=off held=0 ctx=- cache=- '
-                      'suggest=0 ', live)
+        self.assertRegex(live, ' model=claude-opus-5-5 effort=high ultra=0 think=1 fast=off held=0 ctx=- cache=- '
+                         'suggest=[01] ')            # (the fake suggests a prompt after the turn: ComposerTest)
         self.assertEqual([r for r in self.records() if 'update_settings' in str(r.get('stdin', ''))], [])
 
     def test_a_settings_error_does_not_stop_the_start(self):
@@ -843,6 +843,370 @@ class BandTest(MenuCase):
         self.assertGreater(self.room(), 0)                            # the room for 5 lines is all drawn
         self.assertIn('box=1', self.command('print-agent-input'))
         self.assertEqual(self.thread()[-1], chat.REPLY + 'ok: hello')
+
+
+LIMIT = 'Your prompt is %s over the limit of 50000 \u00b7 shorten it to send'
+SEND_KEY = '\u2318 Enter' if chat.sys.platform == 'darwin' else 'Ctrl+Enter'
+
+
+class ComposerTest(MenuCase):
+    """The prompt box (agentcompose.s): send keys, history, drafts per conversation, the placeholder, the
+    suggestion, the limit, invisible characters, the painted word."""
+
+    bands = BandTest.bands
+
+    def text(self):
+        """The box's text (line breaks kept)."""
+        return re.match(r'input=(.*?) focus=\d', self.command('print-agent-input'), re.S).group(1)
+
+    def composer(self):
+        """print-agent-composer as a dict ({} without a conversation's box)."""
+        line = self.command('print-agent-composer').strip()
+        return dict(word.split('=', 1) for word in line.split(' ')) if line else {}
+
+    def placeholder(self):
+        self.command('wait 50')                         # a frame drawn
+        return self.command('print-agent-placeholder').rstrip('\n')[len('placeholder='):]
+
+    def notice(self):
+        """The notice band's text, or None."""
+        for line in self.bands():
+            match = re.match(r'band notice lines=\d+ close=\d+,\d+ (.*)$', line)
+            if match:
+                return match.group(1)
+        return None
+
+    def seed_prompts(self, prompts, sid='s2'):
+        """A transcript of the project with these prompts, each answered; opened, the box focused."""
+        folder = self.work / '.claude/projects' / chat.slug(self.project)
+        folder.mkdir(parents=True, exist_ok=True)
+        lines = []
+        for n, text in enumerate(prompts):
+            lines.append(json.dumps({'type': 'user', 'message': {'role': 'user', 'content': text},
+                                     'cwd': self.project.as_posix(), 'sessionId': sid}))
+            lines.append(json.dumps({'type': 'assistant', 'message': {
+                'role': 'assistant', 'content': [{'type': 'text', 'text': 'reply %d' % n}]}}))
+        (folder / (sid + '.jsonl')).write_text('\n'.join(lines) + '\n', encoding='utf-8')
+
+    def open_seeded(self):
+        self.open_listed()
+        self.command('key Tab')                         # the panel's Tab: into the box
+
+    def open_sid(self, sid):
+        """Back to the list, then the conversation with that id."""
+        self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        rows = [line for line in self.command('print-agents').splitlines() if line.startswith('Claude')]
+        for n in range(1, len(rows) + 1):
+            self.command(f'print-agents {n}')
+            self.command('wait 50')
+            if self.sid() == sid:
+                return
+            self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        self.fail('no conversation ' + sid)
+
+    def test_enter_and_ctrl_enter(self):
+        self.start()
+        self.chat('hello')
+        self.command('agent-type one')
+        self.command('key shift+Return')
+        self.command('agent-type two')
+        self.command('key ctrl+j')                      # a line break, never Toggle Panel
+        self.command('agent-type three')
+        self.assertEqual(self.text(), 'one\ntwo\nthree')
+        self.assertIn(' focus=1 ', self.command('print-agent-input'))
+        self.assertIn(' term=0', self.command('print-panels'))
+        self.command('key Return')
+        self.until(lambda: 'one\ntwo\nthree' in self.prompts(), 'Enter sends')
+        self.assertEqual(self.text(), '')
+        self.command('wait-agent ready')
+        self.command('agent-type four')
+        self.command('key ctrl+Return')                 # Ctrl+Enter sends too
+        self.until(lambda: 'four' in self.prompts(), 'Ctrl+Enter sends')
+        self.command('wait-agent ready')
+        self.quit()
+        self.start(extra='[agents]\nctrl_enter_sends = true\n')
+        rows = self.listed()
+        self.assertEqual(len(rows), 1, rows)
+        self.command('print-agents 1')
+        self.command('key Tab')
+        self.command('agent-type five')
+        self.command('key Return')                      # a new line now
+        self.command('agent-type six')
+        self.command('key ctrl+j')
+        self.assertEqual(self.text(), 'five\nsix\n')
+        self.command('key shift+Return')
+        self.command('agent-type seven')
+        self.command('key ' + chat.MOD + '+Return')     # Ctrl+Enter (Cmd+Enter on macOS) sends
+        self.until(lambda: 'five\nsix\n\nseven' in self.prompts(), 'Ctrl+Enter sends')
+        self.assertEqual(self.text(), '')
+        self.command('wait-agent ready')
+        self.command('agent-type eight')
+        self.command('key ctrl+Return')
+        self.until(lambda: 'eight' in self.prompts(), 'Ctrl+Enter sends on every system')
+
+    def test_history_up_and_down_restore_the_draft(self):
+        self.seed_prompts(['first', 'second line one\nsecond line two', '  third  '])
+        self.start()
+        self.open_seeded()
+        self.command('type draft')
+        self.command('key Up')                          # the caret is not at the start: the box's own Up
+        self.assertEqual(self.text(), 'draft')
+        self.command('key Home')
+        self.command('key Up')
+        self.assertEqual(self.text(), 'third')          # newest first, trimmed
+        self.command('key Up')
+        self.assertEqual(self.text(), 'second line one\nsecond line two')
+        self.command('key Up')
+        self.assertEqual(self.text(), 'first')
+        self.command('key Up')                          # the oldest stays
+        self.assertEqual(self.text(), 'first')
+        self.command('key Down')                        # the caret is at the start: the box's own Down
+        self.assertEqual(self.text(), 'first')
+        self.command('key End')
+        self.command('key Down')
+        self.assertEqual(self.text(), 'second line one\nsecond line two')
+        self.command('key Down')
+        self.assertEqual(self.text(), 'third')
+        self.command('key Down')                        # past the newest: the draft again
+        self.assertEqual(self.text(), 'draft')
+        self.command('key Down')
+        self.assertEqual(self.text(), 'draft')
+        # a recall sent: it is the newest, and the recall starts again from there
+        self.command('key Home')
+        self.command('key Up')
+        self.command('key Up')
+        self.command('key Return')
+        self.command('wait-agent ready')
+        self.assertEqual(self.prompts(), ['second line one\nsecond line two'])
+        self.command('key Up')
+        self.assertEqual(self.text(), 'second line one\nsecond line two')
+        self.command('key Down')                        # the text area's: to the second line, then its end
+        self.command('key Down')
+        self.assertEqual(self.text(), 'second line one\nsecond line two')
+        self.command('key Down')
+        self.assertEqual(self.text(), '')               # the draft was the empty box
+        # a message waiting to start is the newest of all
+        self.command('agent-prompt held')
+        self.command('wait-agent working')
+        self.command('agent-prompt waiting')
+        self.command('key Up')
+        self.assertEqual(self.text(), 'waiting')
+        self.command('key Up')
+        self.assertEqual(self.text(), 'held')
+        self.command('wait-agent ready 20000')
+
+    def test_history_holds_100(self):
+        self.seed_prompts(['p%d' % n for n in range(120)])
+        self.start()
+        self.open_seeded()
+        for n in range(100):
+            self.command('key Up')
+            self.assertEqual(self.text(), 'p%d' % (119 - n))
+        self.command('key Up')
+        self.assertEqual(self.text(), 'p20')            # the 100 newest only
+        self.assertEqual(self.prompts(), [])
+
+    def test_draft_survives_switching(self):
+        self.start()
+        self.chat('one')
+        first = self.sid()
+        self.chat('two')
+        second = self.sid()
+        self.open_sid(first)
+        self.command('agent-type for one')
+        self.open_sid(second)
+        self.assertEqual(self.text(), '')               # B's box is its own
+        self.command('agent-type for two')
+        self.open_sid(first)
+        self.assertEqual(self.text(), 'for one')
+        self.assertEqual(self.composer()['draft'], '1')
+        self.open_sid(second)
+        self.assertEqual(self.text(), 'for two')
+        self.command('agent-type !')
+        self.assertEqual(self.composer()['draft'], '0')  # edited: not the kept draft any more
+        self.open_sid(first)
+        self.command('agent-prompt ')                   # an emptied box keeps no draft
+        self.open_sid(second)
+        self.assertEqual(self.text(), 'for two!')
+        self.open_sid(first)
+        self.assertEqual(self.text(), '')
+        self.assertEqual(self.prompts(), ['one', 'two'])
+
+    def test_new_draft_keeps_its_text_across_the_list(self):
+        self.start()
+        self.chat('one')
+        self.command('agent-new claude')
+        self.command('agent-type not sent yet')         # the draft becomes its conversation
+        self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        self.until(lambda: len(self.listed()) == 1, 'the draft left without a prompt goes')
+        self.command('agent-new claude')
+        self.assertEqual(self.text(), 'not sent yet')
+        self.command('key Return')
+        self.command('wait-agent ready')
+        self.assertEqual(self.prompts(), ['one', 'not sent yet'])
+        self.command('agent-new claude')                # sent: nothing is kept
+        self.assertEqual(self.text(), '')
+
+    def test_placeholder_priority(self):
+        self.seed_prompts(['first'])
+        self.start()
+        self.open_seeded()
+        self.assertEqual(self.placeholder(), 'Ask Claude to edit\u2026')   # until the window's first Send
+        self.command('agent-prompt held')
+        self.command('wait-agent working')
+        self.assertEqual(self.placeholder(), 'Queue another message\u2026')
+        self.command('wait-agent ready 20000')
+        self.until(lambda: ' suggest=1' in self.command('print-agent-live'), 'the suggestion')
+        self.assertEqual(self.placeholder(), 'Run the tests')
+        self.command('agent-type x')
+        self.assertEqual(self.placeholder(), '')        # none once something is typed
+        self.command('key BackSpace')
+        self.assertEqual(self.placeholder(), 'Run the tests')
+        self.command('agent-prompt held')               # it goes when the user sends
+        self.assertIn(' suggest=0', self.command('print-agent-live'))
+        self.assertEqual(self.placeholder(), 'Queue another message\u2026')
+        self.command('wait-agent ready 20000')
+        self.command('agent-new claude')
+        self.assertEqual(self.placeholder(), 'Start a conversation')        # a draft keeps its own
+        self.command('agent-type x')                    # (the draft's conversation: sent from this window)
+        self.command('wait-agent ready')
+        self.command('key BackSpace')
+        self.assertEqual(self.placeholder(), 'Message Claude Code')
+
+    def test_tab_takes_the_suggestion(self):
+        self.start()
+        self.chat('hello')
+        self.until(lambda: ' suggest=1' in self.command('print-agent-live'), 'the suggestion')
+        self.command('key Tab')
+        self.assertEqual(self.text(), 'Run the tests')
+        self.command('key Return')
+        self.until(lambda: 'Run the tests' in self.prompts(), 'sent')
+        self.command('wait-agent ready')
+        self.command('agent-type x')                    # with text in the box Tab takes nothing
+        self.command('key Tab')
+        self.assertNotIn('Run the tests', self.text())
+
+    def test_no_suggestion_when_off(self):
+        self.start(self.claude_section('prompt_suggestions = false\n'))
+        self.chat('hello')
+        self.command('wait 300')
+        self.assertIn(' suggest=0', self.command('print-agent-live'))
+        self.assertEqual(self.placeholder(), 'Message Claude Code')
+        self.command('key Tab')
+        self.assertEqual(self.text(), '')
+
+    def test_over_the_limit_band_and_no_send(self):
+        self.start()
+        self.chat('hello')
+        over = 'a' * 49999 + '\U0001f600'               # 50,001 UTF-16 units: the emoji counts 2
+        self.command('agent-prompt ' + over)
+        self.command('wait 50')
+        self.assertEqual(self.notice(), LIMIT % '1 character')
+        self.assertEqual(self.prompts(), ['hello'])
+        self.assertEqual(self.text(), over)              # kept, nothing went
+        self.assertEqual(self.command('print-toast').strip(), 'toast=')
+        self.command('key Return')
+        self.assertEqual(self.prompts(), ['hello'])
+        self.command('agent-prompt ' + 'b' * 50100)
+        self.command('wait 50')
+        self.assertEqual(self.notice(), LIMIT % '100 characters')
+        self.command('key BackSpace')                    # the text changed: the notice goes
+        self.command('wait 50')
+        self.assertIsNone(self.notice())
+        fits = 'c' * 49998 + '\U0001f600'               # 50,000 units: it goes
+        self.command('agent-prompt ' + fits)
+        self.command('wait-agent ready')
+        self.assertEqual(self.prompts(), ['hello', fits])
+        self.assertIsNone(self.notice())
+
+    def paste(self, text):
+        """text pasted into the box: copied from a new file, then the open conversation's box focused."""
+        self.command('key ' + chat.MOD + '+n')
+        self.command('type ' + text)
+        self.command('key ' + chat.MOD + '+a')
+        self.command('key ' + chat.MOD + '+c')
+        self.command('key ' + chat.MOD + '+w')
+        self.command('key Escape')
+        self.command('cmd focus_agents')
+        self.command('key Tab')
+        self.command('key ' + chat.MOD + '+v')
+
+    def test_invisible_characters_on_paste_and_send(self):
+        self.start()
+        self.chat('hello')
+        self.command('agent-prompt a\u200bb\u202ec\ufeff')
+        self.command('wait 50')
+        self.assertEqual(self.notice(), 'Removed 3 invisible characters \u00b7 review and press Enter to send')
+        self.assertEqual(self.text(), 'abc')
+        self.assertEqual(self.prompts(), ['hello'])
+        self.command('key Return')                       # reviewed: it goes
+        self.command('wait-agent ready')
+        self.assertEqual(self.prompts(), ['hello', 'abc'])
+        self.assertIsNone(self.notice())
+        self.command('agent-prompt \u200b\u2060')
+        self.command('wait 50')
+        self.assertEqual(self.notice(), 'Removed 2 invisible characters \u00b7 nothing left to send')
+        self.assertEqual(self.text(), '')
+        self.command('agent-prompt ' + 'd' * 50001 + '\U000e0041')
+        self.command('wait 50')
+        self.assertEqual(self.notice(), 'Removed 1 invisible character from your prompt \u00b7 still over the '
+                                        'limit of 50000 characters \u00b7 shorten it to send')
+        self.assertEqual(self.text(), 'd' * 50001)
+        self.assertEqual(self.prompts(), ['hello', 'abc'])
+        self.command('agent-prompt ')
+        self.paste('x\u200by')
+        self.command('wait 50')
+        self.assertEqual(self.text(), 'xy')
+        self.assertEqual(self.notice(), 'Removed 1 invisible character from the pasted text')
+        self.quit()
+        self.start(extra='[agents]\nctrl_enter_sends = true\n')
+        self.listed()
+        self.command('print-agents 1')
+        self.command('agent-prompt e\u200bf')
+        self.command('wait 50')
+        self.assertEqual(self.notice(), 'Removed 1 invisible character \u00b7 review and press %s to send' % SEND_KEY)
+
+    def test_joiners_in_emoji_survive(self):
+        self.start()
+        self.chat('hello')
+        kept = 'family \U0001f468\u200d\U0001f469\u200d\U0001f467 heart \u2764\ufe0f ok key 1\ufe0f\u20e3 \u0928\u094d\u200d\u0928'
+        self.command('agent-prompt ' + kept)
+        self.command('wait-agent ready')
+        self.assertEqual(self.prompts(), ['hello', kept])
+        self.assertIsNone(self.notice())
+        self.command('agent-prompt a\u200db\ufe0fc')     # between ASCII letters they go
+        self.command('wait 50')
+        self.assertEqual(self.notice(), 'Removed 2 invisible characters \u00b7 review and press Enter to send')
+        self.assertEqual(self.text(), 'abc')
+
+    def test_ultrathink_is_painted(self):
+        self.start(env={'FAKE_CLAUDE_ULTRATHINK': '1'})
+        self.chat('hello')
+        self.command('agent-type please ultrathink about it')
+        self.assertEqual(self.composer()['paint'], '7-17')
+        self.command('agent-prompt ')
+        self.command('agent-type Ultrathink, ultrathinking or ultra-think: /ultrathink')
+        self.assertEqual(self.composer()['paint'], '0-10')
+        self.command('agent-prompt ')
+        self.command('agent-type /compact ultrathink')    # a command: nothing is painted
+        self.assertEqual(self.composer()['paint'], '-')
+        self.quit()
+        self.start()
+        self.chat('hello')
+        self.command('agent-type please ultrathink')
+        self.assertEqual(self.composer()['paint'], '-')    # the session does not offer it
+
+    def test_scroll_on_send(self):
+        self.start()
+        self.chat('long', 'ready', 20000)
+        self.command('move 1000 300')
+        self.command('scroll -5')
+        self.command('wait 100')
+        self.assertEqual(QueueTest.scroll(self)['follow'], 0)
+        self.command('agent-prompt again')
+        self.command('wait 100')
+        self.assertEqual(QueueTest.scroll(self)['follow'], 1)
+        self.command('wait-agent ready')
 
 
 MODES = ['Manual', 'Edit automatically', 'Plan']

@@ -1984,6 +1984,7 @@ FN agentext_cancel
 #   takes it (agent_send), and the box empties when it went or waits to go
 FN agentext_send
     PROLOGUE 16
+    xor ebx, ebx
     lea rdi, [rip + in_tf]
     call tf_text
     mov r12, rax
@@ -2026,7 +2027,13 @@ FN agentext_send
     je 4f
     mov [rip + in_as], rbx
     inc qword ptr [rip + in_gen]
-4:  mov rdi, rbx                # a command the driver's own table runs (agentpop.s): it ran
+    mov rdi, rbx
+    call composer_adopt
+4:  mov rdi, rbx                # the composer's checks: invisible characters, the limit (a notice band)
+    call composer_send_ok
+    test eax, eax
+    jz 9f
+    mov rdi, rbx                # a command the driver's own table runs (agentpop.s): it ran
     mov rsi, r12
     mov rdx, r13
     call agentpop_slash
@@ -2052,6 +2059,8 @@ FN agentext_send
     EPILOGUE
 6:  lea rdi, [rip + in_tf]
     call tf_clear
+    mov rdi, rbx                # (0: an extension's new session)
+    call composer_sent
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 8:  lea rdi, [rip + .Lnew_failed]
@@ -2298,11 +2307,15 @@ open_wanted:
 
 # FN agentext_row_gone(AS*): a row is freed: the box forgets it
 FN agentext_row_gone
-    cmp [rip + in_as], rdi
+    push rbx
+    mov rbx, rdi
+    call composer_row_gone      # what the composer keeps for it
+    cmp [rip + in_as], rbx
     jne 1f
     mov qword ptr [rip + in_as], 0
     inc qword ptr [rip + in_gen]
-1:  ret
+1:  pop rbx
+    ret
 
 # FN agentext_stop(AS*): "0 agent-stop SID"
 FN agentext_stop
@@ -2358,10 +2371,9 @@ draft_begin:
     PROLOGUE
     mov qword ptr [rip + in_as], 0
     inc qword ptr [rip + in_gen]
-    xor edi, edi
+    xor edi, edi                # the box empties; a new conversation's kept text comes back
+    xor esi, esi
     call composer_owner
-    lea rdi, [rip + in_tf]
-    call tf_clear
     mov dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
@@ -2390,9 +2402,9 @@ prompts_ok:
 9:  mov eax, r12d
     EPILOGUE
 
-# unsent_back(AS*): the box became the session's (emptied): prompts of its that never went (its start
-#   failed while another was open) come back in it, with a toast
-unsent_back:
+# FN agentext_unsent_back(AS*): the box became the session's (emptied): prompts of its that never went (its
+#   start failed while another was open) come back in it, with a toast (composer_owner)
+FN agentext_unsent_back
     PROLOGUE
     call agent_unsent_take
     test rax, rax
@@ -2423,14 +2435,11 @@ FN agentext_opened
     je 9f
     mov [rip + in_as], rbx
     inc qword ptr [rip + in_gen]
-    mov rdi, rbx
-    call composer_owner
+    mov rdi, rbx                # the old owner keeps its text, the box empties and takes this one's
+    xor esi, esi
     cmp qword ptr [rip + keep_box], 0
-    jne 9f                      # the session its own first prompt started: the text stays
-    lea rdi, [rip + in_tf]
-    call tf_clear
-    mov rdi, rbx
-    call unsent_back
+    setne sil                   # (the session its own first prompt started: the text stays)
+    call composer_owner
 9:  EPILOGUE
 
 # FN agentext_remote_line(AS*) -> eax 1 when the session shows "Chat is not available in remote windows
@@ -2533,6 +2542,7 @@ FN agentext_draft_own
 #   record is read (a writer's action), and the typed command menu follows it (agentpop.s)
 FN agentext_box_changed
     PROLOGUE
+    call composer_changed       # an emptied box ends the recall; a notice about another text goes
     call agentext_box_owner
     test edx, edx
     jz 1f
@@ -2646,14 +2656,17 @@ FN agentext_input_key
     mov rdi, r15
     call box_typed
     call agentext_box_changed
-8:  mov dword ptr [rip + g_dirty], 1
+8:  call composer_keyed         # (a card's focus rule)
+    mov dword ptr [rip + g_dirty], 1
     mov eax, 1
     EPILOGUE
 9:  xor eax, eax
     EPILOGUE
 
-# box_typed(len before): the box took a key or a paste: when it holds text now, its session hears of it:
-#   the first text starts its program (agentext_typed), more only keeps it from the idle stop
+# FN agentext_box_typed(len before), box_typed: the box took a key or a paste: when it holds text now, its
+#   session hears of it: the first text starts its program (agentext_typed), more only keeps it from the idle
+#   stop
+FN agentext_box_typed
 box_typed:
     PROLOGUE
     mov rbx, rdi
@@ -2687,7 +2700,12 @@ FN agentext_box_paste
     call ta_insert
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
-1:  lea rdi, [rip + in_tf]
+1:  mov rdi, r12                # a built-in driver's box: the limit, invisible characters (agentcompose.s)
+    mov rsi, r13
+    call composer_paste
+    test eax, eax
+    jnz 9f
+    lea rdi, [rip + in_tf]
     call tf_text
     mov rbx, rdx
     mov rdi, r12
@@ -2696,7 +2714,7 @@ FN agentext_box_paste
     mov rdi, rbx
     call box_typed
     call agentext_box_changed
-    EPILOGUE
+9:  EPILOGUE
 
 # FN agentext_drivers_changed(): a driver went away (the settings changed): a new conversation being begun
 #   for it is left
@@ -3315,12 +3333,9 @@ FN agentext_bottom_draw
     jz 1f
     mov [rip + in_as], rbx
     inc qword ptr [rip + in_gen]
-    mov rdi, rbx
+    mov rdi, rbx                # the old owner keeps its text, the box takes this one's
+    xor esi, esi
     call composer_owner
-    lea rdi, [rip + in_tf]
-    call tf_clear
-    mov rdi, rbx
-    call unsent_back
 1:  mov edi, [rsp]
     mov esi, [rsp + 4]
     mov edx, [rsp + 8]
@@ -3444,16 +3459,27 @@ FN agentext_bottom_draw
 31: mov [rsp + 56], eax         # Send's y
     mov eax, [rip + lay_btn]
     mov [rsp + 60], eax         # its width
-    lea rax, [rip + .Lph_new]   # the placeholder: a new draft's, an extension's session's, or Claude Code's
+    mov rdi, rbx                # the placeholder: the composer's (a suggestion, a turn running, the first
+    call composer_placeholder   #   use), else a new draft's, an extension's session's, or Claude Code's
+    test rax, rax
+    jnz 4f
+    lea rax, [rip + .Lph_new]
     test rbx, rbx
     jz 4f
     lea rax, [rip + .Lph_reply]
     cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
     je 4f
     lea rax, [rip + .Lph_claude]
-4:  mov [rip + ph_last], rax    # (print-agent-placeholder)
+4:  cmp qword ptr [rip + in_tf + TF_sb + SB_len], 0
+    je 41f
+    xor eax, eax                # none over text
+41: mov [rip + ph_last], rax    # (print-agent-placeholder)
     mov ecx, [rsp + 32]
     mov [rip + ph_w], ecx
+    lea rdi, [rip + in_tf]      # the word its driver paints (TF_paint)
+    mov rsi, rbx
+    call composer_paint
+    mov rax, [rip + ph_last]
     push rax
     push rax
     lea rdi, [rip + in_tf]

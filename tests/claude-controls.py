@@ -2390,11 +2390,18 @@ class SeamWordsTest(unittest.TestCase):
     """Nothing above the seam knows Claude (decision 2): phase 1's names stay where phase 1 put them."""
 
     FILES = ['agent_drv.s', 'agents.s', 'agentext.s', 'agentcfg.s', 'agentpop.s', 'agentcard.s',
-             'agentcompose.s', 'agentfoot.s', 'mdtab.s']
+             'agentcompose.s', 'agentfoot.s', 'mdtab.s',
+             # phase 3's generic files: the rows, their diff, the spinner, time, focus view, tasks, selection
+             'agentrows.s', 'agentdiff.s', 'agentspin.s', 'agenttime.s', 'agentfold.s', 'agenttask.s',
+             'agentsel.s']
     # file -> name -> the functions it may appear in
     ALLOWED = {
         'agent_drv.s': {
-            'AG_CLAUDE': {'agent_drv_apply', 'agent_drv_for_kind', 'agent_new'},
+            'AG_CLAUDE': {'agent_drv_apply', 'agent_drv_for_kind', 'agent_new', 'readers'},
+            # phase 3: the readers of the kinds that have one (agent_ingest, agent_reader)
+            'claude_ingest': {'readers'},
+            'claude_text': {'readers'},
+            'claude_kids': {'readers'},
             'cfg_claude_chat': {'agent_drv_for_kind'},
             'cfg_claude_wrapper': {'failed_notice'},
             'cfg_agents_claude': {'agent_drv_unlisted'},
@@ -2410,6 +2417,9 @@ class SeamWordsTest(unittest.TestCase):
             '.Lclaude_name': {'agent_badge', 'agents_dump'},
             'claude_dir_moved': {'agents_tick'},
             'claude_index_envp': {'index_start'},
+            # the file reader's own Claude loops: phase 3 task 4 moves them to claude_blocks.s
+            '.Ltool_use': {'ingest_line'},
+            '.Ltool_result': {'ingest_line'},
         },
         'agentext.s': {
             'AG_CLAUDE': {'agentext_list_buttons', 'agentext_remote_line'},
@@ -2424,7 +2434,11 @@ class SeamWordsTest(unittest.TestCase):
         'agents.s': {'.Lclaude_name'},
         'agentext.s': {'.Lph_claude', '.Lsend_refused'},
     }
-    WORD = re.compile(r'[.\w]*(?:claude|Claude|AG_CLAUDE)[.\w]*')
+    # Claude itself, and (phase 3) its tools' and records' names: the rows above the seam never read them
+    NAMES = (r'claude|Claude|AG_CLAUDE|Bash|TodoWrite|tool_use|tool_result|parent_tool_use_id|mcp__|ExitPlanMode|'
+             r'AskUserQuestion|WebFetch|WebSearch|NotebookEdit|MultiEdit|ToolSearch|content_block|isSidechain|'
+             r'stream_event')
+    WORD = re.compile(r'[.\w]*(?:' + NAMES + r')[.\w]*')
     STRING_DEF = re.compile(r'^\s*([.\w]+):\s*\.(?:asciz|ascii|string)\b(.*)$')
     STRING_MORE = re.compile(r'^\s*\.(?:asciz|ascii|string)\b(.*)$')
     LABEL = re.compile(r'^([A-Za-z_][\w]*):')
@@ -2476,7 +2490,7 @@ class SeamWordsTest(unittest.TestCase):
                     else:
                         last_string, text = None, None
                 if text is not None:            # a string's text: its label must be allowed
-                    if re.search(r'claude|Claude', text) and last_string not in strings | set(allowed):
+                    if re.search(self.NAMES, text) and last_string not in strings | set(allowed):
                         found.append(f'{name}:{number} string {last_string}: {raw.strip()}')
                     continue
                 for word in self.WORD.findall(line):

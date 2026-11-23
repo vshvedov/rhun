@@ -43,8 +43,6 @@
 .include "rhun.inc"
 
 .equ ERRORS_MAX, 50             # settings errors looked at
-.equ R_INFO_ROW, 6              # agents.s's info row (R_INFO)
-.equ R_INFO, 6                  # agents.s's info row
 .equ MODES_N, 6                 # mode_tbl's entries
 .equ CLP_NOAUTO, 1              # AL_cfg: get_settings' effective settings forbid auto mode,
 .equ CLP_NOBYPASS, 2            #   bypassPermissions;
@@ -1109,7 +1107,7 @@ FN claude_start_mode
 7:  lea rdi, [rip + .Lbypass_off]
     call strlen
     mov rdi, rbx
-    mov esi, R_INFO_ROW
+    mov esi, R_INFO
     lea rdx, [rip + .Lbypass_off]
     mov rcx, rax
     call ev_note

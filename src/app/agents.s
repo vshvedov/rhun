@@ -1,39 +1,10 @@
 # agents panel: Claude Code, Codex, Grok Build and OpenCode sessions, live
 .include "rhun.inc"
 
-STRUCT
-F AM_role, 4
-F AM_h, 4
-F AM_w, 4
-F AM_rev, 4             # its text's revision: agents_msg_changed counts the changes
-F AM_text, 8
-F AM_len, 8
-F AM_name, 8
-F AM_doc, 8             # a reply's Markdown (md_new), parsed when it first comes into view, or 0
-F AM_drev, 4            # the revision AM_doc was parsed from
-F AM_dpx, 4             # the text size AM_doc was given (md_set_size)
-F AM_hrev, 4            # what AM_h was measured for, beside AM_w: the revision, the text size,
-F AM_hpx, 4             #   g_face_gen and whether its document gave it (1) or its plain text (0)
-F AM_hgen, 4
-F AM_hdoc, 4
-F AM_dx, 4              # where it was drawn last (its text's left, its top on screen), in which
-F AM_dy, 4              #   frame of the conversation (th_serial)
-F AM_dser, 4
-F AM_flags, 4           # AMF_*
-F AM_qid, 8             # a queued row's message (agent_queued): a held one's uuid's first 8 bytes, a
-                        #   waiting prompt's serial; 0 none
-F AM_mute, 8            # as drawn last: the byte its text is muted from (a prompt's truncation marker), -1
-ENDSTRUCT AM_SIZE
-.equ AMF_PILL, 1                # a centred one-line pill ("Switched to NAME")
-.equ AMF_QUEUED, 2              # a message that has not started yet: after the thread, muted, "queued"
 .equ QROWS_MAX, AL_QUEUE_MAX + AH_MAX   # queued rows at most (agent_queued)
-
-.equ R_USER, 1
-.equ R_ASSIST, 2
-.equ R_TOOL, 3
-.equ R_RESULT, 4
-.equ R_ERROR, 5                 # extension sessions (agentext.s): an error and a notice, drawn as results
-.equ R_INFO, 6
+.equ WALK_KEEP, 8               # chunks a frame's walked count tells its rows apart in
+.equ HX_CAP, 0x3fffffff         # a chunk's height at most
+.equ EST_CAP, 16777216          # a row's lines and bytes the estimate counts at most
 
 .equ ID_AG_ROW, 0x400000          # + session: a range of its own, as the list has no end
 .equ ID_AG_BACK, 0x5f00
@@ -55,10 +26,11 @@ pool: .zero VEC_SIZE            # owned sessions, including previously opened pa
 list_scroll: .long 0
 th_scroll: .long 0
 th_content: .long 0
-th_serial: .long 0              # frames of the conversation drawn (th_prepare)
+.globl th_serial, th_textw
+th_serial: .long 0              # frames of the conversation drawn (th_begin)
 th_textw: .long 0               # the width its rows' text was laid out at last
 .p2align 3
-th_as: .quad 0                  # the session drawn (th_prepare): its replies' links name its checkout
+th_as: .quad 0                  # the session drawn (th_begin): its replies' links name its checkout
 md_parses: .quad 0              # replies parsed (print-agent-row)
 pend_link: .quad 0              # a link clicked in a reply, followed after the frame (owned cstr), or 0
 pend_cwd: .quad 0               # and the checkout it was in (owned), or 0
@@ -101,7 +73,26 @@ model_noted: .long 0            # row_model found a model since cleared (agent_s
 .p2align 3
 prefix_buf: .zero 65536         # model_before: the beginning of a line that begins near a window's end
 qrows: .zero AM_SIZE * QROWS_MAX    # the open conversation's queued messages as rows (queued_sync)
+.p2align 3
+th_aas: .quad 0                 # the session the anchor (th_arow, th_aoff) belongs to
+add_x: .quad 0                  # agents_tool_row: the call the row add_msg makes owns
+walk_c: .zero 8 * WALK_KEEP     # the rows whose height a frame asked (walked): their chunks
+walk_m: .zero 8 * WALK_KEEP     #   and a bit per row of each
+walk_k: .long 0                 # chunks noted
+walk_x: .long 0                 # rows asked past WALK_KEEP chunks (counted, not told apart)
+lay_off: .long 0                # th_layout: the pixels of lay_row above the area's top
+th_pend: .long 0                # a page key's step, taken by the next frame as the wheel's
+th_areah: .long 0               # the rows' area's height in the last frame (a page)
+.globl ag_gen
+ag_gen: .long 0                 # the view's generation: a setting or a state that changes heights moves it on
 .data
+.p2align 3
+lay_row: .quad -1               # th_layout: the row drawn first this frame, -1 none
+th_first: .long -1              # the rows the last frame drew, -1 none
+th_last: .long -1
+.globl th_arow, th_aoff
+th_arow: .long -1               # the anchor: the row under the area's top edge, -1 none (the thread follows
+th_aoff: .long 0                #   its end), and the pixels of it above the edge (row 0: -MI_12 at the top)
 index_fd: .long -1
 common_wd: .long -1             # the watch of the common .git folder (agents_watch_repo)
 registry_wd: .long -1           # and of its worktrees folder
@@ -830,6 +821,14 @@ FN agent_session_free
     call session_clear_msgs
     lea rdi, [rbx + AS_msgs]
     call vec_free
+    lea rdi, [rbx + AS_hx]
+    call vec_free
+    lea rdi, [rbx + AS_wait]
+    call vec_free
+    lea rdi, [rbx + AS_folds]
+    call vec_free
+    lea rdi, [rbx + AS_tasks]
+    call vec_free
     lea rdi, [rbx + AS_part]
     call sb_free
     mov rdi, [rbx + AS_path]
@@ -853,15 +852,8 @@ FN agent_session_free
 session_clear_msgs:
     PROLOGUE
     mov rbx, rdi
-    xor r12d, r12d
-1:  cmp r12, [rbx + AS_msgs + VEC_len]
-    jae 2f
-    imul rdi, r12, AM_SIZE
-    add rdi, [rbx + AS_msgs + VEC_ptr]
-    call msg_free
-    inc r12
-    jmp 1b
-2:  mov qword ptr [rbx + AS_msgs + VEC_len], 0
+    xor esi, esi
+    call agents_rows_cut
     mov rdi, [rbx + AS_log_model]
     call mem_free
     mov rdi, [rbx + AS_shown_model]
@@ -870,7 +862,7 @@ session_clear_msgs:
     mov qword ptr [rbx + AS_shown_model], 0
     EPILOGUE
 
-# msg_free(msg): what a message owns: its text, its name and its document
+# msg_free(msg): what a message owns: its text, its name, its document and its call (agrow_free)
 msg_free:
     push rbx
     mov rbx, rdi
@@ -880,9 +872,14 @@ msg_free:
     call mem_free
     mov rdi, [rbx + AM_doc]
     call md_free
-    mov qword ptr [rbx + AM_text], 0
+    mov rdi, [rbx + AM_x]
+    test rdi, rdi
+    jz 1f
+    call agrow_free
+1:  mov qword ptr [rbx + AM_text], 0
     mov qword ptr [rbx + AM_name], 0
     mov qword ptr [rbx + AM_doc], 0
+    mov qword ptr [rbx + AM_x], 0
     pop rbx
     ret
 
@@ -891,11 +888,15 @@ msg_free:
 FN agents_msg_changed
     cmp rsi, [rdi + AS_msgs + VEC_len]
     jae 1f
+    PROLOGUE
     imul rax, rsi, AM_SIZE
     add rax, [rdi + AS_msgs + VEC_ptr]
     inc dword ptr [rax + AM_rev]
     mov dword ptr [rax + AM_w], -1
+    or dword ptr [rax + AM_flags], AMF_EST
     mov dword ptr [rip + g_dirty], 1
+    call hx_dirty               # its chunk: one chunk made again, whatever the conversation's length
+    EPILOGUE
 1:  ret
 
 # agent_read_head(path, max) -> rax buf (NUL-terminated, mem_alloc), rdx len
@@ -1376,8 +1377,215 @@ add_msg:
     call mem_dup
     mov rcx, [rsp]
     mov [rcx + AM_name], rax
-7:  mov qword ptr [rbx + AS_changed], 0
+7:  mov rdi, rbx
+    call row_init
+    mov qword ptr [rbx + AS_changed], 0
 9:  EPILOGUE
+
+# row_init(s): the row add_msg just pushed (the last): its line feeds, its time (AS_now; a row the stream
+#   feeds without one: the clock), its turn, no fold yet, an estimated height, its chunk dirtied; the first row
+#   of a conversation starts the session's row state (AS_todo, AS_sticky, AS_day: none)
+row_init:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rbx + AS_msgs + VEC_len]
+    dec r12
+    jnz 1f
+    mov dword ptr [rbx + AS_todo], -1
+    mov dword ptr [rbx + AS_sticky], -1
+    mov qword ptr [rbx + AS_day], -1
+1:  mov rdi, rbx
+    mov rsi, r12
+    call row_at
+    mov r13, rax
+    mov rdi, [r13 + AM_text]
+    mov rsi, [r13 + AM_len]
+    call count_lf
+    mov [r13 + AM_nl], eax
+    mov rax, [rbx + AS_now]
+    test rax, rax
+    jnz 3f
+    mov rcx, [rbx + AS_live]    # a conversation rhun drives while its program runs: now
+    test rcx, rcx
+    jz 3f
+    mov ecx, [rcx + AL_state]
+    cmp ecx, ALS_STARTING
+    jb 3f
+    cmp ecx, ALS_HELD
+    ja 3f
+    call agtime_now
+    mov rcx, rax
+    mov rdi, rbx
+    mov rsi, r12
+    call row_at
+    mov r13, rax
+    mov rax, rcx
+3:  mov [r13 + AM_t], rax
+    mov eax, -1                 # its turn: a prompt starts one, any other row is in the one before it
+    test r12, r12
+    jz 4f
+    mov eax, [r13 - AM_SIZE + AM_turn]
+4:  cmp dword ptr [r13 + AM_role], R_USER
+    jne 5f
+    test dword ptr [r13 + AM_flags], AMF_QUEUED
+    jnz 5f
+    mov eax, r12d
+5:  mov [r13 + AM_turn], eax
+    mov dword ptr [r13 + AM_fold], -1
+    mov dword ptr [r13 + AM_ms], -1
+    or dword ptr [r13 + AM_flags], AMF_EST
+    mov rax, [rip + add_x]      # a call's row: its call (agrow_ready chooses its fold)
+    mov [r13 + AM_x], rax
+    mov rdi, rbx
+    mov rsi, r12
+    call hx_dirty
+    cmp qword ptr [rip + add_x], 0
+    jne 9f
+    mov rdi, rbx
+    mov rsi, r12
+    call agfold_add
+9:  EPILOGUE
+
+# FN agents_tool_row(AS*, AT*) -> rax the index of a new R_TOOL row at the end that owns that call (AM_x;
+#   agentrows.s agrow_tool)
+FN agents_tool_row
+    PROLOGUE
+    mov [rip + add_x], rsi
+    mov esi, R_TOOL
+    lea rdx, [rip + .Lempty]
+    xor ecx, ecx
+    xor r8d, r8d
+    call agents_msg_add
+    mov qword ptr [rip + add_x], 0
+    EPILOGUE
+
+# FN agents_row_peek(AS*, index, w) -> eax the height the sums use (the fold's too), edx 1 when it is exact
+#   for the key: nothing is measured, nothing counted (print-agent-rows)
+FN agents_row_peek
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    call row_at
+    mov rdi, rax
+    mov esi, r13d
+    call row_valid
+    mov r14d, eax
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    call row_h0
+    mov ecx, eax
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    call agfold_h
+    mov edx, r14d
+    EPILOGUE
+
+# FN agents_view_first() -> rax the first row the last frame drew, -1; agents_view_last() the last
+FN agents_view_first
+    movsxd rax, dword ptr [rip + th_first]
+    ret
+FN agents_view_last
+    movsxd rax, dword ptr [rip + th_last]
+    ret
+
+# FN agents_reveal(AS*, row): that row brought into view (the row focus): when the last frame did not draw it
+#   whole it is put at the area's top
+FN agents_reveal
+    cmp [rip + th_aas], rdi
+    jne 9f
+    movsxd rax, dword ptr [rip + th_first]
+    cmp rsi, rax
+    jle 1f                      # above, or the first: perhaps cut by the top edge
+    movsxd rax, dword ptr [rip + th_last]
+    cmp rsi, rax
+    jl 9f                       # inside the view
+1:  mov dword ptr [rip + th_follow], 0
+    mov [rip + th_arow], esi
+    mov dword ptr [rip + th_aoff], 0
+    mov dword ptr [rip + g_dirty], 1
+9:  ret
+
+# FN agents_session_live(AS*) -> eax 1 when it is live (is_live: driven and working or waiting, or written to
+#   in the last 20 seconds)
+FN agents_session_live
+    jmp is_live
+
+# FN agents_open_link(AS*, ptr, len) -> eax 1 when it was a file's (opened now, as a reply's link is: after the
+#   frame, relative to the conversation's checkout), 0 for a web link (asked before it opens, links_ask_open,
+#   named by the conversation's driver, else "This reply") or another scheme (nothing)
+FN agents_open_link
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    test r13, r13
+    jz 8f
+    mov rdi, r12
+    mov rsi, r13
+    call link_scheme
+    cmp eax, 2
+    jne 3f
+    mov rdi, r12                # another scheme: a web link asks, anything else is nothing
+    mov rsi, r13
+    call links_url_ok
+    test eax, eax
+    jz 8f
+    lea r14, [rip + .Lthis_reply]
+    mov rdi, rbx
+    call agent_drv_of
+    test rax, rax
+    jz 1f
+    mov r14, [rax + DRV_name]
+1:  mov rdi, r12
+    mov rsi, r13
+    call mem_dup
+    mov r15, rax
+    mov rdi, r14
+    mov rsi, r15
+    call links_ask_open
+    mov rdi, r15
+    call mem_free
+    jmp 8f
+3:  mov rdi, [rip + pend_link]  # a file, file: or rhun://: the reply links' path (reply_follow)
+    call mem_free
+    mov rdi, [rip + pend_cwd]
+    call mem_free
+    mov qword ptr [rip + pend_cwd], 0
+    mov qword ptr [rip + pend_who], 0
+    mov rdi, r12
+    mov rsi, r13
+    call mem_dup
+    mov [rip + pend_link], rax
+    mov r12, [rbx + AS_cwd]
+    test r12, r12
+    jz 4f
+    mov rdi, r12
+    call strlen
+    mov rdi, r12
+    mov rsi, rax
+    call mem_dup
+    mov [rip + pend_cwd], rax
+4:  call reply_follow
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# count_lf(ptr, len) -> eax the line feeds in it
+count_lf:
+    xor eax, eax
+    xor ecx, ecx
+1:  cmp rcx, rsi
+    jae 9f
+    cmp byte ptr [rdi + rcx], 10
+    jne 2f
+    inc eax
+2:  inc rcx
+    jmp 1b
+9:  ret
 
 # text_of(jv) -> rax ptr, rdx len : string, or concatenated "text" parts of an array (in tmp)
 text_of:
@@ -1536,7 +1744,20 @@ FN ingest_line
     cmp dword ptr [rbx + AS_kind], 4
     je .Lil_opencode
     # ---- claude ----
-    mov rdi, r12
+    mov rdi, r12                # the rows the line makes carry its time
+    lea rsi, [rip + .Ltimestamp]
+    call json_get
+    mov rdi, rax
+    call json_str
+    test rax, rax
+    jz 0f
+    mov rdi, rax
+    mov rsi, rdx
+    call agtime_iso
+    mov rdi, rbx
+    mov rsi, rax
+    call agents_stamp
+0:  mov rdi, r12
     lea rsi, [rip + .Ltype]
     call json_get
     mov r13, rax
@@ -1565,9 +1786,31 @@ FN ingest_line
     call json_is
     test eax, eax
     jnz .Lil_assist
+    mov rdi, r13
+    lea rsi, [rip + .Lsystem]
+    call json_is
+    test eax, eax
+    jz .Lil_ret
+    cmp dword ptr [rsp], 0      # a system line: its kind's reader, when it has one
+    je .Lil_ret
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, ING_FILE
+    call agent_ingest
     jmp .Lil_ret
 .Lil_user:
-    # skip meta / command records
+    # the kind's reader first (agent_drv.s readers): when it made the line's rows, only the title is read
+    #   below. (A reader must not parse while it reads: the title reads the record after it.)
+    cmp dword ptr [rsp], 0
+    je 0f
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, ING_FILE
+    call agent_ingest
+    test eax, eax
+    jz 0f
+    mov dword ptr [rsp], 0
+0:  # skip meta / command records
     mov rdi, r12
     lea rsi, [rip + .LisMeta]
     call json_get
@@ -1681,7 +1924,16 @@ FN ingest_line
     call add_interrupted
     jmp .Lil_ret
 .Lil_assist:
-    mov rdi, r12
+    cmp dword ptr [rsp], 0      # the kind's reader first, as for a user line
+    je 0f
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, ING_FILE
+    call agent_ingest
+    test eax, eax
+    jz 0f
+    mov dword ptr [rsp], 0
+0:  mov rdi, r12
     lea rsi, [rip + .Lmessage]
     call json_get
     mov r13, rax
@@ -2349,6 +2601,7 @@ FN ingest_line
     xor r8d, r8d
     call add_msg
 .Lil_ret:
+    mov qword ptr [rbx + AS_now], 0     # the next line's rows have their own time
     EPILOGUE
 
 # agent_grok_summary(log) -> summary.json beside a Grok Build session's log, parsed (the JSON arena), or 0
@@ -2501,6 +2754,12 @@ FN session_update
     cmp byte ptr [r14 + rdx], 10
     jne 2f
     mov [rsp + 8], rdx
+    mov rax, [rbx + AS_off]     # the line's place in the file: what was read, less what is not parsed
+    sub rax, [rbx + AS_part + SB_len]   #   yet, plus its start in that
+    add rax, [rsp]
+    mov [rbx + AS_line], rax
+    sub rdx, [rsp]
+    mov [rbx + AS_linelen], rdx
     mov rdi, rbx
     mov rcx, [rsp]
     lea rsi, [r14 + rcx]
@@ -2514,6 +2773,8 @@ FN session_update
 2:  inc rdx
     jmp 1b
 3:  # keep the tail
+    mov qword ptr [rbx + AS_line], -1   # no line read: a row made now has no place
+    mov qword ptr [rbx + AS_linelen], 0
     mov rcx, [rsp]
     mov rdx, r15
     sub rdx, rcx
@@ -2938,6 +3199,10 @@ open_session:
     mov rdi, rbx
     call session_update
     mov dword ptr [rip + th_follow], 1
+    mov dword ptr [rip + th_arow], -1
+    mov [rip + th_aas], rbx
+    mov rdi, -1                 # no row focused in it yet
+    call agrow_focus_set
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
@@ -3030,7 +3295,14 @@ FN agents_dump
     jae 8f
     imul r13, rbx, AM_SIZE
     add r13, [r12 + AS_msgs + VEC_ptr]
-    mov eax, [r13 + AM_role]
+    mov rdi, r15                # the typed rows' lines (dump_typed)
+    mov rsi, r13
+    call dump_typed
+    test eax, eax
+    jz 40f
+    inc rbx
+    jmp 4b
+40: mov eax, [r13 + AM_role]
     lea rcx, [rip + role_names]
     mov rsi, [rcx + rax*8]
     test dword ptr [r13 + AM_flags], AMF_PILL
@@ -3104,6 +3376,156 @@ FN agents_dump
     jmp 81b
 9:  EPILOGUE
 
+# dump_typed(sb, AM*) -> eax 1 when print-agents' line of that row was written here (or the row has none): a
+#   typed tool row "tool(NAME) SUMMARY", then "result FIRST LINE" when it shows an OUT (a hidden call: no
+#   line); "thinking(live|Ns|-) T"; "compact auto|manual Nk"; "unknown TYPE". 0: the plain line
+dump_typed:
+    PROLOGUE
+    mov r15, rdi
+    mov rbx, rsi
+    mov r12, [rbx + AM_x]
+    test r12, r12
+    jz 3f
+    test dword ptr [r12 + AT_flags], ATF_HIDDEN
+    jnz 8f
+    lea rsi, [rip + .Lr3]
+    mov rdi, r15
+    call sb_push_cstr
+    mov rsi, [rbx + AM_name]
+    test rsi, rsi
+    jnz 1f
+    mov rsi, [r12 + AT_name]
+    test rsi, rsi
+    jz 2f
+1:  mov rdi, r15
+    call dump_paren
+2:  mov rdi, r15
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, r15
+    mov rsi, [rbx + AM_text]
+    mov rdx, [rbx + AM_len]
+    call dump_line
+    mov rdx, [r12 + AT_out + SB_len]
+    test rdx, rdx
+    jz 8f
+    mov rdi, r15
+    lea rsi, [rip + .Lr_result]
+    call sb_push_cstr
+    mov rdi, r15
+    mov rsi, [r12 + AT_out + SB_ptr]
+    mov rdx, [r12 + AT_out + SB_len]
+    call dump_line
+    jmp 8f
+3:  mov eax, [rbx + AM_role]
+    cmp eax, R_THINK
+    je 4f
+    cmp eax, R_COMPACT
+    je 5f
+    cmp eax, R_UNKNOWN
+    je 6f
+    xor eax, eax
+    EPILOGUE
+4:  mov rdi, r15                # thinking(live|Ns|-) T
+    lea rsi, [rip + .Lr7]
+    call sb_push_cstr
+    mov rdi, r15
+    mov esi, '('
+    call sb_push_byte
+    test dword ptr [rbx + AM_flags], AMF_LIVE
+    jz 41f
+    mov rdi, r15
+    lea rsi, [rip + .Lr_live]
+    call sb_push_cstr
+    jmp 43f
+41: mov eax, [rbx + AM_ms]
+    test eax, eax
+    jns 42f
+    mov rdi, r15
+    mov esi, '-'
+    call sb_push_byte
+    jmp 43f
+42: xor edx, edx
+    mov ecx, 1000
+    div ecx
+    mov rdi, r15
+    mov esi, eax
+    call sb_push_u64
+    mov rdi, r15
+    mov esi, 's'
+    call sb_push_byte
+43: mov rdi, r15
+    lea rsi, [rip + .Lr_close]
+    call sb_push_cstr
+    mov rdi, r15
+    mov rsi, [rbx + AM_text]
+    mov rdx, [rbx + AM_len]
+    call dump_line
+    jmp 8f
+5:  mov rdi, r15                # compact auto|manual Nk
+    lea rsi, [rip + .Lr9]
+    call sb_push_cstr
+    lea rsi, [rip + .Lr_auto]
+    test dword ptr [rbx + AM_flags], AMF_MANUAL
+    jz 51f
+    lea rsi, [rip + .Lr_manual]
+51: mov rdi, r15
+    call sb_push_cstr
+    mov rdi, r15
+    mov esi, [rbx + AM_n]
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lr_k]
+    call sb_push_cstr
+    jmp 8f
+6:  mov rdi, r15                # unknown TYPE
+    lea rsi, [rip + .Lr10]
+    call sb_push_cstr
+    mov rdi, r15
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, r15
+    mov rsi, [rbx + AM_text]
+    mov rdx, [rbx + AM_len]
+    call dump_line
+8:  mov eax, 1
+    EPILOGUE
+
+# dump_paren(sb, cstr): "(TEXT)"
+dump_paren:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov esi, '('
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, r12
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, ')'
+    call sb_push_byte
+    EPILOGUE
+
+# dump_line(sb, ptr, len): its first line, 60 bytes at most, and a line feed
+dump_line:
+    PROLOGUE
+    mov rbx, rdi
+    xor ecx, ecx
+1:  cmp rcx, rdx
+    jae 2f
+    cmp rcx, 60
+    jae 2f
+    cmp byte ptr [rsi + rcx], 10
+    je 2f
+    inc rcx
+    jmp 1b
+2:  mov rdx, rcx
+    call sb_push
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    EPILOGUE
+
 # agents_open(i): open session i (tests / control socket)
 FN agents_open
     cmp rdi, [rip + sessions + VEC_len]
@@ -3151,7 +3573,15 @@ FN agents_key
     call agentext_card_nav      # arrows among its options, Enter on the chosen one
     test eax, eax
     jnz 5f
-    cmp r12d, KEY_RETURN        # Enter or Tab goes to its prompt box
+    cmp r12d, KEY_ESCAPE        # (Escape: a running turn's Stop first, below)
+    je 61f
+    mov edi, r12d               # the thread's keys: the ends, pages, the row focus (Enter: a focused row's)
+    mov esi, r13d
+    mov edx, r14d
+    call th_keys
+    test eax, eax
+    jnz 5f
+61: cmp r12d, KEY_RETURN        # Enter or Tab goes to its prompt box
     je 6f
     cmp r12d, KEY_TAB
     jne 4f
@@ -3175,16 +3605,115 @@ FN agents_key
     mov eax, 1
     EPILOGUE
 71: cmp r12d, KEY_ESCAPE        # Escape while the open conversation's turn runs: Stop (agent_drv.s)
-    jne 7f
+    jne 72f
     call agents_open_driven
     test rax, rax
-    jz 7f
+    jz 72f
     mov rdi, rax
     call agent_stop_running
     test eax, eax
     jnz 5b
+72: mov edi, r12d               # the thread's keys (Escape: a row focus goes before the conversation)
+    mov esi, r13d
+    mov edx, r14d
+    call th_keys
+    test eax, eax
+    jnz 5b
 7:  mov edi, r12d
     call key_list
+    EPILOGUE
+
+# th_keys(keysym, cp, mods) -> eax 1 taken: the open conversation's thread keys. Home or Cmd/Ctrl+Up: the
+#   first row; End or Cmd/Ctrl+Down: the last, following; PageUp, PageDown: a page (the next frame steps the
+#   anchor, as the wheel does); Up, Down, Enter, Space, Escape: the row focus (agrow_key)
+th_keys:
+    PROLOGUE
+    mov r12d, edi
+    mov r13d, esi
+    mov r14d, edx
+    mov rax, [rip + view]
+    test rax, rax
+    js 8f
+    cmp rax, [rip + sessions + VEC_len]
+    jae 8f
+    mov rcx, [rip + sessions + VEC_ptr]
+    mov rbx, [rcx + rax*8]
+    mov eax, r14d
+    and eax, MOD_CTRL | MOD_SUPER
+    jz 1f
+    test r14d, MOD_ALT | MOD_SHIFT
+    jnz 1f
+    cmp r12d, KEY_UP
+    je 2f
+    cmp r12d, KEY_DOWN
+    je 3f
+    jmp 8f
+1:  test r14d, MOD_CTRL | MOD_ALT | MOD_SUPER | MOD_SHIFT
+    jnz 6f
+    cmp r12d, KEY_HOME
+    je 2f
+    cmp r12d, KEY_END
+    je 3f
+    cmp r12d, KEY_PAGEUP
+    je 4f
+    cmp r12d, KEY_PAGEDOWN
+    je 5f
+    jmp 6f
+2:  mov dword ptr [rip + th_follow], 0  # the first row
+    mov dword ptr [rip + th_arow], 0
+    PM eax, MI_12
+    neg eax
+    mov [rip + th_aoff], eax
+    mov [rip + th_aas], rbx
+    jmp 7f
+3:  mov dword ptr [rip + th_follow], 1  # the last, following
+    mov dword ptr [rip + th_arow], -1
+    jmp 7f
+4:  call th_page
+    sub [rip + th_pend], eax
+    jmp 7f
+5:  call th_page
+    add [rip + th_pend], eax
+    jmp 7f
+6:  mov rdi, rbx
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    call agrow_key
+    EPILOGUE
+7:  mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# th_page() -> eax a page of the thread: the area's height less a line (MI_40), at least MI_20
+th_page:
+    mov eax, [rip + th_areah]
+    sub eax, [rip + g_pmt + 4*MI_40]
+    mov ecx, [rip + g_pmt + 4*MI_20]
+    cmp eax, ecx
+    cmovl eax, ecx
+    ret
+
+# FN agents_focus_last(): "Agents: Focus Last Message": the panel's keys, the open conversation at its end
+#   (following), the row focus on its last row
+FN agents_focus_last
+    PROLOGUE
+    call cmd_focus_agents
+    mov rax, [rip + view]
+    test rax, rax
+    js 9f
+    cmp rax, [rip + sessions + VEC_len]
+    jae 9f
+    mov rcx, [rip + sessions + VEC_ptr]
+    mov rbx, [rcx + rax*8]
+    mov dword ptr [rip + th_follow], 1
+    mov dword ptr [rip + th_arow], -1
+    mov rdi, [rbx + AS_msgs + VEC_len]
+    dec rdi
+    call agrow_focus_set
+9:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
 key_list:
@@ -3368,6 +3897,18 @@ FN agents_open_any
     jae 1f
     mov rdx, [rip + sessions + VEC_ptr]
     mov rax, [rdx + rcx*8]
+1:  ret
+
+# FN agents_viewed() -> rax the open conversation (AS*), or 0 (the list)
+FN agents_viewed
+    xor eax, eax
+    mov rcx, [rip + view]
+    test rcx, rcx
+    js 1f
+    cmp rcx, [rip + sessions + VEC_len]
+    jae 1f
+    mov rax, [rip + sessions + VEC_ptr]
+    mov rax, [rax + rcx*8]
 1:  ret
 
 # FN agents_scroll_dump(sb): " scroll=N max=N follow=0|1": the open thread as it was drawn last (where it
@@ -3644,7 +4185,10 @@ FN agents_pill
     imul rax, rax, AM_SIZE
     add rax, [rbx + AS_msgs + VEC_ptr]
     or dword ptr [rax + AM_flags], AMF_PILL
-    mov dword ptr [rax + AM_w], -1      # measured as a pill
+    mov rdi, rbx                # measured as a pill
+    mov rsi, [rbx + AS_msgs + VEC_len]
+    dec rsi
+    call agents_msg_changed
 9:  EPILOGUE
 
 # queued_sync(AS*) -> eax n: the session's messages that have not started (agent_queued: those waiting
@@ -3718,9 +4262,101 @@ FN agents_copy_rows
     mov rcx, [r15 + AM_len]
     mov r8, [r15 + AM_name]
     call agents_msg_add
-    inc r14
+    test rax, rax
+    js 3f
+    mov rdi, rbx                # its flags, times and call too: the copy shows what its source showed
+    mov rsi, rax
+    mov rdx, r15
+    call row_copy_parts
+3:  inc r14
     jmp 2b
 9:  EPILOGUE
+
+# row_copy_parts(AS*, index, AM* source): a copied row gets its source's flags, times, counts and a deep
+#   copy of its call
+row_copy_parts:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    call row_at
+    mov r14, rax
+    mov eax, [r13 + AM_flags]
+    and eax, ~AMF_EST
+    or [r14 + AM_flags], eax
+    mov rax, [r13 + AM_t]
+    mov [r14 + AM_t], rax
+    mov eax, [r13 + AM_ms]
+    mov [r14 + AM_ms], eax
+    mov eax, [r13 + AM_n]
+    mov [r14 + AM_n], eax
+    mov rdi, [r13 + AM_x]
+    test rdi, rdi
+    jz 9f
+    call agrow_clone
+    mov r15, rax
+    mov rdi, rbx
+    mov rsi, r12
+    call row_at
+    mov [rax + AM_x], r15
+    test r15, r15
+    jz 9f
+    mov [r15 + AT_row], r12d
+9:  mov rdi, rbx
+    mov rsi, r12
+    call agents_msg_changed
+    EPILOGUE
+
+# FN agents_stamp(AS*, unix ms): the rows added next carry that time (0: none; then a row of a conversation
+#   rhun drives while its program runs gets the clock)
+FN agents_stamp
+    mov [rdi + AS_now], rsi
+    ret
+
+# FN agents_row_add(AS*, role, ptr, len, name cstr or 0) -> rax its index, or -1: a row as a reader adds it
+#   (add_msg's rule: trimmed, an empty one skipped; agents_msg_add stays the stream's)
+FN agents_row_add
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rbx + AS_msgs + VEC_len]
+    call add_msg
+    mov rax, -1
+    cmp [rbx + AS_msgs + VEC_len], r12
+    je 9f
+    mov rax, r12
+9:  EPILOGUE
+
+# FN agents_reply_add(AS*, ptr, len, synthetic) -> rax its index, or -1: a reply read from a file, with the
+#   label reply_label gives it (none for the agent's own notices: synthetic 1)
+FN agents_reply_add
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    xor r8d, r8d
+    test ecx, ecx
+    jnz 1f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call reply_label
+    mov r8, rax
+1:  mov rdi, rbx
+    mov esi, R_ASSIST
+    mov rdx, r12
+    mov rcx, r13
+    call agents_row_add
+    EPILOGUE
+
+# FN agents_row_flag(AS*, index, AMF_* on): flags of a row on (measured again)
+FN agents_row_flag
+    cmp rsi, [rdi + AS_msgs + VEC_len]
+    jae 1f
+    imul rax, rsi, AM_SIZE
+    add rax, [rdi + AS_msgs + VEC_ptr]
+    or [rax + AM_flags], edx
+    jmp agents_msg_changed
+1:  ret
 
 # FN agents_msg_append(AS*, index, ptr, len): more text for that message (streaming)
 FN agents_msg_append
@@ -3743,6 +4379,13 @@ FN agents_msg_append
     mov rsi, r13
     mov rdx, r14
     call msg_clean
+    mov rdi, [r15 + AM_text]    # its line feeds
+    add rdi, [r15 + AM_len]
+    mov r13, rax
+    mov rsi, rax
+    call count_lf
+    add [r15 + AM_nl], eax
+    mov rax, r13
     add rax, [r15 + AM_len]
     mov [r15 + AM_len], rax
     mov rcx, [r15 + AM_text]
@@ -3781,6 +4424,12 @@ FN agents_msg_set
     mov [rcx + AM_text], r15
     mov [rcx + AM_len], r13
     call mem_free
+    mov rdi, r15
+    mov rsi, r13
+    call count_lf
+    imul rcx, r12, AM_SIZE
+    add rcx, [rbx + AS_msgs + VEC_ptr]
+    mov [rcx + AM_nl], eax
     mov rdi, rbx
     mov rsi, r12
     call agents_msg_changed
@@ -3879,14 +4528,125 @@ msg_clean:
 # FN agents_resync(AS*): its rows go and its file is read again from the start (the file is the truth
 #   once rhun stops driving it)
 FN agents_resync
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, rdi
+    mov qword ptr [rsp], -1     # the view's anchor, as (its turn's number, its place in the turn)
+    cmp [rip + th_aas], rbx
+    jne 1f
+    cmp dword ptr [rip + th_follow], 0
+    jne 1f
+    movsxd rsi, dword ptr [rip + th_arow]
+    test rsi, rsi
+    js 1f
+    cmp rsi, [rbx + AS_msgs + VEC_len]
+    jae 1f
+    mov rdi, rbx
+    call anchor_save
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+1:  mov rdi, rbx
     call session_clear_msgs
     mov qword ptr [rbx + AS_off], 0
     mov qword ptr [rbx + AS_part + SB_len], 0
     mov rdi, rbx
     call session_update
-    mov dword ptr [rip + g_dirty], 1
+    mov rsi, [rsp]
+    test rsi, rsi
+    js 2f
+    mov rdi, rbx                # the same place, or the turn's nearest row
+    mov rdx, [rsp + 8]
+    call anchor_restore
+    cmp dword ptr [rip + th_arow], 0
+    jl 2f
+    mov dword ptr [rip + th_follow], 0  # (the rows' cut made it follow)
+    mov [rip + th_aas], rbx
+2:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# anchor_save(AS*, row) -> rax the number of its turn among the prompts (0: before the first), rdx its place
+#   after that turn's prompt (agents_resync: what survives a reread)
+anchor_save:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    call row_at
+    movsxd r13, dword ptr [rax + AM_turn]
+    test r13, r13
+    jns 1f
+    xor eax, eax
+    mov rdx, r12
+    EPILOGUE
+1:  xor r14d, r14d              # the turns up to it
+    xor r15d, r15d
+2:  cmp r15, r13
+    ja 3f
+    mov rdi, rbx
+    mov rsi, r15
+    call row_at
+    movsxd rax, dword ptr [rax + AM_turn]
+    cmp rax, r15
+    jne 21f
+    inc r14
+21: inc r15
+    jmp 2b
+3:  mov rax, r14
+    mov rdx, r12
+    sub rdx, r13
+    EPILOGUE
+
+# anchor_restore(AS*, turn, place): the anchor at that place of that turn again (th_aoff kept): past the
+#   turn's rows its last row, past the turns the last row
+anchor_restore:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, [rbx + AS_msgs + VEC_len]
+    test r14, r14
+    jnz 1f
+    mov dword ptr [rip + th_arow], -1
+    mov dword ptr [rip + th_follow], 1
+    EPILOGUE
+1:  xor r15d, r15d              # the turn's prompt: the r12-th turn start (0: row 0)
+    xor ecx, ecx                # turns seen
+    test r12, r12
+    jz 4f
+2:  cmp r15, r14
+    jae 6f                      # fewer turns: the last row
+    mov rdi, rbx
+    mov rsi, r15
+    call row_at
+    movsxd rax, dword ptr [rax + AM_turn]
+    cmp rax, r15
+    jne 3f
+    inc rcx
+    cmp rcx, r12
+    je 4f
+3:  inc r15
+    jmp 2b
+4:  lea rax, [r15 + r13]        # its place, but not past the turn's last row
+    lea rcx, [r15 + 1]
+5:  cmp rcx, rax
+    ja 7f
+    cmp rcx, r14
+    jae 7f
+    push rax
+    push rcx
+    mov rdi, rbx
+    mov rsi, rcx
+    call row_at
+    movsxd rdx, dword ptr [rax + AM_turn]
+    pop rcx
+    pop rax
+    cmp rdx, rcx
+    je 51f                      # the next turn begins: the row before it
+    inc rcx
+    jmp 5b
+51: lea rax, [rcx - 1]
+7:  cmp rax, r14
+    jb 8f
+6:  lea rax, [r14 - 1]
+8:  mov [rip + th_arow], eax
     EPILOGUE
 
 # FN agents_ext_truncate(AS*, n): the messages from n on go
@@ -3901,16 +4661,91 @@ FN agents_ext_truncate
     mov rdi, rbx
     call session_clear_msgs
     jmp 9f
-1:  mov r13, r12
+1:  mov rdi, rbx                # with the chunks and folds after them (agents_rows_cut)
+    mov rsi, r12
+    call agents_rows_cut
+9:  EPILOGUE
+
+# FN agents_rows_cut(AS*, n): the rows from n on go, with what they own, the chunks after them (the last one
+#   left made again), the folds that began at or after n (one across it ends before n) and what names them:
+#   the calls by id and the waiting calls (agrow_cut), the latest todo row, the pinned turn, the row focus, a
+#   pending click, the anchor; at 0 also the calls' table, the day of the last stamped row, the tasks and the
+#   reader's own data. session_clear_msgs is n = 0
+FN agents_rows_cut
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    cmp r12, [rbx + AS_msgs + VEC_len]
+    jbe 1f
+    mov r12, [rbx + AS_msgs + VEC_len]
+1:  mov rdi, rbx                # the calls of the rows that go leave the table first
+    mov rsi, r12
+    call agrow_cut
+    mov r13, r12
 2:  cmp r13, [rbx + AS_msgs + VEC_len]
     jae 3f
-    imul rdi, r13, AM_SIZE
-    add rdi, [rbx + AS_msgs + VEC_ptr]
+    mov rdi, rbx
+    mov rsi, r13
+    call row_at
+    mov rdi, rax
     call msg_free
     inc r13
     jmp 2b
 3:  mov [rbx + AS_msgs + VEC_len], r12
-9:  EPILOGUE
+    lea rax, [r12 + 63]         # the chunks
+    shr rax, HX_SHIFT
+    cmp rax, [rbx + AS_hx + VEC_len]
+    ja 4f
+    mov [rbx + AS_hx + VEC_len], rax
+4:  test r12, 63
+    jz 5f
+    mov rdi, rbx
+    lea rsi, [r12 - 1]
+    call hx_dirty
+5:  mov rcx, [rbx + AS_folds + VEC_len]     # the folds
+6:  test rcx, rcx
+    jz 7f
+    dec rcx
+    imul rax, rcx, AF_SIZE
+    add rax, [rbx + AS_folds + VEC_ptr]
+    movsxd rdx, dword ptr [rax + AF_first]
+    cmp rdx, r12
+    jb 61f
+    mov [rbx + AS_folds + VEC_len], rcx
+    jmp 6b
+61: movsxd rdx, dword ptr [rax + AF_last]
+    cmp rdx, r12
+    jb 7f
+    lea rdx, [r12 - 1]
+    mov [rax + AF_last], edx
+7:  movsxd rax, dword ptr [rbx + AS_todo]
+    cmp rax, r12
+    jl 71f
+    mov dword ptr [rbx + AS_todo], -1
+71: movsxd rax, dword ptr [rbx + AS_sticky]
+    cmp rax, r12
+    jl 72f
+    mov dword ptr [rbx + AS_sticky], -1
+72: cmp [rip + th_aas], rbx     # the anchor
+    jne 8f
+    movsxd rax, dword ptr [rip + th_arow]
+    cmp rax, r12
+    jl 8f
+    lea rax, [r12 - 1]
+    mov [rip + th_arow], eax
+    test r12, r12
+    jnz 8f
+    mov dword ptr [rip + th_follow], 1
+8:  test r12, r12
+    jnz 9f
+    mov qword ptr [rbx + AS_day], -1
+    mov rdi, rbx
+    call agtask_clear
+    mov rdi, [rbx + AS_rdata]
+    call mem_free
+    mov qword ptr [rbx + AS_rdata], 0
+9:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
 
 # FN agents_ext_msg(AS*, role, ptr, len, label cstr or 0): one message of an extension's session
 FN agents_ext_msg
@@ -4267,6 +5102,1252 @@ is_live:
     pop rbx
     ret
 
+# ---------- the thread's engine: heights without walking the conversation ----------
+#
+# A row's height is exact once it was measured (row_exact) for the key (the width, the panel's text size,
+# g_face_gen, ag_gen: row_valid); until then it is an estimate from its byte and line counts (row_parts,
+# row_est), O(1). The rows' heights and their gaps are summed per 64 rows (AS_hx, HX records): a chunk nobody
+# looks into is its aggregates at any width (hx_value: no step a row), a chunk a row of which is located or
+# drawn is its rows' own heights (hx_resolve, HXF_ROWS). A row of height 0 (a hidden call, a folded row) has
+# no gap either. The view is kept as a row and an offset (th_arow, th_aoff), so a height that changes above it
+# moves nothing; the content offsets (th_top, th_locate) begin with MI_12 above row 0.
+
+# row_at(AS*, index) -> rax AM*
+row_at:
+    imul rax, rsi, AM_SIZE
+    add rax, [rdi + AS_msgs + VEC_ptr]
+    ret
+
+# hx_of(AS*, row) -> rax its chunk's HX* (made when the row is the first of a new chunk)
+hx_of:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    shr r12, HX_SHIFT
+1:  cmp r12, [rbx + AS_hx + VEC_len]
+    jb 2f
+    lea rdi, [rbx + AS_hx]
+    mov esi, HX_SIZE
+    call vec_push
+    jmp 1b
+2:  imul rax, r12, HX_SIZE
+    add rax, [rbx + AS_hx + VEC_ptr]
+    EPILOGUE
+
+# hx_dirty(AS*, row): that row was added or changed: its chunk's sum and aggregates are made again when needed
+hx_dirty:
+    PROLOGUE
+    call hx_of
+    mov dword ptr [rax + HX_flags], 0
+    EPILOGUE
+
+# walk_note(row): a frame asked that row's height (print-agent-thread walked=)
+walk_note:
+    mov rax, rdi
+    shr rax, HX_SHIFT
+    mov ecx, edi
+    and ecx, 63
+    mov edx, 1
+    shl rdx, cl
+    xor ecx, ecx
+1:  cmp ecx, [rip + walk_k]
+    jae 2f
+    lea r8, [rip + walk_c]
+    cmp [r8 + rcx*8], rax
+    je 3f
+    inc ecx
+    jmp 1b
+2:  cmp ecx, WALK_KEEP
+    jae 4f
+    lea r8, [rip + walk_c]
+    mov [r8 + rcx*8], rax
+    lea r8, [rip + walk_m]
+    mov qword ptr [r8 + rcx*8], 0
+    inc dword ptr [rip + walk_k]
+3:  lea r8, [rip + walk_m]
+    or [r8 + rcx*8], rdx
+    ret
+4:  inc dword ptr [rip + walk_x]
+    ret
+
+# walk_count() -> eax the rows asked in the frame
+walk_count:
+    xor eax, eax
+    xor ecx, ecx
+1:  cmp ecx, [rip + walk_k]
+    jae 9f
+    lea r8, [rip + walk_m]
+    mov rdx, [r8 + rcx*8]
+2:  test rdx, rdx
+    jz 3f
+    lea r9, [rdx - 1]
+    and rdx, r9
+    inc eax
+    jmp 2b
+3:  inc ecx
+    jmp 1b
+9:  add eax, [rip + walk_x]
+    ret
+
+# est_lh() -> eax the line height an estimate counts (the panel's text face's, as a row wraps it)
+est_lh:
+    mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_3]
+    ret
+
+# row_parts(AS*, row) -> eax the pixels of its height that do not depend on the width (no gap), edx its
+#   lines and ecx its bytes that wrap; 0, 0, 0: a row of no height at all. O(1): what the estimate and a
+#   chunk's aggregates are made of
+row_parts:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    call row_at
+    mov rbx, rax
+    cmp qword ptr [rbx + AM_x], 0
+    jne 5f
+    mov eax, [rbx + AM_role]
+    cmp eax, R_THINK
+    je 5f
+    cmp eax, R_META
+    je 5f
+    cmp eax, R_COMPACT
+    je 5f
+    cmp eax, R_UNKNOWN
+    je 5f
+    test dword ptr [rbx + AM_flags], AMF_PILL
+    jnz 3f
+    cmp eax, R_TOOL
+    je 4f
+    PM r14d, MI_40              # a prompt, a reply: the label line and paddings
+    cmp eax, R_USER
+    je 1f
+    cmp eax, R_ASSIST
+    je 1f
+    PM r14d, MI_20              # a result, an error, a notice: boxed
+1:  mov edx, [rbx + AM_nl]
+    inc edx
+    cmp edx, EST_CAP
+    jbe 11f
+    mov edx, EST_CAP
+11: mov rcx, [rbx + AM_len]
+    cmp rcx, EST_CAP
+    jbe 12f
+    mov ecx, EST_CAP
+12: mov eax, r14d
+    EPILOGUE
+3:  call pill_h
+    add eax, [rip + g_pmt + 4*MI_12]
+    xor edx, edx
+    xor ecx, ecx
+    EPILOGUE
+4:  PM eax, MI_32
+    xor edx, edx
+    xor ecx, ecx
+    EPILOGUE
+5:  mov rdi, r12                # a typed row (agentrows.s)
+    mov rsi, r13
+    call agrow_est
+    EPILOGUE
+
+# row_est(AS*, row, w) -> eax its estimated height at width w
+row_est:
+    PROLOGUE
+    mov r12d, edx
+    call row_parts
+    mov ebx, eax
+    mov r13d, edx
+    mov r14d, ecx
+    or eax, edx
+    or eax, ecx
+    jz 9f
+    mov r15d, r12d
+    cmp r15d, 1
+    jge 1f
+    mov r15d, 1
+1:  mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_cellw]
+    imul rax, r14
+    xor edx, edx
+    div r15                     # lines its bytes fill at the width
+    add rax, r13
+    mov r8, rax
+    call est_lh
+    imul rax, r8
+    add rax, rbx
+    mov ecx, HX_CAP
+    cmp rax, rcx
+    cmova rax, rcx
+9:  EPILOGUE
+
+# row_valid(AM*, w) -> eax 1 when AM_h is its exact height for the key
+row_valid:
+    xor eax, eax
+    cmp [rdi + AM_w], esi
+    jne 9f
+    mov ecx, [rdi + AM_hrev]
+    cmp ecx, [rdi + AM_rev]
+    jne 9f
+    mov rcx, [rip + ag_fui]
+    mov ecx, [rcx + FACE_px]
+    cmp ecx, [rdi + AM_hpx]
+    jne 9f
+    push rax
+    call face_key
+    mov ecx, eax
+    pop rax
+    cmp ecx, [rdi + AM_hgen]
+    jne 9f
+    mov ecx, [rip + ag_gen]
+    cmp ecx, [rdi + AM_hag]
+    jne 9f
+    mov eax, 1
+9:  ret
+
+# row_h0(AS*, row, w) -> eax what the sums use for it before the fold: exact when cached, else the estimate
+row_h0:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    call row_at
+    mov rdi, rax
+    mov esi, r13d
+    mov r14, rax
+    call row_valid
+    test eax, eax
+    jz 1f
+    mov eax, [r14 + AM_h]
+    EPILOGUE
+1:  mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    call row_est
+    EPILOGUE
+
+# FN row_h(AS*, index, w) -> eax the height the sums use: exact when it is cached for the key, else the
+#   estimate (AMF_EST), 0 for a row a fold hides. Every caller of msg_height but the engine goes through it
+FN row_h
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov rdi, rsi
+    call walk_note
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    call row_h0
+    mov ecx, eax
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    call agfold_h
+    EPILOGUE
+
+# FN row_exact(AS*, index, w) -> eax measured now when it was not for the key (msg_height's work: a reply's
+#   Markdown parsed if never, a typed row laid out; agentrows.s for typed rows); its chunk's sum follows
+FN row_exact
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov rdi, rsi
+    call walk_note
+    mov rdi, rbx
+    mov rsi, r12
+    call row_at
+    mov r14, rax
+    mov rdi, rax
+    mov esi, r13d
+    call row_valid
+    test eax, eax
+    jnz 8f
+    mov rdi, rbx                # what its chunk's sum counted for it: the estimate
+    mov rsi, r12
+    mov edx, r13d
+    call row_est
+    mov ecx, eax
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    call agfold_h
+    mov [rsp], eax
+    mov rdi, rbx                # measured
+    mov rsi, r12
+    mov edx, r13d
+    call row_measure
+    mov r15d, eax
+    mov rdi, rbx
+    mov rsi, r12
+    call row_at
+    mov r14, rax
+    mov [r14 + AM_h], r15d
+    mov [r14 + AM_w], r13d
+    mov eax, [r14 + AM_rev]
+    mov [r14 + AM_hrev], eax
+    call panel_px
+    mov [r14 + AM_hpx], eax
+    call face_key
+    mov [r14 + AM_hgen], eax
+    mov eax, [rip + ag_gen]
+    mov [r14 + AM_hag], eax
+    and dword ptr [r14 + AM_flags], ~AMF_EST
+    mov ecx, r15d
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    call agfold_h
+    mov r15d, eax
+    mov rdi, rbx                # a chunk summed from its rows: by what it changed
+    mov rsi, r12
+    call hx_of
+    test dword ptr [rax + HX_flags], HXF_ROWS
+    jz 9f
+    mov ecx, r15d
+    test ecx, ecx
+    jz 1f
+    add ecx, [rip + g_pmt + 4*MI_8]
+1:  mov edx, [rsp]
+    test edx, edx
+    jz 2f
+    add edx, [rip + g_pmt + 4*MI_8]
+2:  sub ecx, edx
+    add [rax + HX_sum], ecx
+    jmp 9f
+8:  mov ecx, [r14 + AM_h]
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    call agfold_h
+    mov r15d, eax
+9:  mov eax, r15d
+    EPILOGUE
+
+# row_measure(AS*, row, w) -> eax its height measured now: a typed row by agentrows.s, any other by
+#   msg_height (a reply's Markdown parsed when it has none or its text changed)
+row_measure:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    call row_at
+    mov r14, rax
+    cmp qword ptr [r14 + AM_x], 0
+    jne 5f
+    mov eax, [r14 + AM_role]
+    cmp eax, R_THINK
+    je 5f
+    cmp eax, R_META
+    je 5f
+    cmp eax, R_COMPACT
+    je 5f
+    cmp eax, R_UNKNOWN
+    je 5f
+    mov dword ptr [r14 + AM_w], -1      # msg_height's own cache says nothing of ag_gen
+    mov rdi, r14
+    mov esi, r13d
+    call msg_height
+    EPILOGUE
+5:  mov rdi, rbx
+    mov rsi, r12
+    mov edx, r13d
+    call agrow_h
+    EPILOGUE
+
+# hx_agg(AS*, chunk): its aggregates from its rows' parts (no height asked)
+hx_agg:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    imul r15, r12, HX_SIZE
+    add r15, [rbx + AS_hx + VEC_ptr]
+    mov dword ptr [r15 + HX_fix], 0
+    mov dword ptr [r15 + HX_lines], 0
+    mov dword ptr [r15 + HX_bytes], 0
+    mov r13, r12
+    shl r13, HX_SHIFT
+    lea r14, [r13 + 64]
+    cmp r14, [rbx + AS_msgs + VEC_len]
+    jbe 1f
+    mov r14, [rbx + AS_msgs + VEC_len]
+1:  cmp r13, r14
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r13
+    call row_parts
+    imul r15, r12, HX_SIZE
+    add r15, [rbx + AS_hx + VEC_ptr]
+    mov r8d, eax
+    or r8d, edx
+    or r8d, ecx
+    jz 2f
+    add eax, [rip + g_pmt + 4*MI_8]
+    add [r15 + HX_fix], eax
+    mov r8d, [r15 + HX_lines]
+    add r8, rdx
+    mov r9d, 0x3fffffff
+    cmp r8, r9
+    cmova r8, r9
+    mov [r15 + HX_lines], r8d
+    mov r8d, [r15 + HX_bytes]
+    add r8, rcx
+    cmp r8, r9
+    cmova r8, r9
+    mov [r15 + HX_bytes], r8d
+2:  inc r13
+    jmp 1b
+9:  imul r15, r12, HX_SIZE
+    add r15, [rbx + AS_hx + VEC_ptr]
+    or dword ptr [r15 + HX_flags], HXF_AGG
+    EPILOGUE
+
+# hx_value(AS*, chunk, w) -> eax its height: its rows' own sum when it has one, else its aggregates at the
+#   width (one step, whatever the width)
+hx_value:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    imul r14, r12, HX_SIZE
+    add r14, [rbx + AS_hx + VEC_ptr]
+    test dword ptr [r14 + HX_flags], HXF_ROWS
+    jz 1f
+    mov eax, [r14 + HX_sum]
+    EPILOGUE
+1:  test dword ptr [r14 + HX_flags], HXF_AGG
+    jnz 2f
+    call hx_agg
+    imul r14, r12, HX_SIZE
+    add r14, [rbx + AS_hx + VEC_ptr]
+2:  mov r15d, r13d
+    cmp r15d, 1
+    jge 3f
+    mov r15d, 1
+3:  mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_cellw]
+    mov ecx, [r14 + HX_bytes]
+    imul rax, rcx
+    xor edx, edx
+    div r15
+    mov ecx, [r14 + HX_lines]
+    add rax, rcx
+    mov r8, rax
+    call est_lh
+    imul rax, r8
+    mov ecx, [r14 + HX_fix]
+    add rax, rcx
+    mov ecx, HX_CAP
+    cmp rax, rcx
+    cmova rax, rcx
+    EPILOGUE
+
+# hx_resolve(AS*, chunk, w) -> eax its rows' own sum, kept (HXF_ROWS): its rows' heights asked once
+hx_resolve:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    xor r15d, r15d
+    mov r14, r12
+    shl r14, HX_SHIFT
+1:  mov rax, r12
+    shl rax, HX_SHIFT
+    add rax, 64
+    cmp r14, rax
+    jae 3f
+    cmp r14, [rbx + AS_msgs + VEC_len]
+    jae 3f
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, r13d
+    call row_h
+    test eax, eax
+    jz 2f
+    add eax, [rip + g_pmt + 4*MI_8]
+    add r15d, eax
+2:  inc r14
+    jmp 1b
+3:  imul rax, r12, HX_SIZE
+    add rax, [rbx + AS_hx + VEC_ptr]
+    mov [rax + HX_sum], r15d
+    or dword ptr [rax + HX_flags], HXF_ROWS
+    mov eax, r15d
+    EPILOGUE
+
+# th_key(AS*, w): the sums are for this width, text size, g_face_gen and ag_gen. A text size or ag_gen
+#   change drops every chunk's aggregates (made again once, from the rows' parts); a width or face change
+#   only drops the chunks' own sums (a step a chunk, no step a row)
+th_key:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    call panel_px
+    mov r13d, eax
+    xor r14d, r14d              # the flags kept
+    cmp [rbx + AS_hkey + 4], r13d
+    jne 2f
+    mov eax, [rip + ag_gen]
+    cmp [rbx + AS_hkey + 12], eax
+    jne 2f
+    mov r14d, HXF_AGG
+    cmp [rbx + AS_hkey], r12d
+    jne 2f
+    call face_key
+    cmp [rbx + AS_hkey + 8], eax
+    jne 2f
+    EPILOGUE
+2:  mov [rbx + AS_hkey], r12d
+    mov [rbx + AS_hkey + 4], r13d
+    call face_key
+    mov [rbx + AS_hkey + 8], eax
+    mov eax, [rip + ag_gen]
+    mov [rbx + AS_hkey + 12], eax
+    xor ecx, ecx
+3:  cmp rcx, [rbx + AS_hx + VEC_len]
+    jae 9f
+    imul rax, rcx, HX_SIZE
+    add rax, [rbx + AS_hx + VEC_ptr]
+    and [rax + HX_flags], r14d
+    inc rcx
+    jmp 3b
+9:  EPILOGUE
+
+# th_rows_h(AS*, w) -> eax the rows' part of the content: every chunk's height
+th_rows_h:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    call th_key
+    xor r13d, r13d
+    xor r14d, r14d
+1:  cmp r14, [rbx + AS_hx + VEC_len]
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, r12d
+    call hx_value
+    add r13d, eax
+    inc r14
+    jmp 1b
+9:  mov eax, r13d
+    EPILOGUE
+
+# th_after(AS*, w) -> eax what follows the rows: the spinner, the task lines, the queued messages (each with
+#   its gap)
+th_after:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov rdi, rbx
+    call agspin_h
+    mov r13d, eax
+    mov rdi, rbx
+    mov esi, r12d
+    call agtask_h
+    add r13d, eax
+    mov rdi, rbx
+    call queued_sync
+    mov r14d, eax
+    xor r15d, r15d
+1:  cmp r15d, r14d
+    jae 9f
+    imul rdi, r15, AM_SIZE
+    lea rax, [rip + qrows]
+    add rdi, rax
+    mov esi, r12d
+    call msg_height
+    add r13d, eax
+    add r13d, [rip + g_pmt + 4*MI_8]
+    inc r15d
+    jmp 1b
+9:  mov eax, r13d
+    EPILOGUE
+
+# FN th_total(AS*, w) -> eax the content's height: MI_12 above the first row, the chunk sums (a chunk without
+#   its rows' own sum from its aggregates), the spinner, the task lines, the queued rows, MI_20 below
+FN th_total
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    call th_rows_h
+    mov r13d, eax
+    mov rdi, rbx
+    mov esi, r12d
+    call th_after
+    add eax, r13d
+    add eax, [rip + g_pmt + 4*MI_12]
+    add eax, [rip + g_pmt + 4*MI_20]
+    EPILOGUE
+
+# FN th_locate(AS*, y, w) -> rax the row at that offset of the content, edx its top (-1 and MI_12 without
+#   rows): the chunks' sums, then the rows of the one chunk it is in (resolved). Above row 0: row 0; past
+#   the last row: the last row
+FN th_locate
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov esi, edx
+    call th_key
+    PM r15d, MI_12              # the offset reached
+    cmp qword ptr [rbx + AS_msgs + VEC_len], 0
+    jne 1f
+    mov rax, -1
+    mov edx, r15d
+    EPILOGUE
+1:  cmp r12d, r15d
+    jge 2f
+    xor eax, eax
+    mov edx, r15d
+    EPILOGUE
+2:  xor r14d, r14d              # the chunk
+3:  mov rax, [rbx + AS_hx + VEC_len]
+    dec rax
+    mov [rsp + 8], rax          # the last chunk
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, r13d
+    call hx_value
+    cmp r14, [rsp + 8]
+    jae 4f                      # the last chunk: it is there
+    lea ecx, [r15 + rax]
+    cmp r12d, ecx
+    jl 4f
+    mov r15d, ecx
+    inc r14
+    jmp 3b
+4:  imul rax, r14, HX_SIZE      # its rows (resolved: their own sum may say it is the next chunk)
+    add rax, [rbx + AS_hx + VEC_ptr]
+    test dword ptr [rax + HX_flags], HXF_ROWS
+    jnz 5f
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, r13d
+    call hx_resolve
+    cmp r14, [rsp + 8]
+    jae 5f
+    lea ecx, [r15 + rax]
+    cmp r12d, ecx
+    jl 5f
+    mov r15d, ecx
+    inc r14
+    jmp 3b
+5:  shl r14, HX_SHIFT
+    lea rax, [r14 + 64]
+    cmp rax, [rbx + AS_msgs + VEC_len]
+    jbe 6f
+    mov rax, [rbx + AS_msgs + VEC_len]
+6:  dec rax
+    mov [rsp], rax              # the chunk's last row
+7:  mov rdi, rbx
+    mov rsi, r14
+    mov edx, r13d
+    call row_h
+    test eax, eax
+    jz 8f
+    add eax, [rip + g_pmt + 4*MI_8]
+8:  cmp r14, [rsp]
+    jae 9f
+    lea ecx, [r15 + rax]
+    cmp r12d, ecx
+    jl 9f
+    mov r15d, ecx
+    inc r14
+    jmp 7b
+9:  mov rax, r14
+    mov edx, r15d
+    EPILOGUE
+
+# FN th_top(AS*, index, w) -> eax a row's offset in the content: the chunks before its chunk, then its rows
+#   before it (its chunk resolved)
+FN th_top
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov esi, edx
+    call th_key
+    PM r15d, MI_12
+    xor r14d, r14d
+1:  mov rax, r12
+    shr rax, HX_SHIFT
+    cmp r14, rax
+    jae 2f
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, r13d
+    call hx_value
+    add r15d, eax
+    inc r14
+    jmp 1b
+2:  cmp r14, [rbx + AS_hx + VEC_len]
+    jae 9f
+    imul rax, r14, HX_SIZE
+    add rax, [rbx + AS_hx + VEC_ptr]
+    test dword ptr [rax + HX_flags], HXF_ROWS
+    jnz 3f
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, r13d
+    call hx_resolve
+3:  shl r14, HX_SHIFT
+4:  cmp r14, r12
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, r13d
+    call row_h
+    test eax, eax
+    jz 5f
+    add eax, [rip + g_pmt + 4*MI_8]
+5:  add r15d, eax
+    inc r14
+    jmp 4b
+9:  mov eax, r15d
+    EPILOGUE
+
+# face_key() -> eax what the panel's faces are, as heights depend on them: the text and small faces' sizes
+#   and line heights, the interface's and the editor's fonts. (Not g_face_gen: Markdown's sized faces move it
+#   on when documents of other sizes are laid out, which would make every row's height stale every frame)
+face_key:
+    mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_px]
+    imul eax, eax, 31
+    mov rcx, [rip + ag_fui]
+    add eax, [rcx + FACE_lineh]
+    imul eax, eax, 31
+    mov rcx, [rip + ag_fsmall]
+    add eax, [rcx + FACE_lineh]
+    imul eax, eax, 31
+    add eax, [rip + g_face_code + FACE_px]
+    imul eax, eax, 31
+    mov rcx, [rip + g_face_code + FACE_font]
+    add eax, ecx
+    imul eax, eax, 31
+    mov rcx, [rip + g_face_ui + FACE_font]
+    add eax, ecx
+    ret
+
+# gap_of(h) -> eax h and the gap after it (none after a row of no height)
+gap_of:
+    mov eax, edi
+    test eax, eax
+    jz 1f
+    add eax, [rip + g_pmt + 4*MI_8]
+1:  ret
+
+# FN agents_view_changed(): a setting or a state that changes heights (focus view, timestamps, thinking
+#   open, a fold): ag_gen moves on (every chunk's aggregates and every row's height are made again, once)
+FN agents_view_changed
+    inc dword ptr [rip + ag_gen]
+    mov dword ptr [rip + g_dirty], 1
+    ret
+
+# th_begin(AS*, w): a frame of the thread begins: its serial, the session, the width, the rows asked counted
+#   from 0, the sums' key
+th_begin:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    inc dword ptr [rip + th_serial]
+    mov [rip + th_as], rbx
+    mov [rip + th_textw], r12d
+    mov dword ptr [rip + walk_k], 0
+    mov dword ptr [rip + walk_x], 0
+    mov rdi, rbx
+    mov esi, r12d
+    call th_key
+    EPILOGUE
+
+# th_resolve_rows(AS*, first, last, w): the chunks of those rows summed from their rows (the rows in view:
+#   the content's height is right around them)
+th_resolve_rows:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    shr r12, HX_SHIFT
+    mov r13, rdx
+    shr r13, HX_SHIFT
+    mov r14d, ecx
+1:  cmp r12, r13
+    ja 9f
+    cmp r12, [rbx + AS_hx + VEC_len]
+    jae 9f
+    imul rax, r12, HX_SIZE
+    add rax, [rbx + AS_hx + VEC_ptr]
+    test dword ptr [rax + HX_flags], HXF_ROWS
+    jnz 2f
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, r14d
+    call hx_resolve
+2:  inc r12
+    jmp 1b
+9:  EPILOGUE
+
+# th_end(AS*, w, area h): the last rows measured exactly until they fill the area, and their chunks summed
+#   from their rows: the end of the content is exact (following: the last row's bottom is the area's)
+th_end:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov r14, [rbx + AS_msgs + VEC_len]
+    test r14, r14
+    jz 9f
+    dec r14
+    xor r15d, r15d
+1:  test r14, r14
+    js 2f
+    cmp r15d, r13d
+    jge 2f
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, r12d
+    call row_exact
+    mov edi, eax
+    call gap_of
+    add r15d, eax
+    dec r14
+    jmp 1b
+2:  lea rsi, [r14 + 1]
+    mov rdx, [rbx + AS_msgs + VEC_len]
+    dec rdx
+    mov rdi, rbx
+    mov ecx, r12d
+    call th_resolve_rows
+9:  EPILOGUE
+
+# th_step(AS*, w): the anchor (lay_row, lay_off) moved to the row under the top edge again after its offset
+#   changed (a wheel step, a page): over the rows passed, measured exactly, so the rows in view move by the
+#   step alone. Above row 0 it stops at the content's top (-MI_12)
+th_step:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+1:  mov eax, [rip + lay_off]
+    test eax, eax
+    jns 3f
+    cmp qword ptr [rip + lay_row], 0
+    jg 2f
+    PM ecx, MI_12
+    neg ecx
+    cmp eax, ecx
+    jge 9f
+    mov [rip + lay_off], ecx
+    jmp 9f
+2:  dec qword ptr [rip + lay_row]
+    mov rdi, rbx
+    mov rsi, [rip + lay_row]
+    mov edx, r12d
+    call row_exact
+    mov edi, eax
+    call gap_of
+    add [rip + lay_off], eax
+    jmp 1b
+3:  mov rdi, rbx
+    mov rsi, [rip + lay_row]
+    mov edx, r12d
+    call row_exact
+    mov edi, eax
+    call gap_of
+    cmp [rip + lay_off], eax
+    jl 9f
+    mov rcx, [rbx + AS_msgs + VEC_len]
+    dec rcx
+    cmp [rip + lay_row], rcx
+    jge 9f
+    sub [rip + lay_off], eax
+    inc qword ptr [rip + lay_row]
+    jmp 1b
+9:  EPILOGUE
+
+# th_view(AS*, w, area h): the rows in view from the anchor measured exactly (a reply's Markdown parsed
+#   the first time), their chunks summed from their rows
+th_view:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov r14, [rip + lay_row]
+    test r14, r14
+    js 9f
+    mov r15d, [rip + lay_off]
+    neg r15d                    # the row's top in the area
+1:  cmp r14, [rbx + AS_msgs + VEC_len]
+    jae 2f
+    cmp r15d, r13d
+    jge 2f
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, r12d
+    call row_exact
+    mov edi, eax
+    call gap_of
+    add r15d, eax
+    inc r14
+    jmp 1b
+2:  lea rdx, [r14 - 1]
+    mov rsi, [rip + lay_row]
+    cmp rdx, rsi
+    jge 3f
+    mov rdx, rsi
+3:  mov rdi, rbx
+    mov ecx, r12d
+    call th_resolve_rows
+9:  EPILOGUE
+
+# th_from_end(AS*, w, area h): following: the end made exact, the scroll its largest, the anchor the row at it
+th_from_end:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    call th_end
+    mov rdi, rbx
+    mov esi, r12d
+    call th_total
+    sub eax, r13d
+    jns 1f
+    xor eax, eax
+1:  mov r14d, eax
+    mov rdi, rbx
+    mov esi, r14d
+    mov edx, r12d
+    call th_locate
+    mov [rip + lay_row], rax
+    sub r14d, edx
+    mov [rip + lay_off], r14d
+    EPILOGUE
+
+# th_layout(AS*, frame*): where the thread is this frame (frame: thread_draw's, x [0], w [8], the area's y
+#   [20] and h [24], the text width [32]). Following: the end. Else the anchor of the last frame (th_arow,
+#   th_aoff), or the row at th_scroll when it has none (the scrollbar moved it). The wheel moves the anchor
+#   over rows measured exactly; the rows in view are measured; th_scroll is derived from the anchor
+#   (th_top), th_content and th_max from the sums. Sets lay_row and lay_off: the row drawn first, at the
+#   area's top less lay_off
+th_layout:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r14, rsi
+    mov r12d, [r14 + 32]        # the width
+    mov r13d, [r14 + 24]        # the area's height
+    mov dword ptr [rsp], 0      # the wheel
+    mov edi, [r14]
+    mov esi, [r14 + 20]
+    mov edx, [r14 + 8]
+    mov ecx, [r14 + 24]
+    call ui_in
+    test eax, eax
+    jz 1f
+    mov eax, [rip + g_scroll_y]
+    mov [rsp], eax
+1:  cmp [rip + th_aas], rbx
+    je 2f
+    mov [rip + th_aas], rbx     # another conversation: it starts at its end
+    mov dword ptr [rip + th_follow], 1
+2:  cmp qword ptr [rbx + AS_msgs + VEC_len], 0
+    jne 3f
+    mov qword ptr [rip + lay_row], -1
+    PM eax, MI_12
+    neg eax
+    mov [rip + lay_off], eax
+    mov dword ptr [rip + th_follow], 1
+    mov dword ptr [rip + th_scroll], 0
+    jmp 8f
+3:  cmp dword ptr [rip + th_follow], 0
+    jne 5f
+    movsxd rax, dword ptr [rip + th_arow]
+    test rax, rax
+    js 4f
+    cmp rax, [rbx + AS_msgs + VEC_len]
+    jae 4f
+    mov [rip + lay_row], rax
+    mov eax, [rip + th_aoff]
+    mov [rip + lay_off], eax
+    jmp 6f
+4:  mov rdi, rbx                # no anchor (the scrollbar was dragged): the row at the scroll
+    mov esi, [rip + th_scroll]
+    mov edx, r12d
+    call th_locate
+    mov [rip + lay_row], rax
+    mov eax, [rip + th_scroll]
+    sub eax, edx
+    mov [rip + lay_off], eax
+    jmp 6f
+5:  mov rdi, rbx
+    mov esi, r12d
+    mov edx, r13d
+    call th_from_end
+6:  mov eax, [rsp]
+    add eax, [rip + th_pend]    # a page key's step joins the wheel's
+    mov dword ptr [rip + th_pend], 0
+    test eax, eax
+    jz 7f
+    mov dword ptr [rip + th_follow], 0
+    add [rip + lay_off], eax
+    mov dword ptr [rsp], 0
+7:  mov rdi, rbx
+    mov esi, r12d
+    call th_step
+    mov rdi, rbx
+    mov esi, r12d
+    mov edx, r13d
+    call th_view
+    mov rdi, rbx
+    mov rsi, [rip + lay_row]
+    mov edx, r12d
+    call th_top
+    add eax, [rip + lay_off]
+    mov [rsp + 4], eax          # the scroll
+    cmp dword ptr [rip + th_follow], 0
+    jne 8f
+    mov rdi, rbx
+    mov esi, r12d
+    call th_total
+    sub eax, r13d
+    jns 71f
+    xor eax, eax
+71: cmp [rsp + 4], eax
+    jl 72f
+    mov dword ptr [rip + th_follow], 1      # at the end: it follows again
+    jmp 5b
+72: mov eax, [rsp + 4]
+    test eax, eax
+    jns 73f
+    xor eax, eax
+73: mov [rip + th_scroll], eax
+8:  mov rdi, rbx
+    mov esi, r12d
+    call th_total
+    mov [rip + th_content], eax
+    sub eax, r13d
+    jns 81f
+    xor eax, eax
+81: mov [rip + th_max], eax
+    cmp dword ptr [rip + th_follow], 0
+    je 82f
+    mov [rip + th_scroll], eax
+    mov dword ptr [rip + th_arow], -1
+    mov dword ptr [rip + th_aoff], 0
+    EPILOGUE
+82: mov rax, [rip + lay_row]
+    mov [rip + th_arow], eax
+    mov eax, [rip + lay_off]
+    mov [rip + th_aoff], eax
+    EPILOGUE
+
+# th_reanchor(AS*): th_scroll was set from outside the layout (the scrollbar, a key): the anchor is the row
+#   at it, or the end when it is the largest
+th_reanchor:
+    PROLOGUE
+    mov rbx, rdi
+    mov eax, [rip + th_scroll]
+    cmp eax, [rip + th_max]
+    jl 1f
+    mov dword ptr [rip + th_follow], 1
+    mov dword ptr [rip + th_arow], -1
+    jmp 9f
+1:  mov dword ptr [rip + th_follow], 0
+    test eax, eax
+    jns 2f
+    mov dword ptr [rip + th_scroll], 0
+2:  mov rdi, rbx
+    mov esi, [rip + th_scroll]
+    mov edx, [rip + th_textw]
+    call th_locate
+    mov [rip + th_arow], eax
+    mov ecx, [rip + th_scroll]
+    sub ecx, edx
+    mov [rip + th_aoff], ecx
+9:  mov [rip + th_aas], rbx
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# FN agents_thread_dump(sb): print-agent-thread, the open conversation's engine as the last frame left it:
+#   "rows=N content=PX scroll=N max=N follow=0|1 anchor=ROW+PX|- first=N last=N exact=N est=N chunks=N
+#   resolved=N walked=N gen=N focus=N|- think=0|1 sticky=N|- calls=N folds=N" (walked: the rows whose height
+#   the last frame asked; exact and est: the rows whose height is measured for the width drawn last, or not)
+FN agents_thread_dump
+    PROLOGUE 16
+    mov r15, rdi
+    mov rax, [rip + view]
+    test rax, rax
+    js 9f
+    cmp rax, [rip + sessions + VEC_len]
+    jae 9f
+    mov rcx, [rip + sessions + VEC_ptr]
+    mov rbx, [rcx + rax*8]
+    lea rsi, [rip + .Lt_rows]
+    mov rdx, [rbx + AS_msgs + VEC_len]
+    call td_num
+    lea rsi, [rip + .Lt_content]
+    mov edx, [rip + th_content]
+    call td_num
+    lea rsi, [rip + .Lt_scroll]
+    mov edx, [rip + th_scroll]
+    call td_num
+    lea rsi, [rip + .Lt_max]
+    mov edx, [rip + th_max]
+    call td_num
+    lea rsi, [rip + .Lt_follow]
+    mov edx, [rip + th_follow]
+    call td_num
+    mov rdi, r15
+    lea rsi, [rip + .Lt_anchor]
+    call sb_push_cstr
+    cmp dword ptr [rip + th_arow], 0
+    jl 1f
+    mov rdi, r15
+    mov esi, [rip + th_arow]
+    call sb_push_u64
+    mov rdi, r15
+    mov esi, '+'
+    call sb_push_byte
+    mov rdi, r15
+    mov esi, [rip + th_aoff]
+    call md_push_int
+    jmp 2f
+1:  mov rdi, r15
+    mov esi, '-'
+    call sb_push_byte
+2:  lea rsi, [rip + .Lt_first]
+    movsxd rdx, dword ptr [rip + th_first]
+    call td_int
+    lea rsi, [rip + .Lt_last]
+    movsxd rdx, dword ptr [rip + th_last]
+    call td_int
+    xor r12d, r12d              # exact and estimated rows
+    xor r13d, r13d
+    xor r14d, r14d
+3:  cmp r14, [rbx + AS_msgs + VEC_len]
+    jae 4f
+    mov rdi, rbx
+    mov rsi, r14
+    call row_at
+    mov rdi, rax
+    mov esi, [rip + th_textw]
+    call row_valid
+    add r12d, eax
+    xor eax, 1
+    add r13d, eax
+    inc r14
+    jmp 3b
+4:  lea rsi, [rip + .Lt_exact]
+    mov edx, r12d
+    call td_num
+    lea rsi, [rip + .Lt_est]
+    mov edx, r13d
+    call td_num
+    lea rsi, [rip + .Lt_chunks]
+    mov rdx, [rbx + AS_hx + VEC_len]
+    call td_num
+    xor r12d, r12d
+    xor r14d, r14d
+5:  cmp r14, [rbx + AS_hx + VEC_len]
+    jae 6f
+    imul rax, r14, HX_SIZE
+    add rax, [rbx + AS_hx + VEC_ptr]
+    mov eax, [rax + HX_flags]
+    and eax, HXF_ROWS
+    add r12d, eax
+    inc r14
+    jmp 5b
+6:  lea rsi, [rip + .Lt_resolved]
+    mov edx, r12d
+    call td_num
+    call walk_count
+    lea rsi, [rip + .Lt_walked]
+    mov edx, eax
+    call td_num
+    lea rsi, [rip + .Lt_gen]
+    mov edx, [rip + ag_gen]
+    call td_num
+    call agrow_focus
+    lea rsi, [rip + .Lt_focus]
+    mov rdx, rax
+    call td_opt
+    call agrow_think
+    lea rsi, [rip + .Lt_think]
+    mov edx, eax
+    call td_num
+    lea rsi, [rip + .Lt_sticky]
+    movsxd rdx, dword ptr [rbx + AS_sticky]
+    cmp qword ptr [rbx + AS_msgs + VEC_len], 0
+    jne 7f
+    mov rdx, -1
+7:  call td_opt
+    lea rsi, [rip + .Lt_calls]
+    mov edx, [rbx + AS_ncalls]
+    call td_num
+    lea rsi, [rip + .Lt_folds]
+    mov rdx, [rbx + AS_folds + VEC_len]
+    call td_num
+    mov rdi, r15
+    mov esi, 10
+    call sb_push_byte
+9:  EPILOGUE
+
+# td_num(rsi label, rdx value) using r15 = sb: " LABEL=N" (the label holds its blank and "="); td_int signed;
+#   td_opt: N, or "-" when it is negative
+td_num:
+    push rdx
+    push rdx
+    mov rdi, r15
+    call sb_push_cstr
+    pop rsi
+    pop rsi
+    mov esi, esi
+    mov rdi, r15
+    jmp sb_push_u64
+td_int:
+    push rdx
+    push rdx
+    mov rdi, r15
+    call sb_push_cstr
+    pop rsi
+    pop rsi
+    mov rdi, r15
+    jmp md_push_int
+td_opt:
+    push rdx
+    push rdx
+    mov rdi, r15
+    call sb_push_cstr
+    pop rsi
+    pop rsi
+    test rsi, rsi
+    js 1f
+    mov rdi, r15
+    jmp sb_push_u64
+1:  mov rdi, r15
+    mov esi, '-'
+    jmp sb_push_byte
+
+.section .rodata
+.Lt_rows: .asciz "rows="
+.Lt_content: .asciz " content="
+.Lt_scroll: .asciz " scroll="
+.Lt_max: .asciz " max="
+.Lt_follow: .asciz " follow="
+.Lt_anchor: .asciz " anchor="
+.Lt_first: .asciz " first="
+.Lt_last: .asciz " last="
+.Lt_exact: .asciz " exact="
+.Lt_est: .asciz " est="
+.Lt_chunks: .asciz " chunks="
+.Lt_resolved: .asciz " resolved="
+.Lt_walked: .asciz " walked="
+.Lt_gen: .asciz " gen="
+.Lt_focus: .asciz " focus="
+.Lt_think: .asciz " think="
+.Lt_sticky: .asciz " sticky="
+.Lt_calls: .asciz " calls="
+.Lt_folds: .asciz " folds="
+.text
+
 # wrap(face, text, len, x, y, width, lh, color, draw) -> lines   (args via stack frame struct at rdi)
 # rdi -> WR block: face, text, len, x, y, w, lh, color, draw, clip_top, clip_bottom
 STRUCT
@@ -4404,9 +6485,9 @@ wrap:
     EPILOGUE
 
 # msg_height(msg, width) -> px, cached for the width, its text's revision, the text size, the faces and
-#   whether its Markdown gave it. A reply parsed once is as tall as its Markdown at the width (parsed
-#   again first when its text changed: a growing reply, at most once a frame); before its first
-#   parse (th_prepare does it when it comes into view) its plain text wrapped stands in
+#   whether its Markdown gave it: the measure of a row that is not typed (row_exact calls it for the rows
+#   in view; the queued rows have no engine). A reply is as tall as its Markdown at the width, parsed now
+#   when it has none or its text changed (a growing reply: at most once a frame); nothing else parses
 msg_height:
     PROLOGUE 96
     mov rbx, rdi
@@ -4414,8 +6495,6 @@ msg_height:
     xor r13d, r13d              # 1: its document gives the height
     cmp dword ptr [rbx + AM_role], R_ASSIST
     jne 11f
-    cmp qword ptr [rbx + AM_doc], 0
-    je 11f
     mov r13d, 1
     mov rdi, rbx
     call msg_doc
@@ -4458,9 +6537,11 @@ msg_height:
     call wrap
     imul eax, [rsp + WR_lh]
     mov ecx, [rbx + AM_role]
-    cmp ecx, R_RESULT
-    jb 3f                       # results, errors and notices are boxed
-    add eax, [rip + g_pmt + 4*MI_20]
+    cmp ecx, R_USER
+    je 3f
+    cmp ecx, R_ASSIST
+    je 3f
+    add eax, [rip + g_pmt + 4*MI_20]    # results, errors and notices are boxed
     jmp 9f
 3:  add eax, [rip + g_pmt + 4*MI_40]
 9:  mov [rbx + AM_h], eax
@@ -4525,143 +6606,6 @@ msg_doc:
 9:  mov rax, r12
     EPILOGUE
 
-# th_prepare(AS*, frame*, total) -> eax the total again: the replies in view this frame that were
-#   never parsed get their Markdown before anything is drawn (frame: thread_draw's, x [0], w [8], the
-#   area's y [20] and h [24], the text width [32]). A row before the first one that was drawn last
-#   frame and is still in view (scrolling up brings rows in above it) moves the scroll by what it grew,
-#   so the rows that were in view stay where they were; with no such row, one that begins above the
-#   view does
-th_prepare:
-    PROLOGUE 48
-    mov rbx, rdi
-    mov r14, rsi
-    mov r15d, edx
-    mov [rip + th_as], rbx
-    inc dword ptr [rip + th_serial]
-    mov eax, [r14 + 32]
-    mov [rip + th_textw], eax
-    mov dword ptr [rsp + 16], 4         # passes: what came into view by another's growing too
-.Ltp_pass:
-    # the scroll this frame shows: as thread_draw makes it below (the wheel, following, the bounds)
-    mov dword ptr [rsp + 20], 0
-    mov edi, [r14]
-    mov esi, [r14 + 20]
-    mov edx, [r14 + 8]
-    mov ecx, [r14 + 24]
-    call ui_in
-    test eax, eax
-    jz 1f
-    mov eax, [rip + g_scroll_y]
-    mov [rsp + 20], eax
-1:  mov eax, r15d
-    sub eax, [r14 + 24]
-    jns 2f
-    xor eax, eax
-2:  cmp dword ptr [rsp + 20], 0
-    jne 3f
-    cmp dword ptr [rip + th_follow], 0
-    jne 4f
-3:  mov ecx, [rip + th_scroll]
-    add ecx, [rsp + 20]
-    cmp ecx, eax
-    cmovl eax, ecx
-    test eax, eax
-    jns 4f
-    xor eax, eax
-4:  mov dword ptr [rsp + 4], 0  # parsed in this pass
-    mov r13d, [r14 + 20]
-    add r13d, [rip + g_pmt + 4*MI_12]
-    sub r13d, eax
-    mov [rsp + 32], r13d
-    # the anchor: the first row drawn last frame that is in view at this scroll
-    mov qword ptr [rsp + 24], -1
-    xor r12d, r12d
-.Ltp_anchor:
-    cmp r12, [rbx + AS_msgs + VEC_len]
-    jae .Ltp_walk
-    mov eax, [r14 + 20]
-    add eax, [r14 + 24]
-    cmp r13d, eax
-    jge .Ltp_walk
-    imul rdi, r12, AM_SIZE
-    add rdi, [rbx + AS_msgs + VEC_ptr]
-    mov [rsp + 8], rdi
-    mov esi, [r14 + 32]
-    call msg_height
-    add r13d, eax
-    mov rdi, [rsp + 8]
-    mov ecx, [rip + th_serial]
-    dec ecx                     # last frame's
-    cmp [rdi + AM_dser], ecx
-    jne 6f
-    cmp r13d, [r14 + 20]
-    jl 6f
-    mov [rsp + 24], r12
-    jmp .Ltp_walk
-6:  add r13d, [rip + g_pmt + 4*MI_8]
-    inc r12
-    jmp .Ltp_anchor
-.Ltp_walk:
-    mov r13d, [rsp + 32]
-    xor r12d, r12d
-.Ltp_row:
-    cmp r12, [rbx + AS_msgs + VEC_len]
-    jae .Ltp_end
-    mov eax, [r14 + 20]
-    add eax, [r14 + 24]
-    cmp r13d, eax
-    jge .Ltp_end
-    imul rdi, r12, AM_SIZE
-    add rdi, [rbx + AS_msgs + VEC_ptr]
-    mov [rsp + 8], rdi
-    mov esi, [r14 + 32]
-    call msg_height
-    mov [rsp], eax
-    add eax, r13d
-    cmp eax, [r14 + 20]
-    jl .Ltp_next                # above the view
-    mov rdi, [rsp + 8]
-    cmp dword ptr [rdi + AM_role], R_ASSIST
-    jne .Ltp_next
-    cmp qword ptr [rdi + AM_doc], 0
-    jne .Ltp_next
-    call msg_doc
-    inc dword ptr [rsp + 4]
-    mov rdi, [rsp + 8]
-    mov esi, [r14 + 32]
-    call msg_height
-    mov ecx, eax
-    sub ecx, [rsp]
-    mov [rsp], eax
-    add r15d, ecx
-    mov rax, [rsp + 24]
-    test rax, rax
-    js 7f
-    cmp r12, rax
-    jae .Ltp_next               # at or after the anchor: it grows downwards
-    jmp 8f
-7:  cmp r13d, [r14 + 20]
-    jge .Ltp_next
-8:  cmp dword ptr [rsp + 20], 0
-    jne 5f
-    cmp dword ptr [rip + th_follow], 0
-    jne .Ltp_next               # following: the end stays at the bottom
-5:  add [rip + th_scroll], ecx
-    sub r13d, ecx
-.Ltp_next:
-    add r13d, [rsp]
-    add r13d, [rip + g_pmt + 4*MI_8]
-    inc r12
-    jmp .Ltp_row
-.Ltp_end:
-    cmp dword ptr [rsp + 4], 0
-    je .Ltp_done
-    dec dword ptr [rsp + 16]
-    jnz .Ltp_pass
-.Ltp_done:
-    mov eax, r15d
-    EPILOGUE
-
 # wr_setup(WR*) using rbx = msg, r12d = width. Measuring (msg_height) and drawing (draw_msg) share it,
 # so a message wraps the same in both.
 wr_setup:
@@ -4673,8 +6617,10 @@ wr_setup:
     mov [rdi + WR_w], r12d
     mov rax, [rip + ag_fui]
     mov ecx, [rax + FACE_lineh]
-    cmp dword ptr [rbx + AM_role], R_RESULT
-    jb 1f                       # results, errors and notices are boxed
+    cmp dword ptr [rbx + AM_role], R_USER
+    je 1f
+    cmp dword ptr [rbx + AM_role], R_ASSIST
+    je 1f                       # results, errors and notices are boxed
     mov rax, [rip + ag_fsmall]
     mov ecx, [rax + FACE_lineh]
     mov edx, r12d               # a result's box insets its text
@@ -5220,72 +7166,22 @@ thread_draw:
     sub eax, [rsp + 28]
     sub eax, [rip + g_pmt + 4*MI_24]
     mov [rsp + 32], eax         # text width
-    # total height
-    xor r13d, r13d
-    xor r12d, r12d
-4:  cmp r12, [rbx + AS_msgs + VEC_len]
-    jae 5f
-    imul rdi, r12, AM_SIZE
-    add rdi, [rbx + AS_msgs + VEC_ptr]
+    # where the thread is this frame (th_layout: the anchor, the wheel, the rows in view measured)
+    mov eax, [rsp + 24]
+    mov [rip + th_areah], eax
+    call agentpop_shield        # the pointer over the popup is the popup's (drawn last, .Ltd_pop)
+    mov rdi, rbx
     mov esi, [rsp + 32]
-    call msg_height
-    add r13d, eax
-    add r13d, [rip + g_pmt + 4*MI_8]
-    inc r12
-    jmp 4b
-5:  mov rdi, rbx                # the messages that have not started, after the rows: counted too
+    call th_begin
+    mov rdi, rbx
+    lea rsi, [rsp]
+    call th_layout
+    mov eax, [rip + th_max]
+    mov [rsp + 36], eax         # max scroll
+    mov rdi, rbx                # the messages that have not started (th_layout counted them)
     call queued_sync
     mov [rsp + 164], eax
-    xor r12d, r12d
-51: cmp r12d, [rsp + 164]
-    jae 52f
-    imul rdi, r12, AM_SIZE
-    lea rax, [rip + qrows]
-    add rdi, rax
-    mov esi, [rsp + 32]
-    call msg_height
-    add r13d, eax
-    add r13d, [rip + g_pmt + 4*MI_8]
-    inc r12d
-    jmp 51b
-52: add r13d, [rip + g_pmt + 4*MI_32]
-    mov rdi, rbx                # replies coming into view: their Markdown, the rows kept in place
-    lea rsi, [rsp]
-    mov edx, r13d
-    call th_prepare
-    mov r13d, eax
-    mov [rip + th_content], r13d
-    call agentpop_shield        # the pointer over the popup is the popup's (drawn last, .Ltd_pop)
-    # scrolling / follow
     mov edi, [rsp]
-    mov esi, [rsp + 20]
-    mov edx, [rsp + 8]
-    mov ecx, [rsp + 24]
-    call ui_in
-    test eax, eax
-    jz 6f
-    mov eax, [rip + g_scroll_y]
-    test eax, eax
-    jz 6f
-    add [rip + th_scroll], eax
-    mov dword ptr [rip + th_follow], 0
-6:  mov eax, r13d
-    sub eax, [rsp + 24]
-    jns 61f
-    xor eax, eax
-61: mov [rsp + 36], eax         # max scroll
-    mov [rip + th_max], eax
-    cmp dword ptr [rip + th_follow], 0
-    je 62f
-    mov [rip + th_scroll], eax
-62: cmp [rip + th_scroll], eax
-    jl 63f
-    mov [rip + th_scroll], eax
-    mov dword ptr [rip + th_follow], 1
-63: cmp dword ptr [rip + th_scroll], 0
-    jge 64f
-    mov dword ptr [rip + th_scroll], 0
-64: mov edi, [rsp]
     mov esi, [rsp + 20]
     mov edx, [rsp + 8]
     mov ecx, [rsp + 24]
@@ -5303,52 +7199,92 @@ thread_draw:
     lea r8, [rip + .Lempty_thread]
     COLOR r9d, T_MUTED
     call ui_text_c
-65: # messages
+65: # the rows from the anchor's, while in view
     mov r13d, [rsp + 20]
-    add r13d, [rip + g_pmt + 4*MI_12]
-    sub r13d, [rip + th_scroll]
+    sub r13d, [rip + lay_off]
+    mov r12, [rip + lay_row]
+    mov [rip + th_first], r12d
+    mov dword ptr [rip + th_last], -1
+    test r12, r12
+    jns .Ltd_msg
     xor r12d, r12d
 .Ltd_msg:
     cmp r12, [rbx + AS_msgs + VEC_len]
-    jae .Ltd_queued
+    jae .Ltd_after
     mov eax, [rsp + 20]
     add eax, [rsp + 24]
     cmp r13d, eax
     jge .Ltd_msgs_done
-    imul r14, r12, AM_SIZE
-    add r14, [rbx + AS_msgs + VEC_ptr]
-.Ltd_row:
-    mov rdi, r14
-    mov esi, [rsp + 32]
-    call msg_height
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, [rsp + 32]
+    call row_exact
     mov r15d, eax
-    mov eax, r13d
-    add eax, r15d
-    cmp eax, [rsp + 20]
-    jl .Ltd_next
-    mov rdi, r14
+    test eax, eax
+    jz .Ltd_next                # a row of no height (a hidden call, a fold's row)
+    mov [rip + th_last], r12d
+    imul rdi, r12, AM_SIZE
+    add rdi, [rbx + AS_msgs + VEC_ptr]
     mov esi, r13d
     mov edx, r15d
     lea rcx, [rsp]
     call draw_msg
 .Ltd_next:
-    add r13d, r15d
-    add r13d, [rip + g_pmt + 4*MI_8]
+    mov edi, r15d
+    call gap_of
+    add r13d, eax
     inc r12
     jmp .Ltd_msg
-.Ltd_queued:                    # then the queued messages (queued_sync made them rows above)
-    mov rax, r12
-    sub rax, [rbx + AS_msgs + VEC_len]
-    cmp eax, [rsp + 164]
+.Ltd_after:                     # then the spinner, the task lines, the queued messages
+    mov rdi, rbx
+    call agspin_h
+    test eax, eax
+    jz 66f
+    mov [rsp + 48], eax
+    mov rdi, rbx
+    mov esi, [rsp]
+    add esi, [rsp + 28]
+    mov edx, r13d
+    mov ecx, [rsp + 32]
+    call agspin_draw
+    add r13d, [rsp + 48]
+66: mov rdi, rbx
+    mov esi, [rsp + 32]
+    call agtask_h
+    test eax, eax
+    jz 67f
+    mov [rsp + 48], eax
+    mov rdi, rbx
+    mov esi, [rsp]
+    add esi, [rsp + 28]
+    mov edx, r13d
+    mov ecx, [rsp + 32]
+    call agtask_draw
+    add r13d, [rsp + 48]
+67: xor r12d, r12d
+.Ltd_queued:                    # (queued_sync made them rows above)
+    cmp r12d, [rsp + 164]
     jae .Ltd_msgs_done
     mov ecx, [rsp + 20]
     add ecx, [rsp + 24]
     cmp r13d, ecx
     jge .Ltd_msgs_done
-    imul r14, rax, AM_SIZE
+    imul r14, r12, AM_SIZE
     lea rcx, [rip + qrows]
     add r14, rcx
-    jmp .Ltd_row
+    mov rdi, r14
+    mov esi, [rsp + 32]
+    call msg_height
+    mov r15d, eax
+    mov rdi, r14
+    mov esi, r13d
+    mov edx, r15d
+    lea rcx, [rsp]
+    call draw_msg
+    add r13d, r15d
+    add r13d, [rip + g_pmt + 4*MI_8]
+    inc r12d
+    jmp .Ltd_queued
 .Ltd_msgs_done:
     call gfx_clip_pop
     mov r8d, [rsp + 160]
@@ -5381,15 +7317,17 @@ thread_draw:
     mov ecx, eax
     mov r8d, [rsp + 16 + 24]
     lea r9, [rip + th_scroll]
+    mov eax, [rip + th_scroll]
+    mov [rsp + 16 + 52], eax
     call ui_scrollbar
     add rsp, 16
     cmp dword ptr [rip + g_active], ID_AG_TSCROLL
-    jne 7f
-    mov dword ptr [rip + th_follow], 0
+    je 71f
     mov eax, [rip + th_scroll]
-    cmp eax, [rsp + 36]
-    jl 7f
-    mov dword ptr [rip + th_follow], 1
+    cmp eax, [rsp + 52]
+    je 7f
+71: mov rdi, rbx                # the scrollbar moved the thread: the anchor is the row at its scroll
+    call th_reanchor
 7:  # jump-to-latest button when not following
     cmp dword ptr [rip + th_follow], 0
     jne .Ltd_pop
@@ -5419,6 +7357,7 @@ thread_draw:
     test eax, UB_CLICK
     jz .Ltd_pop
     mov dword ptr [rip + th_follow], 1
+    mov dword ptr [rip + th_arow], -1
     mov dword ptr [rip + g_dirty], 1
 .Ltd_pop:
     call agentpop_unshield      # the box's popup over the thread's bottom (agentpop.s: half of it, mostly)
@@ -5430,6 +7369,7 @@ thread_draw:
     call agentpop_draw
 .Ltd_ret:
     call reply_follow           # a link clicked in a reply, now that nothing drawn is in use
+    call agrow_follow           # and a typed row's click or key (agentrows.s)
     EPILOGUE
 
 # draw_msg(msg, y, h, frame*) ; frame: x at [0], w at [8], pad [28], text width [32]
@@ -5445,13 +7385,30 @@ draw_msg:
     mov [rbx + AM_dy], r12d
     mov eax, [rip + th_serial]
     mov [rbx + AM_dser], eax
-    test dword ptr [rbx + AM_flags], AMF_PILL
+    test dword ptr [rbx + AM_flags], AMF_QUEUED
+    jnz 0f                      # a queued row: not one of the conversation's (qrows)
+    cmp qword ptr [rbx + AM_x], 0
+    jne .Ldm_typed
+    mov eax, [rbx + AM_role]
+    cmp eax, R_THINK
+    je .Ldm_typed
+    cmp eax, R_META
+    je .Ldm_typed
+    cmp eax, R_COMPACT
+    je .Ldm_typed
+    cmp eax, R_UNKNOWN
+    je .Ldm_typed
+0:  test dword ptr [rbx + AM_flags], AMF_PILL
     jnz .Ldm_pill
     mov eax, [rbx + AM_role]
     cmp eax, R_TOOL
     je .Ldm_tool
     cmp eax, R_RESULT
-    jae .Ldm_result
+    je .Ldm_result
+    cmp eax, R_ERROR
+    je .Ldm_result
+    cmp eax, R_INFO
+    je .Ldm_result
     # user / assistant: label line + wrapped text
     cmp eax, R_USER
     jne 1f
@@ -5515,7 +7472,7 @@ draw_msg:
     jne 31f
     cmp qword ptr [rbx + AM_doc], 0
     jne .Ldm_md
-    mov dword ptr [rip + g_dirty], 1    # th_prepare parses it next frame; its plain text till then
+    mov dword ptr [rip + g_dirty], 1    # (row_exact parsed it: not reached for a row in view)
 31: lea rdi, [rsp]
     push r12
     push r12
@@ -5551,6 +7508,23 @@ draw_msg:
     mov [rsp + WR_bot], eax
     lea rdi, [rsp]
     call wrap
+    EPILOGUE
+.Ldm_typed:
+    # a typed row (a call with its parts, thinking, a meta line, a compaction marker, an unknown block):
+    #   agentrows.s draws it, by its index
+    mov rcx, [rip + th_as]
+    mov rax, rbx
+    sub rax, [rcx + AS_msgs + VEC_ptr]
+    xor edx, edx
+    mov ecx, AM_SIZE
+    div rcx
+    mov rdi, [rip + th_as]
+    mov rsi, rax
+    mov edx, r15d
+    mov ecx, r12d
+    mov r8d, [r14 + 32]
+    mov r9d, r13d
+    call agrow_draw
     EPILOGUE
 .Ldm_md:
     # a reply: its Markdown under the label, the part in view (as tall as msg_height measured it)
@@ -6357,9 +8331,35 @@ FN agents_row_dump
 2:  mov rdi, r15
     mov esi, '-'
     call sb_push_byte
-4:  mov rdi, r15
+4:  test r14d, r14d             # a parsed reply: its text's size, its code's (the editor's family at it)
+    jz 41f
+    mov rdi, r15
+    lea rsi, [rip + .Lrow_face]
+    call sb_push_cstr
+    mov rdi, r15
+    mov esi, [rbx + AM_dpx]
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lrow_code]
+    call sb_push_cstr
+    call agrow_code_face
+    mov rdi, r15
+    mov esi, [rax + FACE_px]
+    call sb_push_u64
+41: mov rdi, r15
     mov esi, 10
     call sb_push_byte
+    cmp qword ptr [rbx + AM_x], 0       # a typed row: its parts as drawn (agentrows.s)
+    jne 42f
+    mov eax, [rbx + AM_role]
+    cmp eax, R_THINK
+    je 42f
+    cmp eax, R_META
+    je 42f
+    cmp eax, R_COMPACT
+    je 42f
+    cmp eax, R_UNKNOWN
+    je 42f
     cmp dword ptr [rbx + AM_role], R_ASSIST
     jne 5f
     test r14d, r14d
@@ -6397,6 +8397,11 @@ FN agents_row_dump
     mov esi, 10
     call sb_push_byte
 9:  EPILOGUE
+42: mov rdi, r15
+    mov rsi, r13
+    mov rdx, r12
+    call agrow_row_dump
+    EPILOGUE
 
 # FN agents_test_append(ptr, len): TEXT ("\n" in it a line end) added to the last reply of the open
 #   conversation in place, as a streaming reply grows (agent-test-append)
@@ -6446,6 +8451,10 @@ FN agents_test_append
 4:  mov byte ptr [rdi], 0
     sub rdi, [rbx + AM_text]
     mov [rbx + AM_len], rdi
+    mov rsi, rdi
+    mov rdi, [rbx + AM_text]
+    call count_lf
+    mov [rbx + AM_nl], eax
     mov rdi, r13
     mov rsi, r12
     call agents_msg_changed
@@ -6462,11 +8471,21 @@ FN agents_test_append
 .Lr4: .asciz "result"
 .Lr5: .asciz "error"
 .Lr6: .asciz "info"
+.Lr7: .asciz "thinking"
+.Lr8: .asciz "meta"
+.Lr9: .asciz "compact"
+.Lr10: .asciz "unknown"
+.Lr_result: .asciz "result "
+.Lr_live: .asciz "live"
+.Lr_close: .asciz ") "
+.Lr_auto: .asciz " auto "
+.Lr_manual: .asciz " manual "
+.Lr_k: .asciz "k\n"
 .Lst_working: .asciz "  \302\267  working"
 .Lst_waiting: .asciz "  \302\267  waiting for you"
 .Lst_error: .asciz "  \302\267  error"
 .p2align 3
-role_names: .quad .Lr0, .Lr1, .Lr2, .Lr3, .Lr4, .Lr5, .Lr6
+role_names: .quad .Lr0, .Lr1, .Lr2, .Lr3, .Lr4, .Lr5, .Lr6, .Lr7, .Lr8, .Lr9, .Lr10
 ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lheader: .asciz "AGENTS"
 .Lnone: .asciz "No agent sessions for this project yet"
@@ -6511,6 +8530,8 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lrow_parses: .asciz " parses="
 .Lrow_muted: .asciz " muted="
 .Lrow_plain: .asciz "plain "
+.Lrow_face: .asciz " face="
+.Lrow_code: .asciz " code="
 .Lagent: .asciz "Agent"
 .Lempty: .asciz ""
 .Ltool: .asciz "tool"
@@ -6530,6 +8551,8 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lcustom_title: .asciz "custom-title"
 .LcustomTitle: .asciz "customTitle"
 .LisMeta: .asciz "isMeta"
+.Lsystem: .asciz "system"
+.Ltimestamp: .asciz "timestamp"
 .Lmark_stop: .asciz "[Request interrupted by user]"
 .Lmark_tool: .asciz "[Request interrupted by user for tool use]"
 .Linterrupted: .asciz "Interrupted"

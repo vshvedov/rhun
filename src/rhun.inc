@@ -2822,6 +2822,209 @@ ENDSTRUCT TM_SIZE
 .endif
 .endm
 
+# ---- a conversation's rows (agents.s; typed rows: agentrows.s) ----
+# AM: a row, by value in AS_msgs (a row's address changes when a row is added: keep indices)
+STRUCT
+F AM_role, 4            # R_*
+F AM_h, 4
+F AM_w, 4
+F AM_rev, 4             # its text's revision: agents_msg_changed counts the changes
+F AM_text, 8
+F AM_len, 8
+F AM_name, 8
+F AM_doc, 8             # a reply's Markdown (md_new), parsed when it is first measured exactly, or 0
+F AM_drev, 4            # the revision AM_doc was parsed from
+F AM_dpx, 4             # the text size AM_doc was given (md_set_size)
+F AM_hrev, 4            # what AM_h was measured for, beside AM_w: the revision, the text size,
+F AM_hpx, 4             #   g_face_gen and whether its document gave it (1) or its plain text (0)
+F AM_hgen, 4
+F AM_hdoc, 4
+F AM_dx, 4              # where it was drawn last (its text's left, its top on screen), in which
+F AM_dy, 4              #   frame of the conversation (th_serial)
+F AM_dser, 4
+F AM_flags, 4           # AMF_*
+F AM_qid, 8             # a queued row's message (agent_queued): a held one's uuid's first 8 bytes, a
+                        #   waiting prompt's serial; 0 none
+F AM_mute, 8            # as drawn last: the byte its text is muted from (a prompt's truncation marker), -1
+F AM_x, 8               # AT* of a typed tool row, or 0 (a simple row: drawn as before phase 3)
+F AM_t, 8               # unix milliseconds of its record, 0 unknown
+F AM_nl, 4              # line feeds in AM_text (kept by add_msg, agents_msg_append, agents_msg_set)
+F AM_turn, 4            # the index of its turn's prompt row, -1
+F AM_fold, 4            # focus view: its fold in AS_folds, -1 not foldable
+F AM_ms, 4              # thinking: how long, milliseconds, -1 unknown
+F AM_n, 4               # thinking: the live token estimate; a compaction marker: thousands of tokens freed
+F AM_hag, 4             # the view's generation (ag_gen) AM_h was measured for
+ENDSTRUCT AM_SIZE
+.equ R_USER, 1                  # AM_role (role_names in agents.s by the same numbers)
+.equ R_ASSIST, 2
+.equ R_TOOL, 3
+.equ R_RESULT, 4
+.equ R_ERROR, 5                 # extension sessions (agentext.s): an error and a notice, drawn as results
+.equ R_INFO, 6
+.equ R_THINK, 7
+.equ R_META, 8
+.equ R_COMPACT, 9
+.equ R_UNKNOWN, 10
+.equ AMF_PILL, 1                # a centred one-line pill ("Switched to NAME")
+.equ AMF_QUEUED, 2              # a message that has not started yet: after the thread, muted, "queued"
+.equ AMF_EST, 4                 # AM_h is an estimate
+.equ AMF_LIVE, 8                # still streaming
+.equ AMF_DAY, 16                # a day pill above it
+.equ AMF_OPEN, 32               # a compaction marker or a prompt shown whole
+.equ AMF_FAILED, 64             # a reply the agent marked failed
+.equ AMF_NOTICE, 128            # a wrapped notice: hidden in focus view
+.equ AMF_MANUAL, 256            # a compaction asked for
+.equ AMF_ECHO, 512              # a slash command's echo
+.equ AMF_CHIPS, 1024            # AM_name holds its chips, LF between them
+# HX: the sums of 64 rows (AS_hx; agents.s keeps them)
+STRUCT
+F HX_sum, 4             # its rows' heights and gaps, for the key (HXF_ROWS), else from the aggregates
+F HX_fix, 4             # the pixels of its rows that do not depend on the width (gaps included)
+F HX_lines, 4           # of those that do: their lines (AM_nl + 1) and bytes, summed
+F HX_bytes, 4
+F HX_flags, 4           # HXF_*
+F HX_pad, 4
+ENDSTRUCT HX_SIZE
+.equ HXF_ROWS, 1                # HX_sum is its rows' own heights
+.equ HXF_AGG, 2                 # the aggregates are valid for the text size and ag_gen
+.equ HX_SHIFT, 6                # 64 rows a chunk
+# AC: a call of AS_calls (open addressing, a power of two slots, doubled at half full)
+STRUCT
+F AC_hash, 8            # hash_line of the call's id; 0 empty, 1 deleted
+F AC_at, 8              # AT*
+ENDSTRUCT AC_SIZE
+# ATI: a todo item of a call
+STRUCT
+F ATI_text, 8           # owned cstr
+F ATI_state, 4          # TODO_*
+F ATI_pad, 4
+ENDSTRUCT ATI_SIZE
+.equ TODO_PENDING, 0
+.equ TODO_ACTIVE, 1
+.equ TODO_DONE, 2
+# AF: a fold of focus view (AS_folds, agentfold.s)
+STRUCT
+F AF_first, 4           # rows
+F AF_last, 4
+F AF_calls, 4
+F AF_failed, 4
+F AF_thinks, 4
+F AF_other, 4
+F AF_ms, 4              # its thinking's milliseconds, -1 when one is unknown
+F AF_flags, 4           # AFF_*
+ENDSTRUCT AF_SIZE
+.equ AFF_OPEN, 1
+# AT: a tool call (mem_alloc'd, never moved; owned by its row's AM_x or by its parent's AT_kids). A driver or
+#   a reader fills its neutral parts through agrow_* (agentrows.s); the renderer draws the parts that are set
+#   and never looks at a tool's name
+STRUCT
+F AT_id, 8              # owned cstr
+F AT_up, 8              # AT* it ran under, 0
+F AT_row, 4             # its top-level row
+F AT_state, 4           # ATS_*
+F AT_flags, 4           # ATF_*
+F AT_depth, 4
+F AT_name, 8            # owned cstrs or 0: at most 400 bytes each, cut for showing only
+F AT_second, 8
+F AT_tail, 8
+F AT_desc, 8
+F AT_note, 8
+F AT_find, 8
+F AT_title, 8
+F AT_link, 8            # owned cstr or 0: at most AT_LINK_MAX bytes, never cut (a longer target is no link)
+F AT_aux, 8             # owned cstr or 0: the mapper's own (a subagent's id)
+F AT_l0, 4              # the lines a file link opens at, 1-based, 0 none
+F AT_l1, 4
+F AT_in, SB_SIZE        # what is kept: a preview, or what streamed
+F AT_out, SB_SIZE
+F AT_a, SB_SIZE
+F AT_b, SB_SIZE
+F AT_size, 8 * 4        # each part's whole bytes, by ATX_IN..ATX_B
+F AT_lines, 4 * 4       # and its lines
+F AT_file, 8            # owned path of the file its records are in, 0 the session's
+F AT_uoff, 8            # the call's line there, -1 none
+F AT_ulen, 8
+F AT_roff, 8            # its result's line
+F AT_rlen, 8
+F AT_items, VEC_SIZE    # ATI
+F AT_kids, VEC_SIZE     # AT*
+F AT_nkids, 4           # the count its result gave, -1 unknown
+F AT_big, 4             # a bit per text part (1 << (ATX - ATX_IN)): longer than 250 UTF-16 units or than 3
+                        #   lines (the extension's V7): a button that opens it in a tab
+F AT_t0, 8              # time_ms it was made live, 0 from a file
+F AT_diff, 8            # agentdiff.s's record, or 0
+F AT_h, 4               # the layout cached for a width; -1 none
+F AT_w, 4
+F AT_rev, 4
+F AT_pad, 4
+ENDSTRUCT AT_SIZE
+.equ ATS_RUNNING, 0
+.equ ATS_OK, 1
+.equ ATS_FAILED, 2
+.equ ATS_DENIED, 3
+.equ ATS_STOPPED, 4
+.equ ATF_HIDDEN, 1              # no row at all
+.equ ATF_SHELL, 2               # IN is a command: a Copy button
+.equ ATF_PRE, 4                 # AT_b is a file's text under the note
+.equ ATF_DIFF, 8                # AT_a to AT_b is a diff
+.equ ATF_WAIT, 16               # no result yet
+.equ ATF_BG, 32                 # runs in the background
+.equ ATF_CANBG, 64              # may be sent there while it runs
+.equ ATF_KIDS, 128              # its children are listed
+.equ ATF_MD, 256                # IN is Markdown: its tab is a Markdown tab
+.equ ATF_PARENT, 512            # may get children: stays in AS_calls
+.equ ATF_LOADED, 1024           # its children were read from their file
+.equ AT_PREVIEW, 600            # a row from a file keeps of IN and OUT: bytes, lines
+.equ AT_PREVIEW_LINES, 6
+.equ AT_SIDE, 2048              # of a diff's sides and a file's text
+.equ AT_SIDE_LINES, 12
+.equ AT_LIVE_MAX, 16384         # a streamed part keeps
+.equ AT_REREAD_MAX, 16777216    # a line read again at most
+.equ AT_LINK_MAX, 4000
+.equ AT_ITEMS_MAX, 200
+.equ AT_KIDS_MAX, 1000
+.equ AT_DEPTH_MAX, 8
+.equ AT_SHORT_MAX, 400          # the other text parts are cut here (for showing only)
+.equ ATX_NAME, 0                # agrow_set's which
+.equ ATX_SECOND, 1
+.equ ATX_LINK, 2
+.equ ATX_TAIL, 3
+.equ ATX_DESC, 4
+.equ ATX_NOTE, 5
+.equ ATX_FIND, 6
+.equ ATX_TITLE, 7
+.equ ATX_AUX, 8
+.equ ATX_IN, 9
+.equ ATX_OUT, 10
+.equ ATX_A, 11
+.equ ATX_B, 12
+.equ ATV_STATE, 0               # agrow_num's which
+.equ ATV_SET, 1                 # flags on
+.equ ATV_CLEAR, 2               # flags off
+.equ ATV_L0, 3
+.equ ATV_L1, 4
+.equ ATV_NKIDS, 5
+.equ ID_AG_PART, 0x600000       # + (slot << 6) + part: a typed row's buttons (slot 0..255 from agrow_slot)
+.equ PART_LINK, 1
+.equ PART_IN, 2
+.equ PART_OUT, 3
+.equ PART_PRE, 4
+.equ PART_DIFF, 5
+.equ PART_NOTE, 6
+.equ PART_TOGGLE, 7
+.equ PART_COPY, 8
+.equ PART_KIDS, 9
+.equ PART_MORE, 10
+.equ PART_STOP, 11
+.equ PART_BG, 12
+.equ PART_CHIP, 16              # + n, n < 16
+.equ PART_ERR, 32               # + n, n < 8
+.equ ING_FILE, 0                # the reader's flags (agent_ingest): a line of the file
+.equ ING_LIVE, 1                # the stream's record: the driver made the reply text rows and the user's
+                                #   own prompts itself
+.equ AGK_STOP, 1                # DRV_task's what
+.equ AGK_BG, 2
+
 # ---- agent session metadata and transcript state ----
 STRUCT
 F AS_path, 8
@@ -2863,6 +3066,23 @@ F AS_from, 8            # kind 5: the FROM of that request
 F AS_ask, 8             # D4: the open card (an AXK record, agentext.s), or 0
 F AS_live, 8            # the live record of a session rhun drives (AL*, agent_drv.s), or 0
 F AS_draft, 8           # owned cstr: the box's text while the box belongs to another session, or 0
+# phase 3: the thread's engine (agents.s) and the typed rows (agentrows.s); AS_todo, AS_sticky and AS_day
+#   start at -1 when the first row is added
+F AS_hx, VEC_SIZE       # HX per 64 rows
+F AS_hkey, 16           # what the sums are for: width 4, text pixels 4, the faces (agents.s face_key) 4, ag_gen 4
+F AS_calls, 8           # the calls by id: AC slots (mem_alloc'd), a power of two of them, or 0
+F AS_ncalls, 4          # entries in use (deleted ones not counted)
+F AS_ccap, 4            # slots
+F AS_wait, VEC_SIZE     # AT*: the calls of the turn being read or run that wait for a result
+F AS_folds, VEC_SIZE    # AF
+F AS_todo, 4            # the latest row whose call has todo items, -1
+F AS_sticky, 4          # the turn row pinned in the last frame, -1
+F AS_now, 8             # unix ms of the record being read: the rows added next get it (agents_stamp); 0 none
+F AS_day, 8             # the local day of the last stamped row, -1 none yet
+F AS_line, 8            # where the line being read is in the session's file (session_update sets them
+F AS_linelen, 8         #   before ingest_line); a length of 0: no place (the stream feeds it)
+F AS_tasks, VEC_SIZE    # AK (agenttask.s, task 11)
+F AS_rdata, 8           # the reader's own for this conversation (one mem_alloc'd block, freed when the rows go)
 ENDSTRUCT AS_SIZE
 .equ AG_CLAUDE, 1               # AS_kind of the built-in sources (AS_KIND_EXT 5: an extension's)
 .equ AG_CODEX, 2
@@ -3002,6 +3222,8 @@ F AL_dpend, 32          #   refusal puts it back); cstr, a mode picked while its
 F AL_dpicks, 288        #   4 x {request number 8, cstr 64}: models asked of the running program, each
                         #   kept and named once its own answer says it applied;
 F AL_dwait, 8           #   time_ms the prompts held for its first settings answer go anyway
+F AL_dseen, 8           # the driver's own (one mem_alloc'd block, freed with the live record): Claude's
+                        #   table of the record uuids the stream gave
 ENDSTRUCT AL_SIZE
 .equ TE_DONE, 0                 # ev_turn_end's reasons
 .equ TE_ERROR, 1
@@ -3090,6 +3312,11 @@ F DRV_menu, 8           # (AS* or 0, APM** out) -> eax n: the command menu's act
 F DRV_hint, 8           # cstr: the box's placeholder until the window's first Send of this driver, or 0
 F DRV_ended, 8          # (AL*): the record went OFF or FAILED (agent_state_set): what the driver kept for
                         #   a start or a run of its program goes (a Stop, a failed start, a dead process)
+F DRV_brand, 8          # its colour, 0xAARRGGBB, 0 none
+F DRV_verbs, 8          # cstr*, 0-ended: its spinner verbs; 0: its sessions have no spinner line
+F DRV_tips, 8           # cstr*, 0-ended: the empty conversation's tips, or 0
+F DRV_task, 8           # (AL*, esi AGK_*, rdx id cstr) -> eax 1 asked: stop a task, send a running call to
+                        #   the background
 ENDSTRUCT DRV_SIZE
 # AMD: a permission mode (a driver's static table)
 STRUCT
@@ -3179,7 +3406,8 @@ ENDSTRUCT ACH_SIZE
 .equ ACT_HELP, 14
 .equ ACT_UNAVAILABLE, 15
 .equ ACT_ULTRA, 16
-.equ ACT_COUNT, 17
+.equ ACT_FOCUSVIEW, 17          # focus view (agentfold.s, task 9)
+.equ ACT_COUNT, 18
 STRUCT
 F AGC_kind, 4           # the driver kind (AS_kind)
 F AGC_flags, 4          # AGCF_*

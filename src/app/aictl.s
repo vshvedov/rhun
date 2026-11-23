@@ -8,6 +8,7 @@
 args_p: .quad 0
 args_n: .quad 0
 outsb: .quad 0
+tr_text: .zero SB_SIZE          # agent-test-row's and agent-test-tool's texts, unescaped
 
 .text
 
@@ -698,6 +699,313 @@ c_agent_test_append:
     mov rsi, rdx
     call agents_test_append
     xor eax, eax
+    EPILOGUE
+
+# print-agent-thread: the open conversation's engine as the last frame left it (agents_thread_dump)
+c_print_agent_thread:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agents_thread_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-test-view: as a setting that changes heights (agents_view_changed)
+c_agent_test_view:
+    PROLOGUE
+    call ai_set
+    call agents_view_changed
+    xor eax, eax
+    EPILOGUE
+
+# ai_unescape(ptr, len, sb): the text with "\n" a line feed, "\t" a tab, "\r" a carriage return, "\e" an
+#   escape, "\a" a bell, "\xHH" that byte and "\\" a backslash, into sb (cleared)
+ai_unescape:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    mov rbx, rdx
+    mov rdi, rbx
+    call sb_clear
+    xor r14d, r14d
+1:  cmp r14, r13
+    jae 9f
+    movzx esi, byte ptr [r12 + r14]
+    inc r14
+    cmp esi, '\\'
+    jne 3f
+    cmp r14, r13
+    jae 3f
+    movzx eax, byte ptr [r12 + r14]
+    cmp eax, 'n'
+    jne 21f
+    mov esi, 10
+    jmp 2f
+21: cmp eax, 't'
+    jne 22f
+    mov esi, 9
+    jmp 2f
+22: cmp eax, 'r'
+    jne 23f
+    mov esi, 13
+    jmp 2f
+23: cmp eax, 'e'
+    jne 24f
+    mov esi, 27
+    jmp 2f
+24: cmp eax, 'a'
+    jne 25f
+    mov esi, 7
+    jmp 2f
+25: cmp eax, 'x'
+    jne 26f
+    lea rax, [r14 + 3]
+    cmp rax, r13
+    ja 3f
+    movzx edi, byte ptr [r12 + r14 + 1]
+    call hex_val
+    mov r15d, eax
+    movzx edi, byte ptr [r12 + r14 + 2]
+    call hex_val
+    test eax, eax
+    js 3f
+    test r15d, r15d
+    js 3f
+    shl r15d, 4
+    or eax, r15d
+    mov esi, eax
+    add r14, 2
+    jmp 2f
+26: cmp eax, '\\'
+    jne 3f
+2:  inc r14
+3:  mov rdi, rbx
+    call sb_push_byte
+    jmp 1b
+9:  EPILOGUE
+
+# hex_val(byte) -> eax its value as a hex digit, -1
+hex_val:
+    lea eax, [rdi - '0']
+    cmp eax, 9
+    jbe 9f
+    mov eax, edi
+    or eax, 0x20
+    sub eax, 'a'
+    cmp eax, 5
+    ja 8f
+    add eax, 10
+9:  ret
+8:  mov eax, -1
+    ret
+
+# ai_opt(word ptr, len, names table) -> eax the index of its name in the table ("NAME=" it begins with), -1
+#   none; rdx the value's start, rcx its length
+ai_opt:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    mov r14, rdx
+    xor ebx, ebx
+1:  mov r15, [r14 + rbx*8]
+    test r15, r15
+    jz 8f
+    mov rdi, r15
+    call strlen
+    mov rcx, rax
+    lea rax, [rcx + 1]
+    cmp r13, rax
+    jb 2f
+    cmp byte ptr [r12 + rcx], '='
+    jne 2f
+    push rcx
+    push rcx
+    mov rdi, r12
+    mov rsi, r15
+    mov rdx, rcx
+    call memeq
+    pop rcx
+    pop rcx
+    test eax, eax
+    jz 2f
+    lea rdx, [r12 + rcx + 1]
+    mov rax, r13
+    sub rax, rcx
+    dec rax
+    mov rcx, rax
+    mov eax, ebx
+    EPILOGUE
+2:  inc ebx
+    jmp 1b
+8:  mov eax, -1
+    EPILOGUE
+
+# agent-test-row thinking|meta|compact|unknown|user|agent [OPT=V...] TEXT [OPT=V...]: a row of that kind at
+#   the end of the open conversation ("\n", "\t" in TEXT), as a reader would make it; the options, before or
+#   after the text: ms=N (thinking's time), live=1 (still streaming), t=UNIXMS (its time), notice=1 (a wrapped
+#   notice), echo=1 (a slash command's echo), n=N (a compaction's thousands of tokens freed), manual=1 (a
+#   compaction asked for)
+c_agent_test_row:
+    PROLOGUE 80
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 8f
+    mov [rsp], rax
+    call ai_arg
+    test rdx, rdx
+    jz 8f
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + row_kinds]
+    call ai_opt_word
+    test eax, eax
+    js 8f
+    lea rcx, [rip + row_roles]
+    mov eax, [rcx + rax*4]
+    mov [rsp + 8], eax          # the role
+    mov dword ptr [rsp + 12], -1    # ms
+    mov qword ptr [rsp + 16], 0     # flags
+    mov qword ptr [rsp + 24], 0     # t
+    mov qword ptr [rsp + 32], 0     # n
+    call ai_arg_rest
+    mov rdi, rax
+    mov rsi, rdx
+    call trim
+    mov r12, rax                # what is left
+    mov r13, rdx
+1:  mov rdi, r12                # the options before the text
+    mov rsi, r13
+    call next_word
+    mov [rsp + 40], rcx
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rsp]
+    call row_opt
+    test eax, eax
+    jz 2f
+    add r12, [rsp + 40]
+    sub r13, [rsp + 40]
+    jmp 1b
+2:  mov rdi, r12                # and after it
+    mov rsi, r13
+    call trim
+    mov r12, rax
+    mov r13, rdx
+    test r13, r13
+    jz 4f
+    mov rcx, r13
+3:  dec rcx
+    js 31f
+    cmp byte ptr [r12 + rcx], ' '
+    jne 3b
+31: inc rcx                     # the last word's start
+    mov [rsp + 40], rcx
+    lea rdi, [r12 + rcx]
+    mov rsi, r13
+    sub rsi, rcx
+    lea rdx, [rsp]
+    call row_opt
+    test eax, eax
+    jz 4f
+    mov r13, [rsp + 40]
+    jmp 2b
+4:  mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + tr_text]
+    call ai_unescape
+    mov rbx, [rsp]
+    mov rdi, rbx
+    mov rsi, [rsp + 24]
+    call agents_stamp
+    mov rdi, rbx
+    mov esi, [rsp + 8]
+    mov rdx, [rip + tr_text + SB_ptr]
+    test rdx, rdx
+    jnz 41f
+    lea rdx, [rip + .Lempty_str]
+41: mov rcx, [rip + tr_text + SB_len]
+    xor r8d, r8d
+    call agents_msg_add
+    mov r14, rax
+    mov rdi, rbx
+    xor esi, esi
+    call agents_stamp
+    test r14, r14
+    js 8f
+    imul rax, r14, AM_SIZE
+    add rax, [rbx + AS_msgs + VEC_ptr]
+    mov ecx, [rsp + 12]
+    mov [rax + AM_ms], ecx
+    mov ecx, [rsp + 16]
+    or [rax + AM_flags], ecx
+    mov ecx, [rsp + 32]
+    mov [rax + AM_n], ecx
+    mov rdi, rbx
+    mov rsi, r14
+    call agents_msg_changed
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# ai_opt_word(ptr, len, cstr table) -> eax the index of the word in the table, -1
+ai_opt_word:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    mov r14, rdx
+    xor ebx, ebx
+1:  mov rdx, [r14 + rbx*8]
+    test rdx, rdx
+    jz 8f
+    mov rdi, r12
+    mov rsi, r13
+    call str_eq_cstr
+    test eax, eax
+    jnz 9f
+    inc ebx
+    jmp 1b
+8:  mov ebx, -1
+9:  mov eax, ebx
+    EPILOGUE
+
+# row_opt(word ptr, len, frame*) -> eax 1 when the word was one of agent-test-row's options (kept in the
+#   frame: [12] ms, [16] flags, [24] t, [32] n)
+row_opt:
+    PROLOGUE
+    mov rbx, rdx
+    test rsi, rsi
+    jz 8f
+    lea rdx, [rip + row_opts]
+    call ai_opt
+    test eax, eax
+    js 8f
+    mov r12d, eax
+    mov rdi, rdx
+    mov rsi, rcx
+    call parse_u64
+    cmp r12d, 0
+    jne 1f
+    mov [rbx + 12], eax         # ms
+    jmp 9f
+1:  cmp r12d, 2
+    jne 2f
+    mov [rbx + 24], rax         # t
+    jmp 9f
+2:  cmp r12d, 5
+    jne 3f
+    mov [rbx + 32], eax         # n
+    jmp 9f
+3:  test rax, rax               # a flag word: on when not 0
+    jz 9f
+    lea rcx, [rip + row_flags]
+    mov eax, [rcx + r12*4]
+    or [rbx + 16], eax
+9:  mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
     EPILOGUE
 
 # box_kind() -> eax the built-in driver kind the box belongs to: the open conversation's, else the new
@@ -1415,6 +1723,23 @@ c_agent_card_uncomment:
 .Lc_print_agent_composer: .asciz "print-agent-composer"
 .Lc_print_sh_quote: .asciz "print-sh-quote"
 .Lc_agent_test_append: .asciz "agent-test-append"
+.Lc_print_agent_thread: .asciz "print-agent-thread"
+.Lc_agent_test_row: .asciz "agent-test-row"
+.Lc_agent_test_view: .asciz "agent-test-view"
+.Lk_thinking: .asciz "thinking"
+.Lk_meta: .asciz "meta"
+.Lk_compact: .asciz "compact"
+.Lk_unknown: .asciz "unknown"
+.Lk_user: .asciz "user"
+.Lk_agent: .asciz "agent"
+.Lo_ms: .asciz "ms"
+.Lo_live: .asciz "live"
+.Lo_t: .asciz "t"
+.Lo_notice: .asciz "notice"
+.Lo_echo: .asciz "echo"
+.Lo_n: .asciz "n"
+.Lo_manual: .asciz "manual"
+.Lempty_str: .asciz ""
 .Lc_agents_source: .asciz "agents-source"
 .Lc_agent_new: .asciz "agent-new"
 .Lc_agent_prompt: .asciz "agent-prompt"
@@ -1473,6 +1798,9 @@ ai_ctl:
     .quad .Lc_wait_agent, c_wait_agent, .Lc_print_agent_live, c_print_agent_live
     .quad .Lc_agent_timing, c_agent_timing
     .quad .Lc_print_agent_row, c_print_agent_row, .Lc_agent_test_append, c_agent_test_append
+    # the thread's engine and rows (agents.s, agentrows.s: phase 3)
+    .quad .Lc_print_agent_thread, c_print_agent_thread, .Lc_agent_test_row, c_agent_test_row
+    .quad .Lc_agent_test_view, c_agent_test_view
     .quad .Lc_print_agents_metrics, c_print_agents_metrics, .Lc_print_agents_box, c_print_agents_box
     .quad .Lc_print_agent_placeholder, c_print_agent_placeholder, .Lc_print_sh_quote, c_print_sh_quote
     .quad .Lc_print_holder, c_print_holder
@@ -1522,6 +1850,10 @@ cfg_fields:                     # agent-cfg-set's words: the word, the AGF_*, wh
     .long AGF_THINK, 1
     .quad 0, 0
 holder_names: .quad .Lh_none, .Lh_other, .Lh_unknown
+row_kinds: .quad .Lk_thinking, .Lk_meta, .Lk_compact, .Lk_unknown, .Lk_user, .Lk_agent, 0
+row_roles: .long R_THINK, R_META, R_COMPACT, R_UNKNOWN, R_USER, R_ASSIST
+row_opts: .quad .Lo_ms, .Lo_live, .Lo_t, .Lo_notice, .Lo_echo, .Lo_n, .Lo_manual, 0
+row_flags: .long 0, AMF_LIVE, 0, AMF_NOTICE, AMF_ECHO, 0, AMF_MANUAL
 band_words: .quad .Lb_error, .Lb_settings, .Lb_auth, .Lb_rate, .Lb_notice
 live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_conn_kill_ms

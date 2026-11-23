@@ -78,12 +78,6 @@
 #   g_drv_idle_ms (0: [agents] idle_stop_minutes), g_drv_hold_ms: agent-timing's overrides
 .include "rhun.inc"
 
-.equ R_USER, 1                  # the roles of agents.s's messages
-.equ R_ASSIST, 2
-.equ R_TOOL, 3
-.equ R_RESULT, 4
-.equ R_ERROR, 5
-.equ R_INFO, 6
 .equ ENV_TICK_MS, 50            # a start waiting for the login environment looks again this often
 .equ HOLD_MS, 10000             # how long a start waits for another holder of the conversation
 .equ SEND_CHARS, 50000        # a prompt's characters at most (the extension's limit), in UTF-16 units
@@ -3267,6 +3261,47 @@ ext_held:
     mov eax, HOLDER_NONE
     ret
 
+# FN agent_ingest(AS*, record jv, ING_*) -> eax 1 taken: a record of a conversation (a line of its file, or a
+#   record of the stream) given to its kind's reader (readers: no driver needed, so it works with the chat off
+#   and in a remote window); 0: the kind has no reader or it left the record to the caller
+FN agent_ingest
+    push rbx
+    mov rbx, rsi
+    mov eax, [rdi + AS_kind]
+    push rdi
+    push rdx
+    mov edi, eax
+    xor esi, esi
+    call agent_reader
+    pop rdx
+    pop rdi
+    test rax, rax
+    jz 9f
+    mov rsi, rbx
+    call rax
+    jmp 8f
+9:  xor eax, eax
+8:  pop rbx
+    ret
+
+# FN agent_reader(kind, n) -> rax the kind's n-th reader function (0 ingest, 1 a part's whole text, 2 a
+#   call's children) or 0
+FN agent_reader
+    lea rax, [rip + readers]
+1:  mov rcx, [rax]
+    test rcx, rcx
+    jz 8f
+    cmp ecx, edi
+    je 2f
+    add rax, 32
+    jmp 1b
+2:  cmp esi, 2
+    ja 8f
+    mov rax, [rax + 8 + rsi*8]
+    ret
+8:  xor eax, eax
+    ret
+
 # ext_auth(AS*, again) -> eax AUTH_IN: the extension signs its agent in itself
 ext_auth:
     mov eax, AUTH_IN
@@ -3287,6 +3322,15 @@ ext_drv:
     .quad ext_none              # DRV_menu: no command menu (agentpop.s)
     .quad 0                     # DRV_hint: the box's own placeholder
     .quad ext_none              # DRV_ended: it keeps nothing per start
+    .quad 0                     # DRV_brand: no colour of its own
+    .quad 0                     # DRV_verbs: no spinner line
+    .quad 0                     # DRV_tips
+    .quad ext_none              # DRV_task: no tasks
+# the readers of the kinds that have one, by AS_kind: {kind, ingest, text, kids}, then 0 (agent_ingest,
+#   agent_reader; the one place above the drivers that names a kind's reader)
+readers:
+    .quad AG_CLAUDE, claude_ingest, claude_text, claude_kids
+    .quad 0
 kind_names: .quad .Lk_claude, .Lk_codex, .Lk_grok, .Lk_opencode
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 state_names: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed

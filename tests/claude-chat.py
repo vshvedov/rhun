@@ -427,7 +427,7 @@ class SeamTest(ChatCase):
 
 
 MOD = 'cmd' if sys.platform == 'darwin' else 'ctrl'
-ROLES = ('user', 'agent', 'tool', 'result', 'error', 'info')
+ROLES = ('user', 'agent', 'tool', 'result', 'error', 'info', 'thinking', 'meta', 'compact', 'unknown')
 PINNED = ['--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json',
           '--include-partial-messages', '--permission-prompt-tool=stdio', '--replay-user-messages',
           '--setting-sources=user,project,local', '--max-thinking-tokens=31999']

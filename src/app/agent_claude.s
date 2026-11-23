@@ -54,8 +54,6 @@
 .equ OA_PLAN_MODE, 10           # plan review: set_permission_mode auto before a plan's Yes (claude_plan_mode_answer)
 .equ OA_GET_PLAN, 11            # plan review: get_plan for /plan (claude_plan_answer)
 .equ QUESTION_OPTS, 16          # a question's card shows its first 16 options
-.equ R_ASSIST, 2                # the roles of agents.s's messages
-.equ R_INFO, 6
 .equ AUTH_MS, 10000             # the sign-in question's answer is waited for this long
 .equ AUTH_MAX, 65536            # bytes of its answer kept
 .equ AU_UNKNOWN, 0              # a profile's answer: not asked (or to be asked again)
@@ -3439,6 +3437,12 @@ err_tail:
     call sb_push_byte
 9:  EPILOGUE
 
+# cl_task(AL*, AGK_*, id cstr) -> eax 0: DRV_task; nothing is asked yet (phase 3 task 11 sends stop_task and
+#   the background request)
+cl_task:
+    xor eax, eax
+    ret
+
 .section .rodata
 .p2align 3
 .globl claude_drv
@@ -3450,6 +3454,10 @@ claude_drv:
     .quad claude_menu
     .quad .Lhint                # DRV_hint
     .quad claude_ended          # DRV_ended (claude_session.s)
+    .quad 0xffd97757            # DRV_brand: Claude's own colour (the running dot)
+    .quad 0                     # DRV_verbs (phase 3 task 5)
+    .quad 0                     # DRV_tips (phase 3 task 8)
+    .quad cl_task               # DRV_task (phase 3 task 11)
 cl_types:
     .quad .Lv_stream_event, h_stream, .Lv_assistant, h_assistant, .Lv_system, h_system
     .quad .Lv_result, h_result, .Lv_control_request, h_request, .Lv_control_response, h_response

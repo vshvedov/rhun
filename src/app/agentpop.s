@@ -36,7 +36,6 @@
 #   agentpop_dump(sb)                   print-agent-menu; agentpop_fit_dump(sb) its layout at every size
 .include "rhun.inc"
 
-.equ R_INFO, 6                  # agents.s's info row
 .equ ROWS_IDS, 0x3fd            # rows with a button id of their own (later ones share the last)
 .equ ID_TRACK, 0x3fe            # ID_AGPOP + : the effort row's track
 .equ AT_MAX, 64                 # rows whose drawn place print-agent-menu names

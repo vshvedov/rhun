@@ -765,7 +765,8 @@ held_take:
     mov rdx, r14
     EPILOGUE
 
-# FN agent_queued(AS* or 0, i) -> rax ptr, rdx len of its i-th message that has not started (those that
+# FN agent_queued(AS* or 0, i) -> rax ptr, rdx len, rcx the first 8 bytes of its uuid (a held one's; 0 for
+#   a prompt waiting for a start) of its i-th message that has not started (those that
 #   wait for a start first, then those held), or rax 0 past the last: what agents.s draws queued
 FN agent_queued
     PROLOGUE
@@ -794,6 +795,7 @@ FN agent_queued
     call strlen
     mov rdx, rax
     mov rax, r14
+    xor ecx, ecx
     EPILOGUE
 3:  xor eax, eax
     cmp r12, [rbx + AL_held + VEC_len]
@@ -802,6 +804,7 @@ FN agent_queued
     add rcx, [rbx + AL_held + VEC_ptr]
     mov rax, [rcx + AH_text]
     mov rdx, [rcx + AH_len]
+    mov rcx, [rcx + AH_uuid]    # the start of its uuid: which message it is (queued_sync)
 9:  EPILOGUE
 
 # user_row(): agent_send's prompt (rbx AS, r12 ptr, r13 len) as the user's row, shown at once

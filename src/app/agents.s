@@ -20,6 +20,8 @@ F AM_dx, 4              # where it was drawn last (its text's left, its top on s
 F AM_dy, 4              #   frame of the conversation (th_serial)
 F AM_dser, 4
 F AM_flags, 4           # AMF_*
+F AM_qid, 8             # a queued row's message: its uuid's first 8 bytes (agent_queued), 0 none
+F AM_mute, 8            # as drawn last: the byte its text is muted from (a prompt's truncation marker), -1
 ENDSTRUCT AM_SIZE
 .equ AMF_PILL, 1                # a centred one-line pill ("Switched to NAME")
 .equ AMF_QUEUED, 2              # a message that has not started yet: after the thread, muted, "queued"
@@ -3629,7 +3631,7 @@ FN agents_pill
 
 # queued_sync(AS*) -> eax n: the session's messages that have not started (agent_queued: those waiting
 #   for a start, then those held) as the rows qrows[0..n): the user's look, AMF_QUEUED. A row keeps its
-#   measured height while its text is the same
+#   measured height while its message is the same (its text's place and length, and a held one's uuid)
 queued_sync:
     PROLOGUE
     mov rbx, rdi
@@ -3642,15 +3644,18 @@ queued_sync:
     test rax, rax
     jz 9f
     imul r13, r12, AM_SIZE
-    lea rcx, [rip + qrows]
-    add r13, rcx
+    lea r8, [rip + qrows]
+    add r13, r8
     inc r12d
     cmp [r13 + AM_text], rax
     jne 2f
     cmp [r13 + AM_len], rdx
+    jne 2f
+    cmp [r13 + AM_qid], rcx     # (a freed message and a new one of its length at its address: not it)
     je 1b
 2:  mov [r13 + AM_text], rax
     mov [r13 + AM_len], rdx
+    mov [r13 + AM_qid], rcx
     mov dword ptr [r13 + AM_role], R_USER
     mov dword ptr [r13 + AM_flags], AMF_QUEUED
     mov dword ptr [r13 + AM_w], -1      # measured again
@@ -5519,7 +5524,9 @@ draw_msg:
     mov ecx, TRUNCATED_LEN
     call str_find
     mov [rsp + WR_mute], rax
-33: mov dword ptr [rsp + WR_draw], 1
+33: mov rax, [rsp + WR_mute]    # (print-agent-row muted=)
+    mov [rbx + AM_mute], rax
+    mov dword ptr [rsp + WR_draw], 1
     mov eax, [rip + g_cv + CV_cy0]
     mov [rsp + WR_top], eax
     mov eax, [rip + g_cv + CV_cy1]
@@ -6240,8 +6247,8 @@ lk_hex:
     ret
 
 # FN agents_row_dump(sb, n): row n (from 1) of the open conversation as the panel drew it last, for
-#   tests: "row=N role=R height=H y=Y content=C parsed=0|1 parses=P" (y its top on screen in the last
-#   frame, -1 when it was not drawn), then a parsed reply's Markdown a line per block (md_row_dump,
+#   tests: "row=N role=R height=H y=Y content=C parsed=0|1 parses=P muted=M|-" (y its top on screen in the
+#   last frame, -1 when it was not drawn; M the byte a user row drawn then is muted from: the CLI's marker), then a parsed reply's Markdown a line per block (md_row_dump,
 #   its links where they were drawn); "plain TEXT" for the other rows. It parses nothing
 FN agents_row_dump
     PROLOGUE
@@ -6315,7 +6322,24 @@ FN agents_row_dump
     mov rdi, r15
     mov rsi, [rip + md_parses]
     call sb_push_u64
+    mov rdi, r15                # a user row drawn in the last frame: where its text turns muted
+    lea rsi, [rip + .Lrow_muted]
+    call sb_push_cstr
+    mov eax, [rbx + AM_dser]
+    cmp eax, [rip + th_serial]
+    jne 2f
+    cmp dword ptr [rbx + AM_role], R_USER
+    jne 2f
+    mov rsi, [rbx + AM_mute]
+    test rsi, rsi
+    js 2f
     mov rdi, r15
+    call sb_push_u64
+    jmp 4f
+2:  mov rdi, r15
+    mov esi, '-'
+    call sb_push_byte
+4:  mov rdi, r15
     mov esi, 10
     call sb_push_byte
     cmp dword ptr [rbx + AM_role], R_ASSIST
@@ -6467,6 +6491,7 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lrow_content: .asciz " content="
 .Lrow_parsed: .asciz " parsed="
 .Lrow_parses: .asciz " parses="
+.Lrow_muted: .asciz " muted="
 .Lrow_plain: .asciz "plain "
 .Lagent: .asciz "Agent"
 .Lempty: .asciz ""

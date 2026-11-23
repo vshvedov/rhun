@@ -2941,9 +2941,15 @@ FN agents_dump
     PROLOGUE
     mov r15, rdi
     xor ebx, ebx
-1:  cmp rbx, [rip + page_count]
+1:  cmp rbx, [rip + sessions + VEC_len]
     jae 3f
-    mov rax, [rip + sessions + VEC_ptr]
+    mov rdi, rbx                # the rows the list shows (row_shown)
+    call row_shown
+    test eax, eax
+    jnz 11f
+    inc rbx
+    jmp 1b
+11: mov rax, [rip + sessions + VEC_ptr]
     mov r12, [rax + rbx*8]
     lea rsi, [rip + .Lclaude_name]
     cmp dword ptr [r12 + AS_kind], 2
@@ -4505,8 +4511,9 @@ list_draw:
     lea r8, [rip + .Lheader]
     COLOR r9d, T_MUTED
     call ui_text_c
-12: cmp qword ptr [rip + page_count], 0
-    jne 2f
+12: call list_extra             # empty: nothing in the page, nothing rhun drives after it
+    add rax, [rip + page_count]
+    jnz 2f
     mov rdi, [rip + ag_fsmall]
     mov esi, [rsp]
     add esi, [rip + g_pmt + 4*MI_16]
@@ -4552,7 +4559,8 @@ list_draw:
     add [rip + list_scroll], eax
 3:  PM ebx, MI_48
     add ebx, [rip + g_pmt + 4*MI_8]      # row h
-    mov rax, [rip + page_count]
+    call list_extra
+    add rax, [rip + page_count]
     imul eax, ebx
     sub eax, [rsp + 20]
     jns 31f
@@ -4572,8 +4580,12 @@ list_draw:
     mov r13d, [rsp + 16]
     sub r13d, [rip + list_scroll]
 .Lld_row:
-    cmp r12, [rip + page_count]
+    cmp r12, [rip + sessions + VEC_len]
     jae .Lld_rows_done
+    mov rdi, r12                # the page's rows, then the sessions rhun drives after it
+    call row_shown
+    test eax, eax
+    jz .Lld_skip
     mov eax, [rsp + 16]
     add eax, [rsp + 20]
     cmp r13d, eax
@@ -4779,6 +4791,7 @@ list_draw:
     mov dword ptr [rip + g_focus], FOCUS_AGENTS
 .Lld_next:
     add r13d, ebx
+.Lld_skip:
     inc r12
     jmp .Lld_row
 .Lld_rows_done:
@@ -6072,6 +6085,37 @@ th_max: .long 0                 # the open thread's largest scroll, when it was 
 .Lfooter_of: .asciz " of "
 .text
 
+# list_extra() -> rax the rows the list shows after the page: the sessions rhun drives pinned there (a
+#   new conversation discovery has not listed yet). Other rows pinned there (the open conversation's)
+#   are not shown
+list_extra:
+    xor eax, eax
+    mov rcx, [rip + page_count]
+1:  cmp rcx, [rip + sessions + VEC_len]
+    jae 9f
+    mov rdx, [rip + sessions + VEC_ptr]
+    mov rdx, [rdx + rcx*8]
+    inc rcx
+    cmp qword ptr [rdx + AS_live], 0
+    je 1b
+    inc rax
+    jmp 1b
+9:  ret
+
+# row_shown(index) -> eax 1 when the list shows sessions[index]: in the page, or one rhun drives after it
+row_shown:
+    mov eax, 1
+    cmp rdi, [rip + page_count]
+    jb 9f
+    xor eax, eax
+    cmp rdi, [rip + sessions + VEC_len]
+    jae 9f
+    mov rcx, [rip + sessions + VEC_ptr]
+    mov rcx, [rcx + rdi*8]
+    cmp qword ptr [rcx + AS_live], 0
+    setne al
+9:  ret
+
 # Fixed footer: count at left, Load more (or retry) at right.
 page_footer:
     PROLOGUE 32
@@ -6083,16 +6127,20 @@ page_footer:
     mov ecx, [rip + g_pmt + 4*MI_1]
     COLOR r8d, T_BORDER
     call gfx_fill
+    call list_extra             # the sessions rhun drives after the page count, on both sides
+    mov [rsp + 24], rax
     lea rdi, [rip + tmp]
     call sb_clear
     lea rdi, [rip + tmp]
     mov rsi, [rip + page_count]
+    add rsi, [rsp + 24]
     call sb_push_u64
     lea rdi, [rip + tmp]
     lea rsi, [rip + .Lfooter_of]
     call sb_push_cstr
     lea rdi, [rip + tmp]
     mov rsi, [rip + total_count]
+    add rsi, [rsp + 24]
     call sb_push_u64
     mov eax, [rsp + 8]
     sub eax, [rip + g_pmt + 4*MI_16]

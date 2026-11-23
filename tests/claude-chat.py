@@ -682,6 +682,22 @@ class ChatTest(DrivenCase):
         self.assertEqual(self.prompts(), ['slow'])
         self.assertNotIn('user more', self.thread())
 
+    def test_back_before_its_file_lists_the_running_conversation(self):
+        # the new conversation's file is not written yet (discovery cannot list it): the list still has
+        # its row, pinned after the page, and a click on it opens it again
+        self.start(env={'FAKE_CLAUDE_USER_LATE_MS': '100', 'FAKE_CLAUDE_USER_LATE_WAIT_MS': '8000'})
+        self.chat('hello', 'working')
+        sid = self.sid()
+        self.command(f'click {BACK[0]} {BACK[1]}')
+        self.command('wait-agents')
+        self.assertFalse(list((self.work / '.claude/projects').glob(f'*/{sid}.jsonl')))
+        rows = self.command('print-agents').splitlines()
+        self.assertEqual(len(rows), 1, rows)
+        self.assertTrue(rows[0].startswith('Claude') and rows[0].endswith(': New conversation'), rows)
+        self.assertTrue(self.live().startswith('state=off '))   # nothing open
+        self.command(f'click {BACK[0] + 150} {BACK[1] + 50}')    # the list's first row
+        self.assertTrue(self.live().startswith(f'state=working pid=1 sid={sid} '), self.live())
+
     def test_back_mid_turn_keeps_the_session(self):
         self.start()
         self.chat('slow', 'working')

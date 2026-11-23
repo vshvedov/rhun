@@ -1786,14 +1786,14 @@ ck_active_tab:
     call ctx_tab_kind_name
     mov rdi, rax
     jmp ck_cstr
-# FN ctx_tab_kind_name(TAB_*) -> rax "doc" "image" "settings" "git" "extensions" "view", or 0
+# FN ctx_tab_kind_name(TAB_*) -> rax "doc" "image" "settings" "git" "extensions" "view" "markdown", or 0
 FN ctx_tab_kind_name
     lea rax, [rip + .Lv_notebook]   # notebooks: TAB_NOTEBOOK (from the notebooks' block) is "notebook"
     cmp rdi, TAB_NOTEBOOK
     je 9f
     xor eax, eax
     dec rdi
-    cmp rdi, 5
+    cmp rdi, TAB_MDDOC - 1          # plan review: TAB_MDDOC (mdtab.s) is "markdown"
     ja 9f
     lea rax, [rip + tab_kind_names]
     mov rax, [rax + rdi*8]
@@ -2362,7 +2362,7 @@ FN ctx_ctl_set
 .set CTXKEY_NAMES, 1
 ctx_table:
     CTXKEY_LIST
-# by TAB_*: TAB_DOC 1, TAB_SETTINGS 2, TAB_IMAGE 3, TAB_GIT 4, TAB_EXT 5, TAB_VIEW 6
+# by TAB_*: TAB_DOC 1, TAB_SETTINGS 2, TAB_IMAGE 3, TAB_GIT 4, TAB_EXT 5, TAB_VIEW 6, TAB_MDDOC 7
 # published keys with a value until they are set, and again when cleared: id, value
 .p2align 3
 ctx_defaults:
@@ -2372,7 +2372,7 @@ ctx_defaults:
     .quad .Lw_false
     .long -1, 0
 .p2align 3
-tab_kind_names: .quad .Lv_doc, .Lv_settings, .Lv_image, .Lv_git, .Lv_extensions, .Lv_view
+tab_kind_names: .quad .Lv_doc, .Lv_settings, .Lv_image, .Lv_git, .Lv_extensions, .Lv_view, .Lv_markdown
 vim_names: .quad .Lv_normal, .Lv_insert, .Lv_visual, .Lv_vline
 prov_fields: .quad EXT_pv_complete, EXT_pv_signature, EXT_pv_definition, EXT_pv_references
     .quad EXT_pv_symbols, EXT_pv_actions, EXT_pv_rename, EXT_pv_format
@@ -2411,6 +2411,7 @@ prov_names: .quad .Lp_complete, .Lp_signature, .Lp_definition, .Lp_references, .
 .Lv_extensions: .asciz "extensions"
 .Lv_view: .asciz "view"
 .Lv_notebook: .asciz "notebook"
+.Lv_markdown: .asciz "markdown"
 .Lv_normal: .asciz "normal"
 .Lv_insert: .asciz "insert"
 .Lv_visual: .asciz "visual"

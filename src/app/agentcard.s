@@ -109,6 +109,15 @@
 .equ PREVIEW_MIN, 3             # the preview's body: this many to PREVIEW_LINES lines of the panel's text
 .equ PREVIEW_LINES, 16
 .equ QC_BESIDE_W, 480           # a card this wide (2 x 240) shows the preview beside the rows, else under
+# plan review (task 11): the plan card's comments
+.equ CID_UNC, 0x100             # ID_AGCARD + : comment i's × (0x100 + i)
+.equ LK_UNC, 8                  # a comment's × (LI_idx: the comment)
+.equ CMT_MAX, 16                # comments a card takes
+.equ QUOTE_CHARS, 80            # a quote shown is cut to this many characters and "…"
+.equ QBUF, 400                  # a quote shown, with its quotes (qbuf: one per comment)
+.equ CD_UNC, -16                # CD_focus of comment i's ×: CD_UNC - i
+.equ QUOTE_LINES, 2
+.equ COMMENT_LINES, 4
 
 STRUCT
 F LI_kind, 4
@@ -306,6 +315,8 @@ FN agentcard_free
     call vec_free
     lea rdi, [rbx + CD_qs]
     call vec_free
+    mov rdi, rbx                # plan review: the comments' texts
+    call comments_free
     lea rdi, [rbx + CD_comments]
     call vec_free
     lea rdi, [rbx + CD_edit + TF_sb]
@@ -399,7 +410,9 @@ FN agentcard_shown
     cmp dword ptr [r12 + CD_kind], CDK_QUESTIONS
     jne 11f
     mov dword ptr [r12 + CD_focus], CD_OPTS     # the question card: on its first row
-11: mov dword ptr [r12 + CD_scroll], 0
+11: mov rdi, r12                # plan review: the buttons, header and hint its comments call for
+    call vis_set
+    mov dword ptr [r12 + CD_scroll], 0
     or dword ptr [r12 + CD_flags], CDF_WHEEL     # its top (its header) shows first; a key brings the focus
     # the focus rule
     mov eax, [rip + g_focus]
@@ -641,11 +654,15 @@ FN agentcard_pick
     call qc_pick
     mov eax, 1
     EPILOGUE
-3:  cmp r12, [r13 + CD_btns + VEC_len]
-    jae 8f
-    mov rax, [r13 + CD_btns + VEC_ptr]
-    imul rcx, r12, CDB_SIZE
-    mov esi, [rax + rcx + CDB_act]
+3:  mov rdi, r13                # plan review: button n among those shown (CDBF_HIDE)
+    mov esi, r12d
+    call btn_nth
+    test rax, rax
+    js 8f
+    mov rdi, r13
+    mov rsi, rax
+    call btn_act
+    mov esi, eax
     mov rdi, rbx
     call agentcard_answer
     EPILOGUE
@@ -1178,6 +1195,8 @@ bc_layout:
     mov esi, TS_MUTED
     mov edx, PARA_LINES
     call lay_paras
+    mov rdi, rbx                # plan review: "Comments (N)" and each comment with its ×
+    call pc_layout
     mov rdi, [rbx + CD_detail]
     mov esi, TS_BODY
     mov edx, DETAIL_LINES
@@ -1261,6 +1280,10 @@ bc_layout:
 .Lbl_btn:
     cmp r14, [rbx + CD_btns + VEC_len]
     jae .Lbl_field
+    mov rax, [rbx + CD_btns + VEC_ptr]  # plan review: a button its card does not show (CDBF_HIDE)
+    imul rcx, r14, CDB_SIZE
+    test dword ptr [rax + rcx + CDB_flags], CDBF_HIDE
+    jnz 79f
     mov [rsp + 16], r14d
     mov rdi, rbx
     mov esi, r14d
@@ -1597,6 +1620,8 @@ bc_draw:
     je .Lbd_bline
     cmp eax, LK_DETAILS
     je .Lbd_details
+    cmp eax, LK_UNC             # plan review: a comment's ×
+    je .Lbd_unc
     jmp .Lbd_item
 .Lbd_text:
     mov edi, [r15 + LI_idx]
@@ -1772,7 +1797,9 @@ bc_draw:
     # its number (none with CDF_DEFNO, none past 9)
     test dword ptr [r12 + CD_flags], CDF_DEFNO
     jnz .Lbd_item
-    mov eax, [r15 + LI_idx]
+    mov rdi, r12                # plan review: its number among the buttons shown
+    mov esi, [r15 + LI_idx]
+    call btn_ord
     cmp eax, 9
     jae .Lbd_item
     add eax, '1'
@@ -1929,7 +1956,14 @@ bc_draw:
     call gfx_fill
     jmp .Lbd_item
 .Lbd_done:
-    cmp dword ptr [rip + pend_dest], 0
+    mov eax, [rip + pend_unc]   # plan review: a comment's × clicked
+    test eax, eax
+    jz 11f
+    mov dword ptr [rip + pend_unc], 0
+    mov rdi, r12
+    lea esi, [rax - 1]
+    call agentcard_uncomment
+11: cmp dword ptr [rip + pend_dest], 0
     je 1f
     mov rdi, rbx
     mov rsi, r12
@@ -2070,13 +2104,18 @@ bc_key:
 21:    sub eax, '1'
     cmp eax, 8
     ja .Lbk_no
-    movsxd rsi, eax
-    cmp rsi, [r12 + CD_btns + VEC_len]
-    jb 3f
+    mov [rsp], eax              # plan review: the number among the buttons shown (CDBF_HIDE)
+    mov rdi, r12
+    mov esi, eax
+    call btn_nth
+    test rax, rax
+    jns 3f
+    cmp edx, [rsp]
     jne .Lbk_no
     mov dword ptr [r12 + CD_focus], CD_FIELD    # the number after the last: the field
     jmp .Lbk_yes
-3:  mov rdi, r12
+3:  mov rsi, rax
+    mov rdi, r12
     call btn_act
     mov esi, eax
     jmp .Lbk_answer
@@ -2153,10 +2192,12 @@ bc_key:
     jz .Lbk_no
     jmp .Lbk_yes
 .Lbk_no_btn:
-    mov rdi, r12                # Escape: the last button's action (the driver's No)
-    mov rsi, [r12 + CD_btns + VEC_len]
-    dec rsi
+    mov rdi, r12                # Escape: the last button's action (the driver's No; of those shown)
+    call btn_last
+    mov rsi, rax
+    test rsi, rsi
     js .Lbk_yes
+    mov rdi, r12
     call btn_act
     mov esi, eax
 .Lbk_answer:
@@ -2318,9 +2359,9 @@ FN agentcard_dump
     lea rsi, [rip + .Lw_options]    # the question card's rows
     cmp eax, CD_OPTS
     je 3f
-    lea esi, [rax + 1]
-    mov rdi, rbx
-    call sb_push_u64
+    mov rdi, rbx                # plan review: a button's number among those shown, a comment's × "xN"
+    mov rsi, r13
+    call dump_focus
     jmp 4f
 3:  mov rdi, rbx
     call sb_push_cstr
@@ -2467,6 +2508,10 @@ bc_dump:
 2:  xor r13d, r13d
 3:  cmp r13, [r12 + CD_btns + VEC_len]
     jae 6f
+    mov rax, [r12 + CD_btns + VEC_ptr]  # plan review: only the buttons shown, by their numbers there
+    imul rcx, r13, CDB_SIZE
+    test dword ptr [rax + rcx + CDB_flags], CDBF_HIDE
+    jnz 55f
     mov rdi, r12
     mov esi, r13d
     call compose
@@ -2475,7 +2520,10 @@ bc_dump:
     mov rdi, rbx
     lea rsi, [rip + .Lw_button]
     call sb_push_cstr
-    lea esi, [r13 + 1]
+    mov rdi, r12
+    mov esi, r13d
+    call btn_ord
+    lea esi, [rax + 1]
     mov rdi, rbx
     call sb_push_u64
     mov rdi, rbx
@@ -2589,9 +2637,14 @@ FN agentcard_input_line
     lea rsi, [rip + .Ld_options]
     call sb_push_cstr
     xor r13d, r13d
+    xor r14d, r14d              # labels written
 4:  cmp r13, [r12 + CD_btns + VEC_len]
     jae 5f
-    test r13, r13
+    mov rax, [r12 + CD_btns + VEC_ptr]  # plan review: only the buttons shown (CDBF_HIDE)
+    imul rcx, r13, CDB_SIZE
+    test dword ptr [rax + rcx + CDB_flags], CDBF_HIDE
+    jnz 42f
+    test r14, r14
     jz 41f
     mov rdi, rbx
     mov esi, '|'
@@ -2602,7 +2655,8 @@ FN agentcard_input_line
     mov rdi, rbx
     mov rsi, rax
     call sb_push
-    inc r13
+    inc r14
+42: inc r13
     jmp 4b
 5:  mov rdi, rbx
     mov esi, 10
@@ -2749,13 +2803,569 @@ FN agentcard_fit_dump
     call agents_metrics
 9:  EPILOGUE
 
+# ---------------------------------------------------------------- plan review: the plan card's comments
+#
+# A plan card (CDK_PLAN) takes comments on the plan's text (agentcard_comment, from its tab: mdtab.s).
+# Without comments it shows its header "Accept this plan?", the hint "Select text in the preview to add
+# comments" and every button but CBA_FEEDBACK; with comments: "Continue planning", "N comment(s) will be
+# included as feedback", the list "Comments (N)" (each quote cut to 80 characters and "…", in quotes, the
+# comment, and a × "Remove comment" that the keys reach too: Up and Down, then Enter, Space or Delete), and
+# only the CBA_FEEDBACK buttons (the extension's webview index.js @5251806, @5662587). Buttons a card does
+# not show carry CDBF_HIDE: the layout, the numbers, the keys and the dumps skip them.
+#
+#   agentcard_comment(CD*, quote ptr, len, text ptr, len) -> eax 1 added (CMT_MAX at most)
+#   agentcard_uncomment(CD*, i) -> eax 1 removed (i from 0)
+
+.bss
+.p2align 3
+qbuf: .zero QBUF * CMT_MAX      # the quotes as shown, one per comment (pc_layout)
+cbuf: .zero 32                  # "Comments (N)"
+hbuf: .zero 64                  # "N comments will be included as feedback"
+pend_unc: .long 0               # a comment's × clicked while drawing (its index + 1)
+
+.text
+
+# FN agentcard_comment(CD*, quote ptr, len, text ptr, len) -> eax 1 when the comment was added (copied)
+FN agentcard_comment
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov r15, r8
+    xor eax, eax
+    test rbx, rbx
+    jz 9f
+    cmp qword ptr [rbx + CD_comments + VEC_len], CMT_MAX
+    jae 8f
+    mov rdi, r12
+    mov rsi, r13
+    call mem_dup
+    mov r12, rax
+    mov rdi, r14
+    mov rsi, r15
+    call mem_dup
+    mov r14, rax
+    lea rdi, [rbx + CD_comments]
+    mov esi, CDC_SIZE
+    call vec_push
+    mov [rax + CDC_quote], r12
+    mov [rax + CDC_text], r14
+    mov rdi, rbx
+    call vis_set
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+9:  EPILOGUE
+
+# FN agentcard_uncomment(CD*, i) -> eax 1 when comment i (from 0) was removed; a focus on a × that went
+#   moves to the one before, the last button shown when none is left
+FN agentcard_uncomment
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor eax, eax
+    test rbx, rbx
+    jz 9f
+    test r12d, r12d
+    js 9f
+    movsxd r12, r12d
+    cmp r12, [rbx + CD_comments + VEC_len]
+    jae 9f
+    imul r13, r12, CDC_SIZE
+    add r13, [rbx + CD_comments + VEC_ptr]
+    mov rdi, [r13 + CDC_quote]
+    call mem_free
+    mov rdi, [r13 + CDC_text]
+    call mem_free
+    mov rdx, [rbx + CD_comments + VEC_len]      # the ones after it close up
+    sub rdx, r12
+    dec rdx
+    shl rdx, 4
+    mov rdi, r13
+    lea rsi, [r13 + CDC_SIZE]
+    call memmove
+    dec qword ptr [rbx + CD_comments + VEC_len]
+    mov eax, [rbx + CD_focus]
+    cmp eax, CD_UNC
+    jg 2f
+    mov ecx, CD_UNC             # a ×: the same place, else the last one
+    sub ecx, eax
+    movsxd rcx, ecx
+    cmp rcx, [rbx + CD_comments + VEC_len]
+    jb 2f
+    mov rcx, [rbx + CD_comments + VEC_len]
+    test rcx, rcx
+    jz 1f
+    mov eax, CD_UNC + 1
+    sub eax, ecx
+    mov [rbx + CD_focus], eax
+    jmp 2f
+1:  mov dword ptr [rbx + CD_focus], 0
+2:  mov rdi, rbx
+    call vis_set
+    and dword ptr [rbx + CD_flags], ~CDF_WHEEL
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+9:  EPILOGUE
+
+# comments_free(CD*): its comments' texts
+comments_free:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12, [rbx + CD_comments + VEC_len]
+    jae 9f
+    imul r13, r12, CDC_SIZE
+    add r13, [rbx + CD_comments + VEC_ptr]
+    mov rdi, [r13 + CDC_quote]
+    call mem_free
+    mov rdi, [r13 + CDC_text]
+    call mem_free
+    inc r12
+    jmp 1b
+9:  EPILOGUE
+
+# vis_set(CD*): a plan card's header, hint and buttons for its comments (see above); a focus on a button
+#   it no longer shows moves to the first one shown
+vis_set:
+    PROLOGUE
+    mov rbx, rdi
+    cmp dword ptr [rbx + CD_kind], CDK_PLAN
+    jne 9f
+    mov r12, [rbx + CD_comments + VEC_len]
+    xor r13d, r13d
+1:  cmp r13, [rbx + CD_btns + VEC_len]
+    jae 3f
+    imul rax, r13, CDB_SIZE
+    add rax, [rbx + CD_btns + VEC_ptr]
+    and dword ptr [rax + CDB_flags], ~CDBF_HIDE
+    xor ecx, ecx
+    cmp dword ptr [rax + CDB_act], CBA_FEEDBACK
+    sete cl                     # 1: a feedback button
+    xor edx, edx
+    test r12, r12
+    setnz dl                    # 1: comments
+    cmp ecx, edx
+    je 2f
+    or dword ptr [rax + CDB_flags], CDBF_HIDE
+2:  inc r13
+    jmp 1b
+3:  test r12, r12               # the header and the hint
+    jnz 4f
+    lea rdi, [rip + .Lpc_title]
+    lea rsi, [rip + .Lpc_hint]
+    jmp 6f
+4:  lea rdi, [rip + hbuf]
+    mov rsi, r12
+    call fmt_u64
+    lea rdi, [rip + hbuf]
+    add rdi, rax
+    lea rsi, [rip + .Lpc_one]
+    cmp r12, 1
+    je 5f
+    lea rsi, [rip + .Lpc_many]
+5:  call cstr_copy
+    lea rdi, [rip + .Lpc_continue]
+    lea rsi, [rip + hbuf]
+6:  mov r13, rsi
+    mov r14, rdi
+    call strlen
+    mov rdi, rbx
+    mov esi, CDT_TITLE
+    mov rdx, r14
+    mov rcx, rax
+    call agentcard_text
+    mov rdi, r13
+    call strlen
+    mov rdi, rbx
+    mov esi, CDT_HINT
+    mov rdx, r13
+    mov rcx, rax
+    call agentcard_text
+    mov eax, [rbx + CD_focus]   # the focus on a button not shown: the first one shown
+    test eax, eax
+    js 9f
+    movsxd rax, eax
+    cmp rax, [rbx + CD_btns + VEC_len]
+    jae 7f
+    imul rcx, rax, CDB_SIZE
+    add rcx, [rbx + CD_btns + VEC_ptr]
+    test dword ptr [rcx + CDB_flags], CDBF_HIDE
+    jz 9f
+7:  mov rdi, rbx
+    xor esi, esi
+    call btn_nth
+    test rax, rax
+    jns 8f
+    xor eax, eax
+8:  mov [rbx + CD_focus], eax
+9:  EPILOGUE
+
+# btn_ord(CD*, i) -> eax how many buttons before i show (its number from 0 among them); changes rax, rcx,
+#   rdx, r8 only
+btn_ord:
+    xor eax, eax
+    xor ecx, ecx
+    movsxd rsi, esi
+1:  cmp rcx, rsi
+    jae 9f
+    cmp rcx, [rdi + CD_btns + VEC_len]
+    jae 9f
+    imul rdx, rcx, CDB_SIZE
+    add rdx, [rdi + CD_btns + VEC_ptr]
+    inc rcx
+    test dword ptr [rdx + CDB_flags], CDBF_HIDE
+    jnz 1b
+    inc eax
+    jmp 1b
+9:  ret
+
+# btn_nth(CD*, n) -> rax the index of the button shown n-th (from 0), -1 none; edx how many show
+btn_nth:
+    mov rax, -1
+    xor edx, edx
+    xor ecx, ecx
+1:  cmp rcx, [rdi + CD_btns + VEC_len]
+    jae 9f
+    imul r8, rcx, CDB_SIZE
+    add r8, [rdi + CD_btns + VEC_ptr]
+    test dword ptr [r8 + CDB_flags], CDBF_HIDE
+    jnz 2f
+    cmp edx, esi
+    jne 11f
+    mov rax, rcx
+11: inc edx
+2:  inc rcx
+    jmp 1b
+9:  ret
+
+# btn_last(CD*) -> rax the index of the last button shown, -1 none
+btn_last:
+    mov rax, -1
+    xor ecx, ecx
+1:  cmp rcx, [rdi + CD_btns + VEC_len]
+    jae 9f
+    imul rdx, rcx, CDB_SIZE
+    add rdx, [rdi + CD_btns + VEC_ptr]
+    test dword ptr [rdx + CDB_flags], CDBF_HIDE
+    jnz 2f
+    mov rax, rcx
+2:  inc rcx
+    jmp 1b
+9:  ret
+
+# quote_shown(dst, quote cstr) -> rax its length: the quote in quotes, cut to QUOTE_CHARS characters
+#   and "…"
+quote_shown:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov byte ptr [rbx], '"'
+    mov r13d, 1                 # bytes written
+    xor r14d, r14d              # characters
+1:  movzx eax, byte ptr [r12]
+    test eax, eax
+    jz 3f
+    mov ecx, eax
+    and ecx, 0xc0
+    cmp ecx, 0x80
+    je 2f
+    cmp r14d, QUOTE_CHARS       # a new character past the last kept: "…"
+    jae 21f
+    inc r14d
+2:  cmp r13d, QBUF - 8
+    jae 21f
+    mov [rbx + r13], al
+    inc r13d
+    inc r12
+    jmp 1b
+21: lea rsi, [rip + .Lpc_ellipsis]
+    lea rdi, [rbx + r13]
+    call cstr_copy
+    add r13d, 3
+3:  mov byte ptr [rbx + r13], '"'
+    inc r13d
+    mov byte ptr [rbx + r13], 0
+    mov eax, r13d
+    EPILOGUE
+
+# pc_layout(CD*): bc_layout's part: under the hint "Comments (N)", then each comment's quote and text,
+#   its × at the right of its first line (a focus stop); nothing without comments
+pc_layout:
+    PROLOGUE 16
+    mov rbx, rdi
+    cmp qword ptr [rbx + CD_comments + VEC_len], 0
+    je 9f
+    mov eax, [rip + g_pmt + 4*MI_4]
+    add [rip + ly], eax
+    lea rdi, [rip + cbuf]
+    lea rsi, [rip + .Lpc_list]
+    call cstr_copy
+    mov r12, rax
+    mov rdi, rax
+    mov rsi, [rbx + CD_comments + VEC_len]
+    call fmt_u64
+    add r12, rax
+    mov byte ptr [r12], ')'
+    mov byte ptr [r12 + 1], 0
+    lea rdi, [rip + cbuf]
+    mov esi, TS_MUTED
+    mov edx, 1
+    call lay_cstr
+    mov eax, [rip + lw]
+    mov [rsp], eax              # the content's width, kept
+    xor r12d, r12d
+1:  cmp r12, [rbx + CD_comments + VEC_len]
+    jae 8f
+    mov edi, TS_SMALL           # the ×: a square of a small line's height
+    call st_lineh
+    mov r13d, eax
+    mov edi, LK_UNC
+    mov esi, r12d
+    call li_new
+    mov ecx, [rip + lx]
+    add ecx, [rsp]
+    sub ecx, r13d
+    mov [rax + LI_x], ecx
+    mov ecx, [rip + ly]
+    mov [rax + LI_y], ecx
+    mov [rax + LI_w], r13d
+    mov [rax + LI_h], r13d
+    mov edi, CD_UNC
+    sub edi, r12d
+    call stop_add
+    mov eax, CD_UNC
+    sub eax, r12d
+    cmp eax, [rbx + CD_focus]
+    jne 2f
+    mov edi, [rip + ly]
+    mov esi, r13d
+    call set_focus_rect
+2:  mov eax, [rip + ly]
+    add eax, r13d
+    mov [rsp + 4], eax          # the ×'s bottom
+    mov eax, [rsp]              # the texts beside it
+    sub eax, r13d
+    sub eax, [rip + g_pmt + 4*MI_4]
+    cmp eax, 16
+    jge 3f
+    mov eax, 16
+3:  mov [rip + lw], eax
+    imul r14, r12, CDC_SIZE
+    add r14, [rbx + CD_comments + VEC_ptr]
+    imul rdi, r12, QBUF
+    lea rax, [rip + qbuf]
+    add rdi, rax
+    mov r15, rdi
+    mov rsi, [r14 + CDC_quote]
+    call quote_shown
+    mov rdi, r15
+    mov rsi, rax
+    mov edx, TS_MUTED
+    mov ecx, QUOTE_LINES
+    call lay_text
+    mov rdi, [r14 + CDC_text]
+    mov esi, TS_BODY
+    mov edx, COMMENT_LINES
+    call lay_paras
+    mov eax, [rsp]
+    mov [rip + lw], eax
+    mov eax, [rsp + 4]
+    cmp [rip + ly], eax
+    jge 4f
+    mov [rip + ly], eax
+4:  mov eax, [rip + g_pmt + 4*MI_4]
+    add [rip + ly], eax
+    inc r12
+    jmp 1b
+8:  mov eax, [rip + g_pmt + 4*MI_4]
+    add [rip + ly], eax
+9:  EPILOGUE
+
+# .Lbd_unc: bc_draw's part (its frame: [rsp] x, +4 y, +20 live, +24 keys, +32 a scratch; r12 the card, r15
+#   the item): a comment's ×, its tooltip; a click (once the lock is over) removes it after the drawing
+.Lbd_unc:
+    mov eax, CD_UNC
+    sub eax, [r15 + LI_idx]
+    cmp eax, [r12 + CD_focus]
+    jne 1f
+    cmp dword ptr [rsp + 24], 0
+    je 1f
+    COLOR eax, T_HOVER          # focused: ringed
+    push rax
+    push rax
+    mov edi, [rsp + 16]
+    add edi, [r15 + LI_x]
+    mov esi, [rsp + 16 + 4]
+    add esi, [r15 + LI_y]
+    mov edx, [r15 + LI_w]
+    mov ecx, [r15 + LI_h]
+    PM r8d, MI_RADIUS
+    COLOR r9d, T_ACCENT
+    call gfx_frame
+    add rsp, 16
+1:  mov eax, [r15 + LI_idx]
+    lea edi, [rax + ID_AGCARD + CID_UNC]
+    mov esi, [rsp]
+    add esi, [r15 + LI_x]
+    mov edx, [rsp + 4]
+    add edx, [r15 + LI_y]
+    mov ecx, [r15 + LI_w]
+    mov r8d, [r15 + LI_h]
+    mov r9d, IC_CLOSE
+    call ag_icon_btn
+    mov [rsp + 32], eax
+    mov eax, [r15 + LI_idx]
+    lea edi, [rax + ID_AGCARD + CID_UNC]
+    mov esi, [rsp]
+    add esi, [r15 + LI_x]
+    mov edx, [rsp + 4]
+    add edx, [r15 + LI_y]
+    add edx, [r15 + LI_h]
+    mov ecx, [r15 + LI_w]
+    mov r8d, [rsp + 32]
+    lea r9, [rip + .Lpc_remove]
+    call tip_note_text
+    test dword ptr [rsp + 32], UB_CLICK
+    jz .Lbd_item
+    cmp dword ptr [rsp + 20], 0
+    je .Lbd_item
+    mov eax, [r15 + LI_idx]
+    inc eax
+    mov [rip + pend_unc], eax
+    jmp .Lbd_item
+
+# pc_key(AS*, CD*, keysym, cp, mods) -> eax 1 taken: on a comment's × Enter, Space and Delete remove it;
+#   every other key is the button card's (bc_key)
+pc_key:
+    mov eax, [rsi + CD_focus]
+    cmp eax, CD_UNC
+    jg bc_key
+    test r8d, MOD_CTRL | MOD_ALT | MOD_SUPER
+    jnz bc_key
+    cmp edx, KEY_RETURN
+    je 1f
+    cmp edx, KEY_KP_ENTER
+    je 1f
+    cmp edx, ' '
+    je 1f
+    cmp edx, KEY_DELETE
+    jne bc_key
+1:  PROLOGUE
+    mov rbx, rsi
+    mov rdi, rsi
+    call agentcard_live
+    test eax, eax
+    jz 9f                       # locked: the key is swallowed
+    mov ecx, CD_UNC
+    sub ecx, [rbx + CD_focus]
+    mov rdi, rbx
+    mov esi, ecx
+    call agentcard_uncomment
+9:  mov eax, 1
+    EPILOGUE
+
+# dump_focus(sb, CD*): print-agent-card's focus: a button's number among those shown, "xN" for comment N's ×
+dump_focus:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov eax, [r12 + CD_focus]
+    cmp eax, CD_UNC
+    jg 1f
+    mov esi, 'x'
+    call sb_push_byte
+    mov esi, CD_UNC + 1
+    sub esi, [r12 + CD_focus]
+    mov rdi, rbx
+    call sb_push_u64
+    EPILOGUE
+1:  mov rdi, r12
+    mov esi, eax
+    call btn_ord
+    lea esi, [rax + 1]
+    mov rdi, rbx
+    call sb_push_u64
+    EPILOGUE
+
+# pc_dump(sb, CD*): bc_dump's lines, then "comment N "QUOTE" TEXT" per comment (line feeds as "\n")
+pc_dump:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    call bc_dump
+    xor r13d, r13d
+1:  cmp r13, [r12 + CD_comments + VEC_len]
+    jae 9f
+    imul r14, r13, CDC_SIZE
+    add r14, [r12 + CD_comments + VEC_ptr]
+    mov rdi, rbx
+    lea rsi, [rip + .Lpc_dump]
+    call sb_push_cstr
+    lea esi, [r13 + 1]
+    mov rdi, rbx
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lpc_open]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [r14 + CDC_quote]
+    call push_esc_cstr
+    mov rdi, rbx
+    lea rsi, [rip + .Lpc_close]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [r14 + CDC_text]
+    call push_esc_cstr
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    inc r13
+    jmp 1b
+9:  EPILOGUE
+
+# push_esc_cstr(sb, cstr): its bytes, a line feed as "\n"
+push_esc_cstr:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+1:  movzx esi, byte ptr [r12]
+    test esi, esi
+    jz 9f
+    inc r12
+    cmp esi, 10
+    jne 2f
+    mov rdi, rbx
+    mov esi, '\\'
+    call sb_push_byte
+    mov esi, 'n'
+2:  mov rdi, rbx
+    call sb_push_byte
+    jmp 1b
+9:  EPILOGUE
+
+.section .rodata
+.Lpc_title: .asciz "Accept this plan?"
+.Lpc_hint: .asciz "Select text in the preview to add comments"
+.Lpc_continue: .asciz "Continue planning"
+.Lpc_one: .asciz " comment will be included as feedback"
+.Lpc_many: .asciz " comments will be included as feedback"
+.Lpc_list: .asciz "Comments ("
+.Lpc_remove: .asciz "Remove comment"
+.Lpc_ellipsis: .asciz "\342\200\246"
+.Lpc_dump: .asciz "comment "
+.Lpc_open: .asciz " \""
+.Lpc_close: .asciz "\" "
+
 .section .rodata
 .p2align 3
 # the kinds: measure, draw, key, dump (by CD_kind from 1)
 kinds:
     .quad bc_h, bc_draw, bc_key, bc_dump        # CDK_PERMISSION
     .quad qc_layout, qc_draw, qc_key, qc_dump   # CDK_QUESTIONS: the question card
-    .quad bc_h, bc_draw, bc_key, bc_dump        # CDK_PLAN
+    .quad bc_h, bc_draw, pc_key, pc_dump        # CDK_PLAN (plan review: its comments)
     .quad bc_h, bc_draw, bc_key, bc_dump        # CDK_DIALOG
 # the text styles: the face's variable, its colour's theme slot, the line's leading (a metric)
 style_tbl:
@@ -2775,8 +3385,8 @@ kind_names: .quad .Lk_permission, .Lk_questions, .Lk_plan, .Lk_dialog
 # agentcard_text's fields (CDT_*): their CD offsets (-1: CDT_EDIT has none)
 .p2align 2
 text_slots: .long CD_title, CD_hint, CD_detail, CD_desc, CD_note, CD_json, CD_link, -1, CD_ph
-item_letters: .byte '?', 't', 'f', 'e', 'b', 'l', 'F', 'd'
-    .byte '?', '?', '?', '?', '?', '?', '?', '?', 'T', 'x', 'o', 'k', 'p'     # 8..15 unused; the question card's
+item_letters: .byte '?', 't', 'f', 'e', 'b', 'l', 'F', 'd', 'x'    # (x: plan review's ×)
+    .byte '?', '?', '?', '?', '?', '?', '?', 'T', 'x', 'o', 'k', 'p'     # 9..15 unused; the question card's
 .Lk_permission: .asciz "permission"
 .Lk_questions: .asciz "questions"
 .Lk_plan: .asciz "plan"

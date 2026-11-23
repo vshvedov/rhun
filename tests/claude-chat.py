@@ -1075,9 +1075,10 @@ class RequestTest(DrivenCase):
         self.start(self.claude_section('initial_mode = plan\n'))
         self.chat('plan', 'waiting')
         self.assertIn(' mode=plan ', self.live())
-        self.assertEqual(self.card(), 'card=Accept this plan? options=Yes|No, keep planning')
+        self.assertEqual(self.card(), 'card=Accept this plan? options=Yes, and auto-accept|Yes, and manually approve '
+                                      'edits|No, keep planning')      # phase 2's plan card (task 11)
         self.assertEqual(self.thread(), ['user plan', 'tool(ExitPlanMode) ', 'agent # Plan'])
-        self.command('agent-card 1')
+        self.command('agent-card 2')                # manually approve edits: the default mode, then the allow
         self.command('wait-agent ready')
         lines = [m for m in self.stdin() if m.get('type') in ('control_request', 'control_response')]
         self.assertEqual(lines[-2]['request'], {'subtype': 'set_permission_mode', 'mode': 'default'})
@@ -1090,11 +1091,11 @@ class RequestTest(DrivenCase):
     def test_plan_keep_planning(self):
         self.start(self.claude_section('initial_mode = plan\n'))
         self.chat('plan', 'waiting')
-        self.command('agent-card 2')
+        self.command('agent-card 3')                # No, keep planning (task 11: without text it interrupts)
         self.command('wait-agent ready')
         tid = self.tool_ids()
         self.assertEqual(self.answers(), [{'behavior': 'deny', 'message': 'User chose to stay in plan mode and '
-                                           'continue planning', 'interrupt': False, 'toolUseID': tid[0]}])
+                                           'continue planning', 'interrupt': True, 'toolUseID': tid[0]}])
         self.assertNotIn('set_permission_mode', json.dumps(self.stdin()))
         self.assertIn(' mode=plan ', self.live())
 

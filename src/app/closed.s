@@ -46,6 +46,8 @@ FN closed_note
     mov rcx, [rax + TAB_kind]
     cmp rcx, TAB_VIEW
     je 9f                       # an extension's view: it is gone with its extension's picture
+    cmp rcx, TAB_MDDOC
+    je 9f                       # plan review: a Markdown tab of rhun's own is gone with its owner (mdtab.s)
     mov [rbx + CT_kind], rcx
     mov r13, [rax + TAB_doc]
     test r13, r13

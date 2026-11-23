@@ -1434,6 +1434,184 @@ FN md_sel_text
 8:  xor eax, eax
     EPILOGUE
 
+# ---- plan review (mdtab.s): a phrase selected by its text, the selection's end ----
+
+# FN md_select_text(m, ptr, len) -> eax 1 when the text was found and selected: its first occurrence in the
+#   laid-out text as md_sel_text joins it (a space or a line feed in the text matches either between words).
+#   Lay the document out first. Locals: [rsp] the joined text (SB), +24 per text item its index and its
+#   start in it (SB of u32 pairs), +48 the match's start
+FN md_select_text
+    PROLOGUE 64
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    lea rdi, [rsp]
+    xor esi, esi
+    mov edx, 48
+    call memset
+    test r13, r13
+    jz .Lmst_no
+    mov r15d, -1                # the last text item taken
+    xor r14d, r14d
+.Lmst_item:
+    cmp r14, [rbx + MD_items + VEC_len]
+    jae .Lmst_find
+    imul rcx, r14, MDI_SIZE
+    add rcx, [rbx + MD_items + VEC_ptr]
+    cmp dword ptr [rcx + MDI_kind], MDK_TEXT
+    jne .Lmst_next
+    test r15d, r15d             # between it and the one before: LF or a space (md_sel_text's rule)
+    js 3f
+    movsxd rax, r15d
+    imul rax, rax, MDI_SIZE
+    add rax, [rbx + MD_items + VEC_ptr]
+    mov edx, [rax + MDI_y]
+    cmp edx, [rcx + MDI_y]
+    je 2f
+    mov esi, 10
+    jmp 21f
+2:  mov edx, [rax + MDI_x]
+    add edx, [rax + MDI_w]
+    cmp edx, [rcx + MDI_x]
+    jge 3f
+    mov esi, ' '
+21: lea rdi, [rsp]
+    call sb_push_byte
+3:  mov dword ptr [rsp + 56], r14d  # the item's index and start
+    mov rax, [rsp + SB_len]
+    mov [rsp + 60], eax
+    lea rdi, [rsp + 24]
+    lea rsi, [rsp + 56]
+    mov edx, 8
+    call sb_push
+    imul rcx, r14, MDI_SIZE
+    add rcx, [rbx + MD_items + VEC_ptr]
+    mov rsi, [rbx + MD_text + SB_ptr]
+    mov eax, [rcx + MDI_off]
+    add rsi, rax
+    mov edx, [rcx + MDI_len]
+    lea rdi, [rsp]
+    call sb_push
+    mov r15d, r14d
+.Lmst_next:
+    inc r14
+    jmp .Lmst_item
+.Lmst_find:
+    xor r14d, r14d              # the match's start
+1:  mov rax, r14
+    add rax, r13
+    cmp rax, [rsp + SB_len]
+    ja .Lmst_no
+    xor ecx, ecx
+2:  cmp rcx, r13
+    jae 5f
+    mov rdx, [rsp + SB_ptr]
+    add rdx, r14
+    movzx eax, byte ptr [rdx + rcx]
+    movzx edx, byte ptr [r12 + rcx]
+    cmp eax, edx
+    je 4f
+    cmp eax, 10                 # white space matches white space
+    je 3f
+    cmp eax, ' '
+    jne 6f
+3:  cmp edx, 10
+    je 4f
+    cmp edx, ' '
+    jne 6f
+4:  inc rcx
+    jmp 2b
+6:  inc r14
+    jmp 1b
+5:  mov [rsp + 48], r14
+    # the start: the first item whose bytes reach past it; the end: the last item starting before it
+    mov r8, [rsp + 24 + SB_ptr]
+    mov r9, [rsp + 24 + SB_len]
+    shr r9, 3
+    mov r10, r14
+    add r10, r13                # the end
+    mov dword ptr [rbx + MD_sa], -1
+    xor ecx, ecx
+7:  cmp rcx, r9
+    jae 9f
+    mov eax, [r8 + rcx*8]       # its item
+    mov edx, [r8 + rcx*8 + 4]   # its start
+    imul rsi, rax, MDI_SIZE
+    add rsi, [rbx + MD_items + VEC_ptr]
+    mov esi, [rsi + MDI_len]
+    add rsi, rdx                # its end
+    cmp dword ptr [rbx + MD_sa], -1
+    jne 8f
+    cmp r14, rsi
+    jae 8f
+    mov [rbx + MD_sa], eax
+    mov rdi, r14
+    sub rdi, rdx
+    jns 71f
+    xor edi, edi
+71: mov [rbx + MD_sao], edi
+8:  cmp rdx, r10
+    jae 9f
+    mov [rbx + MD_sb], eax
+    mov rdi, r10
+    sub rdi, rdx
+    sub rsi, rdx                # its length
+    cmp rdi, rsi
+    cmova rdi, rsi
+    mov [rbx + MD_sbo], edi
+    inc rcx
+    jmp 7b
+9:  cmp dword ptr [rbx + MD_sa], -1
+    je .Lmst_no
+    mov dword ptr [rbx + MD_sel], 1
+    mov dword ptr [rbx + MD_drag], 0
+    mov dword ptr [rip + g_dirty], 1
+    mov r15d, 1
+    jmp .Lmst_end
+.Lmst_no:
+    mov dword ptr [rbx + MD_sel], 0
+    xor r15d, r15d
+.Lmst_end:
+    lea rdi, [rsp]
+    call sb_free
+    lea rdi, [rsp + 24]
+    call sb_free
+    mov eax, r15d
+    EPILOGUE
+
+# FN md_sel_end(m) -> eax the right end of the selection's last line (its text items'), edx that line's top,
+#   ecx its height (the document's coordinates, as md_draw lays it out); eax -1 when nothing is selected
+FN md_sel_end
+    PROLOGUE
+    mov rbx, rdi
+    call sel_range
+    test eax, eax
+    js 9f
+    movsxd rax, ecx
+    imul r13, rax, MDI_SIZE
+    add r13, [rbx + MD_items + VEC_ptr]
+    mov r12d, [r13 + MDI_y]
+    mov eax, [r13 + MDI_x]
+    add eax, [r13 + MDI_w]
+    xor ecx, ecx                # the text items on its line: their right end
+1:  cmp rcx, [rbx + MD_items + VEC_len]
+    jae 3f
+    imul rdx, rcx, MDI_SIZE
+    add rdx, [rbx + MD_items + VEC_ptr]
+    inc rcx
+    cmp dword ptr [rdx + MDI_kind], MDK_TEXT
+    jne 1b
+    cmp [rdx + MDI_y], r12d
+    jne 1b
+    mov r8d, [rdx + MDI_x]
+    add r8d, [rdx + MDI_w]
+    cmp r8d, eax
+    cmovg eax, r8d
+    jmp 1b
+3:  mov edx, r12d
+    mov ecx, [r13 + MDI_h]
+9:  EPILOGUE
+
 # md_set_flat(m): keep code on the containing surface (0: nothing).
 FN md_set_flat
     test rdi, rdi

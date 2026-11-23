@@ -862,5 +862,336 @@ class QuestionCardTest(CardCase):
         self.until_answered()
 
 
+# ---- plan review (task 11) ----
+PLAN = '# Plan\n\n1. Add the file\n2. Test it'
+# the extension's words (webview index.js @5214753 `zIe`, @5657000-5662000)
+KEEP = 'User chose to stay in plan mode and continue planning'
+COMMENTS = '\n\nComments on the plan:\n'
+PLAN_BUTTONS = ['Yes, and auto-accept', 'Yes, and manually approve edits', 'No, keep planning']
+
+
+class PlanTest(CardCase):
+    """Task 11: plan review (ext-webview-ui.md 4.10, 4.11; finding 24): the plan in an editor tab of its own
+    (TAB_MDDOC), comments on text selected there, the card's answers as the extension sends them. Nothing
+    here saves a rule: the manual answer's setMode goes to destination session."""
+
+    def plan(self, prompt='plan', env=None, extra=''):
+        """rhun in plan mode, the cards' lock off, a conversation whose prompt asks for a plan's review."""
+        self.ask(prompt, env=env, claude=self.claude_section('initial_mode = plan\n' + extra))
+
+    def tabs(self):
+        """print-mdtab: a dict per Markdown tab (tab, title, active, comment, selected) with its 'text' lines."""
+        tabs = []
+        for line in self.command('print-mdtab').splitlines():
+            if line.startswith('mdtab '):
+                tabs.append(dict(re.findall(r'(\w+)=(.*?)(?= \w+=|$)', line[6:]), text=[]))
+            elif line.startswith('text'):
+                tabs[-1]['text'].append(line[5:])
+        return tabs
+
+    def comment(self, phrase, text):
+        self.command('mdtab-select ' + phrase)
+        self.command('mdtab-comment ' + text)
+
+    def answer(self, n=1):
+        return self.until_answered(n)[n - 1]
+
+    def test_plan_opens_in_a_tab(self):
+        self.plan()
+        tabs = self.tabs()
+        self.assertEqual(len(tabs), 1, tabs)
+        self.assertEqual((tabs[0]['title'], tabs[0]['active'], tabs[0]['comment'], tabs[0]['selected']),
+                         ('Plan', '1', '1', '-'))
+        self.assertEqual(tabs[0]['text'], PLAN.split('\n'))
+        self.assertIn('activeTab=markdown', self.command('print-context activeTab'))
+        head, lines = self.card()
+        self.assertEqual((head['kind'], head['title'], head['focus']), ('plan', 'Accept this plan?', '1'))
+        self.assertEqual(lines, ['hint Select text in the preview to add comments',
+                                 *(f'button {i} {label}' for i, label in enumerate(PLAN_BUTTONS, 1)), 'field '])
+        self.assertIn('agent # Plan', self.thread())                # the plan row stays, as in phase 1
+        self.assertEqual(self.command('print-agent-input').splitlines()[1],
+                         'card=Accept this plan? options=' + '|'.join(PLAN_BUTTONS))
+        self.command('agent-card 3')
+        self.command('wait-agent ready')
+        self.assertEqual(self.tabs(), [])                           # the answer closes it
+
+    def test_selecting_and_commenting(self):
+        self.plan()
+        self.command('mdtab-select Add the')
+        self.assertEqual(self.tabs()[0]['selected'], 'Add the')
+        self.command('mdtab-comment fix this')
+        head, lines = self.card()
+        self.assertEqual((head['title'], head['focus']), ('Continue planning', '1'))
+        self.assertEqual(lines, ['hint 1 comment will be included as feedback',
+                                 'button 1 Send feedback and keep planning', 'field ',
+                                 'comment 1 "Add the" fix this'])
+        self.assertEqual(self.tabs()[0]['selected'], '-')            # a comment's text is no longer selected
+        self.comment('the file 2. Test', 'and this')                 # across two lines of the plan
+        self.assertEqual(self.lines('hint'), ['2 comments will be included as feedback'])
+        self.assertEqual(self.lines('comment'), ['1 "Add the" fix this', '2 "the file\\n2. Test" and this'])
+        self.assertEqual(self.answers(), [])
+        _, ok = self.reply('mdtab-select no such words')
+        self.assertFalse(ok)
+        self.keys('1')                                              # the panel has the keys: Send feedback
+        answer = self.answer()
+        self.assertEqual(answer['message'], KEEP + COMMENTS + '[Re: "Add the"] fix this\n'
+                                            '[Re: "the file\n2. Test"] and this')
+
+    def test_the_quote_is_taken_when_comment_is_pressed(self):
+        self.plan()
+        self.command('mdtab-select Test it')
+        self.command('mdtab-comment')                               # the button: the prompt opens
+        self.assertEqual(self.command('print-palette').splitlines()[:2],
+                         ['prompt=Comment on the selection', 'field='])
+        self.command('resize 1000 700')                            # laid out again: the selection is gone
+        self.until(lambda: self.tabs()[0]['selected'] == '-', 'the selection cleared by the new layout')
+        self.command('type fix later')
+        self.keys('Return')
+        self.assertEqual(self.lines('comment'), ['1 "Test it" fix later'])
+        self.assertTrue(self.command('print-palette').startswith('none'))
+        self.command('mdtab-comment')                               # nothing selected: no prompt
+        self.assertTrue(self.command('print-palette').startswith('none'))
+
+    def test_feedback_with_comments_goes_back(self):
+        self.plan('plan2')
+        self.comment('Add the file', 'name it notes.txt')
+        self.comment('Test it', 'with the fake')
+        self.command('agent-card-text field try again')
+        self.command('agent-card 1')
+        answer = self.answer()
+        self.assertEqual(answer['message'], REASON + ' try again' + COMMENTS +
+                         '[Re: "Add the file"] name it notes.txt\n[Re: "Test it"] with the fake')
+        self.assertIs(answer['interrupt'], False)
+        # Claude plans again in the same turn (finding 24): a second card and its own tab
+        self.until(lambda: self.head() and self.head()['title'] == 'Accept this plan?', 'the second plan')
+        tabs = self.tabs()
+        self.assertEqual(len(tabs), 1, tabs)
+        self.assertEqual(tabs[0]['text'][0], '# Plan, revised')
+        self.comment('revised', 'shorter')                          # comments only
+        self.command('agent-card 1')
+        answer = self.answer(2)
+        self.assertEqual((answer['message'], answer['interrupt']), (KEEP + COMMENTS + '[Re: "revised"] shorter', False))
+        self.until(lambda: self.head() and self.head()['title'] == 'Accept this plan?', 'the third plan')
+        self.command('agent-card 2')                                # Yes, and manually approve edits
+        self.command('wait-agent ready')
+        self.assertEqual([r['feedback'] for r in self.records() if 'feedback' in r], [None])   # no userFeedback
+        self.assertEqual(self.thread()[-1], chat.REPLY + 'approved default')
+        self.assertEqual(self.tabs(), [])
+
+    def test_yes_auto_accept_sets_the_mode_first(self):
+        self.plan()
+        self.command('agent-card 1')
+        answer = self.answer()
+        self.assertEqual(list(answer), ['behavior', 'updatedInput', 'toolUseID'])
+        self.assertEqual(answer['updatedInput']['plan'], PLAN)
+        lines = self.control()
+        self.assertEqual(lines[-2]['request'], {'subtype': 'set_permission_mode', 'mode': 'acceptEdits'})
+        self.assertEqual(lines[-1]['response']['response']['behavior'], 'allow')
+        self.command('wait-agent ready')
+        self.assertIn(' mode=acceptEdits ', self.live())
+        self.assertEqual(self.tabs(), [])
+        # a model with auto mode: "use auto mode", and auto first
+        self.stop()
+        self.fake_log.unlink()
+        self.plan(env={'FAKE_CLAUDE_MODELS': 'auto'})
+        self.assertEqual(self.buttons()[0], 'Yes, and use auto mode')
+        self.command('agent-card 1')
+        self.answer()
+        self.assertEqual(self.mode_requests(), [{'subtype': 'set_permission_mode', 'mode': 'auto'}])
+        self.command('wait-agent ready')
+        self.assertIn(' mode=auto ', self.live())
+        # auto refused: acceptEdits, then the allow
+        self.stop()
+        self.fake_log.unlink()
+        self.plan(env={'FAKE_CLAUDE_MODELS': 'auto', 'FAKE_CLAUDE_REFUSE_AUTO': '1'})
+        self.command('agent-card 1')
+        self.answer()
+        lines = self.control()
+        self.assertEqual([m['request'] for m in lines[-3:-1]], [{'subtype': 'set_permission_mode', 'mode': 'auto'},
+                                                              {'subtype': 'set_permission_mode', 'mode': 'acceptEdits'}])
+        self.assertEqual(lines[-1]['response']['response']['behavior'], 'allow')
+        self.command('wait-agent ready')
+        self.assertIn(' mode=acceptEdits ', self.live())
+
+    def test_yes_manual_sends_the_set_mode_update(self):
+        self.plan()
+        self.command('agent-card 2')
+        answer = self.answer()
+        self.assertEqual(answer['updatedPermissions'], [{'type': 'setMode', 'mode': 'default', 'destination': 'session'}])
+        self.assertEqual(answer['updatedInput']['plan'], PLAN)
+        lines = self.control()
+        self.assertEqual(lines[-2]['request'], {'subtype': 'set_permission_mode', 'mode': 'default'})
+        self.assertEqual(lines[-1]['response']['response']['behavior'], 'allow')
+        self.command('wait-agent ready')
+        self.assertEqual(self.thread()[-1], chat.REPLY + 'approved default')
+        self.assertIn(' mode=default ', self.live())
+        self.assertFalse((self.project / '.claude').exists())
+
+    def test_no_without_anything_interrupts(self):
+        self.plan()
+        self.command('agent-card 3')
+        answer = self.answer()
+        self.assertEqual((answer['message'], answer['interrupt']), (KEEP, True))
+        self.command('wait-agent ready')
+        self.assertEqual(self.thread()[-1], 'info Interrupted')
+        self.assertEqual(self.mode_requests(), [])
+        # with text only: the extension's reason, and Claude goes on
+        self.command('agent-prompt plan')
+        self.command('wait-agent waiting')
+        self.command('agent-card-text field not yet')
+        self.keys('4', 'Return')                                    # the field, then Enter in it
+        answer = self.answer(2)
+        self.assertEqual((answer['message'], answer['interrupt']), (REASON + ' not yet', False))
+        self.command('wait-agent ready')
+        self.assertEqual(self.thread()[-1], chat.REPLY + 'planning')
+
+    def test_remove_comment(self):
+        self.plan()
+        self.comment('Add the file', 'one')
+        self.comment('Test it', 'two')
+        self.command('agent-card-uncomment 1')
+        self.assertEqual(self.lines('comment'), ['1 "Test it" two'])
+        self.assertEqual(self.lines('hint'), ['1 comment will be included as feedback'])
+        self.comment('Plan', 'three')
+        self.command('agent-focus panel')
+        self.keys('Up')                                             # from Send feedback up to the last ×
+        self.assertEqual(self.head()['focus'], 'x2')
+        self.keys('Return')
+        self.assertEqual(self.lines('comment'), ['1 "Test it" two'])
+        self.command('agent-card-uncomment 1')
+        head, lines = self.card()
+        self.assertEqual((head['title'], head['focus']), ('Accept this plan?', '1'))
+        self.assertEqual(self.buttons(), PLAN_BUTTONS)
+        self.assertEqual(self.lines('comment'), [])
+        _, ok = self.reply('agent-card-uncomment 1')
+        self.assertFalse(ok)
+        self.command('agent-card 3')
+        self.assertEqual(self.answer()['message'], KEEP)
+
+    def test_closing_the_tab_sends_nothing(self):
+        self.plan()
+        self.command('cmd close_tab')
+        self.assertEqual(self.tabs(), [])
+        time.sleep(0.2)
+        self.assertEqual(self.answers(), [])
+        self.assertIn(' requests=1 ', self.live())
+        self.assertEqual(self.head()['title'], 'Accept this plan?')
+        _, ok = self.reply('mdtab-select Add the')
+        self.assertFalse(ok)
+        self.command('agent-card 2')
+        self.assertEqual(self.answer()['behavior'], 'allow')
+
+    def test_withdrawn_plan_closes_its_tab_and_prompt(self):
+        self.plan('planwithdraw 2500')
+        self.command('mdtab-select Add the file')
+        self.command('mdtab-comment')
+        self.assertTrue(self.command('print-palette').startswith('prompt=Comment on the selection'))
+        self.command('type too late')
+        self.until(lambda: 'info Withdrawn by Claude' in self.thread(), 'the withdrawn row')
+        self.assertEqual(self.tabs(), [])
+        self.assertTrue(self.command('print-palette').startswith('none'))
+        self.keys('Return')
+        self.command('agent-card 1')
+        self.command('wait-agent ready')
+        self.assertEqual(self.answers(), [])
+        self.assertEqual([m for m in self.stdin() if m.get('type') == 'control_response'], [])
+        self.assertEqual(self.card(), (None, []))
+
+    def test_plan_open_command(self):
+        self.plan()
+        self.command('agent-card-text field later')
+        self.command('agent-card 3')                                # keeps planning, in plan mode
+        self.command('wait-agent ready')
+        self.assertEqual(self.tabs(), [])
+        self.command('agent-prompt /plan open')
+        self.until(lambda: self.tabs(), 'the plan in a tab')
+        tab = self.tabs()[0]
+        self.assertEqual((tab['title'], tab['comment'], tab['text']), ('Plan', '0', PLAN.split('\n')))
+        self.assertIn({'subtype': 'get_plan'}, [m['request'] for m in self.control() if 'request' in m])
+        self.command('mdtab-select Add the')
+        _, ok = self.reply('mdtab-comment no button here')
+        self.assertFalse(ok)
+        self.assertEqual(self.prompts(), ['plan'])                  # /plan open is no prompt
+        # again: the same tab, not a second one
+        self.command('agent-prompt /plan open')
+        time.sleep(0.3)
+        self.assertEqual(len(self.tabs()), 1)
+        # a conversation of its own, still without a plan: the extension's info row
+        self.command('agent-new claude')
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready')
+        self.command('agent-prompt /plan open')
+        self.until(lambda: 'info Already in plan mode. No plan written yet.' in self.thread(), 'the info row')
+
+    def test_mdtab_is_not_reopened_or_saved(self):
+        self.plan()
+        before = sorted(p.name for p in self.project.iterdir())
+        self.command('cmd save')
+        self.command('cmd save_as')
+        self.assertTrue(self.command('print-palette').startswith('none'))
+        self.assertEqual(sorted(p.name for p in self.project.iterdir()), before)
+        self.command('cmd close_tab')
+        self.command('cmd reopen_closed_tab')
+        self.assertEqual(self.tabs(), [])
+        self.command('agent-card 2')
+        self.command('wait-agent ready')
+        self.quit()
+        sessions = [p for p in (self.work / 'state').rglob('*') if p.is_file()]
+        self.assertFalse(any('Plan' in p.read_text(encoding='utf-8', errors='replace') for p in sessions
+                             if p.suffix == '.session' or p.name.endswith('.session')), sessions)
+
+    def test_the_tab_leaves_a_document_being_typed_in(self):
+        """With the keyboard in a text document the plan's tab opens behind the active tab; else it shows, and
+        the keyboard stays where it was (the panel's card keeps it)."""
+        (self.project / 'notes.txt').write_text('notes\n', encoding='utf-8')
+        self.start(self.claude_section('initial_mode = plan\n'), env={'FAKE_CLAUDE_INIT_MS': '800'})
+        self.command(f'open {self.project / "notes.txt"}')
+        self.command('agent-timing card=0')
+        self.command('agent-new claude')
+        self.command('agent-prompt plan')
+        self.command('agent-focus editor')
+        self.command('wait-agent waiting')
+        tab = self.tabs()[0]
+        self.assertEqual((tab['title'], tab['active']), ('Plan', '0'))
+        self.assertIn(' focus=0 ', self.command('print-state'))
+        self.keys('x')
+        self.assertIn('xnotes', self.command('print-doc'))
+        self.command('cmd next_tab')                                # the user goes to it
+        self.assertEqual(self.tabs()[0]['active'], '1')
+        self.command('agent-card 3')
+        self.answer()
+        self.command('wait-agent ready')
+        # the keyboard in the panel: the tab shows, the keyboard stays in the panel
+        self.command('agent-focus panel')
+        self.command('agent-prompt plan')
+        self.command('wait-agent waiting')
+        self.assertEqual(self.tabs()[0]['active'], '1')
+        self.assertIn(' focus=6 ', self.command('print-state'))
+        self.assertEqual(self.head()['keys'], '1')
+
+    def test_plan_card_and_tab_fit(self):
+        """The plan card with two comments at panel font sizes 8 to 32 and widths 240 to 900: nothing overlaps,
+        everything inside the frame."""
+        self.plan()
+        self.comment('Add the file', 'a comment long enough to wrap in a narrow panel at a large size')
+        self.comment('Test it', 'two')
+        for line in self.command('print-agent-card-fit').splitlines():
+            size, width = map(int, re.match(r'size=(\d+) w=(\d+) ', line).groups())
+            fx, fy, fw, fh = map(int, re.search(r' frame=([\d,]+)', line).group(1).split(','))
+            items = [(m.group(1), *map(int, m.group(3).split(',')))
+                     for m in re.finditer(r'([a-zA-Z])(\d*):([\d,]+);', line)]
+            what = f'size {size} width {width}'
+            self.assertIn('x', [i[0] for i in items], what)
+            for kind, x, y, w, ih in items:
+                self.assertTrue(fx <= x and x + w <= fx + fw and fy <= y and y + ih <= fy + fh, (what, kind))
+            boxes = [i for i in items if i[0] != 'l']
+            for i, a in enumerate(boxes):
+                for b in boxes[i + 1:]:
+                    apart = (a[1] + a[3] <= b[1] or b[1] + b[3] <= a[1] or a[2] + a[4] <= b[2] or b[2] + b[4] <= a[2])
+                    self.assertTrue(apart, (what, a, b))
+        self.command('agent-card 1')
+        self.answer()
+
+
 if __name__ == '__main__':
     unittest.main()

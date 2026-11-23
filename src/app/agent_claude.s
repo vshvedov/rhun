@@ -51,6 +51,8 @@
 .equ OA_PICK, 5                 # set_permission_mode the user asked for (claude_mode_answer)
 .equ OA_FLAGS, 6                # apply_flag_settings / set_max_thinking_tokens (claude_flags_answer): + its
 .equ OA_FLAGS_END, 9            #   kind (claude_session.s's CLF_*: model, effort, ultracode, thinking)
+.equ OA_PLAN_MODE, 10           # plan review: set_permission_mode auto before a plan's Yes (claude_plan_mode_answer)
+.equ OA_GET_PLAN, 11            # plan review: get_plan for /plan (claude_plan_answer)
 .equ QUESTION_OPTS, 16          # a question's card shows its first 16 options
 .equ R_ASSIST, 2                # the roles of agents.s's messages
 .equ R_INFO, 6
@@ -2304,12 +2306,15 @@ h_can_use:
     lea rsi, [rip + .Lk_plan]
     call jstr
     test rdx, rdx
-    jz 6f
+    jz 41f
     mov rdi, rbx
     mov esi, R_ASSIST
     mov rcx, rdx
     mov rdx, rax
     call ev_note
+41: mov rdi, rbx                # plan review: its rich card (claude_cards.s)
+    mov rsi, r14
+    call claude_plan_build
     jmp 6f
 5:  mov rdi, r14                # a permission: the question for its tool, and its rich card
     mov rsi, r15
@@ -2413,10 +2418,11 @@ req_show:
     jmp 4f
 2:  lea r13, [rip + opts_plan]
     lea r14, [rip + .Lq_plan]
+    cmp qword ptr [r12 + AQ_card], 0    # plan review: a plan's rich card too
+    jne 22f
     cmp eax, AQK_PLAN
     je 3f
-    cmp qword ptr [r12 + AQ_card], 0
-    je 21f
+    jmp 21f
 22: mov rdi, rbx                # a rich card (claude_cards.s)
     mov rsi, r12
     call claude_card_show
@@ -2731,6 +2737,45 @@ FN claude_mode_quiet
     call req_end
     EPILOGUE
 
+# plan review: FN claude_mode_plan(AL*, mode cstr) -> eax 1 written: set_permission_mode {mode} whose answer
+#   claude_plan_mode_answer waits for (a plan's Yes with auto mode); FN claude_get_plan(AL*) -> eax 1
+#   written: get_plan, its answer for claude_plan_answer (/plan)
+FN claude_mode_plan
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov esi, OA_PLAN_MODE
+    call req_begin
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_set_mode]
+    call jw_cstr
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_mode]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, r12
+    call jw_cstr
+    mov rdi, rbx
+    call req_end
+    EPILOGUE
+FN claude_get_plan
+    PROLOGUE
+    mov rbx, rdi
+    mov esi, OA_GET_PLAN
+    call req_begin
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_get_plan]
+    call jw_cstr
+    mov rdi, rbx
+    call req_end
+    EPILOGUE
+
 # reply_begin(AL*, AQ*): {"type":"control_response","response":{"subtype":"success","request_id":ID,
 #   "response":{  (the answer's members follow; reply_end closes it)
 reply_begin:
@@ -3033,7 +3078,19 @@ h_response:
     mov rdi, rbx
     mov rsi, rax
     call out_take
-    cmp eax, OA_SETTINGS
+    cmp eax, OA_PLAN_MODE       # plan review: auto before a plan's Yes, get_plan (claude_cards.s)
+    jne 33f
+    mov rdi, rbx
+    mov rsi, r12
+    call claude_plan_mode_answer
+    jmp 9f
+33: cmp eax, OA_GET_PLAN
+    jne 34f
+    mov rdi, rbx
+    mov rsi, r12
+    call claude_plan_answer
+    jmp 9f
+34: cmp eax, OA_SETTINGS
     jne 1f
     mov rdi, rbx                # get_settings: the model, effort and Ultracode in effect (claude_session.s)
     mov rsi, r12
@@ -3475,6 +3532,7 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lv_tool_use: .asciz "tool_use"
 .Lv_tool_result: .asciz "tool_result"
 .Lv_set_mode: .asciz "set_permission_mode"
+.Lv_get_plan: .asciz "get_plan"            # plan review
 .Lv_default: .asciz "default"
 .Lv_allow: .asciz "allow"
 .Lv_deny: .asciz "deny"

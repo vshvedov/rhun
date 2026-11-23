@@ -1580,6 +1580,15 @@ FN palette_ext_prompt_open
     call tf_set
     EPILOGUE
 
+# FN palette_prompt_kind() -> eax the open prompt's PROMPT_*, 0 when no prompt shows (plan review: mdtab.s
+#   closes its comment prompt with its tab)
+FN palette_prompt_kind
+    xor eax, eax
+    cmp dword ptr [rip + pal_mode], PM_PROMPT
+    jne 1f
+    mov eax, [rip + pal_prompt]
+1:  ret
+
 # palette_close_commands(): the command list holds CMD* and titles of extension commands that
 # just moved or went: a palette showing it closes
 FN palette_close_commands
@@ -3332,7 +3341,7 @@ palette_accept:
     mov dword ptr [rip + g_dirty], 1
     jmp .Lpa_ret
 693: cmp dword ptr [rip + pal_prompt], PROMPT_COLOR    # editor presentation: a swatch's color (hicolor.s)
-    jne 690f
+    jne 694f
     lea rdi, [rip + pal_tf]
     call tf_text
     mov dword ptr [rip + pal_mode], PM_NONE
@@ -3342,6 +3351,19 @@ palette_accept:
     pop rsi
     pop rdi
     call color_prompt_done
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lpa_ret
+694: cmp dword ptr [rip + pal_prompt], PROMPT_MD_COMMENT    # plan review: a comment on the selection (mdtab.s)
+    jne 690f
+    lea rdi, [rip + pal_tf]
+    call tf_text
+    mov dword ptr [rip + pal_mode], PM_NONE
+    push rax
+    push rdx
+    call pal_return_focus
+    pop rsi
+    pop rdi
+    call mdtab_prompt_done
     mov dword ptr [rip + g_dirty], 1
     jmp .Lpa_ret
 690: cmp dword ptr [rip + pal_prompt], PROMPT_REMOTE

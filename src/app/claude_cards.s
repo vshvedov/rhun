@@ -56,6 +56,9 @@
 .equ QHEAD_MAX, 400             #   a header's, a description's, a preview's (cut past it)
 .equ QDESC_MAX, 4000
 .equ QPREVIEW_MAX, 100000
+.equ PLS_TABBED, 1              # plan review: AQ_state of a plan (the driver's): its tab was opened once
+.equ PLS_MODEWAIT, 2            #   its Yes waits for set_permission_mode auto's answer
+.equ PL_INFO, 6                 #   agents.s's R_INFO: an info row
 
 .bss
 .p2align 3
@@ -1785,6 +1788,8 @@ FN claude_card_show
     xor eax, eax
     test r13, r13
     jz 9f
+    cmp dword ptr [r12 + AQ_kind], AQK_PLAN     # plan review: the card, then its tab
+    je .Lcs_plan
     test dword ptr [r13 + CD_flags], CDF_SHOWN
     jnz 8f
     mov edi, AG_CLAUDE
@@ -1826,6 +1831,8 @@ FN claude_reply
     cmp [rcx], r12
     jne 9f
     mov [rip + al_now], rbx
+    cmp dword ptr [r12 + AQ_kind], AQK_PLAN     # plan review: a plan's answers
+    je .Lcr_plan
     mov eax, [r13 + CD_chosen]
     cmp eax, CBA_YES
     je .Lcr_yes
@@ -2520,6 +2527,374 @@ write_answers:
 .Lk_answers_q: .asciz "answers"
 .text
 
+# ---------------------------------------------------------------- plan review (task 11)
+#
+# ExitPlanMode's card (CDK_PLAN; agentcard.s draws its comments and header): "1 Yes, and use auto mode"
+# when auto mode is offered for the model (claude_modes), else "1 Yes, and auto-accept"; "2 Yes, and
+# manually approve edits"; "3 No, keep planning"; the field; "Send feedback and keep planning" shows only
+# with comments. When the card shows, the plan opens in a tab ("Plan", mdtab.s) whose comments go to the
+# card; the card's answer, a withdrawal or the process's end close it (agent_aq_free -> mdtab_drop). The
+# answers are the extension's (webview index.js @5657000-5662000; finding 24):
+#   auto: set_permission_mode auto, and when its answer is an error acceptEdits, then allow with the input;
+#   auto-accept: set_permission_mode acceptEdits, then allow; manual: set_permission_mode default, then
+#   allow with updatedPermissions [{"type":"setMode","mode":"default","destination":"session"}];
+#   No and Send feedback: deny, its message `Xb` " " TEXT or "User chose to stay in plan mode and continue
+#   planning", then with comments "\n\nComments on the plan:\n" and a line `[Re: "QUOTE"] COMMENT` each;
+#   interrupt only without text and comments.
+# /plan in plan mode asks get_plan and shows its content in a tab without comments (claude_plan_answer):
+# "Already in plan mode. No plan written yet." without one, "Couldn't show the plan" on an error.
+#
+#   claude_plan_build(AL*, AQ*)               the card (AQ_card), the manual answer's rule (AQ_sugg)
+#   claude_plan_mode_answer(AL*, response)   set_permission_mode auto's answer: the allow follows
+#   claude_plan_answer(AL*, response)        get_plan's
+
+# FN claude_plan_build(AL*, AQ*): ExitPlanMode's card
+FN claude_plan_build
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov edi, CDK_PLAN
+    call agentcard_new
+    mov r13, rax
+    mov [r12 + AQ_card], rax
+    mov [rax + CD_token], r12
+    lea rdi, [rip + .Lpl_rule]  # the manual answer's update, sent as a kept suggestion is (write_rules)
+    call strlen
+    mov r14, rax
+    lea rdi, [rip + .Lpl_rule]
+    mov rsi, rax
+    call mem_dup
+    mov [r12 + AQ_sugg], rax
+    mov [r12 + AQ_sugglen], r14
+    lea r14, [rip + .Lpl_accept]
+    mov r15d, CBA_YES
+    mov rdi, rbx
+    call plan_auto
+    test eax, eax
+    jz 1f
+    lea r14, [rip + .Lpl_auto]
+    mov r15d, CBA_YES_AUTO
+1:  mov rdi, r13
+    mov rsi, r14
+    mov edx, r15d
+    xor ecx, ecx
+    call agentcard_btn
+    mov rdi, r13
+    lea rsi, [rip + .Lpl_manual]
+    mov edx, CBA_YES_MANUAL
+    xor ecx, ecx
+    call agentcard_btn
+    mov rdi, r13
+    lea rsi, [rip + .Lpl_no]
+    mov edx, CBA_NO
+    xor ecx, ecx
+    call agentcard_btn
+    mov rdi, r13
+    lea rsi, [rip + .Lpl_feedback]
+    mov edx, CBA_FEEDBACK
+    xor ecx, ecx
+    call agentcard_btn
+    lea rdi, [rip + .Lph_field]
+    call strlen
+    mov rdi, r13
+    mov esi, CDT_PH
+    lea rdx, [rip + .Lph_field]
+    mov rcx, rax
+    call agentcard_text
+    EPILOGUE
+
+# plan_auto(AL*) -> eax 1 when auto mode is offered now (the mode picker's rule: claude_modes)
+plan_auto:
+    PROLOGUE 16
+    mov rdi, [rdi + AL_as]
+    lea rsi, [rsp]
+    call claude_modes
+    mov r12d, eax
+    mov rbx, [rsp]
+    xor r13d, r13d
+1:  cmp r13d, r12d
+    jae 8f
+    imul rax, r13, AMD_SIZE
+    mov rdi, [rbx + rax + AMD_id]
+    lea rsi, [rip + .Lv_auto]
+    call strcmp_eq
+    test eax, eax
+    jnz 9f
+    inc r13d
+    jmp 1b
+8:  xor eax, eax
+9:  EPILOGUE
+
+# .Lcs_plan: claude_card_show's part for a plan (rbx AL*, r12 AQ*, r13 CD*): the card, then its tab (once)
+.Lcs_plan:
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call ev_card
+    mov r14d, eax
+    test eax, eax
+    jz 9f
+    test dword ptr [r12 + AQ_state], PLS_TABBED
+    jnz 9f
+    or dword ptr [r12 + AQ_state], PLS_TABBED
+    mov rdi, [r12 + AQ_input]   # the plan (parsed again: the arena is global)
+    mov rsi, [r12 + AQ_inlen]
+    mov edx, LINE_VALUES
+    mov ecx, LINE_DEPTH
+    call json_parse_lim
+    test rax, rax
+    jz 9f
+    mov rdi, rax
+    lea rsi, [rip + .Lk_plan]
+    call in_str
+    lea rdi, [rip + .Lpl_title]
+    mov rsi, rax
+    lea rcx, [rip + plan_mdo]
+    mov r8, r12
+    call mdtab_open
+    test rax, rax
+    js 9f
+    mov [r12 + AQ_tab], r12     # its ctx: the request
+9:  mov eax, r14d
+    EPILOGUE
+
+# plan_on_comment(ctx AQ*, quote ptr, len, text ptr, len): a comment from its tab onto its card
+plan_on_comment:
+    mov rdi, [rdi + AQ_card]
+    test rdi, rdi
+    jz 1f
+    jmp agentcard_comment
+1:  ret
+
+# plan_on_closed(ctx AQ*): the user closed its tab (nothing is sent)
+plan_on_closed:
+    mov qword ptr [rdi + AQ_tab], 0
+    ret
+
+# .Lcr_plan: claude_reply's part for a plan (rbx AL*, r12 AQ*, r13 CD*); nothing while an auto Yes waits
+.Lcr_plan:
+    test dword ptr [r12 + AQ_state], PLS_MODEWAIT
+    jnz .Lcr_gone
+    mov eax, [r13 + CD_chosen]
+    lea r14, [rip + .Lv_accept]
+    xor r15d, r15d
+    cmp eax, CBA_YES
+    je .Lpr_mode
+    lea r14, [rip + .Lv_default]
+    mov r15d, 1
+    cmp eax, CBA_YES_MANUAL
+    je .Lpr_mode
+    cmp eax, CBA_YES_AUTO
+    je .Lpr_auto
+    cmp eax, CBA_NO
+    je .Lpr_no
+    cmp eax, CBA_FEEDBACK
+    je .Lpr_no
+    xor eax, eax
+    EPILOGUE
+.Lpr_mode:                      # the mode first (its line finished), then the allow
+    mov rdi, rbx
+    mov rsi, r14
+    call claude_mode_quiet
+    test eax, eax
+    jz .Lcr_after               # refused: nothing went
+    mov rdi, rbx
+    mov rsi, r12
+    call claude_req_kept
+    test eax, eax
+    jz .Lcr_gone
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    mov ecx, r15d
+    call write_allow
+    jmp .Lcr_after
+.Lpr_auto:                      # auto first; its answer sends the allow (claude_plan_mode_answer)
+    mov rdi, rbx
+    lea rsi, [rip + .Lv_auto]
+    call claude_mode_plan
+    test eax, eax
+    jz .Lcr_after
+    mov rdi, rbx
+    mov rsi, r12
+    call claude_req_kept
+    test eax, eax
+    jz .Lcr_gone
+    or dword ptr [r12 + AQ_state], PLS_MODEWAIT
+    jmp .Lcr_gone
+.Lpr_no:
+    lea rdi, [r13 + CD_field]
+    call tf_text
+    mov rdi, rax
+    mov rsi, rdx
+    call trim
+    mov r14, rax
+    mov r15, rdx
+    lea rdi, [rip + msb]
+    call sb_clear
+    test r15, r15
+    jz 1f
+    lea rdi, [rip + msb]        # the extension's reason, a space, the text
+    lea rsi, [rip + .Lr_reason]
+    call sb_push_cstr
+    lea rdi, [rip + msb]
+    mov esi, ' '
+    call sb_push_byte
+    lea rdi, [rip + msb]
+    mov rsi, r14
+    mov rdx, r15
+    call sb_push
+    jmp 2f
+1:  lea rdi, [rip + msb]        # else: keep planning
+    lea rsi, [rip + .Lpl_keep]
+    call sb_push_cstr
+2:  cmp qword ptr [r13 + CD_comments + VEC_len], 0
+    je 5f
+    lea rdi, [rip + msb]
+    lea rsi, [rip + .Lpl_comments]
+    call sb_push_cstr
+    xor r14d, r14d
+3:  cmp r14, [r13 + CD_comments + VEC_len]
+    jae 5f
+    test r14, r14
+    jz 4f
+    lea rdi, [rip + msb]
+    mov esi, 10
+    call sb_push_byte
+4:  imul rax, r14, CDC_SIZE
+    add rax, [r13 + CD_comments + VEC_ptr]
+    push rax
+    push rax
+    lea rdi, [rip + msb]
+    lea rsi, [rip + .Lpl_re]
+    call sb_push_cstr
+    mov rax, [rsp]
+    lea rdi, [rip + msb]
+    mov rsi, [rax + CDC_quote]
+    call sb_push_cstr
+    lea rdi, [rip + msb]
+    lea rsi, [rip + .Lpl_re_end]
+    call sb_push_cstr
+    pop rax
+    pop rax
+    lea rdi, [rip + msb]
+    mov rsi, [rax + CDC_text]
+    call sb_push_cstr
+    inc r14
+    jmp 3b
+5:  xor r8d, r8d                # interrupt: neither text nor comments
+    test r15, r15
+    jnz 6f
+    cmp qword ptr [r13 + CD_comments + VEC_len], 0
+    jne 6f
+    mov r8d, 1
+6:  mov rdi, rbx
+    mov rsi, r12
+    mov rdx, [rip + msb + SB_ptr]
+    mov rcx, [rip + msb + SB_len]
+    call write_deny
+    jmp .Lcr_after
+
+# FN claude_plan_mode_answer(AL*, control_response's response): set_permission_mode auto's answer for the
+#   plan whose Yes waits: in effect, or refused and acceptEdits asked instead; then the allow with the input
+FN claude_plan_mode_answer
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d              # the plan waiting
+    cmp qword ptr [rbx + AL_reqs + VEC_len], 0
+    je 1f
+    mov rax, [rbx + AL_reqs + VEC_ptr]
+    mov rax, [rax]
+    cmp dword ptr [rax + AQ_kind], AQK_PLAN
+    jne 1f
+    test dword ptr [rax + AQ_state], PLS_MODEWAIT
+    jz 1f
+    mov r13, rax
+    and dword ptr [r13 + AQ_state], ~PLS_MODEWAIT
+1:  mov rdi, r12
+    lea rsi, [rip + .Lk_subtype]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_success]
+    call json_is
+    mov r14d, eax
+    mov rdi, rbx                # the mode in effect (an error changes nothing)
+    mov rsi, r12
+    xor edx, edx
+    call claude_mode_answer
+    test r13, r13
+    jz 9f                       # withdrawn meanwhile: nothing more
+    test r14d, r14d
+    jnz 2f
+    mov rdi, rbx                # refused: acceptEdits instead
+    lea rsi, [rip + .Lv_accept]
+    call claude_mode_quiet
+    test eax, eax
+    jz 3f
+    mov rdi, rbx
+    mov rsi, r13
+    call claude_req_kept
+    test eax, eax
+    jz 9f
+2:  mov rdi, rbx
+    mov rsi, r13
+    mov rdx, [r13 + AQ_card]
+    xor ecx, ecx
+    call write_allow
+3:  mov rdi, rbx
+    mov rsi, r13
+    mov edx, eax
+    call claude_req_after
+9:  EPILOGUE
+
+# FN claude_plan_answer(AL*, control_response's response): get_plan's: its content in a tab of its own (no
+#   comments), else the extension's info row
+FN claude_plan_answer
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    lea r13, [rip + .Lpl_unshown]
+    mov rdi, r12
+    lea rsi, [rip + .Lk_subtype]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_success]
+    call json_is
+    test eax, eax
+    jz 8f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_response]
+    call json_get
+    mov r14, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lk_exists]
+    call in_true
+    test eax, eax
+    jnz 1f
+    lea r13, [rip + .Lpl_none]
+    jmp 8f
+1:  mov rdi, r14
+    lea rsi, [rip + .Lk_content]
+    call in_str
+    test rax, rax
+    jz 8f
+    lea rdi, [rip + .Lpl_title]
+    mov rsi, rax
+    xor ecx, ecx
+    xor r8d, r8d
+    call mdtab_open
+    test rax, rax
+    jns 9f
+8:  mov rdi, r13
+    call strlen
+    mov rdi, rbx
+    mov esi, PL_INFO
+    mov rdx, r13
+    mov rcx, rax
+    call ev_note
+9:  EPILOGUE
+
 .bss
 .p2align 3
 al_now: .quad 0                 # the conversation the card is made or answered for
@@ -2710,3 +3085,26 @@ dest_rank: .long 2, 0, 1, 3     # the four's width (the extension's SPn: user, p
 .Lr_reason: .asciz "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). The user provided the following reason for the rejection: "
 # phase 1's (`Yb`)
 .Lr_rejected: .asciz "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed."
+# plan review (task 11): the plan card's words (webview index.js @5662587, @5664426), its answers
+#   (@5214753 `zIe`, @5657000-5662000), /plan's rows (@5369281)
+.Lpl_accept: .asciz "Yes, and auto-accept"
+.Lpl_auto: .asciz "Yes, and use auto mode"
+.Lpl_manual: .asciz "Yes, and manually approve edits"
+.Lpl_no: .asciz "No, keep planning"
+.Lpl_feedback: .asciz "Send feedback and keep planning"
+.Lpl_title: .asciz "Plan"
+.Lpl_keep: .asciz "User chose to stay in plan mode and continue planning"
+.Lpl_comments: .asciz "\n\nComments on the plan:\n"
+.Lpl_re: .asciz "[Re: \""
+.Lpl_re_end: .asciz "\"] "
+.Lpl_unshown: .asciz "Couldn't show the plan"
+.Lpl_none: .asciz "Already in plan mode. No plan written yet."
+.Lpl_rule: .asciz "[{\"type\":\"setMode\",\"mode\":\"default\",\"destination\":\"session\"}]"
+.Lk_plan: .asciz "plan"
+.Lk_exists: .asciz "exists"
+.Lk_content: .asciz "content"
+.Lk_subtype: .asciz "subtype"
+.Lk_response: .asciz "response"
+.Lv_success: .asciz "success"
+.p2align 3
+plan_mdo: .quad plan_on_comment, plan_on_closed     # its tab's owner (MDO, mdtab.s)

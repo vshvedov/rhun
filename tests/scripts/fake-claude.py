@@ -64,7 +64,8 @@ with a uuid while another waits or runs is refused: lifecycle refused, never run
 FAKE_CLAUDE_DISCARD_HELD (the first such message is queued, then, when its turn would start, lifecycle
 discarded, never run, logged {"discarded": UUID}); FAKE_CLAUDE_NO_LIFECYCLE (no command_lifecycle at all:
 only the replay says a message started); FAKE_CLAUDE_ULTRATHINK (system/init says ultrathink_available true:
-unrecorded, 2.1.330 said false on this account);
+unrecorded, 2.1.330 said false on this account); FAKE_CLAUDE_REFUSE_AUTO (set_permission_mode auto is answered
+with an error: unrecorded, the plan review's fallback to acceptEdits);
 FAKE_CLAUDE_ECHO_ENV (comma-separated names whose values the log's start record shows, besides
 CLAUDE_CODE_ENTRYPOINT, CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, MCP_CONNECTION_NONBLOCKING, TRACEPARENT and
 TRACESTATE);
@@ -1301,22 +1302,77 @@ def s_withdraw(prompt):
 
 def s_plan(prompt):
     """04-plan-mode's ExitPlanMode; the final text names the mode it ends in"""
+    plan_turn(['# Plan\n\n1. Add the file\n2. Test it'])
+
+
+def plan_turn(plans):
+    """ExitPlanMode for each plan in turn (finding 24): a deny with interrupt false gives the tool_result its
+    message and Claude plans again in the same turn (the next plan; after the last, the final text
+    "planning"); a deny with interrupt true ends the turn as an interrupt does ("[Request interrupted by
+    user]", aborted_streaming); an allow leaves plan mode (the mode a set_permission_mode chose before it, a
+    setMode among its updatedPermissions, else default) and logs its userFeedback."""
     global MODE
-    plan = '# Plan\n\n1. Add the file\n2. Test it'
     path = os.path.join(config_dir(), 'plans', 'fake.md')
-    PLAN[0] = {'content': plan, 'path': path}     # get_plan's answer from here on (finding 24)
-    tid, answer = interactive('ExitPlanMode', {'plan': plan, 'planFilePath': path})
-    if answer is None:
-        return
-    if answer.get('behavior') != 'allow':
+    for plan in plans:
+        PLAN[0] = {'content': plan, 'path': path}     # get_plan's answer from here on (finding 24)
+        tid, answer = interactive('ExitPlanMode', {'plan': plan, 'planFilePath': path})
+        if answer is None:
+            return
+        if answer.get('behavior') == 'allow':
+            break
         tool_result(tid, answer.get('message', ''), True)
+        if answer.get('interrupt') is True:
+            cut_off()
+            return
+    else:
         final('planning')
         return
+    log(feedback=(answer.get('updatedInput') or {}).get('userFeedback'))
     modes = [p.get('mode') for p in answer.get('updatedPermissions') or [] if p.get('type') == 'setMode']
-    MODE = modes[0] if modes else 'default'
+    if modes:
+        MODE = modes[0]
+    elif MODE == 'plan':
+        MODE = 'default'
     status(None, MODE)
     tool_result(tid, 'User has approved your plan. You can now start coding.', interactive=True)
     final('approved ' + MODE)
+
+
+def s_plan2(prompt):
+    """plan review's second round (finding 24): up to three plans in one turn, each denied with interrupt
+    false planning again; an allow's userFeedback is logged ({"feedback": ...})"""
+    plan_turn(['# Plan\n\n1. Add the file\n2. Test it', '# Plan, revised\n\n1. Add notes.txt\n2. Test it',
+               '# Plan, third\n\n1. Add notes.txt'])
+
+
+def s_planwithdraw(prompt):
+    """planwithdraw [MS]: an ExitPlanMode Claude takes back by itself after MS (default 1000) unanswered
+    (unrecorded, as `withdraw`); then the turn ends normally"""
+    words = prompt.split()
+    wait = int(words[1]) / 1000 if len(words) > 1 and words[1].isdigit() else 1.0
+    plan = '# Plan\n\n1. Add the file\n2. Test it'
+    path = os.path.join(config_dir(), 'plans', 'fake.md')
+    PLAN[0] = {'content': plan, 'path': path}
+    mid = message_start()
+    tool_input = {'plan': plan, 'planFilePath': path}
+    tid = tool_use(mid, 0, 'ExitPlanMode', tool_input)
+    message_end('tool_use')
+    rid = request_id()
+    deadline = time.time() + wait
+    with COND:
+        PENDING[rid] = None
+        emit({'type': 'control_request', 'request_id': rid, 'request': {
+            'subtype': 'can_use_tool', 'tool_name': 'ExitPlanMode', 'display_name': 'ExitPlanMode',
+            'input': tool_input, 'tool_use_id': tid, 'requires_user_interaction': True}})
+        while PENDING.get(rid) is None and not withdrawn() and time.time() < deadline:
+            COND.wait(0.05)
+        answer = PENDING.pop(rid, None)
+        if answer is None and not CLOSED.is_set():
+            emit({'type': 'control_cancel_request', 'request_id': rid})
+    if answer is not None:
+        log(answer=answer)
+    tool_result(tid, 'The user withdrew the plan' if answer is None else 'answered', answer is None)
+    final('done')
 
 
 def s_slow(prompt):
@@ -1897,6 +1953,7 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'skill': s_skill, 'project': s_project, 'glob': s_glob, 'grep': s_grep, 'websearch': s_websearch,
              'other': s_other,
              'ask3': s_ask3}
+SCENARIOS.update({'plan2': s_plan2, 'planwithdraw': s_planwithdraw})    # plan review (task 11)
 
 
 # three of 2.1.330's commands, as its initialize lists them (finding 22; the real list has every built-in,
@@ -2022,6 +2079,9 @@ def handle(message):
             if mode == 'bypassPermissions' and not BYPASS_OK:
                 respond_error(rid, 'Cannot set permission mode to bypassPermissions because the session was not '
                               'launched with --dangerously-skip-permissions')
+                return
+            if mode == 'auto' and ENV.get('FAKE_CLAUDE_REFUSE_AUTO'):   # unrecorded: auto refused
+                respond_error(rid, 'Cannot set permission mode to auto')
                 return
             old, MODE = MODE, mode
             respond(rid, {'mode': MODE})    # the answer, then the mode's status line (2.1.330)

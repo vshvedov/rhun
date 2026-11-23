@@ -2233,7 +2233,8 @@ shows_fast:
     EPILOGUE
 
 # FN claude_action(AL* or 0, act, ptr, len) -> eax 1 when it was done: ACT_PLAN (/plan [TEXT]: plan mode,
-#   then TEXT as a prompt; already in it: the extension's info row), ACT_FAST (/fast as a prompt),
+#   then TEXT as a prompt; already in it: the plan in a tab, get_plan's, or the extension's info row),
+#   ACT_FAST (/fast as a prompt),
 #   ACT_EFFORT (the effort row: "+", "-", "~" or a level's id, effort_step),
 #   ACT_SETTINGS (Settings at Claude Code's rows), ACT_HELP (the extension's help docs, open_help in
 #   extension.js @3355805, asked before they open); anything else 0
@@ -2266,6 +2267,13 @@ FN claude_action
     test eax, eax
     jz 1f
     lea rdx, [rip + .Lp_already]
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP   # plan review: with a process, the plan in a tab
+    jne .Lca_note                                   #   (get_plan: claude_plan_answer, claude_cards.s)
+    mov rdi, rbx
+    call claude_get_plan
+    test eax, eax
+    jnz .Lca_yes
+    lea rdx, [rip + .Lp_unshown]
     jmp .Lca_note
 1:  mov rdi, rbx
     lea rsi, [rip + .Lv_plan]
@@ -4087,6 +4095,7 @@ local_cmds:
 .Lm_help: .asciz "View help docs"
 .Lm_help_d: .asciz "Open help documentation"
 .Lp_already: .asciz "Already in plan mode. No plan written yet."
+.Lp_unshown: .asciz "Couldn't show the plan"     # plan review
 .Lp_couldnt: .asciz "Couldn't switch to plan mode"
 .Lp_not_sent: .asciz "; not sent: "
 .Lv_plan: .asciz "plan"

@@ -1422,7 +1422,11 @@ FN app_tab_label
     jne 4f
     mov rdi, [rcx + TAB_flags]
     jmp extview_title
-4:  ret
+4:  cmp qword ptr [rcx + TAB_kind], TAB_MDDOC    # plan review: a Markdown tab of rhun's own (mdtab.s)
+    jne 5f
+    mov rdi, [rcx + TAB_flags]
+    jmp mdtab_label
+5:  ret
 
 # app_detect_lang(doc)
 FN app_detect_lang
@@ -1481,7 +1485,15 @@ FN app_close_tab_now
     call nb_tab_closed          # its extension hears it, its cells go
     pop rax
     pop rax
-70: mov rbx, [rax + TAB_doc]
+70: cmp qword ptr [rax + TAB_kind], TAB_MDDOC
+    jne 71f
+    push rax
+    push rax
+    mov rdi, [rax + TAB_flags]
+    call mdtab_tab_closed       # plan review: its owner hears it, its prompt and document go (mdtab.s)
+    pop rax
+    pop rax
+71: mov rbx, [rax + TAB_doc]
     test rbx, rbx
     jz 1f
     mov rdi, rbx
@@ -2636,6 +2648,12 @@ FN app_on_key
     call nb_key
     test eax, eax
     jnz 9f
+    mov edi, r12d               # plan review: a Markdown tab's keys, Ctrl+Enter its Comment (mdtab.s)
+    mov esi, r13d
+    mov edx, r14d
+    call mdtab_key
+    test eax, eax
+    jnz 9f
     mov edi, r12d
     mov esi, r13d
     mov edx, r14d
@@ -3514,13 +3532,22 @@ FN center_draw
     call extview_draw
 14: EPILOGUE
 13: cmp qword ptr [rax + TAB_kind], TAB_NOTEBOOK
-    jne 2f
+    jne 15f
     mov edi, [rip + g_editor_rect]
     mov esi, [rip + g_editor_rect + 4]
     mov edx, [rip + g_editor_rect + 8]
     mov ecx, [rip + g_editor_rect + 12]
     call nb_draw
     call find_draw
+    EPILOGUE
+15: cmp qword ptr [rax + TAB_kind], TAB_MDDOC    # plan review: a Markdown tab of rhun's own (mdtab.s)
+    jne 2f
+    mov rdi, [rip + g_tab_cur]
+    mov esi, [rip + g_editor_rect]
+    mov edx, [rip + g_editor_rect + 4]
+    mov ecx, [rip + g_editor_rect + 8]
+    mov r8d, [rip + g_editor_rect + 12]
+    call mdtab_draw
     EPILOGUE
 2:  mov rbx, [rip + g_doc]
     mov rdi, rbx

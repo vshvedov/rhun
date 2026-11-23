@@ -316,6 +316,8 @@ aq_free:
     jz 9f
     mov rdi, rbx                # a popup opened for it closes (agentpop.s)
     call agentpop_gone
+    mov rdi, [rbx + AQ_tab]     # plan review: its tab and a comment prompt open for it close (mdtab.s)
+    call mdtab_drop
     mov rdi, [rbx + AQ_id]
     call mem_free
     mov rdi, [rbx + AQ_tool]

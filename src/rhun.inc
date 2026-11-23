@@ -3274,6 +3274,7 @@ ENDSTRUCT CDB_SIZE
 .equ CBA_SUBMIT, 7
 .equ CBA_DIALOG, 16             # + n: a dialog's result n
 .equ CDBF_DEST, 1               # the label ends with the place
+.equ CDBF_HIDE, 2               # plan review: not shown now (a plan card's buttons follow its comments)
 STRUCT
 F CDD_id, 8
 F CDD_label, 8

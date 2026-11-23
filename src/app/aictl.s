@@ -1269,6 +1269,97 @@ c_agent_focus:
 8:  mov rax, -1
     EPILOGUE
 
+# ---- plan review (task 11): the plan's tab (mdtab.s) and the plan card's comments (agentcard.s) ----
+
+# rest_text() -> rax ptr, rdx len: the rest of the line from its first character
+rest_text:
+    sub rsp, 8
+    call ai_arg_rest
+    add rsp, 8
+1:  test rdx, rdx
+    jz 2f
+    cmp byte ptr [rax], ' '
+    jne 2f
+    inc rax
+    dec rdx
+    jmp 1b
+2:  ret
+
+# print-mdtab: the Markdown tabs (mdtab_dump)
+c_print_mdtab:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call mdtab_dump
+    xor eax, eax
+    EPILOGUE
+
+# mdtab-select TEXT: the text selected in the active Markdown tab (else the newest); error when not found
+c_mdtab_select:
+    PROLOGUE
+    call ai_set
+    call rest_text
+    mov rdi, rax
+    mov rsi, rdx
+    call mdtab_select
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# mdtab-comment [TEXT]: its Comment button: without TEXT the prompt opens, with it the comment goes as the
+#   prompt's Enter sends it; error when the tab takes no comments
+c_mdtab_comment:
+    PROLOGUE
+    call ai_set
+    call rest_text
+    mov rdi, rax
+    mov rsi, rdx
+    call mdtab_comment
+    test eax, eax
+    js 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# agent-card-uncomment N: comment N (from 1) of the open conversation's card goes, as a click on its ×
+c_agent_card_uncomment:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    test edx, edx
+    jz 8f
+    mov rbx, rax
+    test rbx, rbx
+    jz 8f
+    call agents_open_driven
+    mov rdi, rax
+    call agentcard_of
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    lea rsi, [rbx - 1]
+    call agentcard_uncomment
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+.section .rodata
+.Lc_print_mdtab: .asciz "print-mdtab"
+.Lc_mdtab_select: .asciz "mdtab-select"
+.Lc_mdtab_comment: .asciz "mdtab-comment"
+.Lc_agent_card_uncomment: .asciz "agent-card-uncomment"
+
 .section .rodata
 .Lc_print_agent_row: .asciz "print-agent-row"
 .Lc_print_agent_card: .asciz "print-agent-card"
@@ -1401,6 +1492,9 @@ ai_ctl:
     # the rich cards (agentcard.s)
     .quad .Lc_print_agent_card, c_print_agent_card, .Lc_print_agent_card_fit, c_print_agent_card_fit
     .quad .Lc_agent_card_text, c_agent_card_text, .Lc_agent_focus, c_agent_focus
+    # plan review (mdtab.s, agentcard.s)
+    .quad .Lc_print_mdtab, c_print_mdtab, .Lc_mdtab_select, c_mdtab_select
+    .quad .Lc_mdtab_comment, c_mdtab_comment, .Lc_agent_card_uncomment, c_agent_card_uncomment
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

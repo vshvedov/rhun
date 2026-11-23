@@ -889,6 +889,10 @@ FN views_paste_target
 FN views_clip_command
     PROLOGUE
     mov r12d, edi
+    call mdtab_clip             # plan review: the active Markdown tab's selection (mdtab.s)
+    test eax, eax
+    jnz 9f
+    mov edi, r12d
     call rview_focused_doc      # a doc view: its selected text, or all of it selected
     test rax, rax
     jz 2f

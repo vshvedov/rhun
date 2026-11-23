@@ -1517,8 +1517,8 @@ class ModeTest(ModeCase):
         self.command('agent-prompt /plan')
         self.until(lambda: self.mode() == 'plan', 'plan')
         self.assertEqual(self.asked(), ['plan'])
-        self.command('agent-prompt /plan')
-        self.assertIn('info Already in plan mode. No plan written yet.', self.thread())
+        self.command('agent-prompt /plan')          # in plan mode: get_plan's answer (task 11), none yet
+        self.until(lambda: 'info Already in plan mode. No plan written yet.' in self.thread(), 'the info row')
         self.command('agent-mode default')
         self.until(lambda: self.mode() == 'default', 'default')
         self.command('agent-prompt /plan write the tests')

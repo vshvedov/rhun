@@ -696,7 +696,7 @@ with tempfile.TemporaryDirectory(prefix='rhun-windows-', dir=OUT) as temporary:
                    {'type': 'custom-title', 'customTitle': 'Plan it', 'sessionId': 's1'}]
         (folder / 's1.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in records), encoding='utf-8')
         output = run('rhun.com', winpath(project), '--headless', '1400x860', '--script',
-                     'tests/scripts/claude-chat.rsc', env=env, timeout=90).stdout
+                     'tests/windows/claude-chat.rsc', env=env, timeout=90).stdout
         lines = output.decode('utf-8', 'replace').replace('\r\n', '\n').split('\n')
         # the list, then the list and the open conversation
         equal(lines[:5], ['Claude: Plan it', 'Claude: Plan it', 'user go', 'agent ## Plan',

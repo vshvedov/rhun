@@ -1798,6 +1798,46 @@ class HolderTest(DrivenCase):
         self.assertEqual(self.starts(), [])
         self.assertTrue(self.live().startswith('state=off pid=0 '), self.live())
 
+    def moved(self):
+        """The config names another Claude folder (B) once rhun runs; until the reload is seen."""
+        b = self.work / 'B'
+        self.config.write_text(self.BASE + self.claude_section(f'env.CLAUDE_CONFIG_DIR = {b}\n'), encoding='utf-8')
+        self.until(lambda: self.command(f'print-claude-path {self.project} x').startswith(str(b)), 'the reload')
+        return b
+
+    def test_a_listed_conversation_resumes_where_its_file_is(self):
+        self.env['FAKE_CLAUDE_ECHO_ENV'] = 'CLAUDE_CONFIG_DIR'
+        path = self.seed()
+        self.start()
+        self.command('agent-timing hold=300')
+        self.open_listed()
+        self.moved()
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready')
+        start = self.starts()[0]
+        self.assertEqual(start['argv'][-1], '--resume=s1')
+        self.assertEqual(start['env']['CLAUDE_CONFIG_DIR'], str(self.work / '.claude'))
+        self.assertIn('hello', path.read_text(encoding='utf-8'))
+
+    def test_a_copy_starts_where_its_source_lives(self):
+        self.env['FAKE_CLAUDE_ECHO_ENV'] = 'CLAUDE_CONFIG_DIR'
+        path = self.seed()
+        self.hold()
+        self.start()
+        self.command('agent-timing hold=300')
+        self.open_listed()
+        self.moved()
+        self.command('agent-prompt hello')
+        self.command('wait-agent held 5000')
+        self.command('agent-card 2')                # Continue in a copy
+        self.command('wait-agent ready')
+        start = self.starts()[0]
+        self.assertIn('--resume=s1', start['argv'])
+        self.assertEqual(start['env']['CLAUDE_CONFIG_DIR'], str(self.work / '.claude'))
+        copy = self.sid()
+        self.assertTrue((path.parent / (copy + '.jsonl')).exists())
+        self.assertRegex(self.live(), r' new=0\b')
+
     def test_released_in_time_starts(self):
         path, record, old = self.held(3000)
         time.sleep(0.6)

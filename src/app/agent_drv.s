@@ -935,6 +935,9 @@ fork_copy:
     lea rdi, [r13 + AL_fork]
     lea rsi, [rbx + AL_sid]
     call cstr_copy
+    mov rdi, r13                # the copy lives where its source does
+    mov rsi, rbx
+    call claude_fork_dir
     mov rdi, [rbx + AL_as]      # the original: its own rows only, no prompt waiting
     mov rsi, [rbx + AL_live_from]
     call agents_ext_truncate

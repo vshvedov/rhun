@@ -247,41 +247,157 @@ cl_start:
     xor eax, eax
     EPILOGUE
 
-# start_env(AL*) -> rax envp for its program (mem_free it): claude_env's. Its first start keeps the Claude
-#   folder in AL_cdir; when the configuration names another one by a later start, the program is given
-#   AL_cdir (CLAUDE_CONFIG_DIR), where its conversation lives. While the record lives, its transcript,
-#   the search by id and the holder check use AL_cdir too (pin)
+# start_env(AL*) -> rax envp for its program (mem_free it): claude_env's, or with CLAUDE_CONFIG_DIR its
+#   conversation's folder (live_dir) when the configuration names another one now
 start_env:
     PROLOGUE
     mov rbx, rdi
+    call live_dir
+    test rax, rax
+    jz 8f
+    mov r12, rax
     lea rdi, [rip + psb]
     call sb_clear
     lea rdi, [rip + psb]
     call claude_dir
     test eax, eax
-    jz 8f
-    mov rdi, [rbx + AL_cdir]
-    test rdi, rdi
-    jnz 1f
-    mov rdi, [rip + psb + SB_ptr]
-    mov rsi, [rip + psb + SB_len]
-    call mem_dup
-    mov [rbx + AL_cdir], rax
-    jmp 8f
-1:  mov rsi, [rip + psb + SB_ptr]
+    jz 1f
+    mov rdi, r12
+    mov rsi, [rip + psb + SB_ptr]
     call strcmp_eq
     test eax, eax
     jnz 8f
-    mov rdi, [rbx + AL_cdir]
+1:  mov rdi, r12
     call claude_env_dir
     EPILOGUE
 8:  call claude_env
     EPILOGUE
 
-# pin(AL*): claude_dir gives the folder its program was started with (none yet: the configuration's)
+# live_dir(AL*) -> rax the Claude folder its conversation lives in (AL_cdir; 0 without any), kept from its
+#   first use while the record lives: for an existing conversation where its file is (AS_path:
+#   FOLDER/projects/SLUG/ID.jsonl), for a new one (no file yet; a copy has its source's: claude_fork_dir)
+#   the one claude_dir gives at its first start. Used by start_env and pin (the transcript, the search by
+#   id, the holder check)
+live_dir:
+    PROLOGUE
+    mov rbx, rdi
+    mov rax, [rbx + AL_cdir]
+    test rax, rax
+    jnz 9f
+    test dword ptr [rbx + AL_flags], ALF_NEW
+    jnz 7f
+    mov rax, [rbx + AL_as]
+    mov rdi, [rax + AS_path]
+    call path_folder
+    test rax, rax
+    jnz 8f
+7:  lea rdi, [rip + psb]
+    call sb_clear
+    lea rdi, [rip + psb]
+    call claude_dir
+    test eax, eax
+    jz 9f
+    mov rdi, [rip + psb + SB_ptr]
+    mov rsi, [rip + psb + SB_len]
+    call mem_dup
+8:  mov [rbx + AL_cdir], rax
+9:  EPILOGUE
+
+# path_folder(path cstr or 0) -> rax the Claude folder of a transcript's path, mem_dup'd: what comes before
+#   "/projects/SLUG/NAME" (either separator on Windows); 0 when the path is not of that shape
+path_folder:
+    PROLOGUE
+    mov rbx, rdi
+    xor eax, eax
+    test rbx, rbx
+    jz 9f
+    call strlen
+    mov r12, rax                # where the search goes back from
+    xor r13d, r13d              # separators found
+1:  test r12, r12
+    jz 8f
+    dec r12
+    movzx eax, byte ptr [rbx + r12]
+    cmp eax, '/'
+    je 2f
+.ifdef WINDOWS
+    cmp eax, 92
+    je 2f
+.endif
+    jmp 1b
+2:  inc r13d
+    cmp r13d, 2
+    jne 3f
+    mov r14, r12                # the separator after "projects"
+3:  cmp r13d, 3
+    jb 1b
+    mov rax, r14                # the component between this separator and the next is "projects"
+    sub rax, r12
+    cmp rax, 9
+    jne 8f
+    lea rdi, [rbx + r12 + 1]
+    lea rsi, [rip + .Lw_projects]
+    mov edx, 8
+    call memeq
+    test eax, eax
+    jz 8f
+    test r12, r12
+    jz 8f
+    mov rdi, rbx
+    mov rsi, r12
+    call mem_dup
+    EPILOGUE
+8:  xor eax, eax
+9:  EPILOGUE
+
+# FN claude_fork_dir(copy AL*, source AL*): Continue in a copy: the copy lives where its source does (the
+#   fork reads the source's file there): its folder and its transcript's path are the source's folder's
+FN claude_fork_dir
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, rsi
+    call live_dir
+    test rax, rax
+    jz 9f
+    mov r12, rax
+    mov rdi, rax
+    call strlen
+    mov rdi, r12
+    mov rsi, rax
+    call mem_dup
+    mov r13, rax
+    mov rdi, [rbx + AL_cdir]
+    call mem_free
+    mov [rbx + AL_cdir], r13
+    mov rdi, r13                # its file's path in that folder
+    call claude_dir_pin
+    lea rdi, [rip + psb]
+    call sb_clear
+    mov rax, [rbx + AL_as]
+    mov rsi, [rax + AS_cwd]
+    test rsi, rsi
+    jnz 1f
+    mov rsi, [rip + g_project]
+1:  lea rdi, [rip + psb]
+    lea rdx, [rbx + AL_sid]
+    call claude_transcript
+    mov r14d, eax
+    xor edi, edi
+    call claude_dir_pin
+    test r14d, r14d
+    jz 9f
+    mov rdi, rbx
+    mov rsi, [rip + psb + SB_ptr]
+    call take_path
+9:  EPILOGUE
+
+# pin(AL*): claude_dir gives the folder its conversation lives in (live_dir)
 pin:
-    mov rdi, [rdi + AL_cdir]
-    jmp claude_dir_pin
+    PROLOGUE
+    call live_dir
+    mov rdi, rax
+    call claude_dir_pin
+    EPILOGUE
 
 # unpin(): claude_dir follows the configuration again
 unpin:
@@ -2647,6 +2763,7 @@ cl_flags:
 .La_json: .asciz "--json"
 .Lk_loggedIn: .asciz "loggedIn"
 .Lw_claude: .asciz "claude"
+.Lw_projects: .ascii "projects"
 .Lw_login: .asciz " auth login"
 .ifdef WINDOWS
 # PowerShell, the terminal's shell: "," would make an array and "@" splat; "~" and "+" are kept out too

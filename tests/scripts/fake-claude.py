@@ -2,7 +2,8 @@
 """A stand-in for Claude Code 2.1.330 in stream-json mode, for rhun's tests (spec 11).
 
 `claude auth status [--json]` prints the report FAKE_CLAUDE_AUTH names (ok, out, key, garbage; @FILE reads
-the name from FILE), FAKE_CLAUDE_AUTH_MS after it started (default at once).
+the name from FILE; profile reads it from <config>/fake-auth, ok without it), FAKE_CLAUDE_AUTH_MS after it
+started (default at once).
 Stream mode takes the command line rhun passes (tests/data/claude-shapes/README.txt):
   --output-format stream-json --verbose --input-format stream-json --include-partial-messages
   --permission-prompt-tool=stdio --setting-sources=SOURCES --max-thinking-tokens=N
@@ -104,6 +105,11 @@ if ARGS[:2] == ['auth', 'status']:
     MODE_AUTH = ENV.get('FAKE_CLAUDE_AUTH', 'ok')
     if MODE_AUTH.startswith('@'):           # @FILE: the file names the mode (a test changes it mid-run)
         MODE_AUTH = open(MODE_AUTH[1:], encoding='utf-8').read().strip()
+    elif MODE_AUTH == 'profile':            # the profile's own: <config>/fake-auth names it (ok without one)
+        try:
+            MODE_AUTH = open(os.path.join(config_dir(), 'fake-auth'), encoding='utf-8').read().strip()
+        except OSError:
+            MODE_AUTH = 'ok'
     log(start='auth', argv=ARGS, cwd=os.getcwd(), env=env_shown(), names=claude_env())
     time.sleep(int(ENV.get('FAKE_CLAUDE_AUTH_MS', '0')) / 1000)
     if MODE_AUTH == 'garbage':

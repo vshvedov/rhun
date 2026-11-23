@@ -2145,6 +2145,27 @@ class EdgeTest(DrivenCase):
     def test_a_prompt_that_never_went_comes_back_with_the_panel(self):
         self.unsent(lambda: self.command('cmd toggle_agents'))
 
+    def test_the_sign_in_check_asks_the_conversations_own_profile(self):
+        # a listed conversation lives in ~/.claude (signed in); the settings name B (signed out): its Send is
+        # checked against its own profile, and B's answer is B's alone
+        home_claude, b = self.work / '.claude', self.work / 'B'
+        self.env['FAKE_CLAUDE_ECHO_ENV'] = 'CLAUDE_CONFIG_DIR'
+        b.mkdir()
+        (b / 'fake-auth').write_text('out', encoding='utf-8')
+        self.seed()
+        self.start(env={'FAKE_CLAUDE_AUTH': 'profile'})
+        self.open_listed()
+        self.config.write_text(self.BASE + self.claude_section(f'env.CLAUDE_CONFIG_DIR = {b}\n'), encoding='utf-8')
+        self.until(lambda: self.command(f'print-claude-path {self.project} x').startswith(str(b)), 'the reload')
+        self.command('agent-prompt again')
+        self.command('wait-agent ready')
+        self.assertEqual([r['env'].get('CLAUDE_CONFIG_DIR') for r in self.auths()], [str(home_claude)])
+        self.command('agent-new claude')            # a new one lives in B: B is asked, and is signed out
+        self.command('agent-prompt more')
+        self.command('wait-agent failed')
+        self.assertEqual(self.card(), SIGN_IN_CARD)
+        self.assertEqual([r['env'].get('CLAUDE_CONFIG_DIR') for r in self.auths()], [str(home_claude), str(b)])
+
     def test_signed_in_starts(self):
         self.start()
         self.chat('hello')

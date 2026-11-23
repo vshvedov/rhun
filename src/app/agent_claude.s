@@ -42,10 +42,11 @@
 .equ R_INFO, 6
 .equ AUTH_MS, 10000             # the sign-in question's answer is waited for this long
 .equ AUTH_MAX, 65536            # bytes of its answer kept
-.equ AU_UNKNOWN, 0              # au_state: not asked (or to be asked again)
-.equ AU_ASKING, 1
+.equ AU_UNKNOWN, 0              # a profile's answer: not asked (or to be asked again)
+.equ AU_ASKING, 1               # au_state: a question runs (for au_key)
 .equ AU_IN, 2
 .equ AU_OUT, 3
+.equ AU_SLOTS, 16               # profiles whose answer is kept (the oldest goes after that)
 
 .bss
 .p2align 3
@@ -58,8 +59,13 @@ tsb: .zero SB_SIZE              # a request's id or input as JSON text
 found_al: .quad 0               # find_file's session
 au_buf: .zero SB_SIZE           # the sign-in question's answer
 au_until: .quad 0               # time_ms its answer is given up on
-au_state: .long 0               # AU_*: the window's sign-in state
+au_state: .long 0               # AU_ASKING while a question runs, else AU_UNKNOWN
 au_pid: .long 0                 # the question's process while it runs
+.p2align 3
+au_key: .quad 0                 # owned cstr: the profile (Claude folder) the running question is for
+au_keys: .zero 8 * AU_SLOTS     # owned cstrs: the profiles answered this window
+au_ans: .zero 4 * AU_SLOTS      # their answers (AU_IN, AU_OUT)
+au_next: .long 0                # the slot a new profile takes when all are used
 .data
 .p2align 2
 au_fd: .long -1                 # its output's pipe while it runs
@@ -699,34 +705,58 @@ cl_held:
 
 # ---- the sign-in state: `claude auth status --json`, once a window, in the background ----
 
-# cl_auth(AL*, again) -> eax AUTH_*: whether claude is signed in. The first time a window asks (and again
-#   after it said no, when again is 1: the next Send), `[WRAPPER] CLAUDE auth status --json` runs in the
-#   background (au_begin); while it runs the answer is AUTH_WAIT. Only its loggedIn is read; an answer rhun
-#   cannot read, one later than AUTH_MS, or a program that cannot be started is AUTH_IN: claude says
-#   otherwise itself when it starts
+# cl_auth(AL*, again) -> eax AUTH_*: whether claude is signed in in the profile this conversation's program
+#   uses (its Claude folder, live_dir: the environment start_env gives it). The first time a window asks
+#   for a profile (and again after it said no, when again is 1: the next Send), `[WRAPPER] CLAUDE auth
+#   status --json` runs in the background with that environment (au_begin); while it runs the answer is
+#   AUTH_WAIT (also while another profile's question runs: one at a time). Only its loggedIn is read; an
+#   answer rhun cannot read, one later than AUTH_MS, or a program that cannot be started is AUTH_IN: claude
+#   says otherwise itself when it starts. Answers are kept per profile for the window
 cl_auth:
     PROLOGUE
-    mov eax, [rip + au_state]
+    mov rbx, rdi
+    mov r12d, esi
+    call live_dir
+    test rax, rax
+    jz .Lau_in
+    mov r13, rax                # the profile
+    mov rdi, rax
+    call au_get
+    cmp eax, AU_IN
+    je .Lau_in
     cmp eax, AU_OUT
     jne 1f
-    test esi, esi
+    test r12d, r12d
     jz .Lau_out
-    mov dword ptr [rip + au_state], AU_UNKNOWN
-    mov eax, AU_UNKNOWN
-1:  cmp eax, AU_IN
-    je .Lau_in
-    cmp eax, AU_ASKING
+    mov rdi, r13                # asked again: a Send after "not signed in"
+    xor esi, esi
+    call au_set
+1:  cmp dword ptr [rip + au_state], AU_ASKING
     jne 2f
+    mov rdi, r13                # a question runs: another profile's, or this one's still in time
+    mov rsi, [rip + au_key]
+    call strcmp_eq
+    test eax, eax
+    jz .Lau_wait
     call time_ms
     cmp rax, [rip + au_until]
     jl .Lau_wait
-    call claude_auth_end        # too slow: it counts as signed in
-    mov dword ptr [rip + au_state], AU_IN
+    call au_timeout             # too slow: it counts as signed in
     jmp .Lau_in
-2:  call au_begin
+2:  mov rdi, rbx
+    call au_begin
     test eax, eax
-    jnz .Lau_wait
-    mov dword ptr [rip + au_state], AU_IN
+    jz 3f
+    mov rdi, r13
+    call strlen
+    mov rdi, r13
+    mov rsi, rax
+    call mem_dup
+    mov [rip + au_key], rax
+    jmp .Lau_wait
+3:  mov rdi, r13                # cannot ask: signed in, as far as rhun knows
+    mov esi, AU_IN
+    call au_set
 .Lau_in:
     mov eax, AUTH_IN
     EPILOGUE
@@ -737,11 +767,112 @@ cl_auth:
     mov eax, AUTH_OUT
     EPILOGUE
 
-# au_begin() -> eax 1 when the status question runs (AU_ASKING): its stdout (and stderr) on a pipe read by
-#   au_on_out, stdin at its end. Locals: [rsp] argv (8 slots), [rsp + 64] the pipes, [rsp + 80] envp,
-#   [rsp + 88] the prefix
+# au_find(profile cstr) -> eax its slot in au_keys, or -1
+au_find:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12d, AU_SLOTS
+    jae 8f
+    lea rax, [rip + au_keys]
+    mov rsi, [rax + r12*8]
+    test rsi, rsi
+    jz 2f
+    mov rdi, rbx
+    call strcmp_eq
+    test eax, eax
+    jnz 9f
+2:  inc r12d
+    jmp 1b
+8:  mov r12d, -1
+9:  mov eax, r12d
+    EPILOGUE
+
+# au_get(profile) -> eax its answer (AU_IN, AU_OUT) or AU_UNKNOWN
+au_get:
+    PROLOGUE
+    call au_find
+    test eax, eax
+    js 8f
+    lea rcx, [rip + au_ans]
+    mov eax, [rcx + rax*4]
+    EPILOGUE
+8:  mov eax, AU_UNKNOWN
+    EPILOGUE
+
+# au_set(profile, answer): kept (AU_UNKNOWN: forgotten); a new profile takes a free slot, else the next
+#   in turn
+au_set:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    call au_find
+    test eax, eax
+    jns 5f
+    test r12d, r12d
+    jz 9f                       # forgetting one that is not there
+    xor ecx, ecx                # a free slot
+1:  cmp ecx, AU_SLOTS
+    jae 2f
+    lea rdx, [rip + au_keys]
+    cmp qword ptr [rdx + rcx*8], 0
+    je 3f
+    inc ecx
+    jmp 1b
+2:  mov ecx, [rip + au_next]    # none: the next in turn
+    lea eax, [rcx + 1]
+    and eax, AU_SLOTS - 1
+    mov [rip + au_next], eax
+3:  mov r13d, ecx
+    lea rdx, [rip + au_keys]
+    mov rdi, [rdx + r13*8]
+    call mem_free
+    mov rdi, rbx
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    call mem_dup
+    lea rdx, [rip + au_keys]
+    mov [rdx + r13*8], rax
+    mov eax, r13d
+5:  mov r13d, eax
+    lea rcx, [rip + au_ans]
+    mov [rcx + r13*4], r12d
+    test r12d, r12d
+    jnz 9f
+    lea rdx, [rip + au_keys]    # forgotten: the slot is free
+    mov rdi, [rdx + r13*8]
+    mov qword ptr [rdx + r13*8], 0
+    call mem_free
+9:  EPILOGUE
+
+# au_done(answer): the running question ended with that answer for its profile (au_key), which goes
+au_done:
+    PROLOGUE
+    mov r12d, edi
+    mov rbx, [rip + au_key]
+    mov qword ptr [rip + au_key], 0
+    call claude_auth_end
+    test rbx, rbx
+    jz 9f
+    mov rdi, rbx
+    mov esi, r12d
+    call au_set
+    mov rdi, rbx
+    call mem_free
+9:  EPILOGUE
+
+# au_timeout(): the running question took too long: it ends, its profile counts as signed in
+au_timeout:
+    mov edi, AU_IN
+    jmp au_done
+
+# au_begin(AL*) -> eax 1 when the status question runs (AU_ASKING) with the environment the conversation's
+#   start uses (start_env): its stdout (and stderr) on a pipe read by au_on_out, stdin at its end. Locals:
+#   [rsp] argv (8 slots), [rsp + 64] the pipes, [rsp + 80] envp, [rsp + 88] the prefix
 au_begin:
     PROLOGUE 96
+    mov r12, rdi
     call claude_exe
     test rax, rax
     jz 8f
@@ -770,7 +901,8 @@ au_begin:
     SYS SYS_pipe2
     test rax, rax
     jnz 6f
-    call claude_env
+    mov rdi, r12
+    call start_env
     mov [rsp + 80], rax
     lea rdi, [rsp]
     mov rsi, rax
@@ -862,8 +994,7 @@ au_on_out:
 # au_answer(): the question ended: its loggedIn, false -> AU_OUT, anything else -> AU_IN
 au_answer:
     PROLOGUE
-    call claude_auth_end
-    mov dword ptr [rip + au_state], AU_IN
+    mov ebx, AU_IN
     mov rdi, [rip + au_buf + SB_ptr]
     mov rsi, [rip + au_buf + SB_len]
     test rsi, rsi
@@ -889,8 +1020,10 @@ au_answer:
     jz 9f
     test eax, eax
     jnz 9f
-    mov dword ptr [rip + au_state], AU_OUT
-9:  mov dword ptr [rip + g_dirty], 1
+    mov ebx, AU_OUT
+9:  mov edi, ebx                # (the answer is read before anything frees au_buf)
+    call au_done
+    mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
 # FN claude_auth_tick(): the sign-in question's time, kept whoever waits for it (a draft left before the
@@ -902,8 +1035,7 @@ FN claude_auth_tick
     call time_ms
     cmp rax, [rip + au_until]
     jl 9f
-    call claude_auth_end
-    mov dword ptr [rip + au_state], AU_IN
+    call au_timeout
 9:  EPILOGUE
 
 # FN claude_auth_timeout() -> eax ms until the sign-in question's time is up (0: now), -1 when none runs
@@ -920,14 +1052,15 @@ FN claude_auth_timeout
     cmovg eax, ecx
 9:  EPILOGUE
 
-# FN claude_auth_end(): the status question, if one runs, ends (its watch, its pipe, its process); one
-#   ended before its answer is asked again next time (au_answer and the timeout set the state after)
+# FN claude_auth_end(): the status question, if one runs, ends (its watch, its pipe, its process); its
+#   profile is asked again next time (au_done sets an answer after)
 FN claude_auth_end
     PROLOGUE
-    cmp dword ptr [rip + au_state], AU_ASKING
-    jne 0f
     mov dword ptr [rip + au_state], AU_UNKNOWN
-0:  mov edi, [rip + au_fd]
+    mov rdi, [rip + au_key]
+    mov qword ptr [rip + au_key], 0
+    call mem_free
+    mov edi, [rip + au_fd]
     test edi, edi
     js 1f
     call watch_remove
@@ -1667,9 +1800,13 @@ h_result:
     call auth_error
     test eax, eax
     jz 5f
-    cmp dword ptr [rip + au_state], AU_ASKING
-    je 41f
-    mov dword ptr [rip + au_state], AU_UNKNOWN
+    mov rdi, rbx                # its profile is asked again at the next start
+    call live_dir
+    test rax, rax
+    jz 41f
+    mov rdi, rax
+    xor esi, esi
+    call au_set
 41: mov rdi, rbx
     call ev_signed_out
 5:  test dword ptr [rbx + AL_flags], ALF_NEW

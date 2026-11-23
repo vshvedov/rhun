@@ -3181,6 +3181,26 @@ AUTO_DIALOGS['percent'] = {'title': 'Auto mode is using a fallback', 'paragraphs
 SCENARIOS.update({'rules': s_rules, 'planagain': s_planagain, 'manydialog': s_manydialog})
 
 
+def s_diffs(prompt):
+    """diffs: edits and writes past what a row read from a file keeps (phase 3 task 7), none asks, made-up
+    files (nothing is read or written): an Edit of 20 lines to 22 with a TAB and a long line, a replace_all,
+    a Write of a new file of 30 lines, a Write over a file (its result has originalFile and the patch)"""
+    old = ''.join('x%d = %d  # row %d\n' % (i, i, i) for i in range(20))
+    new = old.replace('x3 = 3', 'x3 = 33').replace('# row 9\n', '# row 9\n\tdef nine():\n' + '    pass ' * 40 + '\n')
+    big_py, a_py, made, notes = at('big.py'), at('a.py'), at('made.py'), at('notes.txt')
+    text_ = ''.join('def f%d(x):\n    return x + %d\n' % (i, i) for i in range(15))
+    ran_calls([('Edit', {'replace_all': False, 'file_path': big_py, 'old_string': old, 'new_string': new},
+                edit_outcome(big_py, old, old, new)),
+               ('Edit', {'replace_all': True, 'file_path': a_py, 'old_string': '# line', 'new_string': '# row'},
+                edit_outcome(a_py, A_PY, '# line', '# row', True)),
+               ('Write', {'file_path': made, 'content': text_}, write_outcome(made, text_)),
+               ('Write', {'file_path': notes, 'content': 'one\r\ntwo\r\n'}, write_outcome(notes, 'one\r\ntwo\r\n', NOTES))],
+              'edited')
+
+
+SCENARIOS.update({'diffs': s_diffs})
+
+
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already
 DISCARDED = [False]                 # FAKE_CLAUDE_DISCARD_HELD: one held message was marked to be discarded
 QUIET = set()                       # FAKE_CLAUDE_NO_LIFECYCLE=local: the uuids of the CLI's own commands

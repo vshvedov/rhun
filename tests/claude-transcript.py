@@ -1016,5 +1016,348 @@ class HostileTest(ToolCase):
         self.assertTrue(self.command('print-doc').startswith('row 0\n'))
 
 
+# ---- task 7: an edit's inline diff and a written file's text (agentdiff.s) ----
+
+PART_PRE, PART_DIFF = 4, 5
+
+
+def numbered(n, word, start=0):
+    return ''.join('x%d = %d  # %s %d\n' % (i, i, word, i) for i in range(start, start + n))
+
+
+class DiffCase(ToolCase):
+    """A call's diff block as print-agent-row draws it and print-agent-rows keeps it."""
+
+    def block(self, n):
+        """Row n's (from 0) block as drawn in the last frame: its box (a dict: x, y, w, h and the words after
+        it), its visual rows [(line, kind, x, y, w, syntax runs [(class, bytes)], text)], the "Click to
+        expand" chip's box or None, and the row's buttons."""
+        box, rows, expand = None, [], None
+        for line in self.drawn(n)[1]:
+            if line.startswith('diffbox '):
+                words = line.split(' ')
+                x, y, w, h = (int(v) for v in words[1].split(','))
+                box = dict(dict(word.split('=', 1) for word in words[2:]), x=x, y=y, w=w, h=h)
+                box = {k: int(v) if isinstance(v, str) and re.fullmatch(r'-?\d+', v) else v for k, v in box.items()}
+            elif line.startswith('diff '):
+                m = re.match(r'diff (\d+) (add|del|same) (-?\d+),(-?\d+),(\d+) syn=(\S*) ?(.*)$', line)
+                self.assertTrue(m, line)
+                runs = [tuple(int(v) for v in run.split(':')) for run in m.group(6).split(',') if run]
+                rows.append((int(m.group(1)), m.group(2), int(m.group(3)), int(m.group(4)), int(m.group(5)),
+                             runs, m.group(7)))
+            elif line.startswith('expand '):
+                expand = tuple(int(v) for v in line.split(' ')[1].split(','))
+        return box, rows, expand, self.buttons(n)
+
+    def kept(self, n, content=False):
+        """print-agent-rows' diff lines of row n: the counts line and the lines kept ("- T", "+ T", "= T")."""
+        _, parts = self.row_line(n, content)
+        return [p for p in parts if p.startswith('diff ') or p[:2] in ('- ', '+ ', '= ') or p in ('-', '+', '=')]
+
+    def metrics(self):
+        """(the interface's points, the panel's text size)."""
+        out = self.command('print-agents-metrics')
+        return int(re.search(r'points=(\d+)', out).group(1)), int(re.search(r' px=(\d+)', out).group(1))
+
+    def tabs(self):
+        return [t for t in self.command('print-tabs').strip()[len('tabs='):].split(' | ') if t]
+
+    def edit(self, tid, a, b, name='a.py', more=''):
+        esc = lambda s: s.replace('\n', '\\n').replace('\t', '\\t').replace('\r', '\\r')
+        self.tool('%s name=Edit second=%s link=%s a=%s b=%s flags=8 state=ok%s'
+                  % (tid, name, name, esc(a), esc(b), more))
+
+
+class DiffTest(DiffCase):
+    """An Edit's two strings as an inline coloured diff, a Write's text coloured, clipped at 10 x MI_20 with a
+    fade and "Click to expand" (UI 3.13: TTt @5253500, ITt @5253190), built once from what the row keeps."""
+
+    def test_edit_shows_removed_and_added(self):
+        (self.project / 'notes.txt').write_text('first line\nsecond\n', encoding='utf-8')
+        self.start()
+        self.scenario('edit', ('1',))
+        row = self.by_name('Edit')[0]['row']
+        self.assertEqual(self.kept(row), ['diff +1 -1', '- first line', '+ first line (edited)'])
+        box, rows, expand, buttons = self.block(row)
+        self.assertEqual([(r[0], r[1], r[6]) for r in rows], [(0, 'del', 'first line'),
+                                                              (1, 'add', 'first line (edited)')])
+        self.assertLess(rows[0][3], rows[1][3])
+        points, size = self.metrics()
+        self.assertEqual(box['h'], 2 * box['lh'] + mi(20, size))
+        self.assertEqual((box['cut'], expand), (0, None))
+        self.assertIn(PART_DIFF, buttons)            # the whole block opens the diff tab
+        self.assertEqual(buttons[PART_DIFF][:4], (box['x'], box['y'], box['w'], box['h']))
+
+    def test_identical_sides_show_no_signs(self):
+        self.codex()
+        self.edit('i', 'same\nlines', 'same\nlines')
+        self.assertEqual(self.kept(self.base), ['diff +0 -0', '= same', '= lines'])
+        _, rows, _, _ = self.block(self.base)
+        self.assertEqual([r[1] for r in rows], ['same', 'same'])
+
+    def test_a_cut_diff_opens_a_diff_tab_of_the_whole_sides(self):
+        old = ''.join('old line %06d\n' % i for i in range(20000))       # about 300 KiB a side
+        new = ''.join('new line %06d\n' % i for i in range(20000))
+        big = (self.project / 'big.txt').as_posix()
+        self.open_seeded([call('e1', 'Edit', {'file_path': big, 'old_string': old, 'new_string': new}),
+                          result('e1', 'The file %s has been updated successfully.' % big, False,
+                                 {'filePath': big, 'oldString': old, 'newString': new})])
+        e, = self.calls(content=False)
+        self.assertEqual(e['note'], 'Modified')
+        kept = self.kept(e['row'])
+        self.assertLessEqual(len(kept), 1 + 24)      # a preview of 12 lines a side
+        box, rows, expand, buttons = self.block(e['row'])
+        points, size = self.metrics()
+        self.assertEqual((box['cut'], box['h']), (1, 10 * mi(20, size)))
+        self.assertIsNotNone(expand)
+        start = len(self.tabs())
+        self.command('agent-row-click %d diff' % (e['row'] + 1))
+        self.assertIn(' active=Diff View: big.txt ', self.command('print-state'))
+        doc = self.command('print-doc')
+        for text in ('old line 019999', 'new line 019999', 'old line 000000', 'new line 000000'):
+            self.assertIn(text, doc)
+        self.assertEqual(len(self.tabs()), start + 1)
+
+    def test_diff_height_follows_the_font(self):
+        for size in (8, 13, 32):
+            if size != 8:                            # a rhun of its own for each size
+                self.stop()
+                self.tmp.cleanup()
+                self.setUp()
+            with self.subTest(size=size):
+                self.codex('[agents]\nfont_size = %d\n' % size)
+                points, px = self.metrics()
+                self.assertEqual(px, size)
+                self.edit('long', numbered(40, 'a'), numbered(40, 'b'))
+                box, rows, expand, _ = self.block(self.base)
+                self.assertEqual((box['h'], box['cut']), (10 * mi(20, size), 1))
+                self.assertIsNotNone(expand)
+                self.assertLessEqual(rows[-1][3] + box['lh'], box['y'] + box['h'])   # nothing below the block
+                self.edit('short', 'one\n', 'two\n')
+                box, rows, expand, _ = self.block(self.base + 1)
+                self.assertEqual((box['h'], box['cut'], expand), (2 * box['lh'] + mi(20, size), 0, None))
+
+    def test_colours_follow_the_file_name(self):
+        self.codex()
+        self.edit('p', 'def f():\n    pass', 'def g():\n    return 1', name='a.py')
+        self.edit('z', 'def f():\n    pass', 'def g():\n    return 1', name='a.zzz')
+        _, py, _, _ = self.block(self.base)
+        _, zz, _, _ = self.block(self.base + 1)
+        first = [r for r in py if r[6].startswith('def ')][0]
+        self.assertNotEqual(first[5][0][0], 0, first)        # "def": the grammar's keyword class
+        self.assertEqual(first[5][0][1], 3)
+        for r in zz:
+            self.assertEqual({c for c, _ in r[5]}, {0}, r)    # no grammar: plain
+
+    def test_long_lines_wrap_at_240(self):
+        self.codex('[ui]\nagents_width = 240\n')
+        self.edit('w', 'x', 'word ' * 80)
+        box, rows, expand, _ = self.block(self.base)
+        added = [r for r in rows if r[1] == 'add']
+        self.assertGreater(len(added), 3, rows)
+        self.assertEqual({r[0] for r in added}, {1})          # one line, wrapped
+        for r in rows:
+            self.assertGreaterEqual(r[2], box['x'])
+            self.assertLessEqual(r[2] + r[4], box['x'] + box['w'], (r, box))
+        self.assertEqual([r[3] - added[0][3] for r in added[:3]], [0, box['lh'], 2 * box['lh']])
+
+    def test_tabs_are_four_cells(self):
+        self.codex()
+        self.edit('t', '\tab', '    ab', name='a.zzz')
+        _, rows, _, _ = self.block(self.base)
+        tab, spaces = rows
+        self.assertEqual((tab[1], spaces[1]), ('del', 'add'))
+        self.assertLessEqual(abs(tab[4] - spaces[4]), 2, (tab, spaces))    # (a cell is the rounded advance)
+        self.assertGreater(tab[4], 0)
+
+    def test_crlf_binary_and_huge_lines(self):
+        self.codex()
+        self.edit('c', 'one\r\ntwo\r\n', 'one\r\nTWO\r\n', name='a.zzz')
+        self.assertEqual(self.kept(self.base), ['diff +1 -1', '= one', '- two', '+ TWO'])
+        self.edit('b', 'x', 'bin\\x01\\x02ary\\xff', name='a.bin')
+        self.assertEqual(self.kept(self.base + 1)[2], '+ binary\ufffd')
+        self.edit('h', 'x', 'y' * 40000, name='a.zzz')         # a streamed side: 16 KiB kept, cut
+        box, rows, expand, _ = self.block(self.base + 2)
+        self.assertEqual(box['cut'], 1)
+        self.assertIsNotNone(expand)
+        _, parts = self.row_line(self.base + 2)
+        self.assertIn('diff +1 -1', parts)
+
+    def test_written_file_is_coloured_and_clipped(self):
+        text = ''.join('def f%d(x):\n    return x + %d\n' % (i, i) for i in range(20))
+        path = (self.project / 'made.py').as_posix()
+        self.open_seeded([call('w1', 'Write', {'file_path': path, 'content': text}),
+                          result('w1', 'File created successfully at: ' + path, False,
+                                 {'type': 'create', 'filePath': path, 'content': text, 'structuredPatch': [],
+                                  'originalFile': None})])
+        w, = self.calls(content=False)
+        self.assertEqual((w['note'], w['pre']), ('41 lines', '40/%d def f0(x):' % len(text)))   # (split by LF)
+        box, rows, expand, buttons = self.block(w['row'])
+        points, size = self.metrics()
+        self.assertEqual((box['cut'], box['h']), (1, 10 * mi(20, size)))
+        self.assertEqual({r[1] for r in rows}, {'same'})
+        self.assertNotEqual(rows[0][5][0][0], 0, rows[0])     # "def" coloured
+        self.assertIsNotNone(expand)
+        self.assertIn(PART_PRE, buttons)
+        self.command('agent-row-click %d pre' % (w['row'] + 1))
+        self.assertIn(' active=Write made.py ', self.command('print-state'))
+        self.assertEqual(self.command('print-doc'), text + '\n<eod>\n')
+
+    def test_a_diff_is_built_once(self):
+        self.codex()
+        self.edit('d', 'one\ntwo\n', 'one\nTWO\n')
+        built = self.block(self.base)[0]['built']
+        for i in range(120):
+            self.command('agent-test-row meta a line below the diff %d' % i)
+        self.command('key End')
+        self.command('cmd focus_agents')
+        self.command('key Home')
+        self.assertEqual(self.block(self.base)[0]['built'], built, 'scrolled away and back')
+        self.command('resize 1100 800')          # (W H: "WxH" reads as a height of 0)
+        box = self.block(self.base)[0]
+        self.assertEqual(box['built'], built, 'a width change')
+        self.command('resize 1280 800')
+        self.assertEqual(self.block(self.base)[0]['built'], built)
+        self.edit('d', 'one\ntwo\n', 'one\nTHREE\n')         # its sides changed: built again
+        self.assertEqual(self.kept(self.base)[2:], ['- two', '+ THREE'])
+
+    def test_a_second_click_finds_the_diff_tab(self):
+        self.codex()
+        self.edit('d', 'one\n', 'two\n')
+        start = len(self.tabs())
+        self.command('agent-row-click %d diff' % (self.base + 1))
+        self.assertIn(' active=Diff View: a.py ', self.command('print-state'))
+        self.assertEqual(len(self.tabs()), start + 1)
+        self.command('cmd focus_agents')
+        self.command('agent-row-click %d diff' % (self.base + 1))
+        self.assertEqual(len(self.tabs()), start + 1)
+        self.command('cmd close_tab')
+        self.assertEqual(len(self.tabs()), start)
+        self.command('cmd focus_agents')
+        self.command('agent-row-click %d diff' % (self.base + 1))
+        self.assertEqual(len(self.tabs()), start + 1)
+
+    def test_enter_on_a_diff_opens_its_tab(self):
+        self.codex()
+        self.edit('d', 'one\n', 'two\n')
+        self.command('cmd focus_agents')
+        self.command('key Up')
+        self.command('key Return')
+        self.assertIn(' active=Diff View: a.py ', self.command('print-state'))
+
+    def test_diff_rows_fit(self):
+        self.codex()
+        self.edit('a', numbered(30, 'a'), numbered(30, 'b') + '\t' + 'long ' * 60 + '\n')
+        self.tool('w name=Write second=made.py link=made.py note=40 lines title=Write made.py b=%s flags=4 state=ok'
+                  % numbered(40, 'w').replace('\n', '\\n'))
+        self.edit('s', 'x\n', 'y\n')
+        blocks, current = [], None
+        for line in self.command('print-agent-rows-fit').splitlines():
+            if line.startswith('size='):
+                current = (dict(w.split('=', 1) for w in line.split(' ')), [])
+                blocks.append(current)
+            else:
+                current[1].append(line.strip())
+        seen = 0
+        for head, parts in blocks:
+            if int(head['row']) < self.base:
+                continue
+            size, tw, h = int(head['size']), int(head['tw']), int(head['h'])
+            boxes = {}
+            for p in parts:
+                words = p.split(' ')
+                kind = words[0] if words[0] != 'button' else 'button' + words[1]
+                x, y, w, hh = (int(v) for v in words[-1].split(','))
+                self.assertGreaterEqual(x, 0, (head, p))
+                self.assertLessEqual(x + w, tw, (head, p))
+                self.assertLessEqual(y + hh, h, (head, p))
+                boxes[kind] = (x, y, w, hh)
+            diff = boxes['diff']
+            seen += 1
+            self.assertLessEqual(diff[3], 10 * mi(20, size), head)
+            button = boxes.get('button%d' % PART_DIFF) or boxes.get('button%d' % PART_PRE)
+            self.assertEqual(button, diff, head)
+            self.assertGreaterEqual(button[3], mi(16, size) - 1, head)
+            if 'expand' in boxes:                    # the chip inside the block
+                ex = boxes['expand']
+                self.assertTrue(diff[0] <= ex[0] and ex[0] + ex[2] <= diff[0] + diff[2] and
+                                diff[1] <= ex[1] and ex[1] + ex[3] <= diff[1] + diff[3], (head, ex, diff))
+            for kind, b in boxes.items():            # nothing else of the row in the block
+                if kind in ('diff', 'expand') or kind.startswith('button'):
+                    continue
+                self.assertFalse(b[1] < diff[1] + diff[3] and diff[1] < b[1] + b[3], (head, kind, b, diff))
+        self.assertEqual(seen, 25 * 34 * 3)
+
+    def test_stream_and_file_give_the_same_diffs(self):
+        """The fake's tools (an Edit, a replace_all, a Write of a new file and one over a file), edit, write and
+        diffs (sides past a file row's preview): the same rows live and reread (ParityTest's rule)."""
+        (self.project / 'notes.txt').write_text('first line\nsecond\n', encoding='utf-8')
+        self.start(self.claude_section('initial_mode = default\n'))
+        for prompt, cards in (('tools', ()), ('edit', ('1',)), ('write', ('1',)), ('diffs', ())):
+            with self.subTest(prompt):
+                self.scenario(prompt, cards)
+                dump = ParityTest.compare(self, prompt)
+                self.assertIn('diff +', dump) if prompt != 'write' else self.assertIn('pre ', dump)
+        live = self.kept(self.by_name('Edit')[0]['row'], content=True)
+        self.assertIn('- x3 = 3  # row 3', live)
+        self.assertIn('+ x3 = 33  # row 3', live)
+        # past the preview's last shared line nothing is known: no line is shown as removed that was only cut
+        self.assertNotIn('- x10 = 10  # row 10', live)
+        self.assertEqual(live[-1], '= x9 = 9  # row 9')
+        self.assertLessEqual(len(live), 1 + 24)
+
+    def test_a_thousand_edits_open_and_scroll_as_without_diffs(self):
+        """The speed test: a conversation of 1,000 Edits (40 lines a side) opens and scrolls in the time one of
+        1,000 Reads does; only the diffs in view are built."""
+        times = {}
+        for kind in ('Read', 'Edit'):
+            lines = []
+            for i in range(1000):
+                tid = 'c%d' % i
+                if kind == 'Edit':
+                    lines.append(call(tid, 'Edit', {'file_path': '/x/f%d.py' % i, 'old_string': numbered(40, 'a', i),
+                                                    'new_string': numbered(40, 'b', i)}))
+                else:
+                    lines.append(call(tid, 'Read', {'file_path': '/x/f%d.py' % i}))
+                lines.append(result(tid, 'ok'))
+                lines.append(reply('done %d' % i))
+            self.seed_lines([prompt('look')] + lines)
+            self.start()
+            self.command('cmd focus_agents')
+            self.command('wait-agents')
+            began = time.monotonic()
+            self.command('print-agents 1')
+            self.command('print-frames')
+            opened = time.monotonic() - began
+            self.command('move 1100 400')
+            began = time.monotonic()
+            for _ in range(20):
+                self.command('scroll -400')
+            scrolled = (time.monotonic() - began) / 20
+            self.command('cmd focus_agents')
+            began = time.monotonic()
+            self.command('key Home')
+            home = time.monotonic() - began
+            thread = dict(w.split('=', 1) for w in self.command('print-agent-thread').split())
+            times[kind] = (opened, scrolled, home, thread)
+            self.assertEqual(int(thread['rows']), 1 + 2000)      # the prompt, a call and a reply a turn
+            if kind == 'Edit':
+                first, last = int(thread['first']), int(thread['last'])
+                n = next(i for i in range(first, last + 1) if self.drawn(i)[0].get('role') == 'tool')
+                built = self.block(n)[0]['built']
+                # the rows at the end, the 20 steps up and the first rows: never the thousand
+                self.assertLess(built, 200, built)
+            self.stop()
+            self.tmp.cleanup()
+            self.setUp()
+        print('\nthousand: ' + '; '.join('%s rows %s open %.3f s, scroll step %.4f s, Home %.4f s, walked %s'
+                                         % (k, v[3]['rows'], v[0], v[1], v[2], v[3]['walked'])
+                                         for k, v in times.items()))
+        (read_open, read_step, read_home, _), (edit_open, edit_step, edit_home, _) = times['Read'], times['Edit']
+        self.assertLess(edit_open, read_open * 1.5 + 0.3, times)
+        self.assertLess(edit_step, read_step * 1.5 + 0.02, times)
+        self.assertLess(edit_home, read_home * 1.5 + 0.05, times)
+
+
 if __name__ == '__main__':
     unittest.main()

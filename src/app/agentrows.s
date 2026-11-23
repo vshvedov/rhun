@@ -950,7 +950,11 @@ FN agrow_set
     mov [rbx + AT_link], rax
     jmp 9f
 .Lset_text:
-    mov eax, r12d
+    cmp r12d, ATX_A             # a diff's side: its record is made again (agentdiff.s)
+    jb 0f
+    mov rdi, rbx
+    call agdiff_free
+0:  mov eax, r12d
     sub eax, ATX_IN
     mov [rsp], eax              # the part's number
     imul r15, rax, SB_SIZE
@@ -1504,7 +1508,13 @@ FN agrow_est
     add r15d, [rip + g_pmt + 4*MI_6]
     add r15d, [rip + g_pmt + 4*MI_6]
     add r15d, [rip + g_pmt + 4*MI_6]
-5:  lea eax, [r13 + r15]
+5:  mov rdi, r12                # the diff or the file's text (agentdiff.s)
+    call agdiff_est
+    test eax, eax
+    jz 51f
+    add r15d, eax
+    add r15d, [rip + g_pmt + 4*MI_6]
+51: lea eax, [r13 + r15]
     xor edx, edx
     xor ecx, ecx
 9:  EPILOGUE
@@ -2777,8 +2787,29 @@ tr_lay:
     mov [rsp + 44], eax
     add r13d, [rip + g_pmt + 4*MI_6]
     cmp dword ptr [rip + lr_mode], LM_DRAW
-    jne 81f
+    je 85f
+    cmp dword ptr [rip + lr_mode], LM_DUMP  # written out: its button, its box and rows (agdiff_lines)
+    jb 81f
     mov edi, PART_DIFF
+    test dword ptr [r15 + AT_flags], ATF_DIFF
+    jnz 86f
+    mov edi, PART_PRE
+86: mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 44]
+    call lay_btn
+    xor r9d, r9d
+    cmp dword ptr [rip + lr_mode], LM_FIT
+    sete r9b
+    mov rdi, [rip + lr_out]
+    mov rsi, r15
+    mov edx, [rsp]
+    mov ecx, r13d
+    mov r8d, [rsp + 8]
+    call agdiff_lines
+    jmp 81f
+85: mov edi, PART_DIFF
     test dword ptr [r15 + AT_flags], ATF_DIFF
     jnz 83f
     mov edi, PART_PRE
@@ -3189,9 +3220,13 @@ open_diff:
     lea rdi, [rip + ys]
     lea rsi, [rip + .Ldiff_view]
     call sb_push_cstr
+    mov rsi, [r12 + AT_second]  # the file's name ("Diff View: NAME"), else the call's
+    test rsi, rsi
+    jnz 0f
     mov rsi, [r12 + AT_name]
     test rsi, rsi
     jz 1f
+0:
     lea rdi, [rip + ys]
     call sb_push_cstr
 1:  mov rdi, [rip + ys + SB_ptr]
@@ -3971,6 +4006,8 @@ call_dump:
     jz 6f
     mov rdi, rbx
     mov rsi, r12
+    mov rdx, r15
+    mov ecx, [rsp]
     call agdiff_dump
 6:  test dword ptr [r12 + AT_flags], ATF_PRE
     jz 7f

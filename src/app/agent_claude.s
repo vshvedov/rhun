@@ -26,7 +26,10 @@
 #
 # The first line it is sent is initialize; nothing else goes until its answer (the prompts wait in
 # AL_queue, agent_drv.s). Its answer's lists go to the project's record (claude_session.s), then
-# get_settings asks what is in effect, then the prompts go. A turn streams: message_start names the message, a text block's start is a
+# get_settings asks what is in effect, then the prompts go. The user's model, effort and Ultracode picks are
+# asked of a running program with apply_flag_settings (cl_apply), thinking with set_max_thinking_tokens
+# (cl_thinking); update_settings is never sent (Claude Code's own settings are the user's alone).
+# A turn streams: message_start names the message, a text block's start is a
 # reply row, its deltas add to it, the consolidated assistant record of the block is its finished text;
 # result ends the turn. A tool call is a tool row once its block is complete, its result a result row,
 # both as the file reader shows them. A tool's permission (can_use_tool, AskUserQuestion and
@@ -46,6 +49,8 @@
 .equ OA_STOP, 3                 # interrupt (its answer is not needed: the turn's result follows)
 .equ OA_SETTINGS, 4             # get_settings (claude_settings_answer)
 .equ OA_PICK, 5                 # set_permission_mode the user asked for (claude_mode_answer)
+.equ OA_FLAGS, 6                # apply_flag_settings / set_max_thinking_tokens (claude_flags_answer): + its
+.equ OA_FLAGS_END, 9            #   kind (claude_session.s's CLF_*: model, effort, ultracode, thinking)
 .equ QUESTION_OPTS, 16          # a question's card shows its first 16 options
 .equ R_ASSIST, 2                # the roles of agents.s's messages
 .equ R_INFO, 6
@@ -248,6 +253,8 @@ cl_start:
     call mem_free
     test r13d, r13d
     jz .Lcs_fail
+    mov rdi, rbx                # what its first answers settle (claude_session.s)
+    call claude_started
     mov qword ptr [rbx + AL_turns], 0
     mov qword ptr [rbx + AL_out + VEC_len], 0
     mov qword ptr [rbx + AL_next], 1        # r1, r2, ... per connection
@@ -1778,7 +1785,8 @@ h_system:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
-    mov rdi, rsi
+    call claude_record          # fast mode's state, notifications (claude_session.s)
+    mov rdi, r12
     lea rsi, [rip + .Lk_subtype]
     call json_get
     mov r13, rax
@@ -1901,7 +1909,8 @@ h_result:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
-    mov rdi, rsi                # the text: errors[0], else result
+    call claude_record          # fast mode's state (claude_session.s)
+    mov rdi, r12                # the text: errors[0], else result
     lea rsi, [rip + .Lk_errors]
     call json_get
     mov rdi, rax
@@ -2928,10 +2937,19 @@ h_response:
     mov rsi, rax
     call out_take
     cmp eax, OA_SETTINGS
-    jne 2f
+    jne 1f
     mov rdi, rbx                # get_settings: the model, effort and Ultracode in effect (claude_session.s)
     mov rsi, r12
     call claude_settings_answer
+    jmp 9f
+1:  cmp eax, OA_FLAGS           # a choice the user made (claude_session.s)
+    jb 2f
+    cmp eax, OA_FLAGS_END
+    ja 2f
+    lea edx, [rax - OA_FLAGS]
+    mov rdi, rbx
+    mov rsi, r12
+    call claude_flags_answer
     jmp 9f
 2:  xor edx, edx                # set_permission_mode: the mode it answers is in effect (no status line
     cmp eax, OA_MODE            #   comes when it was already: finding 10); a refused pick says why
@@ -3002,6 +3020,89 @@ h_response:
     lea rdi, [rbx + AL_cn]
     call conn_stop
     EPILOGUE
+
+# FN cl_apply(AL*, kind CLF_*, key cstr, value cstr or 0, r8d bool when it is 0) -> eax 1 written:
+#   apply_flag_settings {"settings":{KEY:VALUE}} (this process only, finding 13; its answer:
+#   claude_flags_answer)
+FN cl_apply
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rdx
+    mov r13, rcx
+    mov r14d, r8d
+    add esi, OA_FLAGS
+    call req_begin
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_apply_flags]
+    call jw_cstr
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_settings]
+    call jw_key
+    lea rdi, [rip + cw]
+    call jw_obj
+    lea rdi, [rip + cw]
+    mov rsi, r12
+    call jw_key
+    lea rdi, [rip + cw]
+    test r13, r13
+    jz 1f
+    mov rsi, r13
+    call jw_cstr
+    jmp 2f
+1:  mov esi, r14d
+    call jw_bool
+2:  lea rdi, [rip + cw]
+    call jw_end_obj
+    mov rdi, rbx
+    call req_end
+    EPILOGUE
+
+# FN cl_thinking(AL*, on, summaries) -> eax 1 written: set_max_thinking_tokens {max_thinking_tokens 31999,
+#   thinking_display "summarized" or null} or {max_thinking_tokens 0} (finding 14)
+FN cl_thinking
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov esi, OA_FLAGS_END
+    call req_begin
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_set_thinking]
+    call jw_cstr
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_max_thinking]
+    call jw_key
+    lea rdi, [rip + cw]
+    xor esi, esi
+    test r12d, r12d
+    jz 1f
+    mov esi, 31999
+1:  call jw_u64
+    test r12d, r12d
+    jz 3f
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_thinking_display]
+    call jw_key
+    lea rdi, [rip + cw]
+    test r13d, r13d
+    jz 2f
+    lea rsi, [rip + .Lv_summarized]
+    call jw_cstr
+    jmp 3f
+2:  call jw_null
+3:  mov rdi, rbx
+    call req_end
+    EPILOGUE
+
+# FN claude_get_settings(AL*): get_settings again (after a choice was applied)
+FN claude_get_settings
+    jmp send_get_settings
 
 # send_get_settings(AL*): get_settings (its answer: claude_settings_answer)
 send_get_settings:
@@ -3142,7 +3243,7 @@ err_tail:
 .p2align 3
 .globl claude_drv
 claude_drv:
-    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST | DRVC_QUEUE | DRVC_MODES
+    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST | DRVC_QUEUE | DRVC_MODES | DRVC_MODELS | DRVC_EFFORT | DRVC_THINKING
     .quad .Lname, cl_start, cl_send, cl_stop, cl_answer, cl_release, cl_held, cl_auth, cl_terminal
     .quad claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra
     .quad claude_set_thinking, claude_reply, claude_action
@@ -3242,6 +3343,12 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lv_result: .asciz "result"
 .Lv_initialize: .asciz "initialize"
 .Lv_get_settings: .asciz "get_settings"
+.Lv_apply_flags: .asciz "apply_flag_settings"
+.Lk_settings: .asciz "settings"
+.Lv_set_thinking: .asciz "set_max_thinking_tokens"
+.Lk_max_thinking: .asciz "max_thinking_tokens"
+.Lk_thinking_display: .asciz "thinking_display"
+.Lv_summarized: .asciz "summarized"
 .Lv_commands_changed: .asciz "commands_changed"
 .Lv_user: .asciz "user"
 .Lv_text: .asciz "text"

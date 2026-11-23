@@ -15,26 +15,35 @@
 #   foot_draw(AS* or 0, x, y, w)        the footer row: the mode button (a dot of the mode's colour, its
 #                                       label cut with "…" to the room left; a click opens the modes
 #                                       picker; tooltip "DESCRIPTION. Click to change, or press Shift+Tab
-#                                       to cycle."), then at the right the command menu's button "/" (title
-#                                       "Show command menu (/)"). Send keeps its place beside the box (box_fit).
-#                                       Short of room the dot goes, then the label is cut (the footer's
-#                                       stages are task 8's)
+#                                       to cycle."), the model pill ("NAME · EFFORT · Ultracode"; title
+#                                       "Switch model (NAME)"; a click opens the models picker), then at the
+#                                       right the fast mark (a spark while fast mode is on or cooling down)
+#                                       and the command menu's button "/" (title "Show command menu (/)").
+#                                       Send keeps its place beside the box (box_fit). Short of room the
+#                                       pill and the label are cut, then the pill and the dot go (the
+#                                       footer's stages are task 8's)
 #   foot_ring(AS* or 0) -> eax          the box's frame colour in the current mode: a theme slot + 1 (TF_ring)
 #   foot_mode_set(AS* or 0, id) -> eax 1   a mode the user picked (the picker, agent-mode): only one the
 #                                       driver offers now (bypass only through its gate); a draft becomes its
 #                                       conversation first (nothing starts)
 #   foot_mode_cycle() -> eax 1 taken    Shift+Tab in the box: the next mode offered, wrapping
 #   foot_dump(sb)                       print-agents-foot: "mode=ID ring=N mode_at=X,Y menu_at=X,Y
-#                                       label=LABEL" (the open conversation's, as drawn last), then for every
-#                                       panel size 8 to 32 and width 240 to 900 (step 20) "size=S w=W h=H
-#                                       send_x= send_y= send_w= send_h= mode_x= mode_y= mode_w= mode_h=
-#                                       menu_x= menu_y= menu_w= menu_h= label=SHOWN" (from the panel's left
-#                                       and the prompt row's top; H the prompt row and the footer)
+#                                       pill_at=X,Y fast_at=X,Y fast=off|on|cooldown label=LABEL\tpill=TEXT
+#                                       \ttitle=TITLE" (the open conversation's, as drawn last; at 0,0: not
+#                                       drawn), then for every panel size 8 to 32 and width 240 to 900 (step
+#                                       20) "size=S w=W h=H send_x= send_y= send_w= send_h= mode_x= mode_y=
+#                                       mode_w= mode_h= menu_x= menu_y= menu_w= menu_h= pill_x= pill_y=
+#                                       pill_w= pill_h= pill_text= fast_x= fast_y= fast_w= fast_h=
+#                                       label=SHOWN" (from the panel's left and the prompt row's top; H the
+#                                       prompt row and the footer; pill_w, fast_w 0: not shown; pill_text the
+#                                       width of its text as shown)
 .include "rhun.inc"
 
 .equ BAND_LINES, 4
 .equ FOOT_MODE, 0               # ID_AGFOOT + : the mode button
 .equ FOOT_MENU, 1               #   the command menu's button
+.equ FOOT_PILL, 2               #   the model pill
+.equ FOOT_FAST, 3               #   the fast mark
 
 .bss
 .p2align 3
@@ -54,10 +63,22 @@ fl_lx: .long 0
 fl_lw: .long 0
 fl_nx: .long 0
 fl_nw: .long 0
+fl_px: .long 0                  #   the pill's x and width (0: none), the fast mark's
+fl_pw: .long 0
+fl_fx: .long 0
+fl_fw: .long 0
 fd_mode: .long 0                # as drawn last: the buttons' centres
 fd_mode_y: .long 0
 fd_menu: .long 0
 fd_menu_y: .long 0
+fd_pill: .long 0
+fd_pill_y: .long 0
+fd_fast: .long 0
+fd_fast_y: .long 0
+.p2align 3
+pill_name: .quad 0              # the name pill_drv found (cstr), or 0
+psb2: .zero SB_SIZE             # the pill's text
+psb3: .zero SB_SIZE             # as shown (cut)
 
 .text
 
@@ -587,11 +608,15 @@ mode_label:
 1:  ret
 
 # layout(AS* or 0, w): the footer row's parts in fl_* (from the panel's left): the menu button square at the
-#   right end of the prompt row (where Send's right edge is), the mode button from the box's left up to MI_8
-#   before it: MI_6 in, its dot (MI_8) and MI_6, its label, MI_6. Without room for the dot and two
-#   characters' worth of label the dot goes; the label is cut to what is left. lsb: the label as shown
+#   right end of the prompt row (where Send's right edge is); MI_8 before it the fast mark's square while fast
+#   mode is on or cooling down (when two rows' worth stays for the mode button); from the box's left the
+#   mode button: MI_6 in, its dot (MI_8) and MI_6, its
+#   label, MI_6; then, MI_4 after it, the model pill (a driver with models): MI_8 in, its text (pill_text),
+#   MI_8. Short of room for both, the mode button keeps half the room at least and the pill takes the rest,
+#   each cut with "…"; with less than two rows' worth for the pill it goes. Without room for the dot and two
+#   characters' worth of label the dot goes. lsb: the label as shown, psb2: the pill's (pill_text first)
 layout:
-    PROLOGUE 16
+    PROLOGUE 32
     mov rbx, rdi
     mov r12d, esi
     call row_h
@@ -604,13 +629,35 @@ layout:
     sub r13d, eax
     mov [rip + fl_nx], r13d
     sub r13d, [rip + g_pmt + 4*MI_8]
-    PM r14d, MI_12              # the mode button's left
+    mov dword ptr [rip + fl_fw], 0      # the fast mark, when the mode button keeps two rows' worth
+    mov dword ptr [rip + fl_fx], 0
+    mov rdi, rbx
+    call fast_state
+    cmp eax, FS_OFF
+    je 11f
+    mov eax, [rip + fl_row]
+    mov ecx, r13d
+    sub ecx, eax
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    sub ecx, [rip + g_pmt + 4*MI_12]
+    mov edx, eax
+    shl edx, 1
+    cmp ecx, edx
+    jl 11f
+    sub r13d, eax
+    mov [rip + fl_fx], r13d
+    mov [rip + fl_fw], eax
+    sub r13d, [rip + g_pmt + 4*MI_4]
+11: PM r14d, MI_12              # the mode button's left
     mov [rip + fl_mx], r14d
-    sub r13d, r14d              # its room
+    sub r13d, r14d              # the room of the mode button and the pill
     cmp r13d, 1
     jge 1f
     mov r13d, 1
-1:  mov rdi, rbx
+1:  mov [rsp + 8], r13d
+    mov dword ptr [rip + fl_pw], 0
+    mov dword ptr [rip + fl_px], 0
+    mov rdi, rbx
     call foot_cur
     mov rdi, rax
     call mode_label
@@ -622,7 +669,39 @@ layout:
     mov rsi, r15
     call text_width
     mov [rsp], eax              # the label's width
-    mov ecx, [rip + g_pmt + 4*MI_6]     # the room besides the label: MI_6, the dot and MI_6, MI_6
+    mov rdi, rbx                # the pill: its text's natural width, and whether it has room
+    call pill_drv
+    test rax, rax
+    jz 13f
+    mov eax, [rsp + 8]
+    shr eax, 1
+    mov ecx, [rip + fl_row]
+    shl ecx, 1
+    cmp eax, ecx
+    jl 13f
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rip + psb2 + SB_ptr]
+    mov rdx, [rip + psb2 + SB_len]
+    call text_width
+    add eax, [rip + g_pmt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_8]
+    mov [rsp + 4], eax          # the pill's natural width
+    mov ecx, [rip + g_pmt + 4*MI_6]     # the mode button's: MI_6, the dot and MI_6, the label, MI_6
+    imul ecx, ecx, 3
+    add ecx, [rip + g_pmt + 4*MI_8]
+    add ecx, [rsp]
+    mov eax, [rsp + 8]          # its room: min(natural, max(room - MI_4 - pill, room / 2))
+    sub eax, [rip + g_pmt + 4*MI_4]
+    sub eax, [rsp + 4]
+    mov edx, [rsp + 8]
+    shr edx, 1
+    cmp eax, edx
+    cmovl eax, edx
+    cmp eax, ecx
+    cmovg eax, ecx
+    mov r13d, eax
+    mov dword ptr [rip + fl_pw], 1      # (placed below, after the mode button)
+13: mov ecx, [rip + g_pmt + 4*MI_6]     # the room besides the label: MI_6, the dot and MI_6, MI_6
     imul ecx, ecx, 3
     add ecx, [rip + g_pmt + 4*MI_8]
     mov dword ptr [rip + fl_dot], 1
@@ -659,15 +738,45 @@ layout:
     mov rdi, r15                # lsb: what shows of the label
     mov esi, [rip + fl_lw]
     call label_cut
-    EPILOGUE
+    cmp dword ptr [rip + fl_pw], 0
+    je 9f
+    mov eax, [rip + fl_mx]      # the pill: after the mode button, what the room leaves (its natural width
+    add eax, [rip + fl_mw]      #   at most), its text cut to it
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov [rip + fl_px], eax
+    mov ecx, [rsp + 8]
+    sub ecx, [rip + fl_mw]
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    mov edx, [rsp + 4]
+    cmp ecx, edx
+    cmovg ecx, edx
+    mov [rip + fl_pw], ecx
+    sub ecx, [rip + g_pmt + 4*MI_8]
+    sub ecx, [rip + g_pmt + 4*MI_8]
+    jg 5f
+    mov dword ptr [rip + fl_pw], 0
+    mov dword ptr [rip + fl_px], 0
+    jmp 9f
+5:  mov rdi, [rip + psb2 + SB_ptr]
+    mov esi, ecx
+    call label_cut2
+9:  EPILOGUE
 
 # label_cut(cstr, maxw): lsb = the text when it fits in maxw (the small face), else as much as fits with "…"
 #   after it, nothing when not even "…" does
 label_cut:
+    lea rdx, [rip + lsb]
+    jmp cut_into
+# label_cut2(cstr, maxw): the same into psb3 (the pill's text as shown)
+label_cut2:
+    lea rdx, [rip + psb3]
+# cut_into(cstr, maxw, sb)
+cut_into:
     PROLOGUE
     mov r12, rdi
     mov r13d, esi
-    lea rdi, [rip + lsb]
+    mov r15, rdx
+    mov rdi, rdx
     call sb_clear
     mov rdi, r12
     call strlen
@@ -678,7 +787,7 @@ label_cut:
     call text_width
     cmp eax, r13d
     jg 1f
-    lea rdi, [rip + lsb]
+    mov rdi, r15
     mov rsi, r12
     mov rdx, r14
     call sb_push
@@ -692,14 +801,95 @@ label_cut:
     mov rdi, r12
     mov esi, r13d
     call cut_line
-    lea rdi, [rip + lsb]
+    mov rdi, r15
     mov rsi, [rip + bsb + SB_ptr]
     mov rdx, [rip + bsb + SB_len]
     call sb_push
-9:  lea rdi, [rip + lsb]
+9:  mov rdi, r15
     xor esi, esi
     call sb_push_byte
-    dec qword ptr [rip + lsb + SB_len]
+    dec qword ptr [r15 + SB_len]
+    EPILOGUE
+
+# fast_state(AS* or 0) -> eax its program's fast mode (FS_*), FS_OFF without a live record
+fast_state:
+    xor eax, eax
+    test rdi, rdi
+    jz 9f
+    mov rcx, [rdi + AS_live]
+    test rcx, rcx
+    jz 9f
+    mov eax, [rcx + AL_fast]
+9:  ret
+
+# pill_drv(AS* or 0) -> rax the box's driver when it has models (DRVC_MODELS: the pill shows), else 0;
+#   psb2 = the pill's text: the model's name ("Model" without one), " · " and the effort level in effect,
+#   " · Ultracode" while it is on (webview index.js @5758398). Reads nothing: the record as it is
+pill_drv:
+    PROLOGUE
+    mov rbx, rdi
+    mov qword ptr [rip + pill_name], 0
+    lea rdi, [rip + psb2]
+    call sb_clear
+    mov rdi, rbx
+    call foot_drv
+    test rax, rax
+    jz 8f
+    test dword ptr [rax + DRV_caps], DRVC_MODELS
+    jz 8f
+    mov r15, rax
+    mov edi, [rax + DRV_kind]
+    call agentcfg_get
+    mov r12, rax
+    mov rdi, rbx
+    mov rsi, rax
+    call agentcfg_current
+    mov r13, rax                # the model, or 0
+    mov [rip + pill_name], rdx
+    mov rsi, rdx
+    test rsi, rsi
+    jnz 1f
+    lea rsi, [rip + .Lmodel]
+1:  lea rdi, [rip + psb2]
+    call sb_push_cstr
+    test r13, r13
+    jz 2f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call agentcfg_effort
+    test rax, rax
+    jz 2f
+    mov r14, [rax + AEL_label]
+    cmp byte ptr [r14], 0
+    je 2f
+    lea rdi, [rip + psb2]
+    lea rsi, [rip + .Lsep]
+    call sb_push_cstr
+    lea rdi, [rip + psb2]
+    mov rsi, r14
+    call sb_push_cstr
+2:  test rbx, rbx
+    jz 3f
+    mov rax, [rbx + AS_live]
+    test rax, rax
+    jz 3f
+    cmp dword ptr [rax + AL_ultra], 1
+    jne 3f
+    lea rdi, [rip + psb2]
+    lea rsi, [rip + .Lultra]
+    call sb_push_cstr
+3:  lea rdi, [rip + psb2]
+    xor esi, esi
+    call sb_push_byte
+    dec qword ptr [rip + psb2 + SB_len]
+    mov rax, r15
+    EPILOGUE
+8:  lea rdi, [rip + psb2]
+    xor esi, esi
+    call sb_push_byte
+    dec qword ptr [rip + psb2 + SB_len]
+    xor eax, eax
     EPILOGUE
 
 # FN foot_draw(AS* or 0, x, y, w): the footer row at y (layout)
@@ -802,8 +992,16 @@ FN foot_draw
     jz 4f
     mov edi, APP_MODES          # a click opens the picker, or closes it
     call toggle
+4:  mov rdi, rbx                # the model pill (layout cut its text)
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    call pill_draw
+    mov rdi, rbx                # the fast mark
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    call fast_draw
     # the command menu's button
-4:  mov r12d, [rsp]
+    mov r12d, [rsp]
     add r12d, [rip + fl_nx]
     mov edi, ID_AGFOOT + FOOT_MENU
     mov esi, r12d
@@ -851,6 +1049,157 @@ FN foot_draw
     jz 9f
     mov edi, APP_MENU
     call toggle
+9:  EPILOGUE
+
+# pill_draw(AS* or 0, x, y): the model pill where layout put it (none: fl_pw 0): its text as layout cut it,
+#   lit while hovered or while the models picker is open; title "Switch model (NAME)" ("Switch model"
+#   without a name); a click opens the models picker, or closes it
+pill_draw:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov dword ptr [rip + fd_pill], 0
+    mov dword ptr [rip + fd_pill_y], 0
+    cmp dword ptr [rip + fl_pw], 0
+    je 9f
+    mov r12d, [rsp]
+    add r12d, [rip + fl_px]
+    mov edi, ID_AGFOOT + FOOT_PILL
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    mov ecx, [rip + fl_pw]
+    mov r8d, [rip + fl_row]
+    call ui_btn
+    mov r13d, eax
+    mov ecx, [rip + fl_pw]
+    shr ecx, 1
+    lea eax, [r12 + rcx]
+    mov [rip + fd_pill], eax
+    mov eax, [rip + fl_row]
+    shr eax, 1
+    add eax, [rsp + 4]
+    mov [rip + fd_pill_y], eax
+    mov edi, APP_MODELS
+    mov esi, r13d
+    call hover_bg
+    mov r14d, eax
+    mov edi, r12d
+    mov esi, [rsp + 4]
+    mov edx, [rip + fl_pw]
+    call hover_draw
+    mov rdi, [rip + ag_fsmall]
+    mov esi, r12d
+    add esi, [rip + g_pmt + 4*MI_8]
+    mov edx, [rsp + 4]
+    mov ecx, [rip + fl_row]
+    mov r8, [rip + psb3 + SB_ptr]
+    mov r9, [rip + psb3 + SB_len]
+    COLOR eax, T_MUTED
+    test r14d, r14d
+    jz 1f
+    COLOR eax, T_FG
+1:  push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    call pill_title
+    mov edi, ID_AGFOOT + FOOT_PILL
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    add edx, [rip + fl_row]
+    mov ecx, [rip + fl_pw]
+    mov r8d, r13d
+    mov r9, [rip + tsb + SB_ptr]
+    call tip_note_text
+    test r13d, UB_CLICK
+    jz 9f
+    mov edi, APP_MODELS
+    call toggle
+9:  EPILOGUE
+
+# pill_title(): tsb = "Switch model (NAME)" with the name pill_drv found, else "Switch model"
+pill_title:
+    PROLOGUE
+    lea rdi, [rip + tsb]
+    call sb_clear
+    lea rdi, [rip + tsb]
+    lea rsi, [rip + .Lt_pill]
+    call sb_push_cstr
+    mov rbx, [rip + pill_name]
+    test rbx, rbx
+    jz 1f
+    lea rdi, [rip + tsb]
+    lea rsi, [rip + .Lt_open]
+    call sb_push_cstr
+    lea rdi, [rip + tsb]
+    mov rsi, rbx
+    call sb_push_cstr
+    lea rdi, [rip + tsb]
+    mov esi, ')'
+    call sb_push_byte
+1:  lea rdi, [rip + tsb]
+    xor esi, esi
+    call sb_push_byte
+    EPILOGUE
+
+# fast_draw(AS* or 0, x, y): the fast mark while fast mode is on (the accent) or cooling down (muted): a
+#   spark, title "Fast mode enabled" / "Fast mode cooling down" (webview index.js @5837659)
+fast_draw:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov dword ptr [rip + fd_fast], 0
+    mov dword ptr [rip + fd_fast_y], 0
+    cmp dword ptr [rip + fl_fw], 0
+    je 9f
+    mov r12d, [rsp]
+    add r12d, [rip + fl_fx]
+    mov edi, ID_AGFOOT + FOOT_FAST
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    mov ecx, [rip + fl_fw]
+    mov r8d, [rip + fl_row]
+    call ui_btn
+    mov r13d, eax
+    mov ecx, [rip + fl_fw]
+    shr ecx, 1
+    lea eax, [r12 + rcx]
+    mov [rip + fd_fast], eax
+    mov eax, [rip + fl_row]
+    shr eax, 1
+    add eax, [rsp + 4]
+    mov [rip + fd_fast_y], eax
+    mov rdi, rbx
+    call fast_state
+    mov r14d, eax
+    PM ecx, MI_16
+    mov esi, [rip + fl_fw]
+    sub esi, ecx
+    sar esi, 1
+    add esi, r12d
+    mov edx, [rip + fl_row]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 4]
+    mov edi, IC_SPARK
+    COLOR r8d, T_ACCENT
+    cmp r14d, FS_ON
+    je 1f
+    COLOR r8d, T_MUTED
+1:  call icon_draw
+    lea r9, [rip + .Lt_fast_on]
+    cmp r14d, FS_ON
+    je 2f
+    lea r9, [rip + .Lt_fast_cool]
+2:  mov edi, ID_AGFOOT + FOOT_FAST
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    add edx, [rip + fl_row]
+    mov ecx, [rip + fl_fw]
+    mov r8d, r13d
+    call tip_note_text
 9:  EPILOGUE
 
 # hover_bg(popup kind, ub) -> eax 1 when the button is drawn lit: hovered, or its popup is open (the button
@@ -1017,12 +1366,48 @@ FN foot_dump
     lea rdx, [rip + fd_menu]
     call put_at
     mov rdi, rbx
+    lea rsi, [rip + .Ld_pill_at]
+    lea rdx, [rip + fd_pill]
+    call put_at
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_fast_at]
+    lea rdx, [rip + fd_fast]
+    call put_at
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_fast]
+    call sb_push_cstr
+    mov rdi, r15
+    call fast_state
+    cmp eax, FS_COOLDOWN
+    jbe 2f
+    xor eax, eax
+2:  lea rcx, [rip + fast_words]
+    mov rsi, [rcx + rax*8]
+    mov rdi, rbx
+    call sb_push_cstr
+    mov rdi, rbx
     lea rsi, [rip + .Ld_label]
     call sb_push_cstr
     mov rdi, r12
     call mode_label
     mov rdi, rbx
     mov rsi, rax
+    call sb_push_cstr
+    mov rdi, r15                # the pill's whole text and its title (a tab before each)
+    call pill_drv
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_pill]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + psb2 + SB_ptr]
+    mov rdx, [rip + psb2 + SB_len]
+    call sb_push
+    call pill_title
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_title]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + tsb + SB_ptr]
     call sb_push_cstr
     mov rdi, rbx
     mov esi, 10
@@ -1100,6 +1485,41 @@ FN foot_dump
     mov edx, [rip + fl_nw]
     call put_num
     lea rsi, [rip + .Ld_menu_h]
+    mov edx, [rip + fl_row]
+    call put_num
+    lea rsi, [rip + .Ld_pill_x]
+    mov edx, [rip + fl_px]
+    call put_num
+    lea rsi, [rip + .Ld_pill_y]
+    mov edx, [rsp + 28]
+    call put_num
+    lea rsi, [rip + .Ld_pill_w]
+    mov edx, [rip + fl_pw]
+    call put_num
+    lea rsi, [rip + .Ld_pill_h]
+    mov edx, [rip + fl_row]
+    call put_num
+    mov rdi, [rip + ag_fsmall]  # the pill's text as shown: its width
+    mov rsi, [rip + psb3 + SB_ptr]
+    mov rdx, [rip + psb3 + SB_len]
+    xor eax, eax
+    cmp dword ptr [rip + fl_pw], 0
+    je 3f
+    call text_width
+3:  mov edx, eax
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_pill_text]
+    call put_num
+    lea rsi, [rip + .Ld_fast_x]
+    mov edx, [rip + fl_fx]
+    call put_num
+    lea rsi, [rip + .Ld_fast_y]
+    mov edx, [rsp + 28]
+    call put_num
+    lea rsi, [rip + .Ld_fast_w]
+    mov edx, [rip + fl_fw]
+    call put_num
+    lea rsi, [rip + .Ld_fast_h]
     mov edx, [rip + fl_row]
     call put_num
     mov rdi, rbx
@@ -1181,6 +1601,13 @@ band_tips: .quad .Lt_error, .Lt_warning, .Lt_warning, .Lt_warning, .Lt_notice
 .Lt_dot: .asciz ". "
 .Lt_mode: .asciz "Click to change, or press Shift+Tab to cycle."
 .Lt_menu: .asciz "Show command menu (/)"
+.Lmodel: .asciz "Model"
+.Lsep: .asciz " \302\267 "
+.Lultra: .asciz " \302\267 Ultracode"
+.Lt_pill: .asciz "Switch model"
+.Lt_open: .asciz " ("
+.Lt_fast_on: .asciz "Fast mode enabled"
+.Lt_fast_cool: .asciz "Fast mode cooling down"
 .Ld_mode: .asciz "mode="
 .Ld_dash: .asciz "-"
 .Ld_ring: .asciz " ring="
@@ -1202,3 +1629,22 @@ band_tips: .quad .Lt_error, .Lt_warning, .Lt_warning, .Lt_warning, .Lt_notice
 .Ld_menu_y: .asciz " menu_y="
 .Ld_menu_w: .asciz " menu_w="
 .Ld_menu_h: .asciz " menu_h="
+.Ld_pill_at: .asciz " pill_at="
+.Ld_fast_at: .asciz " fast_at="
+.Ld_fast: .asciz " fast="
+.Ld_pill: .asciz "\tpill="
+.Ld_title: .asciz "\ttitle="
+.Ld_pill_x: .asciz " pill_x="
+.Ld_pill_y: .asciz " pill_y="
+.Ld_pill_w: .asciz " pill_w="
+.Ld_pill_h: .asciz " pill_h="
+.Ld_pill_text: .asciz " pill_text="
+.Ld_fast_x: .asciz " fast_x="
+.Ld_fast_y: .asciz " fast_y="
+.Ld_fast_w: .asciz " fast_w="
+.Ld_fast_h: .asciz " fast_h="
+.Lf_off: .asciz "off"
+.Lf_on: .asciz "on"
+.Lf_cool: .asciz "cooldown"
+.p2align 3
+fast_words: .quad .Lf_off, .Lf_on, .Lf_cool

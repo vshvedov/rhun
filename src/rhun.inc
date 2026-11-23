@@ -3125,6 +3125,7 @@ F AMO_desc, 8           # owned cstr
 F AMO_levels, VEC_SIZE  # AEL
 F AMO_flags, 4          # AMOF_*
 F AMO_pad, 4
+F AMO_resolved, 8       # owned cstr: the id the program reports for it ("claude-opus-5-5"), or 0
 ENDSTRUCT AMO_SIZE
 .equ AMOF_OFF, 1                # unavailable: greyed, not picked
 .equ AMOF_THINKOFF, 2           # thinking can be switched off
@@ -3236,7 +3237,8 @@ F APM_kind, 4           # APK_ROW, APK_SWITCH, APK_LEVELS
 F APM_flags, 4          # APRF_FILTERONLY
 F APM_shows, 8          # (AS* or 0, driver kind) -> eax 1 shown, rdx its trail (a levels row: the
                         #   label's "(Level)") or 0, ecx APRF_ON (a switch that is on), r8 a levels
-                        #   row's level id or 0; 0: always shown, nothing trailing
+                        #   row's level id or 0, r9 a levels row's model (AMO*: its levels); 0:
+                        #   always shown, nothing trailing
 ENDSTRUCT APM_SIZE
 .equ APS_CONTEXT, 1             # the command menu's sections, in their order
 .equ APS_MODEL, 2

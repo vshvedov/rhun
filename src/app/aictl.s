@@ -709,8 +709,8 @@ c_print_agent_cfg:
 8:  mov rax, -1
     EPILOGUE
 
-# agent-models: what the model picker needs, for the box's conversation: its driver's record is read
-#   (a popup opened is a writer's action, agentcfg_need); error without such a conversation
+# agent-models: the models picker, as the footer's pill opens it (its driver's record is read: a popup
+#   opened is a writer's action, agentcfg_need); error without a box of a driver
 c_agent_models:
     PROLOGUE
     call ai_set
@@ -721,6 +721,10 @@ c_agent_models:
     call agentcfg_get
     mov rdi, rax
     call agentcfg_need
+    mov edi, APP_MODELS
+    xor esi, esi
+    xor edx, edx
+    call agentpop_open
     xor eax, eax
     EPILOGUE
 8:  mov edi, 1
@@ -903,6 +907,115 @@ c_agent_mode:
 8:  mov rax, -1
     EPILOGUE
 
+# ---- the model, effort, Ultracode and thinking (task 6) ----
+
+# box_live() -> rax the live record of the box's conversation (a draft becomes its conversation first;
+#   nothing starts), or 0
+box_live:
+    PROLOGUE
+    call agentext_box_owner
+    test edx, edx
+    jz 8f
+    test rax, rax
+    jnz 1f
+    call agentext_draft_own
+    test rax, rax
+    jz 8f
+1:  mov rdi, rax
+    call agent_live
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# set_arg(rdi buf of 64) -> eax 1 with the command's first argument in buf (a cstr), 0 when there is none
+#   or it is too long
+set_arg:
+    PROLOGUE
+    mov rbx, rdi
+    call ai_arg
+    test rdx, rdx
+    jz 8f
+    cmp rdx, 63
+    ja 8f
+    mov rdi, rbx
+    mov rsi, rax
+    mov byte ptr [rdi + rdx], 0
+    call memmove
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# agent-model VALUE, agent-effort ID: the box's conversation takes them as the pickers give them (DRV_set_model,
+#   DRV_set_effort: the project's choice; nothing starts); error when refused
+c_agent_model:
+    mov eax, DRV_set_model
+    jmp set_text
+c_agent_effort:
+    mov eax, DRV_set_effort
+set_text:
+    PROLOGUE 80
+    mov r12d, eax
+    call ai_set
+    lea rdi, [rsp]
+    call set_arg
+    test eax, eax
+    jz 8f
+    call box_live
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    mov rcx, [rax + AL_drv]
+    lea rsi, [rsp]
+    call [rcx + r12]
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# agent-ultra on|off, agent-thinking on|off: as the switches give them (DRV_set_ultra, DRV_set_thinking);
+#   error when refused
+c_agent_ultra:
+    mov eax, DRV_set_ultra
+    jmp set_switch
+c_agent_thinking:
+    mov eax, DRV_set_thinking
+set_switch:
+    PROLOGUE 80
+    mov r12d, eax
+    call ai_set
+    lea rdi, [rsp]
+    call set_arg
+    test eax, eax
+    jz 8f
+    mov r13d, 1
+    lea rdi, [rsp]
+    lea rsi, [rip + .Lw_on]
+    call strcmp_eq
+    test eax, eax
+    jnz 1f
+    xor r13d, r13d
+    lea rdi, [rsp]
+    lea rsi, [rip + .Lw_off]
+    call strcmp_eq
+    test eax, eax
+    jz 8f
+1:  call box_live
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    mov rcx, [rax + AL_drv]
+    mov esi, r13d
+    call [rcx + r12]
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
 # print-agents-foot: the footer under the box (foot_dump)
 c_print_agents_foot:
     PROLOGUE
@@ -988,6 +1101,12 @@ c_agent_test_band:
 .Lc_agent_modes: .asciz "agent-modes"
 .Lc_agent_mode: .asciz "agent-mode"
 .Lc_print_agents_foot: .asciz "print-agents-foot"
+.Lc_agent_model: .asciz "agent-model"
+.Lc_agent_effort: .asciz "agent-effort"
+.Lc_agent_ultra: .asciz "agent-ultra"
+.Lc_agent_thinking: .asciz "agent-thinking"
+.Lw_on: .asciz "on"
+.Lw_off: .asciz "off"
 .Lb_error: .asciz "error"
 .Lb_settings: .asciz "settings"
 .Lb_auth: .asciz "auth"
@@ -1072,6 +1191,9 @@ ai_ctl:
     # the footer and the permission modes (agentfoot.s)
     .quad .Lc_agent_modes, c_agent_modes, .Lc_agent_mode, c_agent_mode
     .quad .Lc_print_agents_foot, c_print_agents_foot
+    # the model, effort, Ultracode and thinking (task 6)
+    .quad .Lc_agent_model, c_agent_model, .Lc_agent_effort, c_agent_effort
+    .quad .Lc_agent_ultra, c_agent_ultra, .Lc_agent_thinking, c_agent_thinking
     .quad 0, 0
 cfg_fields:                     # agent-cfg-set's words: the word, the AGF_*, whether it is an int
     .quad .Lf_model

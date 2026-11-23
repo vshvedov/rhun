@@ -761,7 +761,8 @@ class MenuTest(MenuCase):
         self.command('agent-prompt /model')
         head = self.head()
         self.assertEqual(head['popup'], 'models')
-        self.assertEqual([r[1:3] for r in self.rows()], [('Default (recommended)', 'Opus 5.5'), ('Sonnet', 'Sonnet 5')])
+        self.assertEqual([r[1:3] for r in self.rows()][:2], [('Default (recommended)', 'Opus 5.5'),
+                                                             ('Sonnet', 'Sonnet 5')])
         self.assertEqual(self.prompts(), ['hello'])                  # nothing went to the program
         self.assertEqual(self.box(), '')
         self.command('key Escape')
@@ -860,12 +861,13 @@ class ModeCase(MenuCase):
     """The modes picker, the footer under the box (print-agents-foot) and the requests the fake read."""
 
     def modes(self):
-        """The modes picker's rows (label, flags), opened as its button opens it, then closed."""
+        """The modes picker's rows (label, flags), opened as its button opens it, then closed (the effort row
+        under them is not a mode)."""
         self.command('agent-modes')
         menu = self.menu()
         self.assertTrue(menu.startswith('popup=modes '), menu)
         self.assertIn('\nsection Modes\t⇧ + tab to switch\n', menu)
-        rows = self.rows()
+        rows = [r for r in self.rows() if not r[4].startswith('levels=')]
         for _, label, desc, _, _ in rows:
             self.assertEqual(desc, MODE_DESC[label])
         self.command('key Escape')
@@ -885,9 +887,12 @@ class ModeCase(MenuCase):
     def foot(self):
         """print-agents-foot's first line: the mode, the frame's colour, where the buttons are, the label."""
         first = self.command('print-agents-foot').splitlines()[0]
-        head, label = first.split(' label=', 1)
+        head, rest = first.split(' label=', 1)
         out = dict(word.split('=', 1) for word in head.split(' '))
+        label, pill, title = rest.split('\t')
         out['label'] = label
+        out['pill'] = pill[len('pill='):]
+        out['title'] = title[len('title='):]
         return out
 
     def argv_modes(self):
@@ -1186,6 +1191,411 @@ class ModeTest(ModeCase):
               for l in lines}
         self.assertTrue(at[13, 380].endswith(' label=Edit automatically'), at[13, 380])
         self.assertGreater(cut, 0)                                   # a large font in a narrow panel cuts it
+
+
+SCANNED = []                            # the fake's requests ModelCase looked at, over all of its tests
+
+
+class ModelCase(ModeCase):
+    """The model pill and picker, effort, Ultracode, thinking and fast mode. After each test the fake's log is
+    read: no update_settings with userSettings may be in it (rhun never writes Claude Code's own settings),
+    and the test HOME's Claude Code settings file was never made (the fake's config folder is the test's)."""
+
+    def tearDown(self):
+        try:
+            requests = [m['request'] for m in self.stdin() if m.get('type') == 'control_request']
+            SCANNED.extend(r.get('subtype') for r in requests)
+            user = [r for r in requests if r.get('subtype') == 'update_settings' and r.get('source') == 'userSettings']
+            self.assertEqual(user, [])
+            self.assertFalse((self.work / '.claude/settings.json').exists())
+        finally:
+            super().tearDown()
+
+    def requests(self, subtype=None):
+        out = [m['request'] for m in self.stdin() if m.get('type') == 'control_request']
+        return [r for r in out if subtype is None or r.get('subtype') == subtype]
+
+    def flags(self):
+        """The settings apply_flag_settings asked for, in order."""
+        return [r['settings'] for r in self.requests('apply_flag_settings')]
+
+    def choices(self):
+        """print-agent-cfg's project line: the project's model, effort, Ultracode and thinking."""
+        return re.search(r'^project (.*)$', self.command('print-agent-cfg'), re.M).group(1)
+
+    def at(self, n):
+        """Where print-agent-menu says row n was drawn."""
+        match = re.search(r'^at %d (\d+),(\d+)$' % n, self.menu(), re.M)
+        self.assertIsNotNone(match, self.menu())
+        return match.group(1), match.group(2)
+
+    def pills(self):
+        return [l[len('pill '):] for l in self.command('print-agents').splitlines() if l.startswith('pill ')]
+
+    def thinking(self):
+        return [r['thinking'] for r in self.records() if 'thinking' in r]
+
+    def released(self):
+        self.command('agent-release')
+        self.until_gone()
+
+
+class ModelTest(ModelCase):
+    def test_the_pill_names_the_model_and_effort(self):
+        self.ready()
+        foot = self.foot()
+        self.assertEqual(foot['pill'], 'Default (recommended) · High')
+        self.assertEqual(foot['title'], 'Switch model (Default (recommended))')
+        x, y = foot['pill_at'].split(',')
+        self.command(f'move {x} {y}')
+        self.command('wait 700')
+        self.assertIn('Switch model (Default (recommended))', self.command('print-tip'))
+        self.command(f'click {x} {y}')                              # the pill opens the picker
+        head = self.head()
+        self.assertEqual((head['popup'], head['sel']), ('models', '1'))
+        self.assertEqual(self.rows()[0][1:], ('Default (recommended)', 'Opus 5.5', '-', 'check'))
+        self.command(f'click {x} {y}')                              # and closes it
+        self.assertTrue(self.menu().startswith('popup=none'))
+        # a draft names the project's choice, before any program (nothing is read for it)
+        self.command('agent-cfg-set model sonnet')
+        self.command('agent-new claude')
+        self.assertEqual(self.foot()['pill'], 'Sonnet')
+        self.assertEqual(len(self.starts()), 1)
+
+    def test_models_picker_rows_and_unavailable(self):
+        self.start(env={'FAKE_CLAUDE_MODELS': 'unavailable'})
+        self.chat('hello')
+        self.command('agent-models')
+        menu = self.menu()
+        self.assertIn('\nsection Select a model\n', menu)
+        self.assertEqual([r[1:] for r in self.rows()], [
+            ('Default (recommended)', 'Opus 5.5', '-', 'check'), ('Sonnet', 'Sonnet 5', '-', '-'),
+            ('Haiku', 'Not on your plan', '-', 'off'), ('Effort (High)', 'Set how hard the model tries', '-',
+                                                        'levels=high')])
+        self.command('agent-menu-pick 3')                            # the greyed row is not picked
+        self.command('key Return')
+        x, y = self.at(3)
+        self.command(f'click {x} {y}')
+        self.command('key space')
+        self.command('wait 200')
+        self.assertEqual(self.flags(), [])
+        self.assertTrue(self.choices().startswith('model=- '), self.choices())
+        out, ok = self.reply('agent-model haiku')
+        self.assertFalse(ok, out)
+        self.assertEqual(self.foot()['pill'], 'Default (recommended) · High')
+
+    def test_picking_a_model_while_running(self):
+        self.ready()
+        self.command('agent-models')
+        self.command('agent-menu-pick 2')                            # Sonnet
+        self.assertTrue(self.menu().startswith('popup=none'))
+        self.until(lambda: self.pills() == ['Switched to Sonnet'], 'the pill row')
+        subtypes = [r['subtype'] for r in self.requests()]
+        self.assertEqual(subtypes[:2], ['initialize', 'get_settings'])
+        self.assertEqual(self.flags(), [{'model': 'sonnet'}])
+        after = subtypes[subtypes.index('apply_flag_settings'):]
+        self.assertEqual(after, ['apply_flag_settings', 'get_settings'])
+        self.until(lambda: ' model=claude-sonnet-5 effort=medium ' in self.command('print-agent-live'), 'applied')
+        self.assertEqual(self.foot()['pill'], 'Sonnet · Medium')
+        self.assertTrue(self.choices().startswith('model=sonnet '), self.choices())
+        self.command('agent-prompt again')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(len(self.starts()), 1)                      # the same process, no start for it
+
+    def test_picking_before_a_start_starts_nothing_and_passes_model_and_effort(self):
+        self.ready()
+        self.released()
+        self.command('agent-model sonnet')
+        self.command('agent-effort low')
+        self.assertEqual(self.foot()['pill'], 'Sonnet · Low')
+        self.assertEqual(len(self.starts()), 1)
+        self.assertEqual(re.findall(r'\b\d+\b', self.command('print-uproc')), [])
+        self.command('agent-prompt again')
+        self.command('wait-agent ready 10000')
+        argv = self.starts()[-1]['argv']
+        self.assertIn('--model=sonnet', argv)
+        self.assertIn('--effort=low', argv)
+        self.assertEqual(self.flags(), [])                           # passed, not asked for
+        self.assertIn(' model=claude-sonnet-5 effort=low ', self.command('print-agent-live'))
+        out, ok = self.reply('agent-effort xhigh')                   # not one of Sonnet's levels
+        self.assertFalse(ok, out)
+        # a draft's pick: it becomes its conversation, nothing starts
+        self.command('agent-new claude')
+        self.command('agent-model default')
+        self.assertEqual(len(self.starts()), 2)
+
+    def test_choices_never_reach_user_settings(self):
+        settings = self.work / '.claude/settings.json'
+        self.start(env={'FAKE_CLAUDE_MODELS': 'ultra'})
+        self.chat('hello')
+        for line in ('agent-model sonnet', 'agent-effort low', 'agent-ultra on', 'agent-ultra off',
+                     'agent-model default', 'agent-effort max'):
+            self.reply(line)
+        self.until(lambda: len(self.flags()) >= 5, 'the picks applied')
+        self.released()
+        for line in ('agent-model sonnet', 'agent-effort medium', 'agent-ultra on'):
+            self.reply(line)
+        self.command('agent-prompt again')
+        self.command('wait-agent ready 10000')
+        self.assertEqual(self.requests('update_settings'), [])
+        self.assertFalse(settings.exists())
+        self.assertNotIn('modelSettings', json.dumps(self.stdin()))
+        self.assertGreater(len(self.flags()), 5)                     # and the same picks went as flags
+
+    def test_choices_are_the_projects(self):
+        other = self.work / 'other'
+        other.mkdir()
+        self.ready()
+        self.command('agent-model sonnet')
+        self.command('open ' + str(other))
+        self.command('wait 200')
+        self.chat('there')
+        argv = self.starts()[-1]['argv']
+        self.assertEqual([a for a in argv if a.startswith(('--model', '--effort'))], [])
+        self.assertEqual(self.foot()['pill'], 'Default (recommended) · High')
+
+    def test_effort_levels_follow_the_model(self):
+        self.start(env={'FAKE_CLAUDE_MODELS': 'effort,noeffort'})
+        self.chat('hello')
+        self.command('agent-models')
+        self.assertIn('\nlevels low:Low,medium:Medium,high:High,xhigh:Extra high,max:Max\n', self.menu())
+        self.assertEqual(self.rows()[-1][1:], ('Effort (High)', 'Set how hard the model tries', '-', 'levels=high'))
+        self.command('agent-menu-pick 3')                            # the effort row: the next level round
+        self.until(lambda: self.flags() == [{'effortLevel': 'xhigh'}], 'xhigh')
+        self.assertTrue(self.menu().startswith('popup=models '))     # the picker stays
+        self.until(lambda: self.foot()['pill'] == 'Default (recommended) · Extra high', 'the pill')
+        self.command('key Left')                                     # the keys step it
+        self.until(lambda: self.flags()[-1:] == [{'effortLevel': 'high'}], 'high')
+        track = re.search(r'^track (\d+),(\d+),(\d+),(\d+)$', self.menu(), re.M)
+        self.assertIsNotNone(track, self.menu())
+        tx, ty, tw, th = map(int, track.groups())
+        self.command(f'click {tx + 1} {ty + th // 2}')               # its track's left end: the lowest
+        self.until(lambda: self.flags()[-1:] == [{'effortLevel': 'low'}], 'low')
+        self.command(f'click {tx + tw - 1} {ty + th // 2}')          # the right end: the highest
+        self.until(lambda: self.flags()[-1:] == [{'effortLevel': 'max'}], 'max')
+        self.assertTrue(self.choices().startswith('model=- effort=max '), self.choices())
+        # a model without levels has no effort row, and the pill names no level
+        self.command('agent-menu-pick 2')
+        self.until(lambda: self.foot()['pill'] == 'Sonnet', 'Sonnet')
+        self.command('agent-models')
+        self.assertNotIn('Effort', ' '.join(self.labels()))
+        self.command('key Escape')
+        self.command('agent-menu')
+        self.assertNotIn('Effort', ' '.join(self.labels()))
+        self.command('key Escape')
+        self.command('agent-modes')
+        self.assertNotIn('Effort', ' '.join(self.labels()))
+
+    def test_effort_row_in_the_modes_picker_and_the_menu(self):
+        self.ready()
+        self.command('agent-modes')
+        self.assertEqual(self.rows()[-1][1:], ('Effort (High)', 'Set how hard the model tries', '-', 'levels=high'))
+        x, y = self.at(4)
+        self.command(f'move {x} {y}')
+        self.command('wait 700')
+        self.assertIn('Click to cycle effort level', self.command('print-tip'))
+        self.command('key Escape')
+        self.command('agent-menu effort')
+        self.assertEqual(self.labels()[0], 'Effort (High)')
+        self.command('key Return')                                   # the round wraps: high -> low
+        self.until(lambda: self.flags() == [{'effortLevel': 'low'}], 'low')
+        self.assertEqual(self.labels()[0], 'Effort (Low)')
+
+    def test_ultracode_row_and_flag_settings(self):
+        self.start(env={'FAKE_CLAUDE_MODELS': 'ultra'})
+        self.chat('hello')
+        self.command('agent-models')
+        rows = self.rows()
+        self.assertEqual(rows[-1][1:], ('Ultracode', 'Run dynamic workflows on every task (this session only)', '-',
+                                        'switch'))
+        self.command('agent-menu-pick %d' % len(rows))
+        self.until(lambda: self.flags() == [{'ultracode': True}], 'on')
+        self.assertTrue(self.menu().startswith('popup=models '))     # a switch: the picker stays
+        self.until(lambda: ' ultra=1 ' in self.command('print-agent-live'), 'applied')
+        self.assertEqual(self.foot()['pill'], 'Default (recommended) · High · Ultracode')
+        subtypes = [r['subtype'] for r in self.requests()]
+        self.assertEqual(subtypes[subtypes.index('apply_flag_settings'):], ['apply_flag_settings', 'get_settings'])
+        self.assertIn(' ultra=1 ', ' ' + self.choices() + ' ')
+        self.released()
+        self.command('agent-prompt again')                           # the next process takes it after its settings
+        self.command('wait-agent ready 10000')
+        self.until(lambda: self.flags() == [{'ultracode': True}] * 2, 'applied again')
+        self.until(lambda: ' ultra=1 ' in self.command('print-agent-live'), 'on again')
+        self.command('agent-ultra off')
+        self.until(lambda: self.flags()[-1] == {'ultracode': False}, 'off')
+        self.until(lambda: ' ultra=0 ' in self.command('print-agent-live'), 'off applied')
+        self.assertEqual(self.foot()['pill'], 'Default (recommended) · High')
+
+    def test_ultracode_not_offered(self):
+        self.ready()
+        self.command('agent-models')
+        self.assertNotIn('Ultracode', self.labels())
+        out, ok = self.reply('agent-ultra on')
+        self.assertFalse(ok, out)
+        self.assertEqual(self.flags(), [])
+
+    def test_thinking_switch_and_the_next_start(self):
+        self.start(env={'FAKE_CLAUDE_MODELS': 'nothink'})
+        self.chat('hello')
+        self.command('agent-menu think')
+        self.assertEqual(self.rows()[0][1:], ('Thinking', 'Toggle extended thinking mode', '-', 'on,switch'))
+        self.command('key Return')
+        self.until(lambda: self.thinking() == [{'max_thinking_tokens': 0, 'thinking_display': None}], 'off')
+        self.assertEqual(self.rows()[0][1:], ('Thinking', 'Toggle extended thinking mode', '-', 'switch'))
+        self.assertIn(' think=0 ', self.command('print-agent-live'))
+        self.released()
+        self.command('agent-prompt again')
+        self.command('wait-agent ready 10000')
+        argv = self.starts()[-1]['argv']
+        self.assertIn('--thinking=disabled', argv)
+        self.assertNotIn('--max-thinking-tokens=31999', argv)
+        self.command('agent-thinking on')
+        self.until(lambda: self.thinking()[-1:] == [{'max_thinking_tokens': 31999, 'thinking_display': None}], 'on')
+        self.assertEqual(self.requests('apply_flag_settings'), [])
+
+    def test_thinking_asks_for_summaries_when_the_settings_say(self):
+        local = self.project / '.claude'
+        local.mkdir()
+        (local / 'settings.local.json').write_text(json.dumps({'showThinkingSummaries': True}), encoding='utf-8')
+        self.start(env={'FAKE_CLAUDE_MODELS': 'nothink'})
+        self.chat('hello')
+        self.command('agent-thinking off')
+        self.command('agent-thinking on')
+        self.until(lambda: len(self.thinking()) == 2, 'both')
+        self.assertEqual(self.thinking(), [{'max_thinking_tokens': 0, 'thinking_display': None},
+                                           {'max_thinking_tokens': 31999, 'thinking_display': 'summarized'}])
+
+    def test_no_thinking_switch_by_default(self):
+        self.ready()
+        self.command('agent-menu')
+        self.assertNotIn('Thinking', self.labels())
+        out, ok = self.reply('agent-thinking off')
+        self.assertFalse(ok, out)
+        self.assertEqual(self.thinking(), [])
+        self.assertIn('--max-thinking-tokens=31999', self.starts()[-1]['argv'])
+
+    def test_fast_entry_follows_the_reason(self):
+        self.start(env={'FAKE_CLAUDE_MODELS': 'fast', 'FAKE_CLAUDE_FAST': 'off sdk_opt_in_required'})
+        self.chat('hello')
+        self.command('agent-menu')
+        self.assertNotIn('Toggle fast mode', self.labels())
+        self.assertIn('fast off sdk_opt_in_required', self.command('print-agent-cfg'))
+        self.quit()
+        self.start(env={'FAKE_CLAUDE_MODELS': 'fast', 'FAKE_CLAUDE_FAST': 'off -', 'FAKE_CLAUDE_FAST_REJECT': '1'})
+        self.chat('hello')
+        self.assertEqual(self.foot()['fast'], 'off')
+        self.command('agent-menu fast')
+        self.assertEqual(self.labels()[0], 'Toggle fast mode')
+        self.command('key Return')
+        self.until(lambda: '/fast' in self.prompts(), '/fast sent')
+        self.command('wait-agent ready 10000')
+        self.until(lambda: self.foot()['fast'] == 'on', 'the mark')
+        foot = self.foot()
+        x, y = foot['fast_at'].split(',')
+        self.command(f'move {x} {y}')
+        self.command('wait 700')
+        self.assertIn('Fast mode enabled', self.command('print-tip'))
+        self.command('agent-prompt more')                            # usage credits run out: it turns off
+        self.command('wait-agent ready 10000')
+        self.until(lambda: self.foot()['fast'] == 'off', 'off')
+        self.assertEqual(self.command('print-toast').strip(),
+                         'toast=Fast mode disabled · Usage credits are unavailable. Type /fast on in the chat to '
+                         'turn it back on once usage credits are available again.')
+        self.assertNotIn('/fast off', self.prompts())                # rhun sends nothing the user did not ask for
+        self.assertEqual(self.prompts().count('/fast'), 1)
+
+    def test_picker_closes_when_the_conversation_changes(self):
+        self.ready()
+        self.command('agent-models')
+        self.assertEqual(self.head()['popup'], 'models')
+        self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        self.assertTrue(self.menu().startswith('popup=none'))
+        self.command('print-agents 1')
+        self.command('agent-models')
+        self.assertEqual(self.head()['popup'], 'models')
+        self.command('agent-new claude')                             # the box is another's
+        self.assertTrue(self.menu().startswith('popup=none'))
+
+    def test_loading_models_while_it_starts(self):
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '1500'})
+        self.command('agent-new claude')
+        self.command('agent-prompt hello')
+        self.command('agent-models')
+        self.assertIn('\nempty Loading models…\n', self.menu())
+        self.command('wait-agent ready 10000')
+        self.until(lambda: '\nsection Select a model\n' in self.menu(), 'the list')
+        self.command('key Escape')
+        self.quit()
+        self.start(target='--empty')                                 # no list, nothing starting
+        self.command('agent-new claude')
+        self.command('agent-models')
+        self.assertIn('\nempty No models available\n', self.menu())
+
+    def test_model_controls_fit(self):
+        self.start(env={'FAKE_CLAUDE_MODELS': 'fast,ultra', 'FAKE_CLAUDE_FAST': 'on -'})
+        self.chat('hello')
+        self.command('agent-ultra on')
+        self.until(lambda: ' ultra=1 ' in self.command('print-agent-live'), 'Ultracode')
+        self.command('agent-mode acceptEdits')
+        self.until(lambda: self.mode() == 'acceptEdits', 'acceptEdits')
+        self.assertEqual(self.foot()['fast'], 'on')
+        lines = self.command('print-agents-foot').splitlines()[1:]
+        self.assertEqual(len(lines), 25 * 34)
+        shown = hidden = fast = 0
+        for line in lines:
+            r = {k: int(v) for k, v in (f.split('=') for f in line.split(' label=')[0].split())}
+            rects = {name: (r[name + '_x'], r[name + '_y'], r[name + '_w'], r[name + '_h'])
+                     for name in ('send', 'mode', 'menu', 'pill', 'fast') if r[name + '_w'] > 0}
+            fast += 'fast' in rects
+            for name, (x, y, w, h) in rects.items():
+                self.assertGreater(h, 0, line)
+                self.assertGreaterEqual(x, 0, line)
+                self.assertLessEqual(x + w, r['w'], line)
+                self.assertLessEqual(y + h, r['h'], line)
+            names = list(rects)
+            for i, a in enumerate(names):
+                for b in names[i + 1:]:
+                    ax, ay, aw, ah = rects[a]
+                    bx, by, bw, bh = rects[b]
+                    apart = ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay
+                    self.assertTrue(apart, f'{a} and {b} overlap: {line}')
+            self.assertGreaterEqual(r['mode_w'], r['menu_w'], line)
+            if 'pill' in rects:
+                shown += 1
+                self.assertLess(r['pill_text'], r['pill_w'], line)
+            else:
+                hidden += 1
+        at = {(int(re.search(r'size=(\d+)', l).group(1)), int(re.search(r' w=(\d+)', l).group(1))): l
+              for l in lines}
+        self.assertTrue(at[13, 380].endswith(' label=Edit automatically'), at[13, 380])
+        self.assertIn(' pill_w=', at[13, 380])
+        self.assertGreater(int(re.search(r' pill_w=(\d+)', at[13, 380]).group(1)), 0)
+        self.assertGreater(shown, 0)
+        self.assertGreater(hidden, 0)                                # 240 px at 32: the pill gives way
+        self.assertGreater(int(re.search(r' fast_w=(\d+)', at[13, 380]).group(1)), 0)
+        self.assertLess(fast, len(lines))                            # and there the fast mark too
+        # the models picker fits every size too
+        self.command('agent-models')
+        lines = self.command('print-agent-menu fit').splitlines()
+        self.assertEqual(len(lines), 25 * 34)
+        for line in lines:
+            r = {k: int(v) for k, v in (f.split('=') for f in line.split())}
+            self.assertLessEqual(r['x'] + r['pw'], r['w'], line)
+            self.assertGreaterEqual(r['left'], r['x'], line)
+            self.assertLessEqual(r['right'], r['x'] + r['pw'], line)
+            self.assertGreater(r['label'], 0, line)
+
+
+class UserSettingsScanTest(unittest.TestCase):
+    """After ModelTest (the loader runs the classes in the order of their names): ModelCase's scan read every
+    request the fake got in those tests, the picks among them, and update_settings was never one."""
+
+    def test_the_scan_saw_the_model_tests(self):
+        if not SCANNED:
+            self.skipTest('run with ModelTest')
+        self.assertIn('apply_flag_settings', SCANNED)
+        self.assertIn('set_max_thinking_tokens', SCANNED)
+        self.assertNotIn('update_settings', SCANNED)
 
 
 class SeamWordsTest(unittest.TestCase):

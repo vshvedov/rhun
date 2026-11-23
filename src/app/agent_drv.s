@@ -43,6 +43,7 @@
 #     again), ev_config(al) (its lists changed: the project's record is saved, agentcfg.s),
 #     ev_model(al, ptr, len), ev_effort(al, ptr, len) (what is in effect), ev_ultra(al, available, on),
 #     ev_thinking(al, on), ev_fast(al, FS_*, reason ptr, len) (kept in the project's record too),
+#     ev_pill(al, ptr, len) (a one-line pill row, "Switched to NAME"),
 #     ev_band(al, BK_*, ptr, len) (a band above the box; ptr 0 takes it away; dismissed, it stays away until
 #     its text changes), ev_started(al, uuid ptr, len) (a held message started: its row joins),
 #     ev_dropped(al, uuid ptr, len) (a held message will not run: back to its own conversation's box)
@@ -2150,6 +2151,12 @@ FN ev_fast
     call agentcfg_set
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
+
+# FN ev_pill(al, ptr, len): a one-line pill in the conversation ("Switched to NAME"): centred, muted, in a
+#   rounded frame (agents_pill)
+FN ev_pill
+    mov rdi, [rdi + AL_as]
+    jmp agents_pill
 
 # FN ev_band(al, kind BK_*, ptr, len): the band of that kind above the box shows the text (ptr 0: it goes);
 #   the text a band the user dismissed had (AL_bandoff, agentfoot.s) keeps it away, another shows it

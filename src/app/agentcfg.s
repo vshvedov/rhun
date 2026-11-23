@@ -12,7 +12,7 @@
 # something in it changed (agentcfg_save), whole, through a temporary file and a rename (file_write_all).
 #
 # Lines, fields separated by a tab (a tab, a line end and a backslash escaped as \t \n \\), at most 1 MiB:
-#   agentcfg 1 | version V | model VALUE LABEL DESC FLAGS ID:LABEL,ID:LABEL... |
+#   agentcfg 1 | version V | model VALUE LABEL DESC FLAGS ID:LABEL,ID:LABEL... [RESOLVED] |
 #   cmd NAME DESC HINT ALIASES ORIGIN ACT FLAGS | project MODEL EFFORT ULTRA THINK | fast STATE REASON |
 #   dest D | newmode M | conv SID MODE (at most 1000, the oldest dropped)
 # A number -1 is written "-". Unknown lines are skipped; a file that does not start with "agentcfg 1" is
@@ -25,7 +25,11 @@
 #     hint ptr, [stack] hint len, aliases cstr|0, origin cstr|0, act, flags) -> rax ACM* or 0,
 #     agentcfg_lists_end(AGC*) -> eax 1 when they differ from the ones replaced (then dirty)
 #   agentcfg_find_model(AGC*, ptr, len) -> rax AMO* or 0; agentcfg_find_cmd(AGC*, ptr, len) -> rax ACM*
-#     or 0 (its name or an alias)
+#     or 0 (its name or an alias); agentcfg_resolved(AMO*, id) the id the program reports for a model;
+#     agentcfg_model_of(AGC*, ptr, len) -> rax the model of that value or reported id, or 0
+#   agentcfg_current(AS* or 0, AGC*) -> rax AMO* or 0, rdx its name: the model a conversation uses (the
+#     footer's pill, the picker's check); agentcfg_effort(AS* or 0, AGC*, AMO*) -> rax AEL* or 0: the
+#     level in effect
 #   agentcfg_conv(AGC*, sid cstr) -> rax ACH* (made; valid until the next agentcfg_conv); agentcfg_dirty
 #     (AGC*) after changing an ACH_mode; agentcfg_conv_mode(AGC*, sid cstr) -> rax its mode or 0 (makes none)
 #   agentcfg_set(AGC*, field AGF_*, ptr, len) (an int field takes its value in rdx): dirty when it changed
@@ -401,6 +405,11 @@ l_model:
     test rax, rax
     jz 9f
     mov rbx, rax
+    mov edi, 6                  # RESOLVED (later files only)
+    call fld
+    mov rdi, rbx
+    mov rsi, rax
+    call agentcfg_resolved
     mov edi, 5                  # ID:LABEL,ID:LABEL
     call fld
     mov r12, rax
@@ -713,6 +722,157 @@ FN agentcfg_model
 8:  xor eax, eax
     EPILOGUE
 
+# FN agentcfg_resolved(AMO* or 0, id cstr or 0): the id the program reports for the model (its
+#   resolvedModel), kept beside its value
+FN agentcfg_resolved
+    PROLOGUE
+    mov rbx, rdi
+    test rbx, rbx
+    jz 9f
+    mov rdi, rsi
+    call cut_dup0
+    mov r12, rax
+    mov rdi, [rbx + AMO_resolved]
+    call mem_free
+    mov [rbx + AMO_resolved], r12
+9:  EPILOGUE
+
+# FN agentcfg_model_of(AGC*, ptr, len) -> rax the model whose value or reported id that is (the first
+#   listed), or 0
+FN agentcfg_model_of
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    call agentcfg_find_model
+    test rax, rax
+    jnz 9f
+    xor r14d, r14d
+1:  cmp r14, [rbx + AGC_models + VEC_len]
+    jae 8f
+    mov rax, [rbx + AGC_models + VEC_ptr]
+    mov r15, [rax + r14*8]
+    inc r14
+    mov rdx, [r15 + AMO_resolved]
+    test rdx, rdx
+    jz 1b
+    mov rdi, r12
+    mov rsi, r13
+    call str_eq_cstr
+    test eax, eax
+    jz 1b
+    mov rax, r15
+    EPILOGUE
+8:  xor eax, eax
+9:  EPILOGUE
+
+# running(AS* or 0) -> rax its live record when its program runs (ready, working, waiting), else 0
+running:
+    xor eax, eax
+    test rdi, rdi
+    jz 9f
+    mov rax, [rdi + AS_live]
+    test rax, rax
+    jz 9f
+    mov ecx, [rax + AL_state]
+    cmp ecx, ALS_READY
+    jb 8f
+    cmp ecx, ALS_WAITING
+    jbe 9f
+8:  xor eax, eax
+9:  ret
+
+# FN agentcfg_current(AS* or 0, AGC*) -> rax the model the conversation uses (AMO*) or 0, rdx the name to
+#   show for it (its label, else the value as the program gave it) or 0. While its program runs: the
+#   model in effect (AL_model); else the project's choice; else the last one in effect; else the one the
+#   transcript names (AS_model). Reads nothing
+FN agentcfg_current
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    call running
+    test rax, rax
+    jz 1f
+    lea r13, [rax + AL_model]
+    cmp byte ptr [r13], 0
+    jne 5f
+1:  lea r13, [r12 + AGC_model]
+    cmp byte ptr [r13], 0
+    jne 5f
+    test rbx, rbx
+    jz 8f
+    mov rax, [rbx + AS_live]
+    test rax, rax
+    jz 2f
+    lea r13, [rax + AL_model]
+    cmp byte ptr [r13], 0
+    jne 5f
+2:  mov r13, [rbx + AS_model]
+    test r13, r13
+    jz 8f
+    cmp byte ptr [r13], 0
+    je 8f
+5:  mov rdi, r13
+    call strlen
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, rax
+    call agentcfg_model_of
+    mov rdx, r13
+    test rax, rax
+    jz 9f
+    mov rdx, [rax + AMO_label]
+    cmp byte ptr [rdx], 0
+    jne 9f
+    mov rdx, r13
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+9:  EPILOGUE
+
+# FN agentcfg_effort(AS* or 0, AGC*, AMO* or 0) -> rax the effort level in effect among the model's levels
+#   (AEL*) or 0: while its program runs the one it reports (AL_effort), else the project's choice, else the
+#   last one in effect
+FN agentcfg_effort
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r15, rdx
+    test r15, r15
+    jz 8f
+    call running
+    test rax, rax
+    jz 1f
+    lea r13, [rax + AL_effort]
+    cmp byte ptr [r13], 0
+    jne 5f
+1:  lea r13, [r12 + AGC_effort]
+    cmp byte ptr [r13], 0
+    jne 5f
+    test rbx, rbx
+    jz 8f
+    mov rax, [rbx + AS_live]
+    test rax, rax
+    jz 8f
+    lea r13, [rax + AL_effort]
+    cmp byte ptr [r13], 0
+    je 8f
+5:  xor r14d, r14d
+6:  cmp r14, [r15 + AMO_levels + VEC_len]
+    jae 8f
+    imul rbx, r14, AEL_SIZE
+    add rbx, [r15 + AMO_levels + VEC_ptr]
+    inc r14
+    mov rdi, [rbx + AEL_id]
+    mov rsi, r13
+    call strcmp_eq
+    test eax, eax
+    jz 6b
+    mov rax, rbx
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
 # FN agentcfg_level(AMO* or 0, id, label cstrs): an effort level of the model (16 at most)
 FN agentcfg_level
     PROLOGUE
@@ -971,6 +1131,8 @@ models_free:
     mov rdi, [r13 + AMO_label]
     call mem_free
     mov rdi, [r13 + AMO_desc]
+    call mem_free
+    mov rdi, [r13 + AMO_resolved]
     call mem_free
     xor r14d, r14d
 2:  cmp r14, [r13 + AMO_levels + VEC_len]
@@ -1332,7 +1494,12 @@ models_text:
     mov rsi, r14
     xor edx, edx
     call levels_text
+    mov rsi, [r14 + AMO_resolved]   # the id the program reports, when known
+    test rsi, rsi
+    jz 2f
     mov rdi, rbx
+    call put_field
+2:  mov rdi, rbx
     call put_nl
     jmp 1b
 9:  EPILOGUE

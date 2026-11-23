@@ -2,6 +2,12 @@
 # above the prompt box over the conversation's bottom, in the panel's faces and metrics, and kept by the
 # keyboard.
 #
+# The model picker: "Select a model", a row per model (a check on the one in use, the unavailable greyed and
+# never picked), "Loading models…" / "No models available", then the effort row (a track: click or drag;
+# Enter or a click on its label goes to the next level round; Left and Right step) and the Ultracode switch.
+# The modes picker ends with the effort row too. Picks go to the driver (DRV_set_model, DRV_set_effort
+# through DRV_action ACT_EFFORT, DRV_set_ultra, DRV_set_thinking); nothing here starts a process.
+#
 # The command menu has two modes. Typed: the box's caret is in a token matching (?:^|\s)/[^\s/]* (the token
 # is the filter; the menu closes when the caret leaves it); it takes Enter, Tab and the arrows only while it
 # shows a row, every other key goes on to the box. Button (agent-menu; the footer's "/"): its filter field
@@ -31,7 +37,9 @@
 .include "rhun.inc"
 
 .equ R_INFO, 6                  # agents.s's info row
-.equ ROWS_IDS, 0x3fe            # rows with a button id of their own (later ones share the last)
+.equ ROWS_IDS, 0x3fd            # rows with a button id of their own (later ones share the last)
+.equ ID_TRACK, 0x3fe            # ID_AGPOP + : the effort row's track
+.equ AT_MAX, 64                 # rows whose drawn place print-agent-menu names
 .equ QB_MAX, 63
 .equ DROPPED, 9                 # a row the filter leaves out (PR_tier)
 
@@ -48,6 +56,7 @@ F PR_arg, 8
 F PR_name, 8            # a slash command's name, or 0
 F PR_alias, 8           # its aliases, space-separated, or 0
 F PR_extra, 8           # a levels row's level id, or 0
+F PR_model, 8           # a levels row's model (AMO*: its levels), or 0
 F PR_tier, 4            # 0 exact, 1 prefix, 2 fuzzy, DROPPED
 F PR_score, 4
 ENDSTRUCT PR_SIZE
@@ -99,6 +108,8 @@ lay_dw: .long 0
 lay_tx: .long 0
 lay_tw: .long 0
 secrank: .zero 8
+row_ay: .zero 4 * AT_MAX        # as drawn last: each row's centre (y; 0 not drawn), the track's rect
+trk_rect: .zero 16
 
 .text
 
@@ -644,44 +655,11 @@ build_menu:
     jz 1f
     cmp qword ptr [rip + q_len], 0
     je .Lbm_act
-1:  xor edx, edx
-    xor ecx, ecx
-    xor r8d, r8d
-    mov rax, [r15 + APM_shows]
-    test rax, rax
-    jz 2f
-    mov rdi, [rip + pop_owner]
-    mov esi, [rip + pop_dkind]
-    call rax
+1:  mov rdi, r15
+    call apm_tmpl
     test eax, eax
     jz .Lbm_act
-2:  mov [rip + tmpl + PR_trail], rdx
-    mov [rip + tmpl + PR_extra], r8
-    or ecx, [r15 + APM_flags]
-    mov [rip + tmpl + PR_flags], ecx
-    mov eax, [r15 + APM_kind]
-    mov [rip + tmpl + PR_kind], eax
-    mov eax, [r15 + APM_act]
-    mov [rip + tmpl + PR_act], eax
-    mov eax, [r15 + APM_sec]
-    mov [rip + tmpl + PR_sec], eax
-    mov [rip + tmpl + PR_arg], r15
-    mov rax, [r15 + APM_desc]
-    mov [rip + tmpl + PR_desc], rax
-    mov rax, [r15 + APM_label]
-    mov [rip + tmpl + PR_label], rax
-    cmp dword ptr [r15 + APM_kind], APK_LEVELS
-    jne 3f
-    mov rdx, [rip + tmpl + PR_trail]    # a levels row: "Effort (High)"
-    test rdx, rdx
-    jz 3f
-    mov rdi, rax
-    lea rsi, [rip + .Lsp]
-    xor ecx, ecx
-    call own_concat
-    mov [rip + tmpl + PR_label], rax
-    mov qword ptr [rip + tmpl + PR_trail], 0
-3:  call cand_push
+    call cand_push
     jmp .Lbm_act
 .Lbm_slash:
     cmp dword ptr [rip + pop_slash], 0
@@ -743,6 +721,84 @@ build_menu:
     call rank
     call emit
     EPILOGUE
+
+# apm_tmpl(APM*) -> eax 1 when the action shows now (its rule, APM_shows): the row being made is its row (a
+#   levels row's label "Effort (Level)", its level and its model's levels)
+apm_tmpl:
+    PROLOGUE
+    mov r15, rdi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    xor r9d, r9d
+    mov rax, [r15 + APM_shows]
+    test rax, rax
+    jz 2f
+    mov rdi, [rip + pop_owner]
+    mov esi, [rip + pop_dkind]
+    call rax
+    test eax, eax
+    jz 9f
+2:  mov [rip + tmpl + PR_trail], rdx
+    mov [rip + tmpl + PR_extra], r8
+    mov [rip + tmpl + PR_model], r9
+    or ecx, [r15 + APM_flags]
+    mov [rip + tmpl + PR_flags], ecx
+    mov eax, [r15 + APM_kind]
+    mov [rip + tmpl + PR_kind], eax
+    mov eax, [r15 + APM_act]
+    mov [rip + tmpl + PR_act], eax
+    mov eax, [r15 + APM_sec]
+    mov [rip + tmpl + PR_sec], eax
+    mov [rip + tmpl + PR_arg], r15
+    mov rax, [r15 + APM_desc]
+    mov [rip + tmpl + PR_desc], rax
+    mov rax, [r15 + APM_label]
+    mov [rip + tmpl + PR_label], rax
+    cmp dword ptr [r15 + APM_kind], APK_LEVELS
+    jne 3f
+    mov rdx, [rip + tmpl + PR_trail]    # a levels row: "Effort (High)"
+    test rdx, rdx
+    jz 3f
+    mov rdi, rax
+    lea rsi, [rip + .Lsp]
+    xor ecx, ecx
+    call own_concat
+    mov [rip + tmpl + PR_label], rax
+    mov qword ptr [rip + tmpl + PR_trail], 0
+3:  mov eax, 1
+9:  EPILOGUE
+
+# act_row(act ACT_*): a picker's row for the driver's command-menu action of that act (the effort row, the
+#   Ultracode switch), when it shows now
+act_row:
+    PROLOGUE 16
+    mov r12d, edi
+    mov edi, [rip + pop_dkind]
+    call agent_drv_for_kind
+    test rax, rax
+    jz 9f
+    mov qword ptr [rsp], 0
+    mov rdi, [rip + pop_owner]
+    lea rsi, [rsp]
+    call [rax + DRV_menu]
+    mov r13d, eax
+    mov r14, [rsp]
+    test r14, r14
+    jz 9f
+    xor ebx, ebx
+1:  cmp ebx, r13d
+    jae 9f
+    imul rdi, rbx, APM_SIZE
+    add rdi, r14
+    inc ebx
+    cmp [rdi + APM_act], r12d
+    jne 1b
+    call apm_tmpl
+    test eax, eax
+    jz 9f
+    call row_push
+9:  EPILOGUE
 
 # rank(): keys = the candidates that pass the filter, in their order: without a filter by section, then as
 #   listed; with one by tier, score and listing, then the sections in the order of their best rows
@@ -912,7 +968,7 @@ build_modes:
     call row_push
     xor r14d, r14d
 1:  cmp r14d, r12d
-    jae 9f
+    jae 7f
     imul rbx, r14, AMD_SIZE
     add rbx, r13
     inc r14d
@@ -930,28 +986,46 @@ build_modes:
     mov [rip + tmpl + PR_arg], rbx
     call row_push
     jmp 1b
+7:  mov edi, ACT_EFFORT         # then the effort row (ext-webview-ui.md 2.11)
+    call act_row
 9:  EPILOGUE
 
-# build_models(): the driver's models (agentcfg), the project's choice checked (else the one in effect)
+# build_models(): the header "Select a model" and a row per model the driver lists (agentcfg: its name and
+#   description, a check on the one the conversation uses, the unavailable ones greyed), "Loading models…"
+#   while the program starts and nothing is listed yet, else "No models available"; then the effort row and
+#   the Ultracode switch when they show (ext-webview-ui.md 2.9)
 build_models:
     PROLOGUE
     mov edi, [rip + pop_dkind]
     call agentcfg_get
     mov rbx, rax
-    lea r14, [rbx + AGC_model]  # the value checked
-    cmp byte ptr [r14], 0
+    mov rdi, [rip + pop_owner]
+    mov rsi, rax
+    call agentcfg_current
+    mov r14, rax                # the model checked, or 0
+    cmp qword ptr [rbx + AGC_models + VEC_len], 0
     jne 1f
-    xor r14d, r14d
-    mov rax, [rip + pop_owner]
-    test rax, rax
-    jz 1f
-    mov rax, [rax + AS_live]
-    test rax, rax
-    jz 1f
-    lea r14, [rax + AL_model]
-1:  xor r12d, r12d
+    lea rax, [rip + .Lm_none]
+    mov rcx, [rip + pop_owner]
+    test rcx, rcx
+    jz 11f
+    mov rcx, [rcx + AS_live]
+    test rcx, rcx
+    jz 11f
+    cmp dword ptr [rcx + AL_state], ALS_STARTING
+    jne 11f
+    lea rax, [rip + .Lm_loading]
+11: mov [rip + tmpl + PR_label], rax
+    mov dword ptr [rip + tmpl + PR_kind], APK_EMPTY
+    call row_push
+    jmp 9f
+1:  lea rax, [rip + .Lm_select]
+    mov [rip + tmpl + PR_label], rax
+    mov dword ptr [rip + tmpl + PR_kind], APK_SECTION
+    call row_push
+    xor r12d, r12d
 2:  cmp r12, [rbx + AGC_models + VEC_len]
-    jae 9f
+    jae 8f
     mov rax, [rbx + AGC_models + VEC_ptr]
     mov r13, [rax + r12*8]
     inc r12
@@ -960,13 +1034,8 @@ build_models:
     test dword ptr [r13 + AMO_flags], AMOF_OFF
     jz 3f
     mov r15d, APRF_OFF
-3:  test r14, r14
-    jz 4f
-    mov rdi, r14
-    mov rsi, [r13 + AMO_value]
-    call strcmp_eq
-    test eax, eax
-    jz 4f
+3:  cmp r13, r14
+    jne 4f
     or r15d, APRF_CHECK
 4:  mov [rip + tmpl + PR_flags], r15d
     mov rax, [r13 + AMO_label]
@@ -977,6 +1046,10 @@ build_models:
     mov [rip + tmpl + PR_arg], r13
     call row_push
     jmp 2b
+8:  mov edi, ACT_EFFORT         # below the models: the effort row, the Ultracode switch
+    call act_row
+    mov edi, ACT_ULTRA
+    call act_row
 9:  EPILOGUE
 
 # score_cand(PR*): its tier (0 its label or an alias is the filter, 1 starts with it, 2 else) and score (the
@@ -1495,8 +1568,11 @@ FN agentpop_key
     call row_at
     cmp dword ptr [rax + PR_kind], APK_LEVELS
     jne .Lk_field
-    mov edi, ebx
-    call level
+    lea rdi, [rip + .Lplus]
+    test ebx, ebx
+    jns 7f
+    lea rdi, [rip + .Lminus]
+7:  call level
     jmp .Lk_yes
 .Lk_field:
     cmp dword ptr [rip + pop_kind], APP_MENU
@@ -1542,6 +1618,13 @@ enter:
 .Le_row:
     test dword ptr [rbx + PR_flags], APRF_OFF
     jnz .Le_taken
+    cmp dword ptr [rbx + PR_kind], APK_LEVELS   # the effort row (any popup): the next level round
+    jne 11f
+    lea rdi, [rip + .Lcycle]
+    call level
+    jmp .Le_taken
+11: cmp dword ptr [rbx + PR_kind], APK_SWITCH   # a switch (any popup): flipped, the popup stays
+    je 1f
     mov eax, [rip + pop_kind]
     cmp eax, APP_MODES
     je .Le_mode
@@ -1549,27 +1632,35 @@ enter:
     je .Le_model
     test dword ptr [rbx + PR_flags], APRF_SLASH
     jnz .Le_slash
-    cmp dword ptr [rbx + PR_kind], APK_LEVELS
-    jne 1f
-    mov edi, 1
-    call level
-    jmp .Le_taken
 1:  mov r12d, [rbx + PR_act]    # an action: its token leaves the box
     mov r13d, [rbx + PR_kind]
-    cmp dword ptr [rip + pop_typed], 0
+    lea r15, [rip + .Lw_on]     # a switch's new state: the one it does not show
+    test dword ptr [rbx + PR_flags], APRF_ON
+    jz 12f
+    lea r15, [rip + .Lw_off]
+12: cmp dword ptr [rip + pop_typed], 0
     je 2f
     call cut_token
 2:  mov r14, [rip + pop_owner]
     mov eax, [rip + pop_dkind]
     mov [rsp], eax
-    cmp r13d, APK_SWITCH        # a switch: the menu stays
-    je 3f
+    xor ecx, ecx
+    xor r8d, r8d
+    cmp r13d, APK_SWITCH        # a switch: the popup stays
+    jne 21f
+    mov rdi, r15
+    call strlen
+    mov r8, rax
+    mov rcx, r15
+    jmp 3f
+21: push rcx
+    push r8
     call agentpop_close
+    pop r8
+    pop rcx
 3:  mov rdi, r14
     mov esi, [rsp]
     mov edx, r12d
-    xor ecx, ecx
-    xor r8d, r8d
     call agentpop_run
     jmp .Le_taken
 .Le_slash:
@@ -1619,21 +1710,22 @@ enter:
     xor eax, eax
     EPILOGUE
 
-# level(dir): the effort level one step up (1) or down (-1): the driver's part (DRV_action ACT_EFFORT "+"/"-")
+# level(how cstr): the effort level one step up ("+"), down ("-"), round ("~"), or the level of that id: the
+#   driver's part (DRV_action ACT_EFFORT)
 level:
     PROLOGUE
-    mov r12d, edi
+    mov r12, rdi
     call live_of_owner
     test rax, rax
     jz 9f
-    mov rdi, rax
-    mov rax, [rax + AL_drv]
+    mov r13, rax
+    mov rdi, r12
+    call strlen
+    mov rcx, rax
+    mov rdi, r13
+    mov rax, [r13 + AL_drv]
     mov esi, ACT_EFFORT
-    lea rdx, [rip + .Lplus]
-    test r12d, r12d
-    jns 1f
-    lea rdx, [rip + .Lminus]
-1:  mov ecx, 1
+    mov rdx, r12
     call [rax + DRV_action]
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
@@ -1917,8 +2009,9 @@ FN agentpop_slash
 # FN agentpop_run(AS* or 0 for a draft, kind, act ACT_*, arg ptr, len): a command's action. Clear and New
 #   open a new draft of the kind; Model and Modes their pickers; Copy a reply into the clipboard; Help and
 #   Settings are the driver's (DRV_action, without a conversation); the rest act on the conversation (a
-#   draft becomes one): Thinking, Ultracode (DRV_set_*), sign-in, sign-out, Terminal (DRV_terminal 1, 2,
-#   0), anything else the driver's (DRV_action)
+#   draft becomes one): Thinking, Ultracode (DRV_set_*: the arg "on" or "off", else the live record's
+#   state flipped), sign-in, sign-out, Terminal (DRV_terminal 1, 2, 0), anything else the driver's
+#   (DRV_action)
 FN agentpop_run
     PROLOGUE 16
     mov rbx, rdi
@@ -1959,6 +2052,7 @@ FN agentpop_run
     xor esi, esi
     cmp dword ptr [rdi + AL_think], 0
     sete sil
+    call switch_arg
     call [rcx + DRV_set_thinking]
     jmp 9f
 2:  cmp r13d, ACT_ULTRA
@@ -1966,6 +2060,7 @@ FN agentpop_run
     xor esi, esi
     cmp dword ptr [rdi + AL_ultra], 1
     setne sil
+    call switch_arg
     call [rcx + DRV_set_ultra]
     jmp 9f
 3:  mov esi, 1
@@ -2019,6 +2114,24 @@ FN agentpop_run
     mov rcx, r15
     call [rax + DRV_action]
     jmp 9b
+
+# switch_arg() using agentpop_run's r14/r15 (the arg) and esi (the flip of the live record's state): esi 1
+#   for "on", 0 for "off", else as it was; rdi and rcx stay
+switch_arg:
+    cmp r15, 2
+    jne 1f
+    cmp word ptr [r14], 0x6e6f  # "on"
+    jne 9f
+    mov esi, 1
+    ret
+1:  cmp r15, 3
+    jne 9f
+    cmp word ptr [r14], 0x666f  # "of(f)"
+    jne 9f
+    cmp byte ptr [r14 + 2], 'f'
+    jne 9f
+    xor esi, esi
+9:  ret
 
 # copy_reply(AS* or 0, arg ptr, len): /copy [N]: the N-th last reply (1 the latest) into the clipboard, with the
 #   extension's messages as a toast
@@ -2294,7 +2407,12 @@ row_geom:
     cmp eax, APK_FOOT
     je .Lrg_small
     xor r14d, r14d              # the trail's width
-    cmp eax, APK_SWITCH
+    cmp eax, APK_LEVELS
+    jne 31f
+    PM r14d, MI_64              # the effort row's track (a third of the row at most)
+    add r14d, [rip + g_pmt + 4*MI_16]
+    jmp 32f
+31: cmp eax, APK_SWITCH
     jne 3f
     PM r14d, MI_28
     jmp 4f
@@ -2308,7 +2426,7 @@ row_geom:
     mov rsi, [rbx + PR_trail]
     call text_width
     mov r14d, eax
-    mov eax, r13d               # a third of the row at most
+32: mov eax, r13d               # a third of the row at most
     sub eax, r12d
     xor edx, edx
     mov ecx, 3
@@ -2443,6 +2561,13 @@ FN agentpop_draw
     mov [rsp + 12], ecx
     call agentpop_unshield
     mov dword ptr [rip + pop_rect + 12], 0
+    lea rdi, [rip + row_ay]     # where the rows are, as this frame draws them
+    xor eax, eax
+    mov ecx, AT_MAX + 4
+1:  mov [rdi], eax
+    add rdi, 4
+    dec ecx
+    jnz 1b
     call sync
     test eax, eax
     jz 9f
@@ -2612,6 +2737,15 @@ draw_row:
     mov r8d, [rsp + 8]
     call ui_btn
     mov [rsp + 12], eax
+    mov eax, [rsp]              # its centre, for print-agent-menu
+    cmp eax, AT_MAX
+    jae 10f
+    mov ecx, [rsp + 8]
+    shr ecx, 1
+    add ecx, [rsp + 4]
+    lea rdx, [rip + row_ay]
+    mov [rdx + rax*4], ecx
+10: mov eax, [rsp + 12]
     test eax, UB_HOVER
     jz 2f
     mov eax, [rip + g_mx]       # the pointer moved onto it: it is the selection
@@ -2676,7 +2810,22 @@ draw_row:
     call text_at
 5:  cmp dword ptr [rip + lay_tw], 0
     je 7f
-    cmp dword ptr [rbx + PR_kind], APK_SWITCH
+    cmp dword ptr [rbx + PR_kind], APK_LEVELS
+    jne 51f
+    mov rdi, rbx                # the effort row: its track, and the row's title
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 12]
+    call levels_tip
+    mov rdi, rbx
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    call draw_track
+    test eax, eax
+    jz 7f
+    EPILOGUE                    # a level was set: the rows are made again
+51: cmp dword ptr [rbx + PR_kind], APK_SWITCH
     je 6f
     mov eax, [rip + lay_tx]     # the trail
     mov [rip + lay_lx], eax
@@ -2754,6 +2903,228 @@ text_at_y:
     add rsp, 16
 9:  EPILOGUE
 
+# levels_tip(PR*, i, y, h, ub): the effort row's title "Click to cycle effort level" (its button's)
+levels_tip:
+    PROLOGUE
+    mov edi, esi
+    cmp edi, ROWS_IDS
+    jbe 1f
+    mov edi, ROWS_IDS
+1:  add edi, ID_AGPOP
+    mov esi, [rip + g_px]
+    add esi, [rip + g_pmt + 4*MI_4]
+    add edx, ecx                # below it
+    mov ecx, [rip + g_pw]
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    lea r9, [rip + .Lt_cycle]
+    call tip_note_text
+    EPILOGUE
+
+# draw_track(PR*, y, h) -> eax 1 when it set a level: the effort row's track at lay_tx, lay_tw wide (2.11):
+#   a bar, its part up to the level in effect filled, a notch per level, the thumb on the level in effect;
+#   a press on it or a drag (the button held) sets the nearest level (once per level reached); title
+#   "Click or drag to set effort level"
+draw_track:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov r12, [rbx + PR_model]
+    test r12, r12
+    jz .Ltr_none
+    mov r13, [r12 + AMO_levels + VEC_len]
+    test r13, r13
+    jz .Ltr_none
+    mov r14d, -1                # the level in effect, -1 none
+    mov rsi, [rbx + PR_extra]
+    test rsi, rsi
+    jz 2f
+    xor ecx, ecx
+1:  cmp rcx, r13
+    jae 2f
+    imul rax, rcx, AEL_SIZE
+    add rax, [r12 + AMO_levels + VEC_ptr]
+    push rcx
+    push rsi
+    mov rdi, [rax + AEL_id]
+    call strcmp_eq
+    pop rsi
+    pop rcx
+    test eax, eax
+    jnz 11f
+    inc rcx
+    jmp 1b
+11: mov r14d, ecx
+2:  PM eax, MI_12               # the thumb's size, the bar's height, the inset
+    mov [rsp + 8], eax
+    PM eax, MI_6
+    mov [rsp + 12], eax
+    PM eax, MI_2
+    mov [rsp + 16], eax
+    mov eax, [rip + lay_tw]     # the thumb's travel
+    sub eax, [rsp + 8]
+    sub eax, [rsp + 16]
+    sub eax, [rsp + 16]
+    cmp eax, 1
+    jge 3f
+    mov eax, 1
+3:  mov [rsp + 20], eax
+    mov eax, [rsp + 4]          # the middle
+    shr eax, 1
+    add eax, [rsp]
+    mov [rsp + 24], eax
+    mov eax, [rip + lay_tx]     # the rect print-agent-menu names
+    mov [rip + trk_rect], eax
+    mov eax, [rsp]
+    mov [rip + trk_rect + 4], eax
+    mov eax, [rip + lay_tw]
+    mov [rip + trk_rect + 8], eax
+    mov eax, [rsp + 4]
+    mov [rip + trk_rect + 12], eax
+    mov edi, ID_AGPOP + ID_TRACK
+    mov esi, [rip + lay_tx]
+    mov edx, [rsp]
+    mov ecx, [rip + lay_tw]
+    mov r8d, [rsp + 4]
+    call ui_btn
+    mov [rsp + 28], eax
+    xor r15d, r15d              # acted
+    test eax, UB_PRESS | UB_HELD
+    jz .Ltr_draw
+    test eax, UB_PRESS
+    jz 4f
+    mov dword ptr [rip + trk_last], -1
+4:  mov eax, [rip + g_mx]       # the nearest level: (x - left) * (n - 1) / travel, rounded
+    sub eax, [rip + lay_tx]
+    sub eax, [rsp + 16]
+    mov ecx, [rsp + 8]
+    shr ecx, 1
+    sub eax, ecx
+    jns 41f
+    xor eax, eax
+41: lea ecx, [r13 - 1]
+    imul eax, ecx
+    mov ecx, [rsp + 20]
+    mov edx, ecx
+    shr edx, 1
+    add eax, edx
+    xor edx, edx
+    div ecx
+    lea ecx, [r13 - 1]
+    cmp eax, ecx
+    cmova eax, ecx
+    cmp eax, [rip + trk_last]
+    je .Ltr_draw
+    mov [rip + trk_last], eax
+    cmp eax, r14d
+    je .Ltr_draw
+    imul rax, rax, AEL_SIZE
+    add rax, [r12 + AMO_levels + VEC_ptr]
+    mov rdi, [rax + AEL_id]
+    call level
+    mov r15d, 1
+.Ltr_draw:
+    mov edi, [rip + lay_tx]     # the bar
+    mov esi, [rsp + 24]
+    mov ecx, [rsp + 12]
+    shr ecx, 1
+    sub esi, ecx
+    mov edx, [rip + lay_tw]
+    mov ecx, [rsp + 12]
+    mov r8d, ecx
+    shr r8d, 1
+    COLOR r9d, T_BORDER
+    call gfx_round_rect
+    test r14d, r14d             # its part up to the thumb
+    js 6f
+    mov edi, r14d
+    call track_x
+    add eax, [rsp + 8]
+    add eax, [rsp + 16]
+    sub eax, [rip + lay_tx]
+    mov [rsp + 32], eax
+    COLOR edi, T_POPUP
+    COLOR esi, T_ACCENT
+    mov edx, 60
+    call color_mix
+    mov r9d, eax
+    mov edi, [rip + lay_tx]
+    mov esi, [rsp + 24]
+    mov ecx, [rsp + 12]
+    shr ecx, 1
+    sub esi, ecx
+    mov edx, [rsp + 32]
+    mov ecx, [rsp + 12]
+    mov r8d, ecx
+    shr r8d, 1
+    call gfx_round_rect
+6:  xor ebx, ebx                # a notch per level
+7:  cmp rbx, r13
+    jae 8f
+    mov edi, ebx
+    call track_x
+    mov edi, eax
+    mov ecx, [rsp + 8]
+    shr ecx, 1
+    add edi, ecx
+    mov edx, [rsp + 16]         # (MI_2 square, centred)
+    shr edx, 1
+    sub edi, edx
+    mov esi, [rsp + 24]
+    sub esi, edx
+    mov edx, [rsp + 16]
+    mov ecx, edx
+    mov r8d, edx
+    shr r8d, 1
+    COLOR r9d, T_MUTED
+    call gfx_round_rect
+    inc rbx
+    jmp 7b
+8:  test r14d, r14d             # the thumb
+    js 9f
+    mov edi, r14d
+    call track_x
+    mov edi, eax
+    mov esi, [rsp + 24]
+    mov ecx, [rsp + 8]
+    shr ecx, 1
+    sub esi, ecx
+    mov edx, [rsp + 8]
+    mov ecx, edx
+    mov r8d, edx
+    shr r8d, 1
+    COLOR r9d, T_ACCENT
+    call gfx_round_rect
+9:  mov edi, ID_AGPOP + ID_TRACK
+    mov esi, [rip + lay_tx]
+    mov edx, [rsp]
+    add edx, [rsp + 4]
+    mov ecx, [rip + lay_tw]
+    mov r8d, [rsp + 28]
+    lea r9, [rip + .Lt_track]
+    call tip_note_text
+    mov eax, r15d
+    EPILOGUE
+.Ltr_none:
+    xor eax, eax
+    EPILOGUE
+
+# track_x(i) using draw_track's r13 (levels) and frame -> eax the thumb's left at level i
+track_x:
+    mov eax, [rsp + 8 + 20]     # the travel (draw_track's [rsp + 20], under this call's return address)
+    imul eax, edi
+    lea ecx, [r13 - 1]
+    test ecx, ecx
+    jz 1f
+    xor edx, edx
+    div ecx
+    jmp 2f
+1:  xor eax, eax
+2:  add eax, [rip + lay_tx]
+    add eax, [rsp + 8 + 16]
+    ret
+
 # draw_switch(PR*, y, h): a switch at lay_tx, on with APRF_ON
 draw_switch:
     PROLOGUE
@@ -2804,8 +3175,9 @@ draw_switch:
 
 # FN agentpop_dump(sb): "popup=menu|modes|models filter=T sel=N owner=SID" (sel 0 none, owner - a draft's), then
 #   "section NAME" (a header's hint after a tab), "row N LABEL\tDESC\tTRAIL\tFLAGS" (N from 1 among the rows the keys stop on; - for none;
-#   FLAGS of check, off, on, switch, levels=ID), "empty T", "foot T"; "popup=none" when closed. Then the box's
-#   argument hint (composer_hint_dump)
+#   FLAGS of check, off, on, switch, levels=ID; a levels row is followed by "levels ID:LABEL,…"), "empty T",
+#   "foot T"; "popup=none" when closed. Then where the last frame drew them ("at N X,Y" a row, "track
+#   X,Y,W,H" the effort track: at_dump), then the box's argument hint (composer_hint_dump)
 FN agentpop_dump
     PROLOGUE
     mov rbx, rdi
@@ -2971,11 +3343,123 @@ FN agentpop_dump
 9:  mov rdi, rbx
     mov esi, 10
     call sb_push_byte
+    cmp dword ptr [r14 + PR_kind], APK_LEVELS
+    jne .Ldp_row
+    mov rdi, rbx                # its levels: "levels ID:LABEL,ID:LABEL"
+    mov rsi, [r14 + PR_model]
+    call levels_dump
     jmp .Ldp_row
 .Ldp_hint:
     mov rdi, rbx
+    call at_dump
+    mov rdi, rbx
     call composer_hint_dump
     EPILOGUE
+
+# levels_dump(sb, AMO* or 0): "levels ID:LABEL,ID:LABEL" (nothing without a model)
+levels_dump:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    test r12, r12
+    jz 9f
+    lea rsi, [rip + .Ld_levels]
+    call sb_push_cstr
+    xor r13d, r13d
+1:  cmp r13, [r12 + AMO_levels + VEC_len]
+    jae 8f
+    imul r14, r13, AEL_SIZE
+    add r14, [r12 + AMO_levels + VEC_ptr]
+    test r13, r13
+    jz 2f
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+2:  mov rdi, rbx
+    mov rsi, [r14 + AEL_id]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, ':'
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, [r14 + AEL_label]
+    call sb_push_cstr
+    inc r13
+    jmp 1b
+8:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+9:  EPILOGUE
+
+# at_dump(sb): "at N X,Y" for each row the keys stop on that the last frame drew (N as the rows' numbers; X
+#   MI_40 in from the popup's left, Y its middle), then "track X,Y,W,H" when an effort track was drawn
+at_dump:
+    PROLOGUE
+    mov rbx, rdi
+    cmp dword ptr [rip + pop_rect + 12], 0
+    je 9f
+    xor r12d, r12d              # the row
+    xor r13d, r13d              # its number
+1:  cmp r12, [rip + rows + VEC_len]
+    jae 5f
+    cmp r12, AT_MAX
+    jae 5f
+    mov rdi, r12
+    call row_at
+    mov rdi, rax
+    call selectable
+    inc r12
+    test eax, eax
+    jz 1b
+    inc r13d
+    lea rax, [rip + row_ay]
+    mov r14d, [rax + r12*4 - 4]
+    test r14d, r14d
+    jz 1b
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_at]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r13d
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    mov esi, [rip + pop_rect]   # (on its label's side, left of a track or a switch)
+    add esi, [rip + g_pmt + 4*MI_40]
+    mov rdi, rbx
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, r14d
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    jmp 1b
+5:  cmp dword ptr [rip + trk_rect + 8], 0
+    je 9f
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_track]
+    call sb_push_cstr
+    xor r12d, r12d
+6:  lea rax, [rip + trk_rect]
+    mov esi, [rax + r12*4]
+    mov rdi, rbx
+    call sb_push_u64
+    inc r12d
+    cmp r12d, 4
+    jae 7f
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    jmp 6b
+7:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+9:  EPILOGUE
 
 # flag_word(word cstr) using rbx = sb, r15 = where the flags start: ",WORD" (the first without the comma)
 flag_word:
@@ -3138,6 +3622,8 @@ FN agentpop_fit_dump
     EPILOGUE
 
 .data
+.p2align 2
+trk_last: .long -1              # the level a drag of the track gave last
 pop_q_marker: .byte 0           # 1: the next query differs from the last, whatever it is
 
 .section .rodata
@@ -3155,6 +3641,17 @@ empty: .byte 0
 .Ls_slash: .asciz "Slash Commands"
 .Lnone: .asciz "No matching commands"
 .Lm_modes: .asciz "Modes"
+.Lm_select: .asciz "Select a model"
+.Lm_loading: .asciz "Loading models\342\200\246"
+.Lm_none: .asciz "No models available"
+.Lt_track: .asciz "Click or drag to set effort level"
+.Lt_cycle: .asciz "Click to cycle effort level"
+.Lcycle: .asciz "~"
+.Lw_on: .asciz "on"
+.Lw_off: .asciz "off"
+.Ld_levels: .asciz "levels "
+.Ld_at: .asciz "at "
+.Ld_track: .asciz "track "
 .Lm_modes_hint: .asciz "\342\207\247 + tab to switch"
 .Lph_filter: .asciz "Filter actions\342\200\246"
 .Lv: .asciz "v"

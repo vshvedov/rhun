@@ -3029,7 +3029,10 @@ FN agents_dump
     mov eax, [r13 + AM_role]
     lea rcx, [rip + role_names]
     mov rsi, [rcx + rax*8]
-    mov rdi, r15
+    test dword ptr [r13 + AM_flags], AMF_PILL
+    jz 41f
+    lea rsi, [rip + .Lr_pill]   # a pill row: "pill TEXT"
+41: mov rdi, r15
     call sb_push_cstr
     mov rsi, [r13 + AM_name]
     test rsi, rsi
@@ -3569,6 +3572,24 @@ FN agents_msg_add
     cmp [rbx + AS_msgs + VEC_len], r12
     je 9f
     mov rax, r12
+9:  EPILOGUE
+
+# FN agents_pill(AS*, ptr, len): a one-line pill row of a session rhun drives ("Switched to NAME"): an info
+#   row drawn centred, muted, in a rounded frame (AMF_PILL); print-agents shows it as "pill TEXT"
+FN agents_pill
+    PROLOGUE
+    mov rbx, rdi
+    mov rcx, rdx
+    mov rdx, rsi
+    mov esi, R_INFO
+    xor r8d, r8d
+    call agents_msg_add
+    test rax, rax
+    js 9f
+    imul rax, rax, AM_SIZE
+    add rax, [rbx + AS_msgs + VEC_ptr]
+    or dword ptr [rax + AM_flags], AMF_PILL
+    mov dword ptr [rax + AM_w], -1      # measured as a pill
 9:  EPILOGUE
 
 # queued_sync(AS*) -> eax n: the session's messages that have not started (agent_queued: those waiting
@@ -4306,7 +4327,12 @@ msg_height:
     call md_layout
     add eax, [rip + g_pmt + 4*MI_40]
     jmp 9f
-12: mov eax, [rbx + AM_role]
+12: test dword ptr [rbx + AM_flags], AMF_PILL
+    jz 13f
+    call pill_h                 # a pill: one line of the small face, framed
+    add eax, [rip + g_pmt + 4*MI_12]
+    jmp 9f
+13: mov eax, [rbx + AM_role]
     cmp eax, R_TOOL
     jne 2f
     PM eax, MI_32
@@ -4335,6 +4361,14 @@ msg_height:
     mov [rbx + AM_hdoc], r13d
     mov eax, r14d
     EPILOGUE
+
+# pill_h() -> eax a pill's frame: a line of the panel's small face and MI_6 above and below it
+pill_h:
+    mov rax, [rip + ag_fsmall]
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_6]
+    add eax, [rip + g_pmt + 4*MI_6]
+    ret
 
 # panel_px() -> eax the size of the agents panel's text, pixels (agentfont.s)
 panel_px:
@@ -5278,6 +5312,8 @@ draw_msg:
     mov [rbx + AM_dy], r12d
     mov eax, [rip + th_serial]
     mov [rbx + AM_dser], eax
+    test dword ptr [rbx + AM_flags], AMF_PILL
+    jnz .Ldm_pill
     mov eax, [rbx + AM_role]
     cmp eax, R_TOOL
     je .Ldm_tool
@@ -5472,6 +5508,61 @@ draw_msg:
     call ui_text_v_fit
     add rsp, 16
 5:  EPILOGUE
+.Ldm_pill:
+    # a pill: its one line centred in the text's width, muted, in a rounded frame (cut with "…")
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rbx + AM_text]
+    mov rdx, [rbx + AM_len]
+    call text_width
+    mov ecx, [r14 + 32]         # the line's room
+    sub ecx, [rip + g_pmt + 4*MI_12]
+    sub ecx, [rip + g_pmt + 4*MI_12]
+    cmp ecx, 1
+    jge 1f
+    mov ecx, 1
+1:  cmp eax, ecx
+    cmovg eax, ecx
+    mov [rsp + 96], eax         # the text's width as drawn
+    add eax, [rip + g_pmt + 4*MI_12]
+    add eax, [rip + g_pmt + 4*MI_12]
+    mov [rsp + 100], eax        # the frame's
+    mov ecx, [r14 + 32]
+    sub ecx, eax
+    sar ecx, 1
+    jns 2f
+    xor ecx, ecx
+2:  add ecx, r15d
+    mov [rsp + 104], ecx        # its x
+    call pill_h
+    mov [rsp + 108], eax        # its height
+    COLOR r9d, T_BORDER
+    COLOR eax, T_PANEL
+    mov edi, [rsp + 104]
+    mov esi, r12d
+    add esi, [rip + g_pmt + 4*MI_6]
+    mov edx, [rsp + 100]
+    mov ecx, [rsp + 108]
+    PM r8d, MI_RADIUS
+    push rax
+    push rax
+    call gfx_frame
+    add rsp, 16
+    mov rdi, [rip + ag_fsmall]  # ui_text_v_fit(face, x, y, h, ptr, len, argb, maxw)
+    mov esi, [rsp + 104]
+    add esi, [rip + g_pmt + 4*MI_12]
+    mov edx, r12d
+    add edx, [rip + g_pmt + 4*MI_6]
+    mov ecx, [rsp + 108]
+    mov r8, [rbx + AM_text]
+    mov r9, [rbx + AM_len]
+    COLOR r10d, T_MUTED
+    mov r11d, [rsp + 96]
+    inc r11d
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+    EPILOGUE
 .Ldm_result:
     mov edi, r15d
     mov esi, r12d
@@ -6244,6 +6335,7 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lago: .asciz " ago"
 .Lyou: .asciz "You"
 .Lqueued: .asciz "queued"
+.Lr_pill: .asciz "pill"
 .Lqueued_dump: .asciz "queued "
 .Lno_file: .asciz "No such file: "
 .Lrhun_file: .ascii "rhun://file/"

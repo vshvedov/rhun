@@ -49,10 +49,14 @@ interrupt mark, not the prompt);
 FAKE_CLAUDE_USER_LATE_MS (a turn's user line reaches the transcript only when a SIGTERM stops the process,
 that long after the signal: a prompt recorded as it is stopped; or, nobody stopping it, after
 FAKE_CLAUDE_USER_LATE_WAIT_MS, default 10000, and the turn goes on);
-FAKE_CLAUDE_MODELS (comma-separated: effort, nothink, auto, fast, unavailable, ultra; see model_list);
+FAKE_CLAUDE_MODELS (comma-separated: effort, nothink, auto, fast, unavailable, ultra, noeffort; see model_list);
 FAKE_CLAUDE_CONTEXT (N: a turn's usage adds up to N tokens); FAKE_CLAUDE_RATE (warning, rejected: a
 rate_limit_event before each result); FAKE_CLAUDE_SETTINGS_ERROR (TEXT: get_settings has one error);
-FAKE_CLAUDE_AUTH_CONFLICT (initialize has auth_conflict); FAKE_CLAUDE_COMMANDS_CHANGED (comma-separated names:
+FAKE_CLAUDE_AUTH_CONFLICT (initialize has auth_conflict); FAKE_CLAUDE_FAST ("STATE REASON": initialize's
+fast_mode_state and fast_mode_disabled_reason, "-" for none, as 2.1.330's "off sdk_opt_in_required"; system/init and
+every result carry the state; without it initialize has no reason, as before); FAKE_CLAUDE_FAST_REJECT (unrecorded:
+the first turn after /fast turned fast mode on gets system/notification "fast-mode-overage-rejected" and fast mode
+goes off, as the CLI binary's text has it); FAKE_CLAUDE_COMMANDS_CHANGED (comma-separated names:
 the system/commands_changed that follows initialize lists these instead, the known ones as initialize has
 them, the others as skills "Skill NAME", as the real list has skills initialize lacks); FAKE_CLAUDE_REFUSE_HELD (the first message written
 with a uuid while another waits or runs is refused: lifecycle refused, never run, logged {"refused": UUID});
@@ -297,7 +301,8 @@ def usage(cache=None):
 # The models initialize lists (2.1.330's records: tests/data/claude-shapes/README.txt finding 19), shaped by
 # FAKE_CLAUDE_MODELS, a comma-separated list of: effort (the default model gets the five levels low..max),
 # nothink (supportsThinkingOff), auto (supportsAutoMode), fast (supportsFastMode), unavailable (an
-# unavailable_models entry), ultra (get_settings.applied.ultracodeAvailable: no model carries the flag).
+# unavailable_models entry), ultra (get_settings.applied.ultracodeAvailable: no model carries the flag),
+# noeffort (sonnet without supportsEffort).
 MODEL_KNOBS = set(filter(None, ENV.get('FAKE_CLAUDE_MODELS', '').split(',')))
 
 
@@ -315,6 +320,8 @@ def model_list():
         first['supportsAutoMode'] = True
     if 'nothink' in MODEL_KNOBS:
         first['supportsThinkingOff'] = True
+    if 'noeffort' in MODEL_KNOBS:           # a model without effort levels (as the older ones are)
+        del models[1]['supportsEffort']
     return models
 
 
@@ -325,6 +332,8 @@ def unavailable_models():
 
 
 DEFAULT_EFFORT = {'claude-opus-5-5': 'high', 'claude-sonnet-5': 'medium'}   # applied.effort with nothing set
+_FAST = (ENV.get('FAKE_CLAUDE_FAST') or 'off -').split(None, 1) + ['-']
+FAST = [_FAST[0], None if _FAST[1].strip() == '-' else _FAST[1].strip()]   # fast mode's state and its reason
 FLAG_SETTINGS = {}                  # apply_flag_settings: this process only (the flagSettings source)
 
 
@@ -794,7 +803,7 @@ def result(final='', subtype='success', errors=None, stop='end_turn', terminal='
     The turn's message uuid is user_message_uuid (finding 17): before type in an error, after uuid in a success."""
     record = {'duration_api_ms': 10, 'stop_reason': stop, 'session_id': SID, 'total_cost_usd': 0.0 if spent else 0,
               'usage': usage(cache), 'modelUsage': model_usage(cache) if spent else {},
-              'permission_denials': list(DENIALS), 'terminal_reason': terminal, 'fast_mode_state': 'off',
+              'permission_denials': list(DENIALS), 'terminal_reason': terminal, 'fast_mode_state': FAST[0],
               'is_error': subtype != 'success', 'num_turns': 1, 'subtype': subtype}
     if errors is None:
         record['result'] = final
@@ -1600,7 +1609,7 @@ def local_result(text_, local):
     record = {'is_error': False, 'duration_api_ms': 0, 'num_turns': 0, 'stop_reason': None, 'session_id': SID,
               'total_cost_usd': 0, 'usage': {'input_tokens': 0, 'cache_creation_input_tokens': 0,
                                              'cache_read_input_tokens': 0, 'output_tokens': 0},
-              'modelUsage': {}, 'permission_denials': [], 'fast_mode_state': 'off', 'subtype': 'success',
+              'modelUsage': {}, 'permission_denials': [], 'fast_mode_state': FAST[0], 'subtype': 'success',
               'result': text_}
     if local:
         record['local_command'] = local
@@ -1644,10 +1653,19 @@ def c_compact(prompt):
     local_result('', 'compact')
 
 
+def c_fast(prompt):
+    """/fast [on|off] (unrecorded: never tried, it may spend usage credits): fast mode on or off (bare: the
+    other one), its reason gone; the answer as the other local commands', the result carrying the state."""
+    words = prompt.split()
+    FAST[0] = words[1] if len(words) > 1 and words[1] in ('on', 'off') else ('off' if FAST[0] == 'on' else 'on')
+    FAST[1] = None
+    synthetic('fast', 'Fast mode %s' % FAST[0].upper(), local='fast')
+
+
 # commands the CLI answers itself (finding 22): no requesting status, no replay of the prompt; all but /compact
 # send system/init first, as every turn does
 LOCAL_COMMANDS = {'/context': c_context, '/cost': c_usage, '/usage': c_usage, '/status': c_status,
-                  '/compact': c_compact}
+                  '/compact': c_compact, '/fast': c_fast}
 
 
 SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pending, 'ask': s_ask,
@@ -1695,7 +1713,10 @@ def init_response():
     if ENV.get('FAKE_CLAUDE_AUTH_CONFLICT'):    # unrecorded member (the schema's, after account)
         response['auth_conflict'] = {'token_source': 'claude.ai', 'api_key_source': 'ANTHROPIC_API_KEY'}
     response.update(pid=os.getpid(), claude_code_version='2.1.330', current_permission_mode=MODE,
-                    fast_mode_state='off', session_state='idle', capabilities=['ui_surface_v1'])
+                    fast_mode_state=FAST[0])
+    if ENV.get('FAKE_CLAUDE_FAST'):             # 2.1.330 sends the reason (finding 19), after the state
+        response['fast_mode_disabled_reason'] = FAST[1]
+    response.update(session_state='idle', capabilities=['ui_surface_v1'])
     return response
 
 
@@ -1852,7 +1873,7 @@ def system_init():
           'model': current_model() + '[1m]', 'permissionMode': MODE, 'slash_commands': ['compact', 'context', 'usage'],
           'apiKeySource': ENV.get('FAKE_CLAUDE_KEYSRC', 'none'), 'claude_code_version': '2.1.330',
           'output_style': 'default', 'capabilities': ['interrupt_receipt_v1', 'msg_lifecycle_v1'],
-          'uuid': str(uuid.uuid4()), 'fast_mode_state': 'off', 'ultrathink_available': False})
+          'uuid': str(uuid.uuid4()), 'fast_mode_state': FAST[0], 'ultrathink_available': False})
 
 
 def turn(entry):
@@ -1866,6 +1887,11 @@ def turn(entry):
             system_init()
         local(prompt)
         return False
+    if ENV.get('FAKE_CLAUDE_FAST_REJECT') and FAST[0] == 'on':  # unrecorded: credits ran out, fast mode goes
+        emit({'type': 'system', 'subtype': 'notification', 'key': 'fast-mode-overage-rejected',
+              'text': 'Fast mode disabled \u00b7 Usage credits are unavailable.', 'priority': 'immediate',
+              'color': 'error', 'session_id': SID, 'uuid': str(uuid.uuid4())})
+        FAST[0] = 'off'
     if ENV.get('FAKE_CLAUDE_USER_LATE_MS'):    # pending from before system/init: a stop finds it
         LATE_USER.append({'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': prompt}]}})
     system_init()

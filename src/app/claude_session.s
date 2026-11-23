@@ -24,8 +24,10 @@
 #     only through the gate
 #   claude_mode_answer(AL*, response, picked), claude_init_mode(AL*, ptr, len) -> rax ptr, rdx len,
 #     claude_init_ask(AL*)                  set_permission_mode's answers, a pick made while it started
-#   claude_set_model, claude_set_effort, claude_set_ultra, claude_set_thinking: the driver table's
-#     entries for the later tasks (0 until then)
+#   claude_set_model(AL*, value), claude_set_effort(AL*, id), claude_set_ultra(AL*, on),
+#     claude_set_thinking(AL*, on) -> eax 1 taken: the project's choices (see "model, effort, Ultracode,
+#     thinking" below); claude_flags_answer(AL*, response, CLF_*) their answers; claude_started(AL*) a
+#     start written; claude_record(AL*, record) a system or result record (fast mode's state)
 #   claude_menu(AS* or 0, APM** out) -> eax n   the command menu's actions (agentpop.s), each with its rule
 #   claude_action(AL* or 0, act, ptr, len) -> eax 1 done   the driver's part of a local command: /plan,
 #     fast mode (/fast as a prompt), Settings at Claude Code's rows, the help docs (asked before they open)
@@ -41,9 +43,25 @@
 .equ CLP_NOAUTO, 1              # AL_cfg: get_settings' effective settings forbid auto mode,
 .equ CLP_NOBYPASS, 2            #   bypassPermissions;
 .equ CLP_MODEWAIT, 4            #   a mode was picked while the program started (claude_init_mode)
+.equ CLP_WAITMODEL, 8           #   a model, an effort level was picked while it started (apply_kept);
+.equ CLP_WAITEFFORT, 16
+.equ CLP_FIRST, 32              #   its first get_settings answer has not come yet;
+.equ CLP_CREDITS, 64            #   fast mode's requests were refused for want of usage credits;
+.equ CLP_SUMMARIES, 128         #   the effective settings' showThinkingSummaries
+.equ CLF_MODEL, 0               # what apply_flag_settings or set_max_thinking_tokens asked (cl_apply,
+.equ CLF_EFFORT, 1              #   cl_thinking: agent_claude.s's OA_FLAGS + these)
+.equ CLF_ULTRA, 2
+.equ CLF_THINK, 3
+.equ THINK_TOKENS, 31999        # thinking on (finding 14; --max-thinking-tokens=31999 at a start)
 
 .bss
 .p2align 3
+fl_al: .quad 0                  # the model the user picked while the program ran: its AL and value (the pill
+fl_model: .zero 64              #   once it is applied)
+ul_on: .long 0                  # Ultracode asked on (1) or off: the failure's words
+.p2align 3
+fast_why: .zero 32              # the reason fast mode is off, kept while a record names none
+credit_txt: .zero 256           # the notification that refused fast mode's requests
 asb: .zero SB_SIZE              # a command's aliases, joined
 effort_sfx: .zero 48            # the Effort row's "(Level)"
 offered: .zero AMD_SIZE * MODES_N   # claude_modes' list
@@ -162,9 +180,10 @@ fast_of:
 9:  mov eax, r12d
     EPILOGUE
 
-# models_add(AGC*, models array or 0, extra AMOF_* flags): each model with its levels
+# models_add(AGC*, models array or 0, extra AMOF_* flags): each model with its levels and the id the program
+#   reports for it (resolvedModel: get_settings' applied.model names that)
 models_add:
-    PROLOGUE 32
+    PROLOGUE 48
     mov rbx, rdi
     mov r12, rsi
     mov [rsp + 16], edx
@@ -182,6 +201,7 @@ models_add:
     call json_type
     cmp eax, JT_OBJ
     jne 1b
+    mov [rsp + 32], r14         # the model's object
     mov r15d, [rsp + 16]        # the flags
     mov rdi, r14
     lea rsi, [rip + .Lk_thinkoff]
@@ -252,7 +272,17 @@ models_add:
     pop rax
     test rax, rax
     jz 1b
-    mov rdi, rax
+    mov [rsp + 40], rax
+    mov rdi, [rsp + 32]
+    lea rsi, [rip + .Lk_resolved]
+    call jdup
+    mov r14, rax
+    mov rdi, [rsp + 40]
+    mov rsi, rax
+    call agentcfg_resolved
+    mov rdi, r14
+    call mem_free
+    mov rdi, [rsp + 40]
     mov rsi, [rsp + 24]
     mov edx, r15d
     call levels_add
@@ -547,6 +577,8 @@ FN claude_settings_answer
     lea rsi, [rip + .Lk_response]
     call json_get
     mov r12, rax
+    xor r14d, r14d              # Ultracode offered, and on
+    xor r15d, r15d
     mov rdi, rax
     lea rsi, [rip + .Lk_applied]
     call json_get
@@ -580,6 +612,7 @@ FN claude_settings_answer
     lea rsi, [rip + .Lk_ultra]
     mov edx, 1
     call flag_of
+    mov r15d, eax
     mov edx, eax
     mov rdi, rbx
     mov esi, r14d
@@ -587,6 +620,10 @@ FN claude_settings_answer
 5:  mov rdi, rbx                # the policies the modes follow (effective settings)
     mov rsi, r12
     call policies
+    mov rdi, rbx                # the first answer of a process: the choices it has not taken yet
+    mov esi, r14d
+    mov edx, r15d
+    call apply_kept
     mov rdi, r12
     lea rsi, [rip + .Lk_errors]
     call json_get
@@ -624,7 +661,12 @@ policies:
     lea rsi, [rip + .Lk_permissions]
     call json_get
     mov r13, rax
-    and dword ptr [rbx + AL_cfg], ~(CLP_NOAUTO | CLP_NOBYPASS)
+    and dword ptr [rbx + AL_cfg], ~(CLP_NOAUTO | CLP_NOBYPASS | CLP_SUMMARIES)
+    mov rdi, r12                # showThinkingSummaries: thinking turned on again asks for summaries
+    lea rsi, [rip + .Lk_summaries]
+    mov edx, CLP_SUMMARIES
+    call flag_of
+    or [rbx + AL_cfg], eax
     mov rdi, r13
     lea rsi, [rip + .Lk_no_auto]
     call json_get
@@ -1324,22 +1366,639 @@ FN claude_init_ask
     call cl_set_mode
 9:  EPILOGUE
 
-# ---- the driver table's entries for later tasks ----
+# ---- model, effort, Ultracode, thinking (task 6) ----
+#
+# Each is the project's own choice (agentcfg: kept in rhun's state file, never in Claude Code's settings),
+# taken at once. A program that runs is asked with apply_flag_settings (model, effortLevel, ultracode:
+# this process only, finding 13) or set_max_thinking_tokens (finding 14), then get_settings reads what is
+# in effect; one that starts is asked once its first get_settings answer came (apply_kept); otherwise the
+# next start passes them (--model, --effort, --thinking=disabled: cl_start). update_settings is never sent.
+# Other conversations of the project take a choice at their next start.
 
-# FN claude_set_model(AL*, value), claude_set_effort(AL*, id), claude_set_ultra(AL*, on),
-#   claude_set_thinking(AL*, on) -> eax 0: nothing asked yet
+# live_up(AL*) -> eax 1 when its program runs and can be asked (ready, working, waiting, connected)
+live_up:
+    xor eax, eax
+    mov ecx, [rdi + AL_state]
+    cmp ecx, ALS_READY
+    jb 9f
+    cmp ecx, ALS_WAITING
+    ja 9f
+    cmp dword ptr [rdi + AL_cn + CN_state], CN_UP
+    jne 9f
+    mov eax, 1
+9:  ret
+
+# record() -> rax the project's record, read (every pick is a writer's action)
+record:
+    PROLOGUE
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov rbx, rax
+    mov rdi, rax
+    call agentcfg_need
+    mov rax, rbx
+    EPILOGUE
+
+# FN claude_set_model(AL*, value cstr) -> eax 1 when it is the project's model now: one of the listed,
+#   not unavailable. Running: asked at once (the pill follows it, "Switched to NAME" once applied)
 FN claude_set_model
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    call record
+    mov r13, rax
+    mov rdi, r12
+    call strlen
+    mov r14, rax
+    test rax, rax
+    jz .Lsmo_no
+    cmp rax, 63
+    ja .Lsmo_no
+    mov rdi, r13
+    mov rsi, r12
+    mov rdx, r14
+    call agentcfg_find_model
+    test rax, rax
+    jz .Lsmo_no
+    test dword ptr [rax + AMO_flags], AMOF_OFF
+    jnz .Lsmo_no
+    mov rdi, r13
+    mov esi, AGF_MODEL
+    mov rdx, r12
+    mov rcx, r14
+    call agentcfg_set
+    mov rdi, r13
+    call agentcfg_save
+    mov rdi, rbx
+    call live_up
+    test eax, eax
+    jz 3f
+    mov [rip + fl_al], rbx      # the pill once it is applied
+    lea rdi, [rip + fl_model]
+    mov rsi, r12
+    call cstr_copy
+    mov rdi, rbx
+    mov esi, CLF_MODEL
+    lea rdx, [rip + .Lk_model]
+    mov rcx, r12
+    call cl_apply
+    test eax, eax
+    jz .Lsmo_yes                # the write broke the connection: its close says so
+    mov rdi, rbx                # the footer follows the pick at once; get_settings settles it
+    mov rsi, r12
+    mov rdx, r14
+    call ev_model
+    jmp .Lsmo_yes
+3:  cmp dword ptr [rbx + AL_state], ALS_STARTING
+    jne .Lsmo_yes
+    or dword ptr [rbx + AL_cfg], CLP_WAITMODEL
+.Lsmo_yes:
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+.Lsmo_no:
     xor eax, eax
-    ret
+    EPILOGUE
+
+# FN claude_set_effort(AL*, id cstr) -> eax 1 when it is the project's effort level now: one of the
+#   conversation's model's levels. Running: asked at once, shown at once
 FN claude_set_effort
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    call record
+    mov r13, rax
+    mov rdi, r12
+    call strlen
+    mov r14, rax
+    test rax, rax
+    jz .Lse_no
+    cmp rax, 15
+    ja .Lse_no
+    mov rdi, [rbx + AL_as]
+    call cur_model
+    test rax, rax
+    jz .Lse_no
+    mov rdi, rax
+    mov rsi, r12
+    call level_index
+    test eax, eax
+    js .Lse_no
+    mov rdi, r13
+    mov esi, AGF_EFFORT
+    mov rdx, r12
+    mov rcx, r14
+    call agentcfg_set
+    mov rdi, r13
+    call agentcfg_save
+    mov rdi, rbx
+    call live_up
+    test eax, eax
+    jz 3f
+    mov rdi, rbx
+    mov esi, CLF_EFFORT
+    lea rdx, [rip + .Lk_effort_level]
+    mov rcx, r12
+    call cl_apply
+    test eax, eax
+    jz .Lse_yes
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r14
+    call ev_effort
+    jmp .Lse_yes
+3:  cmp dword ptr [rbx + AL_state], ALS_STARTING
+    jne .Lse_yes
+    or dword ptr [rbx + AL_cfg], CLP_WAITEFFORT
+.Lse_yes:
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+.Lse_no:
     xor eax, eax
-    ret
+    EPILOGUE
+
+# level_index(AMO*, id cstr) -> eax the level's index among the model's, -1 when it has none of that id
+level_index:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d
+1:  cmp r13, [rbx + AMO_levels + VEC_len]
+    jae 8f
+    imul rax, r13, AEL_SIZE
+    add rax, [rbx + AMO_levels + VEC_ptr]
+    mov rdi, [rax + AEL_id]
+    mov rsi, r12
+    call strcmp_eq
+    test eax, eax
+    jnz 9f
+    inc r13
+    jmp 1b
+8:  mov r13d, -1
+9:  mov eax, r13d
+    EPILOGUE
+
+# FN claude_set_ultra(AL*, on) -> eax 1 when it is the project's choice now. A program that runs and does
+#   not offer it (get_settings' applied.ultracodeAvailable) refuses it; one that offers it is asked at once
 FN claude_set_ultra
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+    test esi, esi
+    setnz r12b
+    call record
+    mov r13, rax
+    mov rdi, rbx
+    call live_up
+    mov r14d, eax
+    test eax, eax
+    jz 1f
+    cmp dword ptr [rbx + AL_ultra], 0
+    jl .Lsu_no
+1:  mov rdi, r13
+    mov esi, AGF_ULTRA
+    mov edx, r12d
+    call agentcfg_set
+    mov rdi, r13
+    call agentcfg_save
+    test r14d, r14d
+    jz .Lsu_yes
+    mov [rip + ul_on], r12d
+    mov rdi, rbx
+    mov esi, CLF_ULTRA
+    lea rdx, [rip + .Lk_ultra]
+    xor ecx, ecx
+    mov r8d, r12d
+    call cl_apply
+    test eax, eax
+    jz .Lsu_yes
+    mov rdi, rbx
+    mov esi, 1
+    mov edx, r12d
+    call ev_ultra
+.Lsu_yes:
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+.Lsu_no:
     xor eax, eax
-    ret
+    EPILOGUE
+
+# FN claude_set_thinking(AL*, on) -> eax 1 when it is the project's choice now: only for a model that lets
+#   thinking be switched off (supportsThinkingOff). Running: set_max_thinking_tokens, 31999 (with
+#   thinking_display "summarized", or null, as showThinkingSummaries says) or 0
 FN claude_set_thinking
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+    test esi, esi
+    setnz r12b
+    call record
+    mov r13, rax
+    mov rdi, [rbx + AL_as]
+    call cur_model
+    test rax, rax
+    jz .Lst_no
+    test dword ptr [rax + AMO_flags], AMOF_THINKOFF
+    jz .Lst_no
+    mov rdi, r13
+    mov esi, AGF_THINK
+    mov edx, r12d
+    call agentcfg_set
+    mov rdi, r13
+    call agentcfg_save
+    mov rdi, rbx
+    mov esi, r12d
+    call ev_thinking
+    mov rdi, rbx
+    call live_up
+    test eax, eax
+    jz 1f
+    xor edx, edx
+    test dword ptr [rbx + AL_cfg], CLP_SUMMARIES
+    setnz dl
+    mov rdi, rbx
+    mov esi, r12d
+    call cl_thinking
+1:  mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+.Lst_no:
     xor eax, eax
-    ret
+    EPILOGUE
+
+# FN claude_started(AL*): a start of the program was written: what its first answers must settle (the
+#   picks made while it starts, the project's Ultracode), its thinking as the start passed it
+FN claude_started
+    PROLOGUE
+    mov rbx, rdi
+    and dword ptr [rbx + AL_cfg], ~(CLP_WAITMODEL | CLP_WAITEFFORT | CLP_CREDITS)
+    or dword ptr [rbx + AL_cfg], CLP_FIRST
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    xor ecx, ecx
+    cmp dword ptr [rax + AGC_think], 0
+    setne cl
+    mov [rbx + AL_think], ecx
+    EPILOGUE
+
+# apply_kept(AL*, Ultracode offered, on): the first get_settings answer of a process: a model and an effort
+#   level picked while it started are asked for now, and the project's Ultracode when it differs from the
+#   one in effect
+apply_kept:
+    PROLOGUE
+    mov rbx, rdi
+    mov r14d, esi
+    mov r15d, edx
+    test dword ptr [rbx + AL_cfg], CLP_FIRST
+    jz 9f
+    mov r12d, [rbx + AL_cfg]
+    and dword ptr [rbx + AL_cfg], ~(CLP_FIRST | CLP_WAITMODEL | CLP_WAITEFFORT)
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov r13, rax
+    test r12d, CLP_WAITMODEL
+    jz 1f
+    cmp byte ptr [r13 + AGC_model], 0
+    je 1f
+    mov qword ptr [rip + fl_al], 0
+    mov rdi, rbx
+    mov esi, CLF_MODEL
+    lea rdx, [rip + .Lk_model]
+    lea rcx, [r13 + AGC_model]
+    call cl_apply
+    test eax, eax
+    jz 9f
+1:  test r12d, CLP_WAITEFFORT
+    jz 2f
+    cmp byte ptr [r13 + AGC_effort], 0
+    je 2f
+    mov rdi, rbx
+    mov esi, CLF_EFFORT
+    lea rdx, [rip + .Lk_effort_level]
+    lea rcx, [r13 + AGC_effort]
+    call cl_apply
+    test eax, eax
+    jz 9f
+2:  test r14d, r14d
+    jz 9f
+    mov eax, [r13 + AGC_ultra]
+    test eax, eax
+    js 9f
+    cmp eax, r15d
+    je 9f
+    mov [rip + ul_on], eax
+    mov rdi, rbx
+    mov esi, CLF_ULTRA
+    lea rdx, [rip + .Lk_ultra]
+    xor ecx, ecx
+    mov r8d, eax
+    call cl_apply
+9:  EPILOGUE
+
+# FN claude_flags_answer(AL*, control_response's response, kind CLF_*): apply_flag_settings' or
+#   set_max_thinking_tokens' answer. Done: a picked model's pill row ("Switched to NAME"), then what is in
+#   effect is read again (get_settings); refused: the toast says why ("Failed to set model: …", "Failed to
+#   set effort: …", "Failed to turn Ultracode on: …" / "off: …", "Failed to set thinking: …") and what is
+#   in effect is read again
+FN claude_flags_answer
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov rdi, rsi
+    lea rsi, [rip + .Lk_subtype]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_success]
+    call json_is
+    test eax, eax
+    jz 5f
+    cmp r13d, CLF_MODEL
+    jne 4f
+    cmp [rip + fl_al], rbx
+    jne 4f
+    mov qword ptr [rip + fl_al], 0
+    lea rdi, [rip + bsb]        # "Switched to NAME" (webview index.js @5967170)
+    call sb_clear
+    lea rdi, [rip + bsb]
+    lea rsi, [rip + .Lp_switched]
+    call sb_push_cstr
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov r14, rax
+    lea rdi, [rip + fl_model]
+    call strlen
+    mov rdi, r14
+    lea rsi, [rip + fl_model]
+    mov rdx, rax
+    call agentcfg_find_model
+    lea rsi, [rip + fl_model]
+    test rax, rax
+    jz 3f
+    mov rsi, [rax + AMO_label]
+3:  lea rdi, [rip + bsb]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + bsb + SB_ptr]
+    mov rdx, [rip + bsb + SB_len]
+    call ev_pill
+4:  cmp r13d, CLF_THINK
+    je 9f
+    mov rdi, rbx
+    call claude_get_settings
+    EPILOGUE
+5:  lea rdi, [rip + bsb]
+    call sb_clear
+    lea rax, [rip + fail_words]
+    mov rsi, [rax + r13*8]
+    cmp r13d, CLF_ULTRA
+    jne 6f
+    lea rsi, [rip + .Lf_ultra_off]
+    cmp dword ptr [rip + ul_on], 0
+    je 6f
+    lea rsi, [rip + .Lf_ultra_on]
+6:  lea rdi, [rip + bsb]
+    call sb_push_cstr
+    mov rdi, r12
+    lea rsi, [rip + .Lk_error]
+    call jstr
+    lea rdi, [rip + bsb]
+    mov rsi, rax
+    call sb_push
+    lea rdi, [rip + bsb]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + bsb + SB_ptr]
+    call app_toast
+    cmp r13d, CLF_THINK
+    je 9f
+    mov rdi, rbx                # what is in effect comes back
+    call claude_get_settings
+9:  EPILOGUE
+
+# FN claude_record(AL*, record): a system or result record: its fast_mode_state (and reason when it names
+#   one) is fast mode's state; system/notification "fast-mode-overage-rejected" (usage credits are
+#   unavailable) is noted, and when fast mode then turns off the toast of the extension says why (webview
+#   index.js @3762100; rhun never turns it off itself: it sends no "/fast off" the user did not type). The
+#   notification has no recording (the CLI binary's text)
+FN claude_record
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rsi
+    lea rsi, [rip + .Lk_subtype]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_notification]
+    call json_is
+    test eax, eax
+    jz 2f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_key]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_overage]
+    call json_is
+    test eax, eax
+    jz 9f
+    or dword ptr [rbx + AL_cfg], CLP_CREDITS
+    mov byte ptr [rip + credit_txt], 0
+    mov rdi, r12
+    lea rsi, [rip + .Lk_text]
+    call jstr
+    test rdx, rdx
+    jz 9f
+    mov r13, rax
+    mov rdi, rdx                # at most 200 bytes, cut at a character
+    mov rsi, rax
+    mov edx, 200
+    call utf8_cut
+    lea rdi, [rip + credit_txt]
+    mov rsi, r13
+    mov rdx, rax
+    mov byte ptr [rdi + rdx], 0
+    call memmove
+    jmp 9f
+2:  mov rdi, r12
+    lea rsi, [rip + .Lk_fast]
+    call json_get
+    mov rdi, rax
+    call json_str
+    test rdx, rdx
+    jz 9f                       # no state named: nothing changes
+    mov rdi, r12
+    call fast_of
+    mov r13d, eax
+    mov edi, AG_CLAUDE          # its reason: the record's when it names one, else the one kept
+    call agentcfg_get
+    lea rdi, [rip + fast_why]
+    lea rsi, [rax + AGC_fastwhy]
+    call cstr_copy
+    mov rdi, r12
+    lea rsi, [rip + .Lk_fast_why]
+    call json_get
+    test rax, rax               # absent: the one kept; null: none
+    jz 3f
+    mov byte ptr [rip + fast_why], 0
+    mov rdi, r12
+    lea rsi, [rip + .Lk_fast_why]
+    call jstr
+    cmp rdx, 31
+    ja 3f
+    lea rdi, [rip + fast_why]
+    mov rsi, rax
+    mov byte ptr [rdi + rdx], 0
+    call memmove
+3:  cmp r13d, FS_OFF            # it turned off after usage credits ran out: the toast
+    jne 4f
+    cmp dword ptr [rbx + AL_fast], FS_OFF
+    je 4f
+    test dword ptr [rbx + AL_cfg], CLP_CREDITS
+    jz 4f
+    and dword ptr [rbx + AL_cfg], ~CLP_CREDITS
+    lea rdi, [rip + bsb]
+    call sb_clear
+    lea rsi, [rip + .Lfast_off]
+    lea rdi, [rip + credit_txt]
+    cmp byte ptr [rdi], 0
+    je 31f
+    call credit_head            # "TEXT. Type /fast on …" (the text without its last ".")
+    lea rsi, [rip + .Lfast_back]
+31: lea rdi, [rip + bsb]
+    call sb_push_cstr
+    lea rdi, [rip + bsb]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + bsb + SB_ptr]
+    call app_toast
+4:  lea rdi, [rip + fast_why]
+    call strlen
+    mov rcx, rax
+    mov rdi, rbx
+    mov esi, r13d
+    lea rdx, [rip + fast_why]
+    call ev_fast
+9:  EPILOGUE
+
+# credit_head(): bsb = the refusal's text, trimmed, without a last "." and with ". " after it
+credit_head:
+    PROLOGUE
+    lea rdi, [rip + credit_txt]
+    call strlen
+    mov rbx, rax
+    lea rdi, [rip + credit_txt]
+    mov rsi, rax
+    call trim
+    mov r12, rax
+    mov r13, rdx
+    test r13, r13
+    jz 1f
+    cmp byte ptr [r12 + r13 - 1], '.'
+    jne 1f
+    dec r13
+1:  lea rdi, [rip + bsb]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    lea rdi, [rip + bsb]
+    lea rsi, [rip + .Lp_dot_sp]
+    call sb_push_cstr
+    EPILOGUE
+
+# think_on(AS* or 0) -> eax 1 when thinking is on: the program's (AL_think) while it runs, else the
+#   project's choice (unset: on)
+think_on:
+    PROLOGUE
+    test rdi, rdi
+    jz 1f
+    mov rbx, [rdi + AS_live]
+    test rbx, rbx
+    jz 1f
+    mov rdi, rbx
+    call live_up
+    test eax, eax
+    jz 1f
+    mov eax, [rbx + AL_think]
+    EPILOGUE
+1:  mov edi, AG_CLAUDE
+    call agentcfg_get
+    xor ecx, ecx
+    cmp dword ptr [rax + AGC_think], 0
+    setne cl
+    mov eax, ecx
+    EPILOGUE
+
+# effort_step(AL*, how ptr, len): the effort level "+" one up, "-" one down (each stops at the end), "~" the
+#   next one round (the row's label: "Click to cycle effort level"), anything else that level's id
+effort_step:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    cmp r13, 1
+    je 1f
+    cmp r13, 15                 # an id
+    ja 9f
+    lea rdi, [rsp]
+    mov rsi, r12
+    mov rdx, r13
+    mov byte ptr [rdi + rdx], 0
+    call memmove
+    mov rdi, rbx
+    lea rsi, [rsp]
+    call claude_set_effort
+    EPILOGUE
+1:  mov rdi, [rbx + AL_as]
+    call cur_model
+    test rax, rax
+    jz 9f
+    mov r14, rax
+    mov r15, [r14 + AMO_levels + VEC_len]
+    test r15, r15
+    jz 9f
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov rdi, [rbx + AL_as]
+    mov rsi, rax
+    mov rdx, r14
+    call agentcfg_effort
+    mov ecx, -1                 # its index, -1 none
+    test rax, rax
+    jz 2f
+    sub rax, [r14 + AMO_levels + VEC_ptr]
+    xor edx, edx
+    mov ecx, AEL_SIZE
+    div rcx
+    mov ecx, eax
+2:  movzx eax, byte ptr [r12]
+    mov edx, ecx
+    cmp eax, '+'
+    jne 3f
+    inc edx
+    cmp edx, r15d
+    jb 5f
+    lea edx, [r15 - 1]
+    jmp 5f
+3:  cmp eax, '-'
+    jne 4f
+    dec edx
+    jns 5f
+    xor edx, edx
+    jmp 5f
+4:  inc edx                     # "~": round
+    cmp edx, r15d
+    jb 5f
+    xor edx, edx
+5:  cmp edx, ecx
+    je 9f
+    imul rax, rdx, AEL_SIZE
+    add rax, [r14 + AMO_levels + VEC_ptr]
+    mov rdi, rbx
+    mov rsi, [rax + AEL_id]
+    call claude_set_effort
+9:  EPILOGUE
 
 # ---- the command menu (agentpop.s) and local commands ----
 
@@ -1355,7 +2014,7 @@ FN claude_menu
     div ecx
     ret
 
-# cur_model(AS* or 0) -> rax the model the menu names (AMO*): the project's choice, else the one in effect,
+# cur_model(AS* or 0) -> rax the model the conversation uses (AMO*: agentcfg_current, the footer's pill),
 #   else the first listed; 0 without a list
 cur_model:
     PROLOGUE
@@ -1363,27 +2022,11 @@ cur_model:
     mov edi, AG_CLAUDE
     call agentcfg_get
     mov r12, rax
-    lea r13, [r12 + AGC_model]
-    cmp byte ptr [r13], 0
-    jne 1f
-    xor r13d, r13d
-    test rbx, rbx
-    jz 2f
-    mov rax, [rbx + AS_live]
-    test rax, rax
-    jz 2f
-    lea r13, [rax + AL_model]
-    cmp byte ptr [r13], 0
-    je 2f
-1:  mov rdi, r13
-    call strlen
-    mov rdi, r12
-    mov rsi, r13
-    mov rdx, rax
-    call agentcfg_find_model
+    mov rdi, rbx
+    mov rsi, rax
+    call agentcfg_current
     test rax, rax
     jnz 9f
-2:  xor eax, eax
     cmp qword ptr [r12 + AGC_models + VEC_len], 0
     je 9f
     mov rax, [r12 + AGC_models + VEC_ptr]
@@ -1394,62 +2037,52 @@ cur_model:
 shows_model:
     PROLOGUE
     mov rbx, rdi
+    mov edi, AG_CLAUDE
+    call agentcfg_get
+    mov rdi, rbx
+    mov rsi, rax
+    call agentcfg_current
+    test rdx, rdx
+    jnz 9f
+    mov rdi, rbx
     call cur_model
     xor edx, edx
     test rax, rax
-    jz 1f
+    jz 9f
     mov rdx, [rax + AMO_label]
-    jmp 9f
-1:  test rbx, rbx
-    jz 9f
-    mov rax, [rbx + AS_live]
-    test rax, rax
-    jz 9f
-    cmp byte ptr [rax + AL_model], 0
-    je 9f
-    lea rdx, [rax + AL_model]
 9:  xor ecx, ecx
     xor r8d, r8d
+    xor r9d, r9d
     mov eax, 1
     EPILOGUE
 
 # shows_thinking(AS* or 0, kind) -> eax 1 when the model lets thinking be switched off (supportsThinkingOff),
-#   ecx APRF_ON while it is on
+#   ecx APRF_ON while it is on (think_on)
 shows_thinking:
     PROLOGUE
     mov rbx, rdi
     call cur_model
     xor r12d, r12d
+    xor r13d, r13d
     test rax, rax
     jz 9f
     test dword ptr [rax + AMO_flags], AMOF_THINKOFF
     jz 9f
     mov r12d, 1
-    mov ecx, APRF_ON            # on unless the conversation or the project has it off
-    test rbx, rbx
-    jz 1f
-    mov rax, [rbx + AS_live]
-    test rax, rax
-    jz 1f
-    cmp dword ptr [rax + AL_think], 0
-    jne 8f
-    xor ecx, ecx
-    jmp 8f
-1:  mov edi, AG_CLAUDE
-    call agentcfg_get
-    mov ecx, APRF_ON
-    cmp dword ptr [rax + AGC_think], 0
-    jne 8f
-    xor ecx, ecx
-    jmp 8f
-9:  xor ecx, ecx
-8:  xor edx, edx
+    mov rdi, rbx
+    call think_on
+    test eax, eax
+    jz 9f
+    mov r13d, APRF_ON
+9:  mov ecx, r13d
+    xor edx, edx
     xor r8d, r8d
+    xor r9d, r9d
     mov eax, r12d
     EPILOGUE
 
 # shows_effort(AS* or 0, kind) -> eax 1 when the model has effort levels; rdx "(Level)" of the level in
-#   effect (the conversation's, else the project's) or 0, r8 its id
+#   effect (agentcfg_effort) or 0, r8 its id, r9 the model (its levels: the row's track)
 shows_effort:
     PROLOGUE
     mov rbx, rdi
@@ -1457,41 +2090,25 @@ shows_effort:
     xor r12d, r12d
     xor r13d, r13d              # the suffix
     xor r14d, r14d              # the id
+    mov r15, rax
     test rax, rax
     jz 9f
     cmp qword ptr [rax + AMO_levels + VEC_len], 0
     je 9f
-    mov r15, rax
     mov r12d, 1
-    test rbx, rbx
-    jz 1f
-    mov rax, [rbx + AS_live]
-    test rax, rax
-    jz 1f
-    lea r14, [rax + AL_effort]
-    cmp byte ptr [r14], 0
-    jne 2f
-1:  mov edi, AG_CLAUDE
+    mov edi, AG_CLAUDE
     call agentcfg_get
-    lea r14, [rax + AGC_effort]
-    cmp byte ptr [r14], 0
-    jne 2f
-    xor r14d, r14d
-    jmp 9f
-2:  xor ebx, ebx                # its label among the model's levels, else the usual words
-3:  cmp rbx, [r15 + AMO_levels + VEC_len]
-    jae 4f
-    imul rax, rbx, AEL_SIZE
-    add rax, [r15 + AMO_levels + VEC_ptr]
-    inc rbx
+    mov rdi, rbx
+    mov rsi, rax
+    mov rdx, r15
+    call agentcfg_effort
+    test rax, rax
+    jz 9f
+    mov r14, [rax + AEL_id]
     mov r13, [rax + AEL_label]
-    mov rdi, [rax + AEL_id]
-    mov rsi, r14
-    call strcmp_eq
-    test eax, eax
-    jnz 5f
-    jmp 3b
-4:  mov rdi, r14
+    cmp byte ptr [r13], 0
+    jne 5f
+    mov rdi, r14
     call effort_label
     mov r13, rax
 5:  lea rdi, [rip + effort_sfx]
@@ -1511,6 +2128,7 @@ shows_effort:
     lea r13, [rip + effort_sfx]
 9:  mov rdx, r13
     mov r8, r14
+    mov r9, r15
     xor ecx, ecx
     mov eax, r12d
     EPILOGUE
@@ -1521,6 +2139,7 @@ shows_ultra:
     xor ecx, ecx
     xor edx, edx
     xor r8d, r8d
+    xor r9d, r9d
     test rdi, rdi
     jz 9f
     mov rdi, [rdi + AS_live]
@@ -1557,10 +2176,12 @@ shows_fast:
     xor ecx, ecx
     xor edx, edx
     xor r8d, r8d
+    xor r9d, r9d
     EPILOGUE
 
 # FN claude_action(AL* or 0, act, ptr, len) -> eax 1 when it was done: ACT_PLAN (/plan [TEXT]: plan mode,
 #   then TEXT as a prompt; already in it: the extension's info row), ACT_FAST (/fast as a prompt),
+#   ACT_EFFORT (the effort row: "+", "-", "~" or a level's id, effort_step),
 #   ACT_SETTINGS (Settings at Claude Code's rows), ACT_HELP (the extension's help docs, open_help in
 #   extension.js @3355805, asked before they open); anything else 0
 FN claude_action
@@ -1577,7 +2198,14 @@ FN claude_action
     jz .Lca_no
     cmp r12d, ACT_FAST
     je .Lca_fast
-    cmp r12d, ACT_PLAN
+    cmp r12d, ACT_EFFORT        # the effort row: a step, a round, or a level's id
+    jne 11f
+    mov rdi, rbx
+    mov rsi, r13
+    mov rdx, r14
+    call effort_step
+    jmp .Lca_yes
+11: cmp r12d, ACT_PLAN
     jne .Lca_no
     lea rdi, [rbx + AL_mode]    # /plan
     lea rsi, [rip + .Lv_plan]
@@ -1887,3 +2515,23 @@ local_cmds:
 .Lb_this: .asciz "this file"
 .Lb_these: .asciz "these files"
 .Lb_tail: .asciz " are not in effect."
+.Lk_resolved: .asciz "resolvedModel"
+.Lk_effort_level: .asciz "effortLevel"
+.Lk_summaries: .asciz "showThinkingSummaries"
+.Lk_key: .asciz "key"
+.Lk_text: .asciz "text"
+.Lv_notification: .asciz "notification"
+.Lv_overage: .asciz "fast-mode-overage-rejected"
+.Lp_switched: .asciz "Switched to "
+.Lp_dot_sp: .asciz ". "
+# fast mode turned off for want of usage credits (webview index.js @3762100: Xen, and Yen after the
+#   notification's own text)
+.Lfast_off: .asciz "Fast mode was turned off because usage credits are unavailable. Type /fast on in the chat to turn it back on once they are available again."
+.Lfast_back: .asciz "Type /fast on in the chat to turn it back on once usage credits are available again."
+.Lf_model: .asciz "Failed to set model: "
+.Lf_effort: .asciz "Failed to set effort: "
+.Lf_ultra_on: .asciz "Failed to turn Ultracode on: "
+.Lf_ultra_off: .asciz "Failed to turn Ultracode off: "
+.Lf_think: .asciz "Failed to set thinking: "
+.p2align 3
+fail_words: .quad .Lf_model, .Lf_effort, .Lf_ultra_on, .Lf_think     # by CLF_*

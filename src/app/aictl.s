@@ -549,6 +549,67 @@ c_print_agent_row:
     xor eax, eax
     EPILOGUE
 
+# print-sh-quote ps|sh value|command|assign [NAME] TEXT: how the terminal's command line quotes TEXT for
+#   PowerShell or a POSIX shell, whatever the system (agent_sh_quote): a value, a command, NAME=TEXT
+c_print_sh_quote:
+    PROLOGUE 32
+    call ai_set
+    call ai_arg
+    xor ecx, ecx
+    test rdx, rdx
+    jz 8f
+    cmp byte ptr [rax], 'p'
+    sete cl
+    mov [rsp], ecx              # PowerShell
+    call ai_arg
+    test rdx, rdx
+    jz 8f
+    xor ecx, ecx                # value 0, command 1, assign 2
+    cmp byte ptr [rax], 'c'
+    jne 1f
+    mov ecx, 1
+1:  cmp byte ptr [rax], 'a'
+    jne 2f
+    mov ecx, 2
+2:  mov [rsp + 4], ecx
+    mov qword ptr [rsp + 8], 0
+    cmp ecx, 2
+    jne 3f
+    call ai_arg                 # the name
+    test rdx, rdx
+    jz 8f
+    mov rdi, rax
+    mov rsi, rdx
+    call mem_dup
+    mov [rsp + 8], rax
+3:  call ai_arg_rest
+4:  test rdx, rdx               # from its first character
+    jz 5f
+    cmp byte ptr [rax], ' '
+    jne 5f
+    inc rax
+    dec rdx
+    jmp 4b
+5:  mov rdi, rax
+    mov rsi, rdx
+    call mem_dup
+    mov [rsp + 16], rax
+    call ai_out
+    mov rdi, rax
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov rcx, [rsp + 8]
+    mov r8, [rsp + 16]
+    call agent_sh_quote
+    mov rdi, [rsp + 8]
+    call mem_free
+    mov rdi, [rsp + 16]
+    call mem_free
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
 # print-agent-placeholder: the prompt box's placeholder as drawn last (agentext_placeholder_dump)
 c_print_agent_placeholder:
     PROLOGUE
@@ -596,6 +657,7 @@ c_agent_test_append:
 .Lc_print_agents_metrics: .asciz "print-agents-metrics"
 .Lc_print_agents_box: .asciz "print-agents-box"
 .Lc_print_agent_placeholder: .asciz "print-agent-placeholder"
+.Lc_print_sh_quote: .asciz "print-sh-quote"
 .Lc_agent_test_append: .asciz "agent-test-append"
 .Lc_agents_source: .asciz "agents-source"
 .Lc_agent_new: .asciz "agent-new"
@@ -654,7 +716,7 @@ ai_ctl:
     .quad .Lc_agent_timing, c_agent_timing
     .quad .Lc_print_agent_row, c_print_agent_row, .Lc_agent_test_append, c_agent_test_append
     .quad .Lc_print_agents_metrics, c_print_agents_metrics, .Lc_print_agents_box, c_print_agents_box
-    .quad .Lc_print_agent_placeholder, c_print_agent_placeholder
+    .quad .Lc_print_agent_placeholder, c_print_agent_placeholder, .Lc_print_sh_quote, c_print_sh_quote
     .quad .Lc_print_holder, c_print_holder
     .quad 0, 0
 holder_names: .quad .Lh_none, .Lh_other, .Lh_unknown

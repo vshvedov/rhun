@@ -2093,6 +2093,21 @@ class EdgeTest(DrivenCase):
                          [TERM_PROMPT, f'field=CLAUDE_CONFIG_DIR={a} {FAKE} auth login'])
         self.command('key Escape')
 
+    def test_the_terminal_command_quotes_for_its_shell(self):
+        # the quoting of both shells, whatever the system (Windows' terminal runs PowerShell): a PowerShell
+        # value is always one single-quoted string; a command is called with "& " when quoted
+        self.start()
+        cases = [('ps value C:/Claude', "'C:/Claude'"), ("ps value it's", "'it''s'"),
+                 ('ps command C:/bin/claude.exe', 'C:/bin/claude.exe'),
+                 ('ps command C:/Program Files/claude.exe', "& 'C:/Program Files/claude.exe'"),
+                 ('ps assign CLAUDE_CONFIG_DIR C:/Claude', "$env:CLAUDE_CONFIG_DIR='C:/Claude'; "),
+                 ("ps assign HOME C:/Users/o'brien", "$env:HOME='C:/Users/o''brien'; "),
+                 ('sh value /tmp/x', '/tmp/x'), ('sh value a b', "'a b'"), ("sh value it's", "'it'\\''s'"),
+                 ('sh command /opt/my bin/claude', "'/opt/my bin/claude'"),
+                 ('sh assign HOME /tmp/h', 'HOME=/tmp/h ')]
+        for args, out in cases:
+            self.assertEqual(self.command('print-sh-quote ' + args), out + '\n', args)
+
     def test_sign_in_expands_the_home_folder(self):
         # executable = ~/my bin/claude: the start finds it; the terminal's command names it in full
         program = self.work / 'my bin/claude'

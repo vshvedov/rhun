@@ -46,6 +46,11 @@
 .equ AU_ASKING, 1               # au_state: a question runs (for au_key)
 .equ AU_IN, 2
 .equ AU_OUT, 3
+.ifdef WINDOWS
+.equ SH_PS, 1
+.else
+.equ SH_PS, 0
+.endif
 .equ AU_SLOTS, 16               # profiles whose answer is kept (the oldest goes after that)
 
 .bss
@@ -69,6 +74,7 @@ au_next: .long 0                # the slot a new profile takes when all are used
 .data
 .p2align 2
 au_fd: .long -1                 # its output's pipe while it runs
+sh_ps: .long SH_PS              # the terminal's shell: PowerShell (Windows) or a POSIX shell (sh_word)
 
 .text
 
@@ -1099,24 +1105,18 @@ cl_terminal:
     mov rdi, rax
 0:  call claude_term_env
     mov r15, rdx
-    lea r13, [rip + .Lw_dir_head]
+    lea r13, [rip + .Lw_config_dir]
     cmp eax, 1
     je 4f
-    lea r13, [rip + .Lw_home_head]
+    lea r13, [rip + .Lw_home]
     cmp eax, 2
     jne 1f
 4:  lea rdi, [rip + psb]
     call sb_clear
     lea rdi, [rip + psb]
     mov rsi, r13
-    call sb_push_cstr
-    lea rdi, [rip + psb]
-    mov rsi, r15
-    xor edx, edx
-    call sh_word
-    lea rdi, [rip + psb]
-    lea rsi, [rip + .Lw_dir_tail]
-    call sb_push_cstr
+    mov rdx, r15
+    call sh_assign
     jmp 5f
 1:  lea rdi, [rip + psb]
     call sb_clear
@@ -1145,20 +1145,28 @@ cl_terminal:
     call app_toast
 9:  EPILOGUE
 
-# sh_word(sb, cstr, head): the word for the terminal's shell: as it is when it has only letters, digits
-#   and .Lsh_plain's bytes, else in single quotes: a quote in it as '\'' (POSIX), or doubled, and a
-#   command (head 1) after "& " (PowerShell, where a quoted word is a string, not a command)
+# sh_word(sb, cstr, head): the word for the terminal's shell (sh_ps: PowerShell, else a POSIX shell). POSIX:
+#   as it is when it has only letters, digits and / . _ - + ~ : , @, else in single quotes (a quote in it as
+#   '\''). PowerShell: a command (head 1) as it is when it has only letters, digits and / . _ - : \, else
+#   "& " and the word in single quotes (a quoted word is a string there, not a command); a value (head 0)
+#   always in single quotes (unquoted it would be run as a command); a quote in it doubled
 sh_word:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
     mov r14d, edx
-    xor ecx, ecx
+    lea r15, [rip + .Lsh_plain]
+    cmp dword ptr [rip + sh_ps], 0
+    je 0f
+    lea r15, [rip + .Lsh_plain_ps]
+    test r14d, r14d
+    jz 31f                      # a PowerShell value: quoted, whatever it holds
+0:  xor ecx, ecx
 1:  movzx eax, byte ptr [r12 + rcx]
     test eax, eax
     jz 7f                       # all plain
     inc rcx
-    lea rdx, [rip + .Lsh_plain]
+    mov rdx, r15
 2:  movzx r8d, byte ptr [rdx]
     test r8d, r8d
     jz 3f
@@ -1174,15 +1182,14 @@ sh_word:
     sub eax, '0'
     cmp eax, 9
     jbe 1b
-.ifdef WINDOWS
+    cmp dword ptr [rip + sh_ps], 0
+    je 31f
     test r14d, r14d
     jz 31f
     mov rdi, rbx
     lea rsi, [rip + .Lsh_call]
     call sb_push_cstr
-31:
-.endif
-    mov rdi, rbx                # quoted
+31: mov rdi, rbx                # quoted
     mov esi, 39
     call sb_push_byte
     xor r13d, r13d
@@ -1194,7 +1201,10 @@ sh_word:
     jne 5f
     mov rdi, rbx
     lea rsi, [rip + .Lsh_quote]
-    call sb_push_cstr
+    cmp dword ptr [rip + sh_ps], 0
+    je 41f
+    lea rsi, [rip + .Lsh_quote_ps]
+41: call sb_push_cstr
     jmp 4b
 5:  mov rdi, rbx
     call sb_push_byte
@@ -1206,6 +1216,61 @@ sh_word:
 7:  mov rdi, rbx
     mov rsi, r12
     call sb_push_cstr
+    EPILOGUE
+
+# sh_assign(sb, name cstr, value cstr): a variable for the command after it, in the terminal's shell:
+#   "NAME=VALUE " (POSIX: for that command only), "$env:NAME=VALUE; " (PowerShell: for the session)
+sh_assign:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    cmp dword ptr [rip + sh_ps], 0
+    je 1f
+    lea rsi, [rip + .Lsh_env]
+    call sb_push_cstr
+1:  mov rdi, rbx
+    mov rsi, r12
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, '='
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, r13
+    xor edx, edx
+    call sh_word
+    mov rdi, rbx
+    lea rsi, [rip + .Lsh_tail]
+    cmp dword ptr [rip + sh_ps], 0
+    je 2f
+    lea rsi, [rip + .Lsh_tail_ps]
+2:  call sb_push_cstr
+    EPILOGUE
+
+# FN agent_sh_quote(sb, ps, kind, name, text): print-sh-quote: the quoting of either shell on any system,
+#   for tests: kind 0 a value, 1 a command, 2 "NAME=value" (sh_assign); a line
+FN agent_sh_quote
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, edx
+    mov r13, rcx
+    mov r14, r8
+    mov r15d, [rip + sh_ps]
+    mov [rip + sh_ps], esi
+    cmp r12d, 2
+    jne 1f
+    mov rsi, r13
+    mov rdx, r14
+    call sh_assign
+    jmp 2f
+1:  mov rdi, rbx
+    mov rsi, r14
+    mov edx, r12d
+    call sh_word
+2:  mov [rip + sh_ps], r15d
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
     EPILOGUE
 
 # auth_error(ptr, len) -> eax 1 when a turn's error says claude's sign-in was refused (an expired or
@@ -2927,21 +2992,17 @@ cl_flags:
 .Lw_claude: .asciz "claude"
 .Lw_projects: .ascii "projects"
 .Lw_login: .asciz " auth login"
-.ifdef WINDOWS
-# PowerShell, the terminal's shell: "," would make an array and "@" splat; "~" and "+" are kept out too
-.Lsh_plain: .asciz "/._-:\\"
-.Lsh_quote: .asciz "''"
-.Lsh_call: .asciz "& "
-.Lw_dir_head: .asciz "$env:CLAUDE_CONFIG_DIR="
-.Lw_home_head: .asciz "$env:HOME="
-.Lw_dir_tail: .asciz "; "
-.else
 .Lsh_plain: .asciz "/._-+~:,@"
+# PowerShell, Windows' terminal shell: "," would make an array and "@" splat; "~" and "+" are kept out too
+.Lsh_plain_ps: .asciz "/._-:\\"
 .Lsh_quote: .asciz "'\\''"
-.Lw_dir_head: .asciz "CLAUDE_CONFIG_DIR="
-.Lw_home_head: .asciz "HOME="
-.Lw_dir_tail: .asciz " "
-.endif
+.Lsh_quote_ps: .asciz "''"
+.Lsh_call: .asciz "& "
+.Lsh_env: .asciz "$env:"
+.Lsh_tail: .asciz " "
+.Lsh_tail_ps: .asciz "; "
+.Lw_config_dir: .asciz "CLAUDE_CONFIG_DIR"
+.Lw_home: .asciz "HOME"
 .Lr_prompt_busy: .asciz "Close the open prompt first."
 .La_w1: .asciz "authentication_error"
 .La_w2: .asciz "Please run /login"

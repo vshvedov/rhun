@@ -109,12 +109,16 @@ while the panel or its box has the focus, interrupts the turn, a card that waits
 and the conversation shows it when you open it again.
 
 After **Stop idle agents after** (`idle_stop_minutes`) without a turn, a card or typing, the
-process is stopped; the next prompt starts it again and goes on with the same conversation. A new
+process is stopped; the next prompt starts it again and goes on with the same conversation. A
+prompt sent while the process is still ending, after the idle stop or the limit below, waits as one
+sent during a start does, and the process starts again once the old one is gone. A new
 conversation you leave before sending anything (Back, another conversation opened, another new one
 begun or the panel closed) is dropped, with its process. At most 32 processes run at once: one more
 ends the idle one used longest ago, and when none is idle the prompt stays in the box under an error
-row, "Too many agents are running. Stop one and send again." Quitting rhun, opening another folder
-or turning the chat off ends every process rhun started. A process that ends by itself during a
+row, "Too many agents are running. Stop one and send again." Quitting rhun, opening another folder,
+turning the chat off or switching off **Claude Code** in Settings > Agents (`[agents] claude`, which
+takes Claude Code's conversations out of the list) ends every Claude Code process rhun started;
+switching off another provider leaves them running. A process that ends by itself during a
 turn leaves an error row such as "Claude Code ended (exit status 2)" with the last lines it printed,
 and prompts that were still waiting go back into the box; the next prompt starts it again.
 
@@ -171,14 +175,18 @@ background and reads only whether it is signed in; an answer it cannot read, or 
 seconds, counts as signed in. When it is not signed in, or a turn fails because the sign-in was
 refused, the prompt goes back into the box and a card says "Claude Code is not signed in." with
 **Sign In**. Sign In opens the prompt "Run in the terminal: Enter, or Esc" with `claude auth login`
-in it (the **Claude Code program** in place of `claude` when one is set): Enter runs it in rhun's
-terminal. The card stays until the next Send, which asks again.
+in it (the **Claude Code program** in place of `claude` when one is set, with `~/` written out as
+your home folder): Enter runs it in rhun's terminal. When `env.CLAUDE_CONFIG_DIR` is set, the
+command starts with `CLAUDE_CONFIG_DIR=FOLDER ` (on Windows, where the terminal runs PowerShell,
+`$env:CLAUDE_CONFIG_DIR=FOLDER; `), so the sign-in goes to the folder rhun's Claude Code uses. No
+other `env.` line goes there, as the command stays in the shell's history. The card stays until the
+next Send, which asks again.
 
 When a start fails, an error row says why, such as "Claude Code was not found. Install it, or set
 its path in Settings > Claude Code.", and a card says "Claude Code could not start." (followed by
 "The wrapper WRAPPER is set in Settings > Claude Code." when one is set) with **Run claude in
-Terminal**, which opens the same prompt with `claude`, or the configured program, to see what it
-says. The next Send tries again.
+Terminal**, which opens the same prompt with `claude`, or the configured program (and the folder
+before it in the same way), to see what it says. The next Send tries again.
 
 Claude Code reads the project's own settings only in a folder rhun trusts: one you opened yourself,
 or one you trusted after a `rhun://` link opened it (see **Trust folder** above). In any other
@@ -223,17 +231,25 @@ font_size = 0
 - `env.NAME = value`: a variable for Claude Code's environment, a line each, at most 64 of at most
   8 KiB each. NAME is letters, digits and `_`, and does not start with a digit; a line that breaks
   these rules is dropped with a log line that names it. The values are only in the config file:
-  `print-settings` shows `claude.env.NAME=(set)`, and no value is printed or logged. An absolute
-  `env.CLAUDE_CONFIG_DIR` is also where the agents panel finds Claude Code's conversations.
+  `print-settings` shows `claude.env.NAME=(set)`, and no value is printed or logged. On Linux and
+  macOS, when rhun saves a config that holds an `env.` line, only you can read and write the file:
+  a new one is made with mode 0600, and an existing one loses its group's and others' permissions.
 - `idle_stop_minutes` (**Stop idle agents after**, 10 by default, 0 to 240; the Settings page steps
   by 5): minutes without a turn, a card or typing before a conversation's process is stopped. 0
   never stops it.
 - `font_size` (**Font size**, under Agents): see [Text size](#text-size) below.
 
-Otherwise Claude Code gets your login shell's environment, without the variables a Claude Code that
-started rhun leaves in it (`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `TRACEPARENT`, `TRACESTATE`),
-and with `CLAUDE_CODE_ENTRYPOINT=rhun` and `MCP_CONNECTION_NONBLOCKING=true`, which an `env.` line
-does not change.
+Otherwise Claude Code gets your environment: rhun's own when rhun was started from a terminal or
+runs on Windows, else the one your login shell gives, without the variables a Claude Code that started rhun leaves in it
+(`CLAUDECODE`, `CLAUDE_CODE_CHILD_SESSION`, `TRACEPARENT`, `TRACESTATE`), and with
+`CLAUDE_CODE_ENTRYPOINT=rhun` and `MCP_CONNECTION_NONBLOCKING=true`, which an `env.` line does not
+change.
+
+Claude Code's folder, where rhun reads its conversations and its records of running sessions, is
+the first of: an absolute `env.CLAUDE_CONFIG_DIR`; the `CLAUDE_CONFIG_DIR` of the environment Claude
+Code gets, when it is not empty; `~/.claude`. Until rhun has your login shell's environment it
+looks in its own, and when the login shell's names another folder the list is made again from that
+one.
 
 ### Markdown replies
 
@@ -243,12 +259,15 @@ links. Your own prompts stay plain text, and tool, result, error and info rows a
 reply that is still streaming is drawn as it grows; a code block that has not been closed yet shows
 as code.
 
-`http` and `https` links open in the browser and `rhun://` links as rhun opens them; a link with
-another scheme does nothing. A link to a file opens it in the editor at its line: `path`,
+`http` and `https` links open in the browser. An agent writes the replies, so of the `rhun://`
+links only a `rhun://file/` link to a file is followed, as rhun opens it; other `rhun://` links,
+which could install an extension or open a project, a `rhun://file/` link to a folder and a link
+with another scheme do nothing. A link to a file opens it in the editor at its line: `path`,
 `path:12`, `path:12:5`, `path:12-20`, `path#L12` or `path#L12-L20`, absolute, or relative to the
-conversation's checkout and then to the project, with `file://` before it and `%20` escapes read
-too. A range goes to its first line, and a file that does not exist shows "No such file: PATH"
-instead.
+conversation's checkout and then to the project. A `file:` URI of one is read too (`file:///path`,
+`file://host/path` with the host left out, `file:/path`; `file:///C:/path` is `C:/path`), and `%`
+escapes such as `%20` are decoded. A range goes to its first line, and a file that does not exist
+shows "No such file: PATH" instead.
 
 ### Text size
 
@@ -256,7 +275,10 @@ The agents panel has a text size of its own: **Font size** in Settings > Agents 
 `[agents]`). 0, the default, follows the interface's size (**Interface font size** in Settings >
 Appearance); otherwise it is 8 to 32, and 1 to 7 act as 8. It sizes all the panel's text: the
 list, the conversation and its Markdown, cards and the prompt box. Rows, badges and buttons grow
-with it.
+with it. When the panel is too narrow for its text size, the prompt box keeps room for about ten
+characters: first the `mode: NAME` label is left out, then **Send** (or **Stop**) shows as an icon,
+an arrow (or a square), and then it goes on a row under the box, with the mode label beside it when
+there is room.
 
 **Agents: Increase Font Size**, **Agents: Decrease Font Size** and **Agents: Reset Font Size** in
 the command palette change it wherever the focus is (`agents_font_increase`,
@@ -1026,7 +1048,7 @@ shot /tmp/rhun.ppm
 print-state
 ```
 
-Commands: `key`, `type`, `click x y [right|middle|shift|ctrl]` (ctrl is Cmd+click on macOS), `move`, `down`, `up`, `up-down` (a release and the next press in one frame), `scroll dy [MODS]` (modifiers as a key combination names them: `ctrl`, `shift+alt`), `open`, `cmd`, `shot`, `wait`, `wait-git`, `wait-agents` (until session discovery finishes), `agents-more`, `print-agents-page`, `print-agents-runs` (discovery runs started so far), `print-agents` (sessions and an optional open session number), `agent-new claude` (a new Claude Code conversation, opened; `agent-new OWNER/NAME` for an extension's agent), `agent-type TEXT` (typed into the open conversation's box, not sent: its process starts), `agent-prompt TEXT` (the text in the box, then Enter), `agent-stop`, `agent-card N` (option N of the open card, from 1), `agent-release` (the open conversation's process ends, as the idle stop ends it), `wait-agent STATE[|STATE...] [MS]` (until the open conversation's process is `off`, `starting`, `ready`, `working`, `waiting`, `held` or `failed`; 10000 ms by default, an error line with the state after them), `print-agent-input` (the box, the new conversation, the card), `print-agent-live` (`state= pid=0|1 sid= mode= queued= requests= new=0|1`, then `report=` and why it failed), `agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N]` (shorter waits for tests), `print-agent-row N` (row N of the open conversation as drawn: a reply's Markdown a line per block), `agent-test-append TEXT` (more text for the open conversation's last reply, as a stream adds it), `print-agents-metrics` (the panel's text size: `size= points= px= small= line= row=`), `print-claude-exe` (the program the chat would start, a word a line, or `none`), `print-claude-path CWD SID` (the file Claude Code keeps that conversation in), `wait-grep` (until find in files has read the project), `wait-term TEXT` (until the terminal shows TEXT), `wait-update`, `resize`, `print-doc`, `print-state`, `print-project`, `print-panels` (whether the explorer, the agents panel and the terminal are shown), `print-palette`, `print-menu`, `print-tip` (the tooltip on screen), `print-term`, `print-term-cell ROW COL` (the middle of that terminal cell), `print-link` (the terminal link under the pointer), `print-settings` (the rows the Settings page shows, `section.key` each), `print-scroll` (the editor's horizontal scroll, its vertical one in 1/256 lines, the horizontal limit and the scrollbar's track), `scroll-x dx` (a sideways wheel), `print-git`, `print-gitlog`, `print-scm`, `print-update`, `print-frames`, `print-loop-stats` (the main loop's passes and the frames it drew since rhun started), `print-shape` (the mouse cursor's CUR_* value), `appearance dark|light|unknown` (the system's dark mode changes, as a platform reports it), `print-appearance` (that mode, `follow_system`, the three theme settings and the theme shown), `focus out|in` (the window loses or gets the keyboard, as a platform reports it), `echo`, `quit`. A headless run takes the system's mode from `RHUN_APPEARANCE` (`dark` or `light`). `cmd` runs anything from the command palette by its snake case name.
+Commands: `key`, `type`, `click x y [right|middle|shift|ctrl]` (ctrl is Cmd+click on macOS), `move`, `down`, `up`, `up-down` (a release and the next press in one frame), `scroll dy [MODS]` (modifiers as a key combination names them: `ctrl`, `shift+alt`), `open`, `cmd`, `shot`, `wait`, `wait-git`, `wait-agents` (until session discovery finishes), `agents-more`, `print-agents-page`, `print-agents-runs` (discovery runs started so far), `print-agents` (sessions and an optional open session number), `agent-new claude` (a new Claude Code conversation, opened; `agent-new OWNER/NAME` for an extension's agent), `agent-type TEXT` (typed into the open conversation's box, not sent: its process starts), `agent-prompt TEXT` (the text in the box, then Enter), `agent-stop`, `agent-card N` (option N of the open card, from 1), `agent-release` (the open conversation's process ends, as the idle stop ends it), `wait-agent STATE[|STATE...] [MS]` (until the open conversation's process is `off`, `starting`, `ready`, `working`, `waiting`, `held` or `failed`; 10000 ms by default, an error line with the state after them), `print-agent-input` (the box, the new conversation, the card), `print-agent-live` (`state= pid=0|1 sid= mode= queued= requests= new=0|1`, then `report=` and why it failed), `agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES]` (shorter waits, a smaller cap and a smaller input queue for tests), `print-agent-row N` (row N of the open conversation as drawn: a reply's Markdown a line per block), `agent-test-append TEXT` (more text for the open conversation's last reply, as a stream adds it), `print-agents-metrics` (the panel's text size: `size= points= px= small= line= row=`), `print-agents-box` (the prompt row's layout at every text size from 8 to 32 and panel width from 240 to 900 in steps of 20, a line each: `size= w= x= box= min= mode=0|1 btn_x= btn_w= below=0|1 h=`), `print-claude-exe` (the program the chat would start, a word a line, or `none`), `print-claude-path CWD SID` (the file Claude Code keeps that conversation in), `wait-grep` (until find in files has read the project), `wait-term TEXT` (until the terminal shows TEXT), `wait-update`, `resize`, `print-doc`, `print-state`, `print-project`, `print-panels` (whether the explorer, the agents panel and the terminal are shown), `print-palette`, `print-menu`, `print-tip` (the tooltip on screen), `print-term`, `print-term-cell ROW COL` (the middle of that terminal cell), `print-link` (the terminal link under the pointer), `print-settings` (the rows the Settings page shows, `section.key` each), `print-scroll` (the editor's horizontal scroll, its vertical one in 1/256 lines, the horizontal limit and the scrollbar's track), `scroll-x dx` (a sideways wheel), `print-git`, `print-gitlog`, `print-scm`, `print-update`, `print-frames`, `print-loop-stats` (the main loop's passes and the frames it drew since rhun started), `print-shape` (the mouse cursor's CUR_* value), `appearance dark|light|unknown` (the system's dark mode changes, as a platform reports it), `print-appearance` (that mode, `follow_system`, the three theme settings and the theme shown), `focus out|in` (the window loses or gets the keyboard, as a platform reports it), `echo`, `quit`. A headless run takes the system's mode from `RHUN_APPEARANCE` (`dark` or `light`). `cmd` runs anything from the command palette by its snake case name.
 
 Managing extensions: `ext-install OWNER/NAME[@VERSION]` and `wait-install` (then `print-dialog`,
 `dialog yes|no`), `ext-install-folder PATH [copy|link]`, `ext-install-archive PATH`,

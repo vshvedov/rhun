@@ -665,6 +665,9 @@ cl_stop:
     call jw_cstr
     mov rdi, rbx
     call req_end
+    test eax, eax
+    jnz 9f
+    and dword ptr [rbx + AL_flags], ~ALF_STOP_ASKED   # refused (the input queue is full): not asked
 9:  EPILOGUE
 
 # cl_release(AL*): claude's input ends; it exits by itself, the stop sequence follows (agent_conn.s)

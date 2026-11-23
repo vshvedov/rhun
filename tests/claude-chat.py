@@ -1276,6 +1276,19 @@ class LifeTest(DrivenCase):
         self.until_gone()
         self.assertEqual(self.thread(), streamed)
 
+    def test_a_refused_stop_can_be_asked_again(self):
+        self.start()
+        self.chat('slow', 'working')
+        self.streaming()
+        self.command('agent-timing queue=1')        # the input queue takes nothing: the interrupt is refused
+        self.command('agent-stop')
+        self.assertEqual(self.interrupts(), [])
+        self.command(f'agent-timing queue={16 << 20}')
+        self.command('agent-stop')                  # asked again, now it goes
+        self.command('wait-agent ready 20000')
+        self.assertEqual(len(self.interrupts()), 1)
+        self.assertEqual(self.thread()[-1], 'info Interrupted')
+
     def test_stop_withdraws_a_card_quietly(self):
         self.start()
         self.chat('pending', 'waiting')

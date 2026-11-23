@@ -90,23 +90,26 @@ stays a way to use Claude Code as before: a conversation is the same one `claude
 so you can go on with it in either place.
 
 **+ Claude Code** in the panel's header opens a new conversation, "New Claude Code session": write
-the first prompt in the box and press Enter. To continue an existing conversation, open it from the
-list and write in the box under it. Enter sends and Shift+Enter starts a new line; in the panel,
-Enter or Tab goes to the box and Escape leaves it. The reply streams in as Claude writes it. A tool
-call shows as a row once Claude has written it, and its output as a result row; thinking and the
-work of subagents are not shown. The permission mode Claude Code reports shows as `mode: NAME`
+the first prompt in the box, which says "Start a conversation", and press Enter. To continue an
+existing conversation, open it from the list and write in the box under it, "Message Claude Code".
+Enter sends and Shift+Enter starts a new line; in the panel, Enter or Tab goes to the box and Escape
+leaves it. The reply streams in as Claude writes it. A tool call shows as a row once Claude has
+written it, and its output as a result row; thinking and the work of subagents are not shown. The permission mode Claude Code reports shows as `mode: NAME`
 beside Send.
 
 The process starts when you type or paste the first character in a conversation's box, so it is
 usually ready by the time you send; reading conversations starts nothing. It runs in the
 conversation's folder (a worktree's conversation in that worktree, a new one in the project). Up
 to four prompts sent while it starts wait for it; a fifth stays in the box with "Four
-prompts are already waiting to be sent." While Claude works, **Stop** takes the place of **Send**,
-and a prompt sent then, or while a card waits for you, stays in the box with "Claude is still
-working. Stop it or wait for the reply." A prompt is at most 50,000 characters. **Stop**, or Escape
-while the panel or its box has the focus, interrupts the turn, a card that waits included, and an
-"Interrupted" row marks it. **Back** leaves the conversation without stopping it: the turn goes on,
-and the conversation shows it when you open it again.
+prompts are already waiting to be sent." While the process starts and while Claude works, **Stop**
+takes the place of **Send**, and a prompt sent while Claude works, or while a card waits for you,
+stays in the box with "Claude is still working. Stop it or wait for the reply." A prompt is at most
+50,000 characters. **Stop**, or Escape while the panel or its box has the focus, interrupts the
+turn, a card that waits included, and an "Interrupted" row marks it. During a start they give the
+start up, whatever it waits for: the prompts that waited go back into the box, before anything
+typed since, a process already started is ended without an error row, and the next Send starts
+anew. **Back** leaves the conversation without stopping it: the turn goes on, and the conversation
+shows it when you open it again.
 
 After **Stop idle agents after** (`idle_stop_minutes`) without a turn, a card or typing, the
 process is stopped; the next prompt starts it again and goes on with the same conversation. A
@@ -125,15 +128,16 @@ and prompts that were still waiting go back into the box; the next prompt starts
 While rhun talks to Claude Code, the rows come from the process. When the process ends, the
 conversation is read again from Claude Code's own file, so the panel shows what the file holds. A
 running process keeps the program, wrapper and environment it was started with; changed settings
-apply to the next start. In a [remote window](#remote-hosts) Claude Code's conversations are listed
-and read, the header has no **+ Claude Code**, and where the box would be a line says "Chat is not
-available in remote windows yet".
+apply to the next start, except Claude Code's folder (see below), which a conversation keeps. In a
+[remote window](#remote-hosts) Claude Code's conversations are listed and read, the header has no
+**+ Claude Code**, and where the box would be a line says "Chat is not available in remote windows
+yet".
 
 | Key | Action |
 | --- | --- |
 | Enter, Tab | In the panel: go to the prompt box |
 | Enter, Shift+Enter | In the box: send, new line |
-| Escape | Stop the turn while one runs; otherwise leave the box, then the conversation |
+| Escape | Stop the turn while one runs, or give up a start; otherwise leave the box, then the conversation |
 | 1 to 9; arrows and Enter | Pick an option of the card (while the panel, not the box, has the focus) |
 | Ctrl+Plus, Ctrl+Minus, Ctrl+0 | The panel's text size, while the panel or its box has the focus |
 
@@ -234,6 +238,8 @@ font_size = 0
   `print-settings` shows `claude.env.NAME=(set)`, and no value is printed or logged. On Linux and
   macOS, when rhun saves a config that holds an `env.` line, only you can read and write the file:
   a new one is made with mode 0600, and an existing one loses its group's and others' permissions.
+  `env.CLAUDE_CONFIG_DIR` and `env.HOME` also decide where rhun looks for Claude Code's files (see
+  below).
 - `idle_stop_minutes` (**Stop idle agents after**, 10 by default, 0 to 240; the Settings page steps
   by 5): minutes without a turn, a card or typing before a conversation's process is stopped. 0
   never stops it.
@@ -247,9 +253,13 @@ change.
 
 Claude Code's folder, where rhun reads its conversations and its records of running sessions, is
 the first of: an absolute `env.CLAUDE_CONFIG_DIR`; the `CLAUDE_CONFIG_DIR` of the environment Claude
-Code gets, when it is not empty; `~/.claude`. Until rhun has your login shell's environment it
-looks in its own, and when the login shell's names another folder the list is made again from that
-one.
+Code gets, when it is not empty; `.claude` in the home folder Claude Code gets, which is a
+non-empty `env.HOME`, else that environment's `HOME`. Until rhun has your login shell's environment
+it looks in its own, and when the login shell's names another folder the list is made again from
+that one. A conversation stays in the folder its process was first started with: until another
+folder is opened, the chat or the Claude Code provider is switched off, or rhun quits, its file,
+the check for another Claude Code and its next starts use that folder, even after the config names
+another one.
 
 ### Markdown replies
 
@@ -1048,7 +1058,7 @@ shot /tmp/rhun.ppm
 print-state
 ```
 
-Commands: `key`, `type`, `click x y [right|middle|shift|ctrl]` (ctrl is Cmd+click on macOS), `move`, `down`, `up`, `up-down` (a release and the next press in one frame), `scroll dy [MODS]` (modifiers as a key combination names them: `ctrl`, `shift+alt`), `open`, `cmd`, `shot`, `wait`, `wait-git`, `wait-agents` (until session discovery finishes), `agents-more`, `print-agents-page`, `print-agents-runs` (discovery runs started so far), `print-agents` (sessions and an optional open session number), `agent-new claude` (a new Claude Code conversation, opened; `agent-new OWNER/NAME` for an extension's agent), `agent-type TEXT` (typed into the open conversation's box, not sent: its process starts), `agent-prompt TEXT` (the text in the box, then Enter), `agent-stop`, `agent-card N` (option N of the open card, from 1), `agent-release` (the open conversation's process ends, as the idle stop ends it), `wait-agent STATE[|STATE...] [MS]` (until the open conversation's process is `off`, `starting`, `ready`, `working`, `waiting`, `held` or `failed`; 10000 ms by default, an error line with the state after them), `print-agent-input` (the box, the new conversation, the card), `print-agent-live` (`state= pid=0|1 sid= mode= queued= requests= new=0|1`, then `report=` and why it failed), `agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES]` (shorter waits, a smaller cap and a smaller input queue for tests), `print-agent-row N` (row N of the open conversation as drawn: a reply's Markdown a line per block), `agent-test-append TEXT` (more text for the open conversation's last reply, as a stream adds it), `print-agents-metrics` (the panel's text size: `size= points= px= small= line= row=`), `print-agents-box` (the prompt row's layout at every text size from 8 to 32 and panel width from 240 to 900 in steps of 20, a line each: `size= w= x= box= min= mode=0|1 btn_x= btn_w= below=0|1 h=`), `print-claude-exe` (the program the chat would start, a word a line, or `none`), `print-claude-path CWD SID` (the file Claude Code keeps that conversation in), `wait-grep` (until find in files has read the project), `wait-term TEXT` (until the terminal shows TEXT), `wait-update`, `resize`, `print-doc`, `print-state`, `print-project`, `print-panels` (whether the explorer, the agents panel and the terminal are shown), `print-palette`, `print-menu`, `print-tip` (the tooltip on screen), `print-term`, `print-term-cell ROW COL` (the middle of that terminal cell), `print-link` (the terminal link under the pointer), `print-settings` (the rows the Settings page shows, `section.key` each), `print-scroll` (the editor's horizontal scroll, its vertical one in 1/256 lines, the horizontal limit and the scrollbar's track), `scroll-x dx` (a sideways wheel), `print-git`, `print-gitlog`, `print-scm`, `print-update`, `print-frames`, `print-loop-stats` (the main loop's passes and the frames it drew since rhun started), `print-shape` (the mouse cursor's CUR_* value), `appearance dark|light|unknown` (the system's dark mode changes, as a platform reports it), `print-appearance` (that mode, `follow_system`, the three theme settings and the theme shown), `focus out|in` (the window loses or gets the keyboard, as a platform reports it), `echo`, `quit`. A headless run takes the system's mode from `RHUN_APPEARANCE` (`dark` or `light`). `cmd` runs anything from the command palette by its snake case name.
+Commands: `key`, `type`, `click x y [right|middle|shift|ctrl]` (ctrl is Cmd+click on macOS), `move`, `down`, `up`, `up-down` (a release and the next press in one frame), `scroll dy [MODS]` (modifiers as a key combination names them: `ctrl`, `shift+alt`), `open`, `cmd`, `shot`, `wait`, `wait-git`, `wait-agents` (until session discovery finishes), `agents-more`, `print-agents-page`, `print-agents-runs` (discovery runs started so far), `print-agents` (sessions and an optional open session number), `agent-new claude` (a new Claude Code conversation, opened; `agent-new OWNER/NAME` for an extension's agent), `agent-type TEXT` (typed into the open conversation's box, not sent: its process starts), `agent-prompt TEXT` (the text in the box, then Enter), `agent-stop`, `agent-card N` (option N of the open card, from 1), `agent-release` (the open conversation's process ends, as the idle stop ends it), `wait-agent STATE[|STATE...] [MS]` (until the open conversation's process is `off`, `starting`, `ready`, `working`, `waiting`, `held` or `failed`; 10000 ms by default, an error line with the state after them), `print-agent-input` (the box, the new conversation, the card), `print-agent-placeholder` (the box's placeholder as drawn last, `placeholder=TEXT`), `print-agent-live` (`state= pid=0|1 sid= mode= queued= requests= new=0|1`, then `report=` and why it failed), `agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES]` (shorter waits, a smaller cap and a smaller input queue for tests), `print-agent-row N` (row N of the open conversation as drawn: a reply's Markdown a line per block), `agent-test-append TEXT` (more text for the open conversation's last reply, as a stream adds it), `print-agents-metrics` (the panel's text size: `size= points= px= small= line= row=`), `print-agents-box` (the prompt row's layout at every text size from 8 to 32 and panel width from 240 to 900 in steps of 20, a line each: `size= w= x= box= min= mode=0|1 btn_x= btn_w= below=0|1 h=`), `print-claude-exe` (the program the chat would start, a word a line, or `none`), `print-claude-path CWD SID` (the file Claude Code keeps that conversation in), `wait-grep` (until find in files has read the project), `wait-term TEXT` (until the terminal shows TEXT), `wait-update`, `resize`, `print-doc`, `print-state`, `print-project`, `print-panels` (whether the explorer, the agents panel and the terminal are shown), `print-palette`, `print-menu`, `print-tip` (the tooltip on screen), `print-term`, `print-term-cell ROW COL` (the middle of that terminal cell), `print-link` (the terminal link under the pointer), `print-settings` (the rows the Settings page shows, `section.key` each), `print-scroll` (the editor's horizontal scroll, its vertical one in 1/256 lines, the horizontal limit and the scrollbar's track), `scroll-x dx` (a sideways wheel), `print-git`, `print-gitlog`, `print-scm`, `print-update`, `print-frames`, `print-loop-stats` (the main loop's passes and the frames it drew since rhun started), `print-shape` (the mouse cursor's CUR_* value), `appearance dark|light|unknown` (the system's dark mode changes, as a platform reports it), `print-appearance` (that mode, `follow_system`, the three theme settings and the theme shown), `focus out|in` (the window loses or gets the keyboard, as a platform reports it), `echo`, `quit`. A headless run takes the system's mode from `RHUN_APPEARANCE` (`dark` or `light`). `cmd` runs anything from the command palette by its snake case name.
 
 Managing extensions: `ext-install OWNER/NAME[@VERSION]` and `wait-install` (then `print-dialog`,
 `dialog yes|no`), `ext-install-folder PATH [copy|link]`, `ext-install-archive PATH`,

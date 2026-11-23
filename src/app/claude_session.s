@@ -2497,21 +2497,30 @@ FN claude_action
     call strcmp_eq
     test eax, eax
     jz 1f
-    lea rdx, [rip + .Lp_already]
     cmp dword ptr [rbx + AL_cn + CN_state], CN_UP   # plan review: with a process, the plan in a tab
-    jne .Lca_note                                   #   (get_plan: claude_plan_answer, claude_cards.s)
-    mov rdi, rbx
+    je 12f                                          #   (get_plan: claude_plan_answer, claude_cards.s)
+    cmp dword ptr [rbx + AL_state], ALS_OFF         # without one (the idle stop ended it): it starts, as
+    jne 11f                                         #   for a prompt, and get_plan goes once it is up (the
+    mov rdi, [rbx + AL_as]                          #   extension always has one); nothing is sent
+    call agent_typing
+11: cmp dword ptr [rbx + AL_state], ALS_STARTING
+    jne 13f
+    or dword ptr [rbx + AL_cfg], CLP_PLANWAIT
+    jmp .Lca_yes
+13: lea r15, [rip + .Lp_unshown]
+    jmp .Lca_note
+12: mov rdi, rbx
     call claude_get_plan
     test eax, eax
     jnz .Lca_yes
-    lea rdx, [rip + .Lp_unshown]
+    lea r15, [rip + .Lp_unshown]
     jmp .Lca_note
 1:  mov rdi, rbx
     lea rsi, [rip + .Lv_plan]
     call claude_set_mode
     test eax, eax
     jnz 2f
-    lea rdx, [rip + .Lp_couldnt]    # "Couldn't switch to plan mode[; not sent: TEXT]"
+    lea r15, [rip + .Lp_couldnt]    # "Couldn't switch to plan mode[; not sent: TEXT]"
     test r14, r14
     jz .Lca_note
     lea rdi, [rip + bsb]
@@ -2551,11 +2560,11 @@ FN claude_action
     mov rdx, r14
     call agent_send
     jmp .Lca_yes
-.Lca_note:
-    mov rdi, rdx
+.Lca_note:                      # (r15: the note)
+    mov rdi, r15
     call strlen
     mov rcx, rax
-    mov rdx, rdi
+    mov rdx, r15
     mov rdi, rbx
     mov esi, R_INFO
     call ev_note
@@ -4325,7 +4334,6 @@ local_cmds:
 .Lm_signout: .asciz "Sign out"
 .Lm_help: .asciz "View help docs"
 .Lm_help_d: .asciz "Open help documentation"
-.Lp_already: .asciz "Already in plan mode. No plan written yet."
 .Lp_unshown: .asciz "Couldn't show the plan"     # plan review
 .Lp_couldnt: .asciz "Couldn't switch to plan mode"
 .Lp_not_sent: .asciz "; not sent: "

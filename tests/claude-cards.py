@@ -1727,6 +1727,22 @@ class ReviewRulesTest(CardCase):
         self.assertGreater(allow, answered)
         self.assertEqual([(a['plan'], a['behavior']) for a in self.answers()], [(2, 'allow')])
 
+    def test_plan_without_a_process_starts_it_and_shows_the_plan(self):
+        # /plan in plan mode after the idle stop: the program starts again (nothing is sent) and the plan the
+        # conversation has shows in a tab, as with a running program (the extension always has one)
+        self.ask('plan', claude=self.claude_section('initial_mode = plan\n'))
+        self.command('agent-card-text field later')
+        self.command('agent-card 3')                    # keeps planning, in plan mode
+        self.command('wait-agent ready')
+        self.command('agent-release')
+        self.until(lambda: ' pid=1 ' not in self.live(), 'its end')
+        self.command('agent-prompt /plan')
+        self.until(lambda: PlanTest.tabs(self), 'the plan in a tab')
+        self.assertEqual(PlanTest.tabs(self)[0]['text'], PLAN.split('\n'))
+        self.assertEqual(len(self.starts()), 2)
+        self.assertEqual(self.prompts(), ['plan'])
+        self.assertNotIn('info Already in plan mode. No plan written yet.', self.thread())
+
 
 if __name__ == '__main__':
     unittest.main()

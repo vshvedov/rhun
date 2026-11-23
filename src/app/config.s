@@ -107,6 +107,12 @@ cfg_claude_initial_mode: .long 0 # g_claude_mode_opts: 0 the CLI's own default
 cfg_agents_idle_stop: .long 10   # [agents] idle_stop_minutes: a conversation's process stops after them, 0 never
 .globl cfg_agents_font_size
 cfg_agents_font_size: .long 0   # [agents] font_size: the panel's text, 0 the interface's (agentfont.s)
+.globl cfg_claude_allow_bypass, cfg_claude_prompt_suggestions, cfg_agents_ctrl_enter_sends
+.globl cfg_agents_scroll_on_send
+cfg_claude_allow_bypass: .long 0        # [claude] allow_bypass_permissions: rhun's gate on bypassPermissions
+cfg_claude_prompt_suggestions: .long 1  # [claude] prompt_suggestions: initialize asks for them
+cfg_agents_ctrl_enter_sends: .long 0    # [agents] ctrl_enter_sends: Enter a new line, Ctrl+Enter sends
+cfg_agents_scroll_on_send: .long 1      # [agents] scroll_on_send: sending scrolls to the end
 .p2align 3
 cfg_theme: .quad cfg_def_theme
 cfg_dark_theme: .quad cfg_def_theme
@@ -728,7 +734,7 @@ FN config_save
     jne 51f
     lea rdi, [rsp]              # AI: the extension sources switched off (agentext.s)
     call agentext_config_save
-51: lea rax, [rip + cfg_claude_initial_mode]
+51: lea rax, [rip + cfg_claude_prompt_suggestions]    # the last [claude] row
     cmp [rbx + SET_ptr], rax
     jne .Lcs_skip
     lea rdi, [rsp]              # Claude Code: the env pairs (claudecfg.s)
@@ -1003,11 +1009,16 @@ g_settings:
     SETTING .Ls_agents, opencode, ST_BOOL, cfg_agents_opencode, 0, 1, 1, 0, "OpenCode", "Show OpenCode sessions in the agents panel."
     SETTING .Ls_agents, idle_stop_minutes, ST_INT, cfg_agents_idle_stop, 0, 240, 5, 0, "Stop idle agents after", "Minutes without activity before a conversation's process is stopped. 0 never stops it."
     SETTING .Ls_agents, font_size, ST_INT, cfg_agents_font_size, 0, 32, 1, 0, "Font size", "Text size of the agents panel. 0 follows the interface."
+    SETTING .Ls_agents, ctrl_enter_sends, ST_BOOL, cfg_agents_ctrl_enter_sends, 0, 1, 1, 0, "Ctrl+Enter sends", "Enter starts a new line; Ctrl+Enter (Cmd+Enter on macOS) sends."
+    SETTING .Ls_agents, scroll_on_send, ST_BOOL, cfg_agents_scroll_on_send, 0, 1, 1, 0, "Scroll to the end on send", "Sending a prompt scrolls the conversation to its end."
     # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
     SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
     SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."
     SETTING .Ls_claude, wrapper, ST_STR, cfg_claude_wrapper, 0, 0, 0, 0, "Wrapper program", "A program that is started with claude and its arguments after it."
-    SETTING .Ls_claude, initial_mode, ST_CHOICE, cfg_claude_initial_mode, 0, 3, 1, 0, "Permission mode", "The mode a conversation starts in.", g_claude_mode_opts
+    SETTING .Ls_claude, initial_mode, ST_CHOICE, cfg_claude_initial_mode, 0, 5, 1, 0, "Permission mode", "The mode a conversation starts in.", g_claude_mode_opts
+    SETTING .Ls_claude, allow_bypass_permissions, ST_BOOL, cfg_claude_allow_bypass, 0, 1, 1, 0, "Allow bypass permissions", "Offer Bypass permissions in the mode picker. Claude then runs commands without asking for approval."
+    # the last [claude] row: the env pairs follow it (config_save, settings_dump)
+    SETTING .Ls_claude, prompt_suggestions, ST_BOOL, cfg_claude_prompt_suggestions, 0, 1, 1, 0, "Prompt suggestions", "Claude suggests your next prompt after a reply. Tab takes it."
     SETTING .Ls_terminal, shell, ST_STR, cfg_term_shell, 0, 0, 0, 0, "Shell", "Program the terminal runs. Empty uses $SHELL."
     SETTING .Ls_terminal, font_size, ST_INT, cfg_term_font_size, 8, 40, 1, 0, "Terminal font size", "Font size of the terminal panel."
     SETTING .Ls_terminal, font, ST_STR, cfg_term_font, 0, 0, 0, 0, "Terminal font", "Path to a monospace .ttf file. Empty uses the editor font."

@@ -129,8 +129,10 @@ class ChatCase(unittest.TestCase):
             output.append(reply)
 
     def live(self):
-        """print-agent-live without the thread's scroll fields (EdgeTest reads those)."""
-        return re.sub(r' scroll=\d+ max=\d+ follow=[01]', '', self.command('print-agent-live'))
+        """print-agent-live without the controls the driver reports (tests/claude-controls.py reads those)
+        and the thread's scroll fields (EdgeTest reads those)."""
+        return re.sub(r' model=\S+ effort=\S+ ultra=\S+ think=\S+ fast=\S+ held=\d+ ctx=\S+ cache=\S+ '
+                      r'suggest=[01]| scroll=\d+ max=\d+ follow=[01]', '', self.command('print-agent-live'))
 
     def quit(self):
         """End rhun the way the user does (it writes its config if a setting changed), and wait."""
@@ -171,12 +173,14 @@ class SettingsTest(ChatCase):
         # the rows of the section are together, the pairs after them
         rows = [line for line in out.splitlines() if line.startswith('claude.')]
         self.assertEqual(rows, ['claude.chat', 'claude.executable', 'claude.wrapper', 'claude.initial_mode',
+                                'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
                                 'claude.env.FOO=(set)', 'claude.env.ANSWER_2=(set)'])
         self.command('cmd toggle_word_wrap')         # a setting changed: the exit writes the file
         self.quit()
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(section(saved, 'claude'), [
             'chat = false', f'executable = {FAKE}', f'wrapper = {PYTHON}', 'initial_mode = plan',
+            'allow_bypass_permissions = false', 'prompt_suggestions = true',
             'env.FOO = very-secret-value', 'env.ANSWER_2 = forty two'])
         self.assertIn('idle_stop_minutes = 15', section(saved, 'agents'))
 
@@ -211,7 +215,8 @@ class SettingsTest(ChatCase):
         self.quit()
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(section(saved, 'claude'), [
-            'chat = true', 'executable =', 'wrapper =', 'initial_mode = default', 'env.OK = fine'])
+            'chat = true', 'executable =', 'wrapper =', 'initial_mode = default', 'allow_bypass_permissions = false',
+            'prompt_suggestions = true', 'env.OK = fine'])
         self.assertIn('idle_stop_minutes = 240', section(saved, 'agents'))
 
     def test_the_cli_default_mode_is_written_empty(self):
@@ -527,7 +532,10 @@ class ChatTest(DrivenCase):
         self.assertIsNone(starts[0]['env']['CLAUDECODE'])
         self.assertEqual(self.stdin()[0], {'type': 'control_request', 'request_id': 'r1',
                                            'request': {'subtype': 'initialize', 'hooks': None}})
-        self.assertEqual(self.stdin()[1], {'type': 'user', 'message': {
+        # then what is in effect (tests/claude-controls.py), then the prompt
+        self.assertEqual(self.stdin()[1], {'type': 'control_request', 'request_id': 'r2',
+                                           'request': {'subtype': 'get_settings'}})
+        self.assertEqual(self.stdin()[2], {'type': 'user', 'message': {
             'role': 'user', 'content': [{'type': 'text', 'text': 'hello'}]},
             'parent_tool_use_id': None, 'session_id': ''})
         self.assertEqual(self.live(), f'state=ready pid=1 sid={sid} mode=default queued=0 requests=0 new=0\n')
@@ -683,7 +691,7 @@ class ChatTest(DrivenCase):
         self.assertIn(' queued=2 ', live)
         self.command('wait-agent ready 10000')
         lines = self.stdin()
-        self.assertEqual([m.get('type') for m in lines], ['control_request', 'user', 'user'])
+        self.assertEqual([m.get('type') for m in lines], ['control_request', 'control_request', 'user', 'user'])
         self.assertEqual(self.prompts(), ['one', 'two'])
         self.assertEqual(self.thread(), ['user one', 'user two', REPLY + 'ok: one', 'agent ok: two'])
 

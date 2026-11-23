@@ -19,8 +19,9 @@ F AM_hdoc, 4
 F AM_dx, 4              # where it was drawn last (its text's left, its top on screen), in which
 F AM_dy, 4              #   frame of the conversation (th_serial)
 F AM_dser, 4
-F AM_pad2, 4
+F AM_flags, 4           # AMF_*
 ENDSTRUCT AM_SIZE
+.equ AMF_PILL, 1                # a centred one-line pill ("Switched to NAME")
 
 .equ R_USER, 1
 .equ R_ASSIST, 2
@@ -834,6 +835,8 @@ FN agent_session_free
     mov rdi, [rbx + AS_worktree]
     call mem_free
     mov rdi, [rbx + AS_model]
+    call mem_free
+    mov rdi, [rbx + AS_draft]
     call mem_free
     mov rdi, rbx
     call mem_free

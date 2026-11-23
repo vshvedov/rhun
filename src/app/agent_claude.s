@@ -19,7 +19,8 @@
 # sign-in) in rhun's terminal prompt, as the rhun.run tool does.
 #
 # The first line it is sent is initialize; nothing else goes until its answer (the prompts wait in
-# AL_queue, agent_drv.s). A turn streams: message_start names the message, a text block's start is a
+# AL_queue, agent_drv.s). Its answer's lists go to the project's record (claude_session.s), then
+# get_settings asks what is in effect, then the prompts go. A turn streams: message_start names the message, a text block's start is a
 # reply row, its deltas add to it, the consolidated assistant record of the block is its finished text;
 # result ends the turn. A tool call is a tool row once its block is complete, its result a result row,
 # both as the file reader shows them. A tool's permission (can_use_tool, AskUserQuestion and
@@ -37,6 +38,7 @@
 .equ OA_INIT, 1                 # what an answer rhun waits for answers (AL_out's act)
 .equ OA_MODE, 2                 # set_permission_mode (nothing is done with its answer)
 .equ OA_STOP, 3                 # interrupt (its answer is not needed: the turn's result follows)
+.equ OA_SETTINGS, 4             # get_settings (claude_settings_answer)
 .equ QUESTION_OPTS, 16          # a question's card shows its first 16 options
 .equ R_ASSIST, 2                # the roles of agents.s's messages
 .equ R_INFO, 6
@@ -89,6 +91,10 @@ cl_start:
     mov r12, [rbx + AL_as]
     lea rdi, [rbx + AL_report]
     call sb_clear
+    mov edi, AG_CLAUDE          # a start is a writer's action: the project's record is read (agentcfg.s)
+    call agentcfg_get
+    mov rdi, rax
+    call agentcfg_need
     call claude_exe
     test rax, rax
     jz .Lcs_missing
@@ -1699,8 +1705,16 @@ h_system:
     lea rsi, [rip + .Lv_status]
     call json_is
     test eax, eax
+    jnz 5f
+    mov rdi, r13
+    lea rsi, [rip + .Lv_commands_changed]
+    call json_is
+    test eax, eax
     jz 9f
-    jmp 5f
+    mov rdi, rbx                # the whole command list again (claude_session.s)
+    mov rsi, r12
+    call claude_commands_changed
+    jmp 9f
 1:  mov rdi, r12                # the id it runs under: ours (--session-id), else it is taken
     lea rsi, [rip + .Lk_session_id]
     call jstr
@@ -2791,7 +2805,13 @@ h_response:
     mov rdi, rbx
     mov rsi, rax
     call out_take
-    cmp eax, OA_INIT
+    cmp eax, OA_SETTINGS
+    jne 2f
+    mov rdi, rbx                # get_settings: the model, effort and Ultracode in effect (claude_session.s)
+    mov rsi, r12
+    call claude_settings_answer
+    jmp 9f
+2:  cmp eax, OA_INIT
     jne 9f
     mov rdi, r12
     lea rsi, [rip + .Lk_subtype]
@@ -2812,7 +2832,17 @@ h_response:
     mov rdi, rbx
     mov rsi, rax
     call ev_mode
-1:  mov rdi, rbx
+1:  mov rdi, r12                # its lists, version and fast mode (claude_session.s)
+    lea rsi, [rip + .Lk_response]
+    call json_get
+    mov rdi, rbx
+    mov rsi, rax
+    call claude_init_answer
+    mov rdi, rbx                # then what is in effect; a write that broke has ended the start
+    call send_get_settings
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
+    mov rdi, rbx
     call ev_ready
 9:  EPILOGUE
 5:  mov rdi, r12                # refused: the start failed with its words, the process goes
@@ -2832,6 +2862,22 @@ h_response:
     call ev_failed
     lea rdi, [rbx + AL_cn]
     call conn_stop
+    EPILOGUE
+
+# send_get_settings(AL*): get_settings (its answer: claude_settings_answer)
+send_get_settings:
+    PROLOGUE
+    mov rbx, rdi
+    mov esi, OA_SETTINGS
+    call req_begin
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_get_settings]
+    call jw_cstr
+    mov rdi, rbx
+    call req_end
     EPILOGUE
 
 # cl_close(CN*, err): the process is gone (or the connection broke). While it started or a turn ran
@@ -2959,6 +3005,8 @@ err_tail:
 claude_drv:
     .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST
     .quad .Lname, cl_start, cl_send, cl_stop, cl_answer, cl_release, cl_held, cl_auth, cl_terminal
+    .quad claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra
+    .quad claude_set_thinking, claude_reply, claude_action
 cl_types:
     .quad .Lv_stream_event, h_stream, .Lv_assistant, h_assistant, .Lv_system, h_system
     .quad .Lv_result, h_result, .Lv_control_request, h_request, .Lv_control_response, h_response
@@ -3043,6 +3091,8 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lv_system: .asciz "system"
 .Lv_result: .asciz "result"
 .Lv_initialize: .asciz "initialize"
+.Lv_get_settings: .asciz "get_settings"
+.Lv_commands_changed: .asciz "commands_changed"
 .Lv_user: .asciz "user"
 .Lv_text: .asciz "text"
 .Lv_message_start: .asciz "message_start"

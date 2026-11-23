@@ -652,8 +652,142 @@ c_agent_test_append:
     xor eax, eax
     EPILOGUE
 
+# box_kind() -> eax the built-in driver kind the box belongs to: the open conversation's, else the new
+#   one's being written; 0 none (an extension's)
+box_kind:
+    PROLOGUE
+    call agents_open_driven
+    test rax, rax
+    jz 1f
+    mov eax, [rax + AS_kind]
+    jmp 2f
+1:  call agentext_new_active
+    cmp rax, AG_OPENCODE        # a small number is a built-in kind, a pointer an extension
+    jbe 2f
+    xor eax, eax
+2:  cmp eax, AG_OPENCODE
+    jbe 9f
+    xor eax, eax
+9:  EPILOGUE
+
+# print-agent-cfg [KIND]: a driver kind's lists and choices for the project (agentcfg_dump; default
+#   claude). It never reads the state file: read=0 says nothing has
+c_print_agent_cfg:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov ebx, AG_CLAUDE
+    test rdx, rdx
+    jz 1f
+    mov rdi, rax
+    mov rsi, rdx
+    call agent_kind_named
+    test eax, eax
+    jz 8f
+    mov ebx, eax
+1:  mov edi, ebx
+    call agentcfg_get
+    mov r12, rax
+    call ai_out
+    mov rdi, rax
+    mov rsi, r12
+    call agentcfg_dump
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# agent-models: what the model picker needs, for the box's conversation: its driver's record is read
+#   (a popup opened is a writer's action, agentcfg_need); error without such a conversation
+c_agent_models:
+    PROLOGUE
+    call ai_set
+    call box_kind
+    test eax, eax
+    jz 8f
+    mov edi, eax
+    call agentcfg_get
+    mov rdi, rax
+    call agentcfg_need
+    xor eax, eax
+    EPILOGUE
+8:  mov edi, 1
+    call no_chat
+    mov rax, -1
+    EPILOGUE
+
+# agent-cfg-set FIELD VALUE: a choice in the box's driver record (claude's when there is none), as a picker
+#   makes it, for tests: model, effort, dest, newmode (text), ultra, think (-1 "-", 0, 1)
+c_agent_cfg_set:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov r12, rax
+    mov r13, rdx
+    lea r14, [rip + cfg_fields]
+1:  mov rdx, [r14]
+    test rdx, rdx
+    jz 8f
+    mov rdi, r12
+    mov rsi, r13
+    call str_eq_cstr
+    test eax, eax
+    jnz 2f
+    add r14, 16
+    jmp 1b
+2:  call box_kind
+    test eax, eax
+    jnz 3f
+    mov eax, AG_CLAUDE
+3:  mov edi, eax
+    call agentcfg_get
+    mov rbx, rax
+    call ai_arg_rest
+    mov r12, rax
+    mov r13, rdx
+6:  test r13, r13               # from its first character
+    jz 7f
+    cmp byte ptr [r12], ' '
+    jne 7f
+    inc r12
+    dec r13
+    jmp 6b
+7:  cmp dword ptr [r14 + 12], 0
+    je 5f
+    mov rdx, -1                 # an int
+    test r13, r13
+    jz 4f
+    cmp byte ptr [r12], '-'
+    je 4f
+    mov rdi, r12
+    mov rsi, r13
+    call parse_u64
+    mov rdx, rax
+4:  mov rdi, rbx
+    mov esi, [r14 + 8]
+    call agentcfg_set
+    jmp 9f
+5:  mov rdi, rbx
+    mov esi, [r14 + 8]
+    mov rdx, r12
+    mov rcx, r13
+    call agentcfg_set
+9:  xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
 .section .rodata
 .Lc_print_agent_row: .asciz "print-agent-row"
+.Lc_print_agent_cfg: .asciz "print-agent-cfg"
+.Lc_agent_models: .asciz "agent-models"
+.Lc_agent_cfg_set: .asciz "agent-cfg-set"
+.Lf_model: .asciz "model"
+.Lf_effort: .asciz "effort"
+.Lf_dest: .asciz "dest"
+.Lf_newmode: .asciz "newmode"
+.Lf_ultra: .asciz "ultra"
+.Lf_think: .asciz "think"
 .Lc_print_agents_metrics: .asciz "print-agents-metrics"
 .Lc_print_agents_box: .asciz "print-agents-box"
 .Lc_print_agent_placeholder: .asciz "print-agent-placeholder"
@@ -718,6 +852,22 @@ ai_ctl:
     .quad .Lc_print_agents_metrics, c_print_agents_metrics, .Lc_print_agents_box, c_print_agents_box
     .quad .Lc_print_agent_placeholder, c_print_agent_placeholder, .Lc_print_sh_quote, c_print_sh_quote
     .quad .Lc_print_holder, c_print_holder
+    .quad .Lc_print_agent_cfg, c_print_agent_cfg, .Lc_agent_models, c_agent_models
+    .quad .Lc_agent_cfg_set, c_agent_cfg_set
+    .quad 0, 0
+cfg_fields:                     # agent-cfg-set's words: the word, the AGF_*, whether it is an int
+    .quad .Lf_model
+    .long AGF_MODEL, 0
+    .quad .Lf_effort
+    .long AGF_EFFORT, 0
+    .quad .Lf_dest
+    .long AGF_DEST, 0
+    .quad .Lf_newmode
+    .long AGF_NEWMODE, 0
+    .quad .Lf_ultra
+    .long AGF_ULTRA, 1
+    .quad .Lf_think
+    .long AGF_THINK, 1
     .quad 0, 0
 holder_names: .quad .Lh_none, .Lh_other, .Lh_unknown
 live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed

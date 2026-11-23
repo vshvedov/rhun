@@ -1417,6 +1417,8 @@ F TF_prefx, 4           # text area: preferred x for vertical motion, -1 = none
 F TF_pad, 4
 F TF_revision, 8        # content or destination lifecycle mutation
 F TF_face, 8            # text area: the face it measures and draws in, 0 the interface's
+F TF_paint, 8           # text area: 0, or ranges {start 8, end 8, kind 4, pad 4} ending start -1 drawn
+                        #   in the cycling colours (PAINT_RAINBOW)
 ENDSTRUCT TF_SIZE
 
 # Owned destination snapshot and queued clipboard request. No document pointers retained.
@@ -2860,6 +2862,7 @@ F AS_req, 8             # kind 5: the agent-transcript request in flight (its id
 F AS_from, 8            # kind 5: the FROM of that request
 F AS_ask, 8             # D4: the open card (an AXK record, agentext.s), or 0
 F AS_live, 8            # the live record of a session rhun drives (AL*, agent_drv.s), or 0
+F AS_draft, 8           # owned cstr: the box's text while the box belongs to another session, or 0
 ENDSTRUCT AS_SIZE
 .equ AG_CLAUDE, 1               # AS_kind of the built-in sources (AS_KIND_EXT 5: an extension's)
 .equ AG_CODEX, 2
@@ -2919,6 +2922,34 @@ ENDSTRUCT CN_SIZE
 .equ CN_EOF_MS, 5000    # stdout closed but the child still runs -> the stop sequence
 
 # ---- the driver seam (src/app/agent_drv.s): sessions rhun drives through a driver's table ----
+# AH: a message written while a turn ran or others were held (AL_held): shown queued until it starts
+STRUCT
+F AH_uuid, 40           # cstr: the uuid it was written with
+F AH_text, 8            # owned
+F AH_len, 8
+ENDSTRUCT AH_SIZE
+.equ AH_MAX, 16                 # held messages at most; one more stays in the box (SEND_TOOMANY)
+# AGU: a conversation's context and prompt-cache numbers (ev_usage)
+STRUCT
+F AGU_used, 8           # tokens in the context
+F AGU_window, 8         # the context window in tokens, 0 unknown
+F AGU_cache_at, 8       # time_ms the prompt cache was last written, 0 unknown
+F AGU_cache_ttl, 8      # its lifetime in ms
+F AGU_cold, 4           # CCOLD_*
+F AGU_pad, 4
+ENDSTRUCT AGU_SIZE
+.equ CCOLD_NONE, 0
+.equ CCOLD_EXPIRED, 1
+.equ CCOLD_COMPACTED, 2
+.equ BK_ERROR, 0                # the bands above the box (AL_bands, ev_band), by kind
+.equ BK_SETTINGS, 1
+.equ BK_AUTH, 2
+.equ BK_RATE, 3
+.equ BK_NOTICE, 4
+.equ BK_COUNT, 5
+.equ FS_OFF, 0                  # fast mode (AL_fast, AGC_fast)
+.equ FS_ON, 1
+.equ FS_COOLDOWN, 2
 # AL: a driven session's live record (AS_live), made on its first use and freed with its row
 STRUCT
 F AL_as, 8              # its session
@@ -2947,6 +2978,18 @@ F AL_hold_at, 8         # time_ms the holder is read again (ALF_HOLDWAIT)
 F AL_fork, 40           # cstr: a copy's source conversation (ALF_FORK)
 F AL_cdir, 8            # owned cstr: the Claude folder its program was first started with, or 0
 F AL_unsent, 8          # owned cstr: prompts that never went, for its box when it is opened again, or 0
+F AL_model, 64          # cstr: the model in effect, the driver's value, or empty
+F AL_effort, 16         # cstr: the effort level in effect, or empty
+F AL_ultra, 4           # Ultracode: -1 not offered (or not known), 0 off, 1 on
+F AL_think, 4           # thinking: 1 on
+F AL_fast, 4            # FS_*
+F AL_pad3, 4
+F AL_held, VEC_SIZE     # AH: messages written and not started yet, the oldest first
+F AL_suggest, 8         # owned cstr: the prompt the agent suggests next, or 0
+F AL_usage, AGU_SIZE    # the context and cache numbers
+F AL_bands, 8*BK_COUNT      # owned cstr or 0 per band kind (BK_*)
+F AL_word, 16           # cstr: the word the box paints, "" none
+F AL_keyed, 8           # time_ms of the box's last key (the card focus rule)
 ENDSTRUCT AL_SIZE
 .equ TE_DONE, 0                 # ev_turn_end's reasons
 .equ TE_ERROR, 1
@@ -2988,7 +3031,16 @@ F AQ_tuid, 8            # owned cstr: the tool call's id (every answer's toolUse
 F AQ_n, 8               # AQK_QUESTION: the question its card shows (from 0)
 F AQ_count, 8           # AQK_QUESTION: how many it asks
 F AQ_picks, SB_SIZE     # AQK_QUESTION: the option picked for each question answered, a byte each
+F AQ_flags, 4           # AQF_*
+F AQ_pad, 4
+F AQ_sugg, 8            # permission_suggestions as JSON text at answer depth, owned, or 0
+F AQ_sugglen, 8
+F AQ_card, 8            # CD* while its rich card exists (agentcard.s), or 0
+F AQ_dkind, 8           # owned cstr: a dialog's dialog_kind (AQK_DIALOG), or 0
+F AQ_tab, 8             # the plan tab's ctx (mdtab.s), or 0
 ENDSTRUCT AQ_SIZE
+.equ AQF_NOSAVE, 1              # suppress_always_allow_rule
+.equ AQF_DEFNO, 2               # default_to_no
 .equ AQ_MAX, 32                 # requests waiting at most (AL_reqs); one more gets an error reply
 .equ AQK_PERMISSION, 1
 .equ AQK_QUESTION, 2
@@ -2997,6 +3049,7 @@ ENDSTRUCT AQ_SIZE
 .equ AQK_TRUST, 5               #   the project is not trusted, the program is not signed in, its start
 .equ AQK_SIGNIN, 6              #   failed
 .equ AQK_FAILED, 7
+.equ AQK_DIALOG, 8              # a dialog the agent asks for (a rich card)
 # DRV: a driver's table (read-only)
 STRUCT
 F DRV_kind, 4           # the AS_kind it drives
@@ -3010,14 +3063,40 @@ F DRV_release, 8        # (AL*): end the process politely (the stop sequence)
 F DRV_held, 8           # (AL*) -> eax HOLDER_*
 F DRV_auth, 8           # (AL*, again) -> eax AUTH_*: whether its program is signed in (asked in the
                         #   background; again 1: a "no" is asked again, the user's next Send)
-F DRV_terminal, 8       # (AL*, what): its program in rhun's terminal prompt: 0 alone, 1 its sign-in
+F DRV_terminal, 8       # (AL*, what): its program in rhun's terminal prompt: 0 alone, 1 its sign-in,
+                        #   2 its sign-out
+# the lists and controls a driver supplies (the extension's: stubs answering 0)
+F DRV_modes, 8          # (AS*, AMD** out) -> eax n: the modes offered now, in Shift+Tab order; 0 none
+F DRV_set_mode, 8       # (AL*, id cstr) -> eax 1 asked
+F DRV_set_model, 8      # (AL*, value cstr) -> eax 1 asked
+F DRV_set_effort, 8     # (AL*, id cstr) -> eax 1 asked
+F DRV_set_ultra, 8      # (AL*, esi on) -> eax 1 asked
+F DRV_set_thinking, 8   # (AL*, esi on) -> eax 1 asked
+F DRV_reply, 8          # (AL*, AQ*, CD*) -> eax 1 written: a rich card's answer (the card holds the choice)
+F DRV_action, 8         # (AL*, esi ACT_*, rdx arg ptr, rcx len) -> eax 1 done: its part of a local command
 ENDSTRUCT DRV_SIZE
+# AMD: a permission mode (a driver's static table)
+STRUCT
+F AMD_id, 8             # cstr
+F AMD_label, 8          # cstr
+F AMD_desc, 8           # cstr
+F AMD_color, 4          # the theme slot of the box's frame in this mode
+F AMD_flags, 4          # AMDF_*
+ENDSTRUCT AMD_SIZE
+.equ AMDF_CURRENT, 1
 .equ DRVC_NEW, 1                # can start a conversation
 .equ DRVC_RESUME, 2
 .equ DRVC_FORK, 4
 .equ DRVC_SESSION, 8            # keeps no live record: its functions take the AS* where the others take
                                 # the AL*, and send returns SEND_* (an extension's: it keeps the state)
 .equ DRVC_TRUST, 16             # its program reads the project's own settings: an untrusted project asks
+.equ DRVC_QUEUE, 32             # takes messages during a turn (held, shown queued)
+.equ DRVC_MODES, 64             # DRV_modes, DRV_set_mode
+.equ DRVC_MODELS, 128           # a model list (agentcfg), DRV_set_model
+.equ DRVC_EFFORT, 256           # DRV_set_effort
+.equ DRVC_THINKING, 512         # DRV_set_thinking
+.equ DRVC_SUGGEST, 1024         # suggests the next prompt (ev_suggest)
+.equ DRVC_CARDS, 2048           # its requests are rich cards answered through DRV_reply
 .equ AUTH_IN, 0                 # DRV_auth: signed in (or it cannot tell: the program will say)
 .equ AUTH_WAIT, 1               #   the answer is not there yet
 .equ AUTH_OUT, 2                #   not signed in
@@ -3030,6 +3109,217 @@ ENDSTRUCT DRV_SIZE
 .equ SEND_REFUSED, 3
 .equ SEND_FAILED, 4
 .equ SEND_EMPTY, 5
+.equ SEND_HELD, 6               # written during a turn or while others are held: shown queued
+.equ SEND_TOOMANY, 7            # AH_MAX are held already: the text stays in the box
+
+# ---- a driver's lists and the project's choices, per driver kind and project (src/app/agentcfg.s) ----
+STRUCT
+F AEL_id, 8             # owned cstr: an effort level's id
+F AEL_label, 8          # owned cstr
+ENDSTRUCT AEL_SIZE
+STRUCT
+F AMO_value, 8          # owned cstr: the value the driver passes
+F AMO_label, 8          # owned cstr
+F AMO_desc, 8           # owned cstr
+F AMO_levels, VEC_SIZE  # AEL
+F AMO_flags, 4          # AMOF_*
+F AMO_pad, 4
+ENDSTRUCT AMO_SIZE
+.equ AMOF_OFF, 1                # unavailable: greyed, not picked
+.equ AMOF_THINKOFF, 2           # thinking can be switched off
+.equ AMOF_AUTO, 4               # supports auto mode
+.equ AMOF_FAST, 8               # supports fast mode
+.equ AMOF_EFFORT, 32            # has effort levels
+STRUCT
+F ACM_name, 8           # owned cstr, without "/"
+F ACM_desc, 8           # owned cstr
+F ACM_hint, 8           # owned cstr: its argument hint
+F ACM_aliases, 8        # owned cstr: space-separated, or 0
+F ACM_origin, 8         # owned cstr: a plugin's name, or 0
+F ACM_act, 4            # ACT_*
+F ACM_flags, 4          # ACMF_*
+ENDSTRUCT ACM_SIZE
+.equ ACMF_LOCAL, 1              # the driver's own table: runs ACM_act
+.equ ACMF_CLI, 2                # the program advertises it
+STRUCT
+F ACH_sid, 40           # cstr: a conversation's id
+F ACH_mode, 32          # cstr: its mode
+ENDSTRUCT ACH_SIZE
+.equ ACT_SEND, 0                # what a command does (ACM_act, DRV_action)
+.equ ACT_CLEAR, 1
+.equ ACT_NEW, 2
+.equ ACT_MODEL, 3
+.equ ACT_MODES, 4
+.equ ACT_THINKING, 5
+.equ ACT_EFFORT, 6
+.equ ACT_FAST, 7
+.equ ACT_PLAN, 8
+.equ ACT_COPY, 9
+.equ ACT_SIGNIN, 10
+.equ ACT_SIGNOUT, 11
+.equ ACT_TERMINAL, 12
+.equ ACT_SETTINGS, 13
+.equ ACT_HELP, 14
+.equ ACT_UNAVAILABLE, 15
+.equ ACT_ULTRA, 16
+.equ ACT_COUNT, 17
+STRUCT
+F AGC_kind, 4           # the driver kind (AS_kind)
+F AGC_flags, 4          # AGCF_*
+F AGC_path, 8           # owned cstr: the state file, resolved when the record is made, or 0
+F AGC_models, VEC_SIZE  # AMO*
+F AGC_cmds, VEC_SIZE    # ACM*
+F AGC_version, 24       # cstr: the program's version
+F AGC_model, 64         # cstr: the project's model, empty none
+F AGC_effort, 16        # cstr: the project's effort level, empty none
+F AGC_ultra, 4          # the project's Ultracode: -1 unset, 0, 1
+F AGC_think, 4          # the project's thinking: -1 unset, 0, 1
+F AGC_fast, 4           # the program's fast mode (FS_*)
+F AGC_pad, 4
+F AGC_fastwhy, 32       # cstr: why fast mode is off, empty none
+F AGC_dest, 24          # cstr: the last permission destination picked
+F AGC_newmode, 32       # cstr: the user's last picked default mode
+F AGC_convs, VEC_SIZE   # ACH: each conversation's mode, the oldest first
+F AGC_omodels, VEC_SIZE # the lists being replaced (agentcfg_lists_begin to _end)
+F AGC_ocmds, VEC_SIZE
+F AGC_lmask, 4          # AGL_*: which lists agentcfg_lists_begin replaces
+F AGC_pad2, 4
+ENDSTRUCT AGC_SIZE
+.equ AGCF_READ, 1               # the state file was read (or there is none to read)
+.equ AGCF_DIRTY, 2              # something changed since it was written
+.equ AGCF_NOFILE, 4             # no project: the record lives in memory only
+.equ AGL_MODELS, 1              # agentcfg_lists_begin's lists
+.equ AGL_CMDS, 2
+.equ AGF_MODEL, 1               # agentcfg_set's fields (the int ones take the value in rdx)
+.equ AGF_EFFORT, 2
+.equ AGF_ULTRA, 3
+.equ AGF_THINK, 4
+.equ AGF_DEST, 5
+.equ AGF_NEWMODE, 6
+.equ AGF_VERSION, 7
+.equ AGF_FAST, 8
+.equ AGF_FASTWHY, 9
+
+# ---- the panel's popup list (src/app/agentpop.s) ----
+.equ APP_MENU, 1
+.equ APP_MODES, 2
+.equ APP_MODELS, 3
+STRUCT
+F APR_kind, 4           # APK_*
+F APR_flags, 4          # APRF_*
+F APR_label, 8
+F APR_desc, 8
+F APR_trail, 8
+F APR_act, 4
+F APR_pad, 4
+F APR_arg, 8            # ACM*, AMO*, AMD*
+ENDSTRUCT APR_SIZE
+.equ APK_SECTION, 1
+.equ APK_ROW, 2
+.equ APK_SWITCH, 3
+.equ APK_LEVELS, 4
+.equ APK_EMPTY, 5
+.equ APK_FOOT, 6
+.equ APRF_OFF, 1
+.equ APRF_CHECK, 2
+.equ APRF_ON, 4
+.equ APRF_FILTERONLY, 8
+
+# ---- rich cards of driven sessions (src/app/agentcard.s) ----
+STRUCT
+F CDB_label, 8          # owned cstr
+F CDB_act, 4            # CBA_*
+F CDB_flags, 4          # CDBF_*
+ENDSTRUCT CDB_SIZE
+.equ CBA_YES, 1
+.equ CBA_RULE, 2
+.equ CBA_NO, 3
+.equ CBA_YES_AUTO, 4
+.equ CBA_YES_MANUAL, 5
+.equ CBA_FEEDBACK, 6
+.equ CBA_SUBMIT, 7
+.equ CBA_DIALOG, 16             # + n: a dialog's result n
+.equ CDBF_DEST, 1               # the label ends with the place
+STRUCT
+F CDD_id, 8
+F CDD_label, 8
+F CDD_tip, 8
+ENDSTRUCT CDD_SIZE
+STRUCT
+F CDO_label, 8
+F CDO_desc, 8
+F CDO_preview, 8        # MD* or 0
+ENDSTRUCT CDO_SIZE
+STRUCT
+F CDQ_header, 8
+F CDQ_text, 8
+F CDQ_multi, 4
+F CDQ_picks, 4          # a bit per option, 16 at most
+F CDQ_sel, 4
+F CDQ_otheron, 4
+F CDQ_other, TF_SIZE
+F CDQ_opts, VEC_SIZE    # CDO
+ENDSTRUCT CDQ_SIZE
+STRUCT
+F CDC_quote, 8
+F CDC_text, 8
+ENDSTRUCT CDC_SIZE
+STRUCT
+F CD_kind, 4            # CDK_*
+F CD_flags, 4           # CDF_*
+F CD_token, 8           # AQ*
+F CD_title, 8           # owned cstrs or 0
+F CD_hint, 8
+F CD_detail, 8
+F CD_desc, 8
+F CD_note, 8
+F CD_json, 8
+F CD_link, 8
+F CD_btns, VEC_SIZE     # CDB
+F CD_dests, VEC_SIZE    # CDD
+F CD_dest, 4
+F CD_focus, 4           # a button index, CD_FIELD, CD_EDIT
+F CD_chosen, 4
+F CD_pad, 4
+F CD_born, 8            # time_ms
+F CD_scroll, 4
+F CD_tab, 4
+F CD_edit, TF_SIZE
+F CD_field, TF_SIZE
+F CD_qs, VEC_SIZE       # CDQ*
+F CD_comments, VEC_SIZE # CDC
+F CD_extra, VEC_SIZE    # owned cstrs: the lines under the rule button
+ENDSTRUCT CD_SIZE
+.equ CDK_PERMISSION, 1
+.equ CDK_QUESTIONS, 2
+.equ CDK_PLAN, 3
+.equ CDK_DIALOG, 4
+.equ CDF_DEFNO, 1
+.equ CDF_FOLDED, 2
+.equ CDF_EDIT, 4
+.equ CDF_JSON, 8                # the Details disclosure is open
+.equ CD_FIELD, -2
+.equ CD_EDIT, -3
+.equ CDT_TITLE, 0               # agentcard_text's fields
+.equ CDT_HINT, 1
+.equ CDT_DETAIL, 2
+.equ CDT_DESC, 3
+.equ CDT_NOTE, 4
+.equ CDT_JSON, 5
+.equ CDT_LINK, 6
+.equ CDT_EDIT, 7
+
+# ---- the box's behaviour (src/app/agentcompose.s) and a Markdown tab of rhun's own (src/app/mdtab.s) ----
+.equ CW_SEND, 0                 # composer_check's reasons
+.equ CW_PASTE, 1
+.equ PAINT_RAINBOW, 1           # TF_paint's kinds
+.equ TAB_MDDOC, 7
+.equ ID_MDTAB, 0x6c3000         # + 0xfff: its links, Comment, scrollbar
+.equ PROMPT_MD_COMMENT, 110
+STRUCT
+F MDO_comment, 8        # (ctx, quote ptr, len, text ptr, len), 0: no Comment button
+F MDO_closed, 8         # (ctx)
+ENDSTRUCT MDO_SIZE
 
 # ---- debugger (DAP client): debugcfg.s, dapwire.s, dap.s, bp.s, debugconsole.s, debugctl.s ----
 .equ NEEDS_DEBUG, 0x10000           # [needs] debug = yes: start debug adapters that run as the user

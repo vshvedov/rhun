@@ -37,8 +37,8 @@ BOOLS = {
                'folding inline_complete color_swatches highlight_occurrences code_lens inlay_hints '
                'semantic_highlighting'),
     'files': 'trim_trailing_whitespace final_newline format_on_save restore_session restore_project',
-    'agents': 'claude codex grok opencode',
-    'claude': 'chat',
+    'agents': 'claude codex grok opencode ctrl_enter_sends scroll_on_send',
+    'claude': 'chat allow_bypass_permissions prompt_suggestions',
     'git': 'enabled', 'updates': 'check',
     'testing': 'gutter',
     'debug': 'show_on_start keys_in_terminal',
@@ -80,7 +80,7 @@ CHOICES = {('editor', 'multi_cursor_paste'): ('spread', 'full'),
            ('updates', 'extensions'): ('install', 'check', 'off'),
            ('extensions', 'secrets'): ('system', 'memory', 'file'),
            # the first is the CLI's own default, written as an empty value
-           ('claude', 'initial_mode'): ('', 'default', 'acceptEdits', 'plan')}
+           ('claude', 'initial_mode'): ('', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions')}
 
 
 # Theme shows without Follow system dark mode, the dark and light mode's themes with it.
@@ -114,7 +114,7 @@ class SettingsUI(unittest.TestCase):
             k + ' = ' + v + '\n' for k, v in values.items()) for s, values in data.items()),
             encoding='utf-8')
 
-    def run_editor(self, actions, height=7200, width=1400):   # the whole page: every row
+    def run_editor(self, actions, height=7800, width=1400):   # the whole page: every row
         script = self.work / 'actions.rsc'
         script.write_text('\n'.join(['cmd settings', *actions, 'quit']) + '\n', encoding='utf-8')
         result = subprocess.run([str(EXE), self.work.as_posix(), '--headless', f'{width}x{height}',
@@ -164,14 +164,14 @@ class SettingsUI(unittest.TestCase):
                 self.configure(section, key, 'original')
                 y = self.compact_row_y(section, key)
                 self.run_editor([f'click 240 {y}', f'key {MOD}+a', 'type ' + value,
-                                 'key Return'], width=480, height=12000)
+                                 'key Return'], width=480, height=13000)
                 self.assertEqual(self.value(section, key), value)
         for (section, key), choices in CHOICES.items():
             for index, value in enumerate(choices):
                 with self.subTest(setting=f'{section}.{key}', value=value):
                     self.configure()
                     y = self.compact_row_y(section, key) + index * 32
-                    self.run_editor([f'click 240 {y}'], width=480, height=12000)
+                    self.run_editor([f'click 240 {y}'], width=480, height=13000)
                     self.assertEqual(self.value(section, key), value)
 
     def test_inventory_requires_cases_for_every_setting(self):
@@ -237,7 +237,7 @@ class SettingsUI(unittest.TestCase):
                   ('git', 'commit_ai'): (45, 92, 59, 116),
                   ('updates', 'extensions'): (67, 84, 45),
                   ('extensions', 'secrets'): (76, 70, 44),
-                  ('claude', 'initial_mode'): (166, 58, 141, 50)}
+                  ('claude', 'initial_mode'): (166, 58, 141, 50, 50, 141)}
         for (section, key), options in CHOICES.items():
             for index, option in enumerate(options):
                 with self.subTest(setting=f'{section}.{key}', option=option):

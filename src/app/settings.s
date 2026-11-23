@@ -106,7 +106,7 @@ FN settings_dump
     jne 3f
     mov rdi, r12                # AI: the extension sources (agentext.s)
     call agentext_settings_dump
-3:  lea rax, [rip + cfg_claude_initial_mode]
+3:  lea rax, [rip + cfg_claude_prompt_suggestions]    # the last [claude] row
     cmp [rbx + SET_ptr], rax
     jne 2f
     mov rdi, r12                # Claude Code: the env pairs, never their values (claudecfg.s)

@@ -38,7 +38,12 @@
 #     leaves AL_reqs and is freed), ev_mode(al, ptr, len), ev_turn_end(al, TE_*, ptr, len),
 #     ev_closed(al, err) (the process is gone: OFF unless FAILED, the requests it waited on go with an
 #     info row, the conversation read again from its file; prompts sent while it was ending start it
-#     again)
+#     again), ev_config(al) (its lists changed: the project's record is saved, agentcfg.s),
+#     ev_model(al, ptr, len), ev_effort(al, ptr, len) (what is in effect), ev_ultra(al, available, on),
+#     ev_thinking(al, on), ev_fast(al, FS_*, reason ptr, len) (kept in the project's record too),
+#     ev_band(al, BK_*, ptr, len) (a band above the box; ptr 0 takes it away)
+#   A driver's table also has its lists and controls (DRV_modes, DRV_set_*, DRV_reply, DRV_action): the
+#   extension driver's answer 0
 #
 #   agent_aq_free(AQ*)                        a request a driver made but never kept
 #
@@ -190,6 +195,8 @@ FN agent_live
     mov [r13 + AL_drv], r12
     mov qword ptr [r13 + AL_row], -1
     mov qword ptr [r13 + AL_next], 1
+    mov dword ptr [r13 + AL_ultra], -1  # not offered until the driver says
+    mov dword ptr [r13 + AL_think], 1
     mov [rbx + AS_live], r13
     lea rdi, [rip + lives]
     mov esi, 8
@@ -251,6 +258,8 @@ live_free:
     call mem_free
     mov rdi, [rbx + AL_unsent]  # prompts never given back go with their session
     call mem_free
+    mov rdi, rbx
+    call live_lists_free
     mov rax, [rbx + AL_as]
     mov qword ptr [rax + AS_live], 0
     mov dword ptr [rax + AS_state], AGS_IDLE
@@ -295,9 +304,40 @@ aq_free:
     call mem_free
     lea rdi, [rbx + AQ_picks]
     call sb_free
+    mov rdi, [rbx + AQ_sugg]
+    call mem_free
+    mov rdi, [rbx + AQ_dkind]
+    call mem_free
     mov rdi, rbx
     call mem_free
 9:  EPILOGUE
+
+# live_lists_free(AL*): the held messages, the suggestion and the bands
+live_lists_free:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12, [rbx + AL_held + VEC_len]
+    jae 2f
+    imul rax, r12, AH_SIZE
+    add rax, [rbx + AL_held + VEC_ptr]
+    mov rdi, [rax + AH_text]
+    call mem_free
+    inc r12
+    jmp 1b
+2:  lea rdi, [rbx + AL_held]
+    call vec_free
+    mov rdi, [rbx + AL_suggest]
+    call mem_free
+    mov qword ptr [rbx + AL_suggest], 0
+    xor r12d, r12d
+3:  mov rdi, [rbx + AL_bands + r12*8]
+    call mem_free
+    mov qword ptr [rbx + AL_bands + r12*8], 0
+    inc r12
+    cmp r12, BK_COUNT
+    jb 3b
+    EPILOGUE
 
 # queue_free(AL*): the prompts that waited go
 queue_free:
@@ -1659,6 +1699,124 @@ FN ev_mode
     mov dword ptr [rip + g_dirty], 1
     jmp memmove
 
+# FN ev_config(al): the driver's lists changed (agentcfg.s): its record is saved
+FN ev_config
+    PROLOGUE
+    call live_cfg
+    mov rdi, rax
+    call agentcfg_save
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# live_cfg(al) -> rax the record of its driver's kind (agentcfg_get)
+live_cfg:
+    mov rax, [rdi + AL_drv]
+    mov edi, [rax + DRV_kind]
+    jmp agentcfg_get
+
+# FN ev_model(al, ptr, len): the model in effect (AL_model)
+FN ev_model
+    lea rdi, [rdi + AL_model]
+    mov ecx, 64
+    jmp live_text
+
+# FN ev_effort(al, ptr, len): the effort level in effect (AL_effort)
+FN ev_effort
+    lea rdi, [rdi + AL_effort]
+    mov ecx, 16
+    jmp live_text
+
+# live_text(dst, ptr, len, cap): ptr/len into a cstr field of cap bytes, cut at a character; a redraw
+live_text:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    test r12, r12
+    jnz 1f
+    xor r13d, r13d
+1:  lea rdx, [rcx - 1]
+    mov rdi, r13
+    mov rsi, r12
+    call utf8_cut
+    mov r13, rax
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call memmove
+    mov byte ptr [rbx + r13], 0
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# FN ev_ultra(al, available, on): Ultracode offered or not, and whether it is on (AL_ultra)
+FN ev_ultra
+    mov eax, -1
+    test esi, esi
+    jz 1f
+    xor eax, eax
+    test edx, edx
+    setnz al
+1:  mov [rdi + AL_ultra], eax
+    mov dword ptr [rip + g_dirty], 1
+    ret
+
+# FN ev_thinking(al, on): thinking on or off (AL_think)
+FN ev_thinking
+    xor eax, eax
+    test esi, esi
+    setnz al
+    mov [rdi + AL_think], eax
+    mov dword ptr [rip + g_dirty], 1
+    ret
+
+# FN ev_fast(al, state FS_*, reason ptr, len): fast mode's state (AL_fast); the project's record keeps it
+#   and the reason it is off, for the menu before a program runs
+FN ev_fast
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rdx
+    mov r14, rcx
+    cmp r12d, FS_COOLDOWN
+    jbe 1f
+    xor r12d, r12d
+1:  mov [rbx + AL_fast], r12d
+    mov rdi, rbx
+    call live_cfg
+    mov r15, rax
+    mov rdi, rax
+    mov esi, AGF_FAST
+    mov edx, r12d
+    call agentcfg_set
+    mov rdi, r15
+    mov esi, AGF_FASTWHY
+    mov rdx, r13
+    mov rcx, r14
+    call agentcfg_set
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# FN ev_band(al, kind BK_*, ptr, len): the band of that kind above the box shows the text (ptr 0: it goes)
+FN ev_band
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rdx
+    mov r14, rcx
+    cmp r12d, BK_COUNT
+    jae 9f
+    mov rdi, [rbx + AL_bands + r12*8]
+    call mem_free
+    xor eax, eax
+    test r13, r13
+    jz 1f
+    mov rdi, r13
+    mov rsi, r14
+    call mem_dup
+1:  mov [rbx + AL_bands + r12*8], rax
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
 # FN ev_turn_end(al, reason, ptr, len): a turn ended: TE_DONE, TE_ERROR (the agent's text as an error row)
 #   or TE_INTERRUPTED (an "Interrupted" row). READY once every prompt sent has had its end
 FN ev_turn_end
@@ -2034,6 +2192,7 @@ live_end:
 #   uproc_quit_end's). Quitting, and the project changing (agents_set_project)
 FN agent_drv_shutdown
     PROLOGUE
+    call agentcfg_flush         # each driver's lists and choices to their project's file (agentcfg.s)
     call claude_auth_end        # the sign-in question, if it runs
     mov dword ptr [rip + trust_answered], 0     # another project is asked again
 1:  mov rcx, [rip + lives + VEC_len]
@@ -2190,6 +2349,9 @@ FN agent_live_dump
     setnz sil
 8:  mov rdi, rbx
     call sb_push_u64
+    mov rdi, rbx                # what the driver reported of its controls
+    mov rsi, r12
+    call live_controls_dump
     mov rdi, rbx                # where the open thread is scrolled, whether it follows the stream
     call agents_scroll_dump
     mov rdi, rbx
@@ -2210,6 +2372,152 @@ FN agent_live_dump
     mov esi, 10
     call sb_push_byte
 9:  EPILOGUE
+
+# live_controls_dump(sb, AL* or 0): " model=V effort=E ultra=0|1|- think=0|1 fast=off|on|cooldown held=N
+#   ctx=N|- cache=Nm|cold|- suggest=0|1" ("-" for what is not known)
+live_controls_dump:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_model]
+    call sb_push_cstr
+    xor esi, esi
+    test r12, r12
+    jz 1f
+    lea rsi, [r12 + AL_model]
+1:  mov rdi, rbx
+    call push_or_dash
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_effort]
+    call sb_push_cstr
+    xor esi, esi
+    test r12, r12
+    jz 2f
+    lea rsi, [r12 + AL_effort]
+2:  mov rdi, rbx
+    call push_or_dash
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_ultra]
+    call sb_push_cstr
+    mov eax, -1
+    test r12, r12
+    jz 3f
+    mov eax, [r12 + AL_ultra]
+3:  mov rdi, rbx
+    mov esi, eax
+    call push_tri
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_think]
+    call sb_push_cstr
+    mov eax, -1
+    test r12, r12
+    jz 4f
+    mov eax, [r12 + AL_think]
+4:  mov rdi, rbx
+    mov esi, eax
+    call push_tri
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_fast]
+    call sb_push_cstr
+    xor eax, eax
+    test r12, r12
+    jz 5f
+    mov eax, [r12 + AL_fast]
+    cmp eax, FS_COOLDOWN
+    jbe 5f
+    xor eax, eax
+5:  lea rcx, [rip + fast_names]
+    mov rsi, [rcx + rax*8]
+    mov rdi, rbx
+    call sb_push_cstr
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_held]
+    call sb_push_cstr
+    xor esi, esi
+    test r12, r12
+    jz 6f
+    mov rsi, [r12 + AL_held + VEC_len]
+6:  mov rdi, rbx
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_ctx]
+    call sb_push_cstr
+    test r12, r12
+    jz 7f
+    cmp qword ptr [r12 + AL_usage + AGU_window], 0
+    je 7f
+    mov rdi, rbx
+    mov rsi, [r12 + AL_usage + AGU_used]
+    call sb_push_u64
+    jmp 71f
+7:  mov rdi, rbx
+    mov esi, '-'
+    call sb_push_byte
+71: mov rdi, rbx
+    lea rsi, [rip + .Ld_cache]
+    call sb_push_cstr
+    test r12, r12
+    jz 81f
+    mov r13, [r12 + AL_usage + AGU_cache_at]
+    test r13, r13
+    jz 81f
+    cmp dword ptr [r12 + AL_usage + AGU_cold], CCOLD_NONE
+    jne 82f
+    add r13, [r12 + AL_usage + AGU_cache_ttl]
+    call time_ms
+    sub r13, rax                # ms left
+    jle 82f
+    lea rax, [r13 + 59999]      # minutes left, rounded up
+    xor edx, edx
+    mov ecx, 60000
+    div rcx
+    mov rdi, rbx
+    mov rsi, rax
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, 'm'
+    call sb_push_byte
+    jmp 83f
+81: mov rdi, rbx
+    mov esi, '-'
+    call sb_push_byte
+    jmp 83f
+82: mov rdi, rbx
+    lea rsi, [rip + .Ld_cold]
+    call sb_push_cstr
+83: mov rdi, rbx
+    lea rsi, [rip + .Ld_suggest]
+    call sb_push_cstr
+    xor esi, esi
+    test r12, r12
+    jz 84f
+    cmp qword ptr [r12 + AL_suggest], 0
+    setne sil
+84: mov rdi, rbx
+    call sb_push_u64
+    EPILOGUE
+
+# push_or_dash(sb, cstr or 0): the text, or "-" when it is empty
+push_or_dash:
+    test rsi, rsi
+    jz 1f
+    cmp byte ptr [rsi], 0
+    je 1f
+    jmp sb_push_cstr
+1:  mov esi, '-'
+    jmp sb_push_byte
+
+# push_tri(sb, -1|0|1): "-", "0" or "1"
+push_tri:
+    mov eax, esi
+    mov esi, '-'
+    test eax, eax
+    js 1f
+    mov esi, '0'
+    jz 1f
+    mov esi, '1'
+1:  jmp sb_push_byte
 
 # ---- the extension driver: the extension keeps the session's state (agentext.s) ----
 
@@ -2237,13 +2545,20 @@ ext_auth:
     mov eax, AUTH_IN
     ret
 
+# ext_none() -> eax 0: what an extension's session does not have (modes, models, rich cards, actions)
+ext_none:
+    xor eax, eax
+    ret
+
 .section .rodata
 .p2align 3
 ext_drv:
     .long AS_KIND_EXT, DRVC_SESSION | DRVC_NEW | DRVC_RESUME
     .quad .Lext_name, ext_start, agentext_ext_send, agentext_stop, ext_answer, ext_release, ext_held
     .quad ext_auth, ext_release
+    .quad ext_none, ext_none, ext_none, ext_none, ext_none, ext_none, ext_none, ext_none
 kind_names: .quad .Lk_claude, .Lk_codex, .Lk_grok, .Lk_opencode
+fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 state_names: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 ags_of: .long AGS_IDLE, AGS_WORKING, AGS_IDLE, AGS_WORKING, AGS_WAITING, AGS_WAITING, AGS_ERROR
 opts_held: .quad .Lo_here, .Lo_copy, .Lo_cancel
@@ -2297,3 +2612,16 @@ opts_failed: .quad .Lo_terminal
 .Ld_requests: .asciz " requests="
 .Ld_new: .asciz " new="
 .Ld_report: .asciz "report="
+.Ld_model: .asciz " model="
+.Ld_effort: .asciz " effort="
+.Ld_ultra: .asciz " ultra="
+.Ld_think: .asciz " think="
+.Ld_fast: .asciz " fast="
+.Ld_held: .asciz " held="
+.Ld_ctx: .asciz " ctx="
+.Ld_cache: .asciz " cache="
+.Ld_cold: .asciz "cold"
+.Ld_suggest: .asciz " suggest="
+.Lfs_off: .asciz "off"
+.Lfs_on: .asciz "on"
+.Lfs_cooldown: .asciz "cooldown"

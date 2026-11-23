@@ -52,7 +52,9 @@ FAKE_CLAUDE_USER_LATE_WAIT_MS, default 10000, and the turn goes on);
 FAKE_CLAUDE_MODELS (comma-separated: effort, nothink, auto, fast, unavailable, ultra; see model_list);
 FAKE_CLAUDE_CONTEXT (N: a turn's usage adds up to N tokens); FAKE_CLAUDE_RATE (warning, rejected: a
 rate_limit_event before each result); FAKE_CLAUDE_SETTINGS_ERROR (TEXT: get_settings has one error);
-FAKE_CLAUDE_AUTH_CONFLICT (initialize has auth_conflict); FAKE_CLAUDE_REFUSE_HELD (the first message written
+FAKE_CLAUDE_AUTH_CONFLICT (initialize has auth_conflict); FAKE_CLAUDE_COMMANDS_CHANGED (comma-separated names:
+the system/commands_changed that follows initialize lists these instead, the known ones as initialize has
+them, the others as skills "Skill NAME", as the real list has skills initialize lacks); FAKE_CLAUDE_REFUSE_HELD (the first message written
 with a uuid while another waits or runs is refused: lifecycle refused, never run, logged {"refused": UUID});
 FAKE_CLAUDE_ECHO_ENV (comma-separated names whose values the log's start record shows, besides
 CLAUDE_CODE_ENTRYPOINT, CLAUDECODE, CLAUDE_CODE_CHILD_SESSION, MCP_CONNECTION_NONBLOCKING, TRACEPARENT and
@@ -1658,6 +1660,16 @@ COMMANDS = [{'name': 'compact', 'description': 'Clear history but keep a summary
             {'name': 'usage', 'description': "Show session cost, plan usage, and what's contributing to your limits",
              'argumentHint': '', 'aliases': ['cost', 'stats']}]
 COMMANDS_SENT = [False]
+
+
+def changed_commands():
+    """The list commands_changed sends after initialize: COMMANDS, or FAKE_CLAUDE_COMMANDS_CHANGED's names."""
+    names = [n for n in ENV.get('FAKE_CLAUDE_COMMANDS_CHANGED', '').split(',') if n]
+    if not names:
+        return COMMANDS
+    known = {c['name']: c for c in COMMANDS}
+    return [known.get(n, {'name': n, 'description': 'Skill ' + n, 'argumentHint': ''}) for n in names]
+
 SUGGEST = [False]                   # initialize's promptSuggestions
 PLAN = [None]                       # get_plan's plan: {content, path} once `plan` asked
 
@@ -1725,8 +1737,8 @@ def handle(message):
             respond(rid, init_response())
             if not COMMANDS_SENT[0]:        # 2.1.330 follows the answer with the full command list
                 COMMANDS_SENT[0] = True
-                emit({'type': 'system', 'subtype': 'commands_changed', 'commands': COMMANDS, 'uuid': str(uuid.uuid4()),
-                      'session_id': SID})
+                emit({'type': 'system', 'subtype': 'commands_changed', 'commands': changed_commands(),
+                      'uuid': str(uuid.uuid4()), 'session_id': SID})
         elif sub == 'interrupt':
             with COND:
                 if DEAF.is_set():

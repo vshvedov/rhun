@@ -50,6 +50,7 @@
 .equ SLUG_MAX, 200
 .equ ENV_WAIT_MS, 10000         # print-claude-exe waits this long for the login environment
 .equ CONFIG_DIR_LEN, 18         # "CLAUDE_CONFIG_DIR="
+.equ MODE_OPT_BYPASS, 5         # bypassPermissions' index in g_claude_mode_opts
 
 .bss
 .p2align 3
@@ -673,13 +674,20 @@ usual_place:
 8:  xor eax, eax
 9:  EPILOGUE
 
-# claude_mode() -> rax the initial_mode value to pass, or 0 for the CLI's own default
+# claude_mode() -> rax the initial_mode value to pass, or 0 for the CLI's own default. Bypass
+#   permissions is rhun's gate alone ([claude] allow_bypass_permissions): without it, default
 FN claude_mode
     mov esi, [rip + cfg_claude_initial_mode]
     xor eax, eax
     test esi, esi
     jz 1f
-    lea rdi, [rip + g_claude_mode_opts]
+    cmp esi, MODE_OPT_BYPASS
+    jne 2f
+    cmp dword ptr [rip + cfg_claude_allow_bypass], 0
+    jne 2f
+    lea rax, [rip + .Ldefault]
+    ret
+2:  lea rdi, [rip + g_claude_mode_opts]
     jmp choice_entry
 1:  ret
 
@@ -1030,7 +1038,7 @@ unsets_dir: .quad .Lu_claudecode, .Lu_child, .Lu_traceparent, .Lu_tracestate, .L
 .globl g_claude_mode_opts
 g_claude_mode_opts:
     .asciz " ", "Claude Code's setting", "default", "Manual", "acceptEdits", "Edit automatically"
-    .asciz "plan", "Plan", ""
+    .asciz "plan", "Plan", "auto", "Auto", "bypassPermissions", "Bypass permissions", ""
 
 # where installers put claude, after the PATH ("~/" is the home folder)
 places:

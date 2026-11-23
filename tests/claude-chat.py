@@ -945,6 +945,12 @@ QUESTIONS_TWO = [{'question': 'Which language?', 'header': 'Language', 'multiSel
                               {'label': 'docker', 'description': ''}]}]
 
 
+def bash_card(command):
+    """print-agent-input's line for a Bash card whose suggestions are the fake's (a rule for the command, the
+    folder, acceptEdits): phase 2's rich card has the rule button between Yes and No, with its place."""
+    return f'card=Allow this bash command? {command} options=Yes|Yes, allow {command} for this project (just you)|No'
+
+
 class RequestTest(DrivenCase):
     """Claude's tool calls as rows, its requests (permissions, questions, plans) as cards."""
 
@@ -981,7 +987,7 @@ class RequestTest(DrivenCase):
     def test_permission_allow(self):
         self.start()
         self.chat('tool', 'waiting')
-        self.assertEqual(self.card(), 'card=Allow this bash command? touch approved.txt options=Yes|No')
+        self.assertEqual(self.card(), bash_card('touch approved.txt'))
         self.assertIn(' requests=1 ', self.live())
         self.assertEqual(self.thread(), ['user tool', 'tool(Bash) touch approved.txt'])
         self.command('agent-card 1')
@@ -999,7 +1005,7 @@ class RequestTest(DrivenCase):
     def test_permission_deny(self):
         self.start()
         self.chat('tool', 'waiting')
-        self.command('agent-card 2')
+        self.command('agent-card 3')                # No (2 is the rule button)
         self.command('wait-agent ready')
         tid = self.tool_ids()
         self.assertEqual(self.answers(), [{'behavior': 'deny', 'message': REJECTED, 'interrupt': True,
@@ -1037,11 +1043,11 @@ class RequestTest(DrivenCase):
     def test_two_requests_queue(self):
         self.start()
         self.chat('tool2', 'waiting')
-        self.assertEqual(self.card(), 'card=Allow this bash command? touch approved.txt options=Yes|No')
+        self.assertEqual(self.card(), bash_card('touch approved.txt'))
         self.command('agent-card 1')
         self.command('wait-agent waiting')
-        self.assertEqual(self.card(), 'card=Allow this bash command? touch denied.txt options=Yes|No')
-        self.command('agent-card 2')
+        self.assertEqual(self.card(), bash_card('touch denied.txt'))
+        self.command('agent-card 3')
         self.command('wait-agent ready')
         self.assertEqual([a['behavior'] for a in self.answers()], ['allow', 'deny'])
         self.assertEqual(self.thread()[-1], 'info Interrupted')     # No interrupts: the turn ends there
@@ -1091,7 +1097,7 @@ class RequestTest(DrivenCase):
     def test_withdrawn_request(self):
         self.start()
         self.chat('withdraw', 'waiting')
-        self.assertEqual(self.card(), 'card=Allow this bash command? touch withdrawn.txt options=Yes|No')
+        self.assertEqual(self.card(), bash_card('touch withdrawn.txt'))
         self.until(lambda: 'info Withdrawn by Claude' in self.thread(), 'the withdrawn row')
         self.assertIsNone(self.card())
         self.assertIn(' requests=0 ', self.live())
@@ -1127,7 +1133,7 @@ class RequestTest(DrivenCase):
         # in that write's close, a failure; where it has (Linux) the write is refused and the card stays
         self.start()
         self.chat('gone', 'waiting')
-        self.assertEqual(self.card(), 'card=Allow this bash command? touch gone.txt options=Yes|No')
+        self.assertEqual(self.card(), bash_card('touch gone.txt'))
         time.sleep(0.3)                             # the fake closes its stdin as it reads the prompt
         self.command('agent-card 1')
         live = self.live()
@@ -1140,7 +1146,7 @@ class RequestTest(DrivenCase):
         else:
             self.assertTrue(live.startswith('state=waiting '), live)
             self.assertIn(' requests=1 ', live)
-            self.assertEqual(self.card(), 'card=Allow this bash command? touch gone.txt options=Yes|No')
+            self.assertEqual(self.card(), bash_card('touch gone.txt'))
         self.assertEqual(self.answers(), [])
         self.command('agent-prompt hello')          # rhun goes on
         self.assertIsNone(self.process.poll())
@@ -1178,7 +1184,7 @@ class RequestTest(DrivenCase):
         self.command('agent-card 1')
         self.assertIn('state=waiting ', self.live())
         self.assertIn(' requests=1 ', self.live())
-        self.assertEqual(self.card(), 'card=Allow this bash command? touch approved.txt options=Yes|No')
+        self.assertEqual(self.card(), bash_card('touch approved.txt'))
         self.assertEqual(self.answers(), [])
         self.command(f'agent-timing queue={16 << 20}')
         self.command('agent-card 1')                # now it goes
@@ -1733,7 +1739,7 @@ class LifeTest(DrivenCase):
     def test_a_result_takes_a_waiting_card(self):
         self.start()
         self.chat('orphan', 'waiting')
-        self.assertEqual(self.card(), 'card=Allow this bash command? touch orphan.txt options=Yes|No')
+        self.assertEqual(self.card(), bash_card('touch orphan.txt'))
         self.command('wait-agent ready')
         self.assertIsNone(self.card())
         self.assertIn(' requests=0 ', self.live())

@@ -763,14 +763,18 @@ def blocked_path(command):
     return os.path.join(CWD, command[6:].strip()) if command.startswith('touch ') else CWD
 
 
-def bash_request(tool_input, tid, suggestions):
-    """A Bash can_use_tool request (02's field order)."""
-    return {'subtype': 'can_use_tool', 'tool_name': 'Bash', 'display_name': 'Bash', 'input': tool_input,
-            'description': tool_input.get('description', ''), 'permission_suggestions': suggestions,
-            'blocked_path': blocked_path(tool_input['command']), 'tool_use_id': tid}
+def bash_request(tool_input, tid, suggestions, extra=None):
+    """A Bash can_use_tool request (02's field order); extra: members of the schema no recording had
+    (suppress_always_allow_rule, default_to_no, decision_reason*: ext-host-protocol 3.1), before tool_use_id."""
+    request = {'subtype': 'can_use_tool', 'tool_name': 'Bash', 'display_name': 'Bash', 'input': tool_input,
+               'description': tool_input.get('description', ''), 'permission_suggestions': suggestions,
+               'blocked_path': blocked_path(tool_input['command'])}
+    request.update(extra or {})
+    request['tool_use_id'] = tid
+    return request
 
 
-def can_use_tool(name, tool_input, tid, suggestions=None):
+def can_use_tool(name, tool_input, tid, suggestions=None, extra=None):
     """Asks rhun (02, 03, 04); its answer, or None when an interrupt withdrew the request (06) or stdin
     closed. Without suggestions it is an interactive tool's request (03, 04)."""
     rid = request_id()
@@ -778,7 +782,7 @@ def can_use_tool(name, tool_input, tid, suggestions=None):
         request = {'subtype': 'can_use_tool', 'tool_name': name, 'display_name': name, 'input': tool_input,
                    'tool_use_id': tid, 'requires_user_interaction': True}
     else:
-        request = bash_request(tool_input, tid, suggestions)
+        request = bash_request(tool_input, tid, suggestions, extra)
     with COND:
         PENDING[rid] = None
         emit({'type': 'control_request', 'request_id': rid, 'request': request})
@@ -903,9 +907,9 @@ def suggestions(command):
             {'type': 'setMode', 'mode': 'acceptEdits', 'destination': 'session'}]
 
 
-def bash(command, ask=True, extra=None, rules=None):
+def bash(command, ask=True, extra=None, rules=None, request=None):
     """One Bash call in its own message, as 02 has them; False when an interrupt cut the turn. extra: more
-    input fields; rules: the suggestions in place of 02's."""
+    input fields; rules: the suggestions in place of 02's; request: more members of the request."""
     mid = message_start()
     tool_input = dict({'command': command, 'description': 'Run ' + command}, **(extra or {}))
     tid = tool_use(mid, 0, 'Bash', tool_input)
@@ -915,7 +919,8 @@ def bash(command, ask=True, extra=None, rules=None):
               'uuid': str(uuid.uuid4()), 'session_id': SID})
     if ask and (rule_allows('Bash', command) or MODE == 'bypassPermissions'):
         ask = False                 # a saved rule lets it run (finding 15: the same command again did not ask)
-    answer = can_use_tool('Bash', tool_input, tid, rules or suggestions(command)) if ask else {'behavior': 'allow'}
+    answer = can_use_tool('Bash', tool_input, tid, suggestions(command) if rules is None else rules,
+                          request) if ask else {'behavior': 'allow'}
     if answer is not None and ask:
         log(answer=answer)
         if answer.get('behavior') == 'allow':
@@ -927,6 +932,144 @@ def bash(command, ask=True, extra=None, rules=None):
         cut_off(tool_turn=True)
         return False
     return True
+
+
+def s_nosave(prompt):
+    """a Bash call whose request says suppress_always_allow_rule (the schema's; unrecorded): no rule button"""
+    if bash('touch nosave.txt', request={'suppress_always_allow_rule': True}):
+        final('done')
+
+
+def s_defno(prompt):
+    """a Bash call whose request says default_to_no (the schema's; unrecorded)"""
+    if bash('touch defno.txt', request={'default_to_no': True}):
+        final('done')
+
+
+def s_hook(prompt):
+    """a Bash call a PreToolUse hook sent to the user: decision_reason_type hook and its reason (the schema's;
+    unrecorded)"""
+    if bash('touch hook.txt', request={'decision_reason': 'The policy hook wants a person to look at this.',
+                                       'decision_reason_type': 'hook'}):
+        final('done')
+
+
+def s_dirs(prompt):
+    """dirs [N]: a Bash call whose only suggestions are N directories (default 1) for the session"""
+    words = prompt.split()
+    count = int(words[1]) if len(words) > 1 and words[1].isdigit() else 1
+    paths = [os.path.join(CWD, 'dir%d' % i) for i in range(1, count + 1)]
+    if bash('ls dir1', rules=[{'type': 'addDirectories', 'directories': paths, 'destination': 'session'}]):
+        final('done')
+
+
+def s_modeonly(prompt):
+    """a Bash call whose only suggestion is setMode acceptEdits for the session (as 16's Edit had)"""
+    if bash('touch modeonly.txt', rules=[{'type': 'setMode', 'mode': 'acceptEdits', 'destination': 'session'}]):
+        final('done')
+
+
+def s_mixed(prompt):
+    """a Bash call with a prefix rule, another directory and setMode plan for the session (15's kinds)"""
+    rules = [{'type': 'addRules', 'rules': [{'toolName': 'Bash', 'ruleContent': 'git log:*'}], 'behavior': 'allow',
+              'destination': 'localSettings'},
+             {'type': 'addDirectories', 'directories': [os.path.join(CWD, 'lib')], 'destination': 'session'},
+             {'type': 'setMode', 'mode': 'plan', 'destination': 'session'}]
+    if bash('git log -1', rules=rules):
+        final('done')
+
+
+def s_sessiononly(prompt):
+    """a Bash call with one rule suggested for the session"""
+    rules = [{'type': 'addRules', 'rules': [{'toolName': 'Bash', 'ruleContent': 'touch session.txt'}],
+              'behavior': 'allow', 'destination': 'session'}]
+    if bash('touch session.txt', rules=rules):
+        final('done')
+
+
+def s_bypass(prompt):
+    """a Bash call whose suggestions are a rule and setMode bypassPermissions (the schema allows it;
+    unrecorded)"""
+    rules = [{'type': 'addRules', 'rules': [{'toolName': 'Bash', 'ruleContent': 'touch bypass.txt'}],
+              'behavior': 'allow', 'destination': 'localSettings'},
+             {'type': 'setMode', 'mode': 'bypassPermissions', 'destination': 'session'}]
+    if bash('touch bypass.txt', rules=rules):
+        final('done')
+
+
+def asked(name, tool_input, suggestions=None):
+    """One call of NAME that asks, in finding 15's request shape (its description, its suggestions when given);
+    the tool's result is made up; a deny that interrupts ends the turn as bash's does"""
+    mid = message_start()
+    tid = tool_use(mid, 0, name, tool_input)
+    message_end('tool_use')
+    request = {'subtype': 'can_use_tool', 'tool_name': name, 'display_name': name, 'input': tool_input,
+               'description': tool_input.get('description', name)}
+    if suggestions is not None:
+        request['permission_suggestions'] = suggestions
+    request['tool_use_id'] = tid
+    answer = ask_request(request_id(), request)
+    if answer is None:
+        tool_result(tid, REJECTED, True)
+        cut_off(tool_turn=True)
+        return
+    log(answer=answer)
+    if answer.get('behavior') == 'allow':
+        apply_updates(answer)
+        tool_result(tid, 'done', plain=True)
+        final('done')
+        return
+    DENIALS.append({'tool_name': name, 'tool_use_id': tid, 'tool_input': tool_input})
+    tool_result(tid, answer.get('message', ''), True)
+    if answer.get('interrupt') is True:
+        cut_off(tool_turn=True)
+    else:
+        final('not done')
+
+
+def s_pwsh(prompt):
+    """a PowerShell call (the tool of Windows; its input is Bash's: unrecorded)"""
+    asked('PowerShell', {'command': 'Get-ChildItem', 'description': 'List the folder'},
+          [{'type': 'addRules', 'rules': [{'toolName': 'PowerShell', 'ruleContent': 'Get-ChildItem'}],
+            'behavior': 'allow', 'destination': 'localSettings'}])
+
+
+def s_net(prompt):
+    """a sandbox's network request (SandboxNetworkAccess {host}: the extension's renderer; unrecorded)"""
+    asked('SandboxNetworkAccess', {'host': 'example.com'})
+
+
+def s_skill(prompt):
+    """skill NAME: a Skill call with arguments (the extension's renderer reads skill and args; unrecorded)"""
+    words = prompt.split()
+    asked('Skill', {'skill': words[1] if len(words) > 1 else 'review', 'args': '--quick'})
+
+
+def s_project(prompt):
+    """a SendToProject call that makes a project (the extension's reader d$; unrecorded)"""
+    asked('SendToProject', {'message_from': 'typed', 'proposal': {'summary': 'Here is the plan for the docs.'},
+                            'project_name': 'Docs'})
+
+
+def s_glob(prompt):
+    """a Glob call in the project (with its path)"""
+    asked('Glob', {'pattern': '*.txt', 'path': CWD})
+
+
+def s_grep(prompt):
+    """a Grep call without a path"""
+    asked('Grep', {'pattern': 'TODO'})
+
+
+def s_websearch(prompt):
+    """a WebSearch call with allowed and blocked domains"""
+    asked('WebSearch', {'query': 'rhun editor', 'allowed_domains': ['rhun.app', 'github.com'],
+                        'blocked_domains': ['example.com']})
+
+
+def s_other(prompt):
+    """a tool rhun has no header for (an MCP server's): the fallback with its input as JSON"""
+    asked('mcp__notes__add', {'title': 'Milk', 'tags': ['home', 'list'], 'due': None})
 
 
 def bash_result(tid, tool_input, answer):
@@ -1727,7 +1870,11 @@ SCENARIOS = {'tool': s_tool, 'tool2': s_tool2, 'auto': s_auto, 'pending': s_pend
              'withdraw': s_withdraw, 'unsaved': s_unsaved, 'unknown': s_unknown, 'unhandled': s_unhandled,
              'mute': s_mute, 'orphan': s_orphan, 'autherr': s_autherr, 'long': s_long, 'gone': s_gone,
              'stream': s_stream, 'held': s_held, 'usage': s_usage, 'edit': s_edit, 'fetch': s_fetch,
-             'rate': s_rate}
+             'rate': s_rate,
+             'nosave': s_nosave, 'defno': s_defno, 'hook': s_hook, 'dirs': s_dirs, 'modeonly': s_modeonly,
+             'mixed': s_mixed, 'sessiononly': s_sessiononly, 'bypass': s_bypass, 'pwsh': s_pwsh, 'net': s_net,
+             'skill': s_skill, 'project': s_project, 'glob': s_glob, 'grep': s_grep, 'websearch': s_websearch,
+             'other': s_other}
 
 
 # three of 2.1.330's commands, as its initialize lists them (finding 22; the real list has every built-in,

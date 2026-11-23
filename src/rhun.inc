@@ -3323,6 +3323,9 @@ F CD_field, TF_SIZE
 F CD_qs, VEC_SIZE       # CDQ*
 F CD_comments, VEC_SIZE # CDC
 F CD_extra, VEC_SIZE    # owned cstrs: the lines under the rule button
+F CD_ph, 8              # owned cstr: the reject field's placeholder (the driver's wording), or 0
+F CD_room, 4            # the height it was last drawn in (less than its own: it scrolls)
+F CD_lastw, 4           # the width it was last drawn at
 ENDSTRUCT CD_SIZE
 .equ CDK_PERMISSION, 1
 .equ CDK_QUESTIONS, 2
@@ -3332,6 +3335,9 @@ ENDSTRUCT CD_SIZE
 .equ CDF_FOLDED, 2
 .equ CDF_EDIT, 4
 .equ CDF_JSON, 8                # the Details disclosure is open
+.equ CDF_LIVE, 16               # its lock is over and the wake-up that redraws it was given
+.equ CDF_SHOWN, 32              # ev_card showed it once (a second showing keeps its lock and focus)
+.equ CDF_WHEEL, 64              # the wheel scrolled it: the focused control is not kept in view until a key
 .equ CD_FIELD, -2
 .equ CD_EDIT, -3
 .equ CDT_TITLE, 0               # agentcard_text's fields
@@ -3342,6 +3348,10 @@ ENDSTRUCT CD_SIZE
 .equ CDT_JSON, 5
 .equ CDT_LINK, 6
 .equ CDT_EDIT, 7
+.equ CDT_PH, 8                  # the reject field's placeholder
+.equ ID_AGCARD, 0x8300          # a rich card's controls: + CID_* (agentcard.s), to 0x87ff
+.equ CARD_LOCK_MS, 500          # a card's buttons and keys are dead this long after it shows
+.equ CARD_KEYED_MS, 500         # a card takes no keyboard from a box that had a key this recently
 
 # ---- the box's behaviour (src/app/agentcompose.s) and a Markdown tab of rhun's own (src/app/mdtab.s) ----
 .equ CW_SEND, 0                 # composer_check's reasons

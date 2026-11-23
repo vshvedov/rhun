@@ -69,6 +69,8 @@
 
 .bss
 .p2align 3
+.globl claude_cw
+claude_cw:                      # (claude_cards.s writes its answers here too)
 cw: .zero SB_SIZE               # the message being written
 ksb: .zero SB_SIZE              # an item key, a request id
 asb: .zero SB_SIZE              # the arguments built for argv
@@ -2296,9 +2298,13 @@ h_can_use:
     mov rdx, rax
     call ev_note
     jmp 6f
-5:  mov rdi, r14                # a permission: the question for its tool
+5:  mov rdi, r14                # a permission: the question for its tool, and its rich card
     mov rsi, r15
     call perm_prompt
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, r13
+    call claude_card_build
 6:  lea rdi, [rbx + AL_reqs]
     mov esi, 8
     call vec_push
@@ -2394,7 +2400,13 @@ req_show:
     lea r14, [rip + .Lq_plan]
     cmp eax, AQK_PLAN
     je 3f
-    lea r13, [rip + opts_yes_no]
+    cmp qword ptr [r12 + AQ_card], 0
+    je 21f
+    mov rdi, rbx                # a rich card (claude_cards.s)
+    mov rsi, r12
+    call claude_card_show
+    jmp 4f
+21:    lea r13, [rip + opts_yes_no]
     mov r14, [r12 + AQ_q]
 3:  mov rdi, r14
     call strlen
@@ -2591,6 +2603,38 @@ cl_answer:
     mov eax, 1
     EPILOGUE
 
+# FN claude_req_after(AL*, AQ*, written): after a rich card's answer (claude_cards.s), as cl_answer ends:
+#   written, the request goes (unless the write's close took it already) and the next one's card shows;
+#   refused, the card shows again with a toast
+FN claude_req_after
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    test edx, edx
+    jnz 1f
+    call req_show
+    lea rdi, [rip + .Lr_unsent]
+    call app_toast
+    EPILOGUE
+1:  call req_kept
+    test eax, eax
+    jz 9f
+    mov rdi, rbx
+    mov rsi, r12
+    call ev_request_gone
+    mov rdi, rbx
+    call req_show
+9:  EPILOGUE
+
+# FN claude_reply_begin(AL*, AQ*), FN claude_reply_end(AL*, AQ*) -> eax 1 written: an answer's envelope in
+#   claude_cw (reply_begin, reply_end); FN claude_req_kept(AL*, AQ*) -> eax (req_kept)
+FN claude_reply_begin
+    jmp reply_begin
+FN claude_reply_end
+    jmp reply_end
+FN claude_req_kept
+    jmp req_kept
+
 # req_kept(AL*, AQ*) -> eax 1 when the request is still in AL_reqs. A write that breaks the connection
 #   runs its close (cl_close -> ev_closed), which frees every request; nothing adds one meanwhile (only a
 #   line from claude does, and a write reads none), so a request that is not there is freed
@@ -2645,8 +2689,15 @@ FN claude_sid
 # set_mode_default(AL*): {"type":"control_request","request_id":"rN","request":{"subtype":
 #   "set_permission_mode","mode":"default"}} (its answer, as system/status, reports the mode)
 set_mode_default:
+    lea rsi, [rip + .Lv_default]
+    jmp claude_mode_quiet
+
+# FN claude_mode_quiet(AL*, mode cstr) -> eax 1 written: set_permission_mode {mode} that is no pick of the
+#   user's (a rule's setMode, a plan's answer): its answer is dropped, system/status reports the mode
+FN claude_mode_quiet
     PROLOGUE
     mov rbx, rdi
+    mov r12, rsi
     mov esi, OA_MODE
     call req_begin
     lea rdi, [rip + cw]
@@ -2659,7 +2710,7 @@ set_mode_default:
     lea rsi, [rip + .Lk_mode]
     call jw_key
     lea rdi, [rip + cw]
-    lea rsi, [rip + .Lv_default]
+    mov rsi, r12
     call jw_cstr
     mov rdi, rbx
     call req_end

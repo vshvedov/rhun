@@ -3003,7 +3003,8 @@ box_focused:
     movzx eax, al
 1:  ret
 
-# any_card_h(AS*, w) -> eax the session's card's height: its rich card's (agentcard.s), else the simple one's
+# any_card_h(AS*, w) -> eax the session's card's height: its rich card's (agentcard.s) and, while the box
+#   has text, the "Waiting for permission…" line under it; else the simple one's
 any_card_h:
     PROLOGUE
     mov rbx, rdi
@@ -3014,11 +3015,26 @@ any_card_h:
     test rax, rax
     jz 1f
     call agentcard_h
+    mov r13d, eax
+    mov rdi, rbx
+    call waiting_h
+    add eax, r13d
     EPILOGUE
 1:  call card_h
     EPILOGUE
 
-# any_card_draw(AS*, x, y, w, h): its rich card, else the simple one
+# waiting_h(AS*) -> eax the height of the line under a rich card that waits while the box has text, or 0
+waiting_h:
+    PROLOGUE
+    call agentcard_waiting
+    test rax, rax
+    jz 9f
+    mov rax, [rip + ag_fsmall]
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_8]
+9:  EPILOGUE
+
+# any_card_draw(AS*, x, y, w, h): its rich card (and the waiting line under it), else the simple one
 any_card_draw:
     PROLOGUE 16
     mov rbx, rdi
@@ -3027,17 +3043,61 @@ any_card_draw:
     mov r14d, ecx
     mov r15d, r8d
     call agentcard_of
+    test rax, rax
+    jnz 2f
     mov rdi, rbx
     mov esi, r12d
     mov edx, r13d
     mov ecx, r14d
     mov r8d, r15d
-    test rax, rax
-    jz 1f
+    call card_draw
+    EPILOGUE
+2:  mov rdi, rbx
+    call waiting_h
+    mov [rsp], eax
+    mov r8d, r15d
+    sub r8d, eax
+    jle 3f
+    mov rdi, rbx
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
     call agentcard_draw
-    EPILOGUE
-1:  call card_draw
-    EPILOGUE
+3:  cmp dword ptr [rsp], 0
+    je 9f
+    mov rdi, rbx                # "Waiting for permission…", right under the card, muted
+    call agentcard_waiting
+    mov [rsp + 8], rax
+    mov rdi, rax
+    call strlen
+    mov [rsp + 4], eax
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rsp + 8]
+    mov edx, eax
+    call text_width
+    mov ecx, r14d
+    sub ecx, [rip + g_pmt + 4*MI_24]
+    sub ecx, [rip + g_pmt + 4*MI_24]
+    cmp eax, ecx
+    cmovg eax, ecx
+    mov esi, r12d
+    add esi, r14d
+    sub esi, [rip + g_pmt + 4*MI_24]
+    sub esi, eax
+    mov edx, r13d
+    add edx, r15d
+    sub edx, [rsp]
+    mov ecx, [rsp]
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    mov r8, [rsp + 8]
+    mov r9d, [rsp + 4]
+    push rax
+    COLOR eax, T_MUTED
+    push rax
+    mov rdi, [rip + ag_fsmall]
+    call ui_text_v_fit
+    add rsp, 16
+9:  EPILOGUE
 
 # box_fit(w, AS* or 0): the prompt row across the panel's width w, in lay_*. In a row: the box (from
 #   MI_12 in), Send with its word (MI_64), ending MI_40 - MI_8 - MI_12 before the right edge. The box gets
@@ -4114,7 +4174,13 @@ FN agentext_input_dump
     call agents_open_driven
     test rax, rax
     jz 9f
-    mov r12, [rax + AS_ask]
+    mov r12, rax
+    mov rdi, rbx                # a rich card's line (agentcard.s), else the simple card's
+    mov rsi, rax
+    call agentcard_input_line
+    test eax, eax
+    jnz 9f
+    mov r12, [r12 + AS_ask]
     test r12, r12
     jz 9f
     mov rdi, rbx

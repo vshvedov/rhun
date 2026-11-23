@@ -46,7 +46,8 @@
 #     ev_pill(al, ptr, len) (a one-line pill row, "Switched to NAME"),
 #     ev_band(al, BK_*, ptr, len) (a band above the box; ptr 0 takes it away; dismissed, it stays away until
 #     its text changes), ev_band_link(al, BK_*, label cstr, url cstr) (a link under it, asked before it
-#     opens), ev_usage(al, AGU*) (the context and prompt-cache numbers), ev_started(al, uuid ptr, len) (a held message started: its row joins),
+#     opens), ev_usage(al, AGU*) (the context and prompt-cache numbers), ev_card(al, AQ*, CD*) (a request's
+#     rich card, agentcard.s: WAITING), ev_started(al, uuid ptr, len) (a held message started: its row joins),
 #     ev_dropped(al, uuid ptr, len) (a held message will not run: back to its own conversation's box)
 #   A driver's table also has its lists and controls (DRV_modes, DRV_set_*, DRV_reply, DRV_action): the
 #   extension driver's answer 0
@@ -331,6 +332,8 @@ aq_free:
     call mem_free
     mov rdi, [rbx + AQ_dkind]
     call mem_free
+    mov rdi, [rbx + AQ_card]    # its rich card goes with it
+    call agentcard_free
     mov rdi, rbx
     call mem_free
 9:  EPILOGUE
@@ -1947,6 +1950,23 @@ FN ev_request
     mov eax, 1
 9:  EPILOGUE
 
+# FN ev_card(al, AQ*, CD*) -> eax 1 shown: the request's rich card on the session (agentcard.s; it is the
+#   one at the head of AL_reqs): AQ_card set, its lock and focus rule the first time it shows (agentcard_shown);
+#   the state is WAITING
+FN ev_card
+    PROLOGUE
+    mov rbx, rdi
+    mov [rsi + AQ_card], rdx
+    mov [rdx + CD_token], rsi
+    mov rdi, [rbx + AL_as]
+    mov rsi, rdx
+    call agentcard_shown
+    mov rdi, rbx
+    mov esi, ALS_WAITING
+    call agent_state_set
+    mov eax, 1
+    EPILOGUE
+
 # FN ev_request_gone(al, AQ*): answered or withdrawn: its card goes (when it shows), it leaves AL_reqs
 #   (the others keep their order) and is freed. One that is not in AL_reqs is not touched: a write's close
 #   (ev_closed) may have freed it already
@@ -2602,7 +2622,16 @@ FN agent_drv_timeout
     cmp rax, r13
     jae 82f
 81: mov r13, rax
-82: mov rax, 0x3fffffff
+82: call agentcard_timeout      # a shown card's lock (agentcard.s; none: -1)
+    test eax, eax
+    js 84f
+    mov eax, eax
+    cmp r13, -1
+    je 83f
+    cmp rax, r13
+    jae 84f
+83: mov r13, rax
+84: mov rax, 0x3fffffff
     cmp r13, rax
     jbe 9f
     cmp r13, -1

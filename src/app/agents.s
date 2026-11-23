@@ -5170,7 +5170,18 @@ thread_draw:
     mov r8d, 3
     div r8d
     mov ecx, eax
-45: mov eax, [rsp + 160]
+45: mov [rsp + 48], ecx
+    mov rdi, rbx                # a rich card waiting (agentcard.s): all but a strip of the thread
+    call agentcard_of
+    mov ecx, [rsp + 48]
+    test rax, rax
+    jz 46f
+    mov ecx, [rsp + 24]
+    sub ecx, [rip + g_pmt + 4*MI_32]
+    cmp ecx, [rsp + 48]
+    jge 46f
+    mov ecx, [rsp + 48]
+46: mov eax, [rsp + 160]
     cmp eax, ecx
     jbe 42f
     mov eax, ecx                # at most half the panel

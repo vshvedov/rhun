@@ -286,19 +286,40 @@ c_agent_release:
 9:  xor eax, eax
     EPILOGUE
 
-# agent-card N: option N (from 1) of the open session's card
+# agent-card N | fold | details | dest: option N (from 1) of the open session's card (a rich card's button
+#   N once its lock is over, agentcard.s); a rich card's fold button, its Details, a click on its place
 c_agent_card:
     PROLOGUE
     call ai_set
     call ai_arg
-    mov rdi, rax
-    mov rsi, rdx
-    call parse_u64
-    lea rbx, [rax - 1]
+    mov r12, rax
+    mov r13, rdx
     call agents_open_driven
     test rax, rax
     jz 9f
-    mov rdi, rax
+    mov r14, rax
+    mov rdi, r12
+    mov rsi, r13
+    call card_word
+    test eax, eax
+    js 1f
+    mov rdi, r14
+    mov esi, eax
+    call agentcard_toggle
+    jmp 9f
+1:  mov rdi, r12
+    mov rsi, r13
+    call parse_u64
+    lea rbx, [rax - 1]
+    mov rdi, r14
+    call agentcard_of
+    test rax, rax
+    jz 2f
+    mov rdi, r14
+    mov rsi, rbx
+    call agentcard_pick
+    jmp 9f
+2:  mov rdi, r14
     mov rsi, rbx
     call agentext_pick
 9:  xor eax, eax
@@ -429,8 +450,10 @@ state_named:
 8:  mov eax, -1
     EPILOGUE
 
-# agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES] [cache=MS]: shorter
-#   times (and a smaller cap, a smaller input queue, a prompt cache's lifetime, 0 the CLI's) for tests
+# agent-timing [idle=MS] [term=MS] [kill=MS] [eof=MS] [hold=MS] [guard=N] [queue=BYTES] [cache=MS]
+#   [card=MS] [keyed=MS]: shorter times (and a smaller cap, a smaller input queue, a prompt cache's
+#   lifetime, 0 the CLI's) for tests; card: a rich card's lock, keyed: how recent a key in the box keeps a
+#   new card from taking the keyboard
 c_agent_timing:
     PROLOGUE
     call ai_set
@@ -1109,8 +1132,149 @@ c_agent_test_band:
 8:  mov rax, -1
     EPILOGUE
 
+# ---- the rich cards (agentcard.s) ----
+
+# card_word(ptr, len) -> eax agentcard_toggle's what for "fold", "details", "dest", else -1
+card_word:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    xor ebx, ebx
+1:  cmp ebx, 3
+    jae 8f
+    lea rax, [rip + card_words]
+    mov rdx, [rax + rbx*8]
+    mov rdi, r12
+    mov rsi, r13
+    call str_eq_cstr
+    test eax, eax
+    jnz 2f
+    inc ebx
+    jmp 1b
+2:  mov eax, ebx
+    EPILOGUE
+8:  mov eax, -1
+    EPILOGUE
+
+# print-agent-card: the open conversation's rich card (agentcard_dump)
+c_print_agent_card:
+    PROLOGUE
+    call ai_set
+    call agents_open_driven
+    mov rbx, rax
+    test rax, rax
+    jz 9f
+    call ai_out
+    mov rdi, rax
+    mov rsi, rbx
+    call agentcard_dump
+9:  xor eax, eax
+    EPILOGUE
+
+# print-agent-card-fit: its layout at every panel size and width (agentcard_fit_dump)
+c_print_agent_card_fit:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agentcard_fit_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-card-text field|edit|other TEXT: the rich card's reject field, or its command, holds TEXT (other:
+#   a question's Other field, the question card's); error without such a field
+c_agent_card_text:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov r12, rax
+    mov r13, rdx
+    xor ebx, ebx
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lw_card_field]
+    call str_eq_cstr
+    test eax, eax
+    jnz 1f
+    mov ebx, 1
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lw_card_edit]
+    call str_eq_cstr
+    test eax, eax
+    jz 8f
+1:  call agents_open_driven
+    test rax, rax
+    jz 8f
+    mov r12, rax
+    call ai_arg_rest
+2:  test rdx, rdx               # from its first character
+    jz 3f
+    cmp byte ptr [rax], ' '
+    jne 3f
+    inc rax
+    dec rdx
+    jmp 2b
+3:  mov rdi, r12
+    mov esi, ebx
+    mov rcx, rdx
+    mov rdx, rax
+    call agentcard_set_text
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# agent-focus editor|panel|box: the keyboard to the editor, the agents panel or its prompt box (as a click
+#   would put it there; the panel stays as it is)
+c_agent_focus:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov r12, rax
+    mov r13, rdx
+    xor ebx, ebx
+1:  cmp ebx, 3
+    jae 8f
+    lea rax, [rip + focus_words]
+    mov ecx, ebx
+    shl ecx, 4
+    mov rdx, [rax + rcx]
+    mov rdi, r12
+    mov rsi, r13
+    call str_eq_cstr
+    test eax, eax
+    jnz 2f
+    inc ebx
+    jmp 1b
+2:  lea rax, [rip + focus_words]
+    shl ebx, 4
+    mov eax, [rax + rbx + 8]
+    mov [rip + g_focus], eax
+    mov dword ptr [rip + g_dirty], 1
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
 .section .rodata
 .Lc_print_agent_row: .asciz "print-agent-row"
+.Lc_print_agent_card: .asciz "print-agent-card"
+.Lc_print_agent_card_fit: .asciz "print-agent-card-fit"
+.Lc_agent_card_text: .asciz "agent-card-text"
+.Lc_agent_focus: .asciz "agent-focus"
+.Lw_card_field: .asciz "field"
+.Lw_card_edit: .asciz "edit"
+.Lw_card_fold: .asciz "fold"
+.Lw_card_details: .asciz "details"
+.Lw_card_dest: .asciz "dest"
+.Lw_focus_editor: .asciz "editor"
+.Lw_focus_panel: .asciz "panel"
+.Lw_focus_box: .asciz "box"
+.Lt_card: .asciz "card"
+.Lt_keyed: .asciz "keyed"
 .Lc_print_agent_cfg: .asciz "print-agent-cfg"
 .Lc_agent_models: .asciz "agent-models"
 .Lc_agent_cfg_set: .asciz "agent-cfg-set"
@@ -1220,7 +1384,18 @@ ai_ctl:
     .quad .Lc_agent_ultra, c_agent_ultra, .Lc_agent_thinking, c_agent_thinking
     # the composer (agentcompose.s)
     .quad .Lc_print_agent_composer, c_print_agent_composer
+    # the rich cards (agentcard.s)
+    .quad .Lc_print_agent_card, c_print_agent_card, .Lc_print_agent_card_fit, c_print_agent_card_fit
+    .quad .Lc_agent_card_text, c_agent_card_text, .Lc_agent_focus, c_agent_focus
     .quad 0, 0
+card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
+focus_words:                    # agent-focus's words and their focus
+    .quad .Lw_focus_editor
+    .long FOCUS_EDITOR, 0
+    .quad .Lw_focus_panel
+    .long FOCUS_AGENTS, 0
+    .quad .Lw_focus_box
+    .long FOCUS_AGENT_INPUT, 0
 cfg_fields:                     # agent-cfg-set's words: the word, the AGF_*, whether it is an int
     .quad .Lf_model
     .long AGF_MODEL, 0
@@ -1240,4 +1415,6 @@ band_words: .quad .Lb_error, .Lb_settings, .Lb_auth, .Lb_rate, .Lb_notice
 live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_conn_kill_ms
     .quad .Lt_eof, g_conn_eof_ms, .Lt_hold, g_drv_hold_ms, .Lt_guard, g_conn_max
-    .quad .Lt_queue, g_conn_queue_max, .Lt_cache, g_cache_ttl_ms, 0, 0
+    .quad .Lt_queue, g_conn_queue_max, .Lt_cache, g_cache_ttl_ms
+    .quad .Lt_card, g_card_lock_ms, .Lt_keyed, g_card_keyed_ms     # the rich cards (agentcard.s)
+    .quad 0, 0

@@ -1826,6 +1826,20 @@ class EdgeTest(DrivenCase):
                          [TERM_PROMPT, f'field=CLAUDE_CONFIG_DIR={quoted} {FAKE} auth login'])
         self.command('key Escape')
 
+    def test_sign_in_expands_the_home_folder(self):
+        # executable = ~/my bin/claude: the start finds it; the terminal's command names it in full
+        program = self.work / 'my bin/claude'
+        program.parent.mkdir()
+        program.symlink_to(FAKE)
+        self.start(f'[claude]\nwrapper = {PYTHON}\nexecutable = ~/my bin/claude\n',
+                   env={'FAKE_CLAUDE_AUTH': 'out'})
+        self.chat('hello', 'failed')
+        self.assertEqual(self.card(), SIGN_IN_CARD)
+        self.command('agent-card 1')
+        self.assertEqual(self.command('print-palette').splitlines()[:2],
+                         [TERM_PROMPT, f"field='{program}' auth login"])
+        self.command('key Escape')
+
     def test_signed_in_starts(self):
         self.start()
         self.chat('hello')

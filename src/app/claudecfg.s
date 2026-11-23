@@ -19,6 +19,7 @@
 #                   strings live until the config is read again)
 #       claude_exe and claude_env read the login environment: call them only once uproc_env_ready()
 #       returned 1
+#   claude_expand_home(cstr) -> rax "~/" as the home folder, as the start reads a configured path
 #   claude_mode() -> rax the --permission-mode value of [claude] initial_mode, or 0 (the CLI's own)
 #   claude_mode_alias(ptr, len) -> rax ptr, rdx len: the initial_mode value config.s looks up
 #   claude_dir(sb) -> eax 1: appended, the first of an absolute env.CLAUDE_CONFIG_DIR, the environment's
@@ -449,6 +450,11 @@ runnable:
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
+
+# FN claude_expand_home(cstr) -> rax it, or "$HOME/rest" for "~/rest" (borrowed until the next call): a
+#   configured program's path as the start reads it (cl_terminal's command line)
+FN claude_expand_home
+    jmp expand_home
 
 # expand_home(cstr) -> rax it, or "$HOME/rest" for "~/rest" (in xsb, until the next call)
 expand_home:

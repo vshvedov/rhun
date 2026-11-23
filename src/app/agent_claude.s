@@ -750,7 +750,8 @@ FN claude_auth_end
 9:  EPILOGUE
 
 # cl_terminal(AL*, what): claude in rhun's terminal prompt (it runs when the user presses Enter there): the
-#   configured program (or "claude", found on the terminal's PATH), with "auth login" for what 1. When
+#   configured program ("~/" expanded as the start does; the wrapper is not used there) or "claude",
+#   found on the terminal's PATH, with "auth login" for what 1. When
 #   [claude] env.CLAUDE_CONFIG_DIR is set, it goes before the command, so the sign-in lands where rhun's
 #   claude looks (no other pair: their values may be keys, and the line ends up in the shell's history).
 #   For the shell rhun's terminal starts: a POSIX shell, PowerShell on Windows
@@ -773,10 +774,12 @@ cl_terminal:
     lea rdi, [rip + psb]
     lea rsi, [rip + .Lw_dir_tail]
     call sb_push_cstr
-1:  mov rsi, [rip + cfg_claude_executable]
-    cmp byte ptr [rsi], 0
-    jne 2f
+1:  mov rdi, [rip + cfg_claude_executable]
     lea rsi, [rip + .Lw_claude]
+    cmp byte ptr [rdi], 0
+    je 2f
+    call claude_expand_home     # "~/" as the start reads it: quoted, no shell would expand it
+    mov rsi, rax
 2:  lea rdi, [rip + psb]
     mov edx, 1
     call sh_word

@@ -2681,15 +2681,25 @@ FN claude_action
     call strcmp_eq
     test eax, eax
     jz 1f
-    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP   # plan review: with a process, the plan in a tab
-    je 12f                                          #   (get_plan: claude_plan_answer, claude_cards.s)
-    cmp dword ptr [rbx + AL_state], ALS_OFF         # without one (the idle stop ended it): it starts, as
-    jne 11f                                         #   for a prompt, and get_plan goes once it is up (the
-    mov rdi, [rbx + AL_as]                          #   extension always has one); nothing is sent
-    call agent_typing
-11: cmp dword ptr [rbx + AL_state], ALS_STARTING
+    mov eax, [rbx + AL_state]   # plan review. A start under way (its process may be up, initialize not
+    cmp eax, ALS_STARTING       #   answered): get_plan goes once it is up (prompts_go), as for a /plan
+    je 14f                      #   that started it
+    cmp eax, ALS_HELD
+    je 14f
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP   # a process: the plan in a tab (get_plan:
+    je 12f                                          #   claude_plan_answer, claude_cards.s)
+    cmp eax, ALS_OFF            # none (the idle stop ended it, or it failed): it starts, as for a prompt,
+    je 15f                      #   and get_plan goes once it is up (the extension always has one);
+    cmp eax, ALS_FAILED         #   nothing is sent
     jne 13f
-    or dword ptr [rbx + AL_cfg], CLP_PLANWAIT
+15: mov rdi, [rbx + AL_as]
+    call agent_run
+    mov eax, [rbx + AL_state]
+    cmp eax, ALS_STARTING
+    je 14f
+    cmp eax, ALS_HELD
+    jne 13f
+14: or dword ptr [rbx + AL_cfg], CLP_PLANWAIT
     jmp .Lca_yes
 13: lea r15, [rip + .Lp_unshown]
     jmp .Lca_note

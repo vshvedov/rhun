@@ -3079,6 +3079,30 @@ class ReviewProtocolTest(ModelCase):
         self.until_gone()
         self.assertTrue(self.command('print-agent-input').startswith('input=p2 '))
 
+    def test_plan_waits_for_a_start_and_starts_a_failed_program(self):
+        # R11: /plan in plan mode while the program starts (initialize not answered): get_plan goes once it is
+        # up, after the settings are asked (not as the second line, before initialize's answer); after the
+        # program failed, /plan starts it again and asks for the plan
+        self.start(env={'FAKE_CLAUDE_INIT_MS': '800'})
+        self.chat('hello', ms=15000)
+        self.command('agent-mode plan')
+        self.until(lambda: self.mode() == 'plan', 'plan mode')
+        self.released()
+        self.command('agent-prompt again')
+        self.assertIn('state=starting ', self.live())
+        self.command('agent-prompt /plan')
+        self.command('wait-agent ready 10000')
+        self.until(lambda: 'get_plan' in self.last_start(), 'get_plan')
+        second = self.last_start()
+        self.assertLess(second.index('get_settings'), second.index('get_plan'))
+        self.command('agent-prompt exit 300')
+        self.command('wait-agent failed 10000')
+        starts = len(self.starts())
+        self.command('agent-prompt /plan')
+        self.until(lambda: len(self.starts()) == starts + 1, 'started again')
+        self.command('wait-agent ready 10000')
+        self.until(lambda: 'get_plan' in self.last_start(), 'get_plan after the failure')
+
     def test_a_long_resolved_id_is_cut(self):
         # 2.1: a model's resolvedModel is kept at most 63 bytes, in memory and in the state file
         self.start(env={'FAKE_CLAUDE_MODELS': 'longresolved'})

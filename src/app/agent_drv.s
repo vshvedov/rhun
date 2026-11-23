@@ -1567,6 +1567,25 @@ FN agent_typing
     call agent_start
 9:  EPILOGUE
 
+# FN agent_run(AS*): a local command needs its program (a driver's action): it starts when it is off or
+#   failed, as a Send would start it; otherwise nothing changes
+FN agent_run
+    PROLOGUE
+    call agent_live
+    test rax, rax
+    jz 9f
+    mov r12, rax
+    call time_ms
+    mov [r12 + AL_used], rax
+    mov eax, [r12 + AL_state]
+    cmp eax, ALS_OFF
+    je 1f
+    cmp eax, ALS_FAILED
+    jne 9f
+1:  mov rdi, r12
+    call agent_start
+9:  EPILOGUE
+
 # FN agent_release(AS*): its program ends politely (the stop sequence); the record stays
 FN agent_release
     mov rdi, [rdi + AS_live]

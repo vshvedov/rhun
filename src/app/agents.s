@@ -111,13 +111,36 @@ FN agents_apply_settings
     call hash_line
     cmp rax, [rip + sources_hash]
     je 1f
-    call agents_set_project
+    call agents_sources_changed
 1:  EPILOGUE
 
 # ---------- asynchronous index and paging ----------
+
+# FN agents_set_project(): another project (or none): the list is made again, the sessions rhun drives end
+#   with their programs (agent_drv.s)
 FN agents_set_project
     PROLOGUE
-    call agent_drv_shutdown     # the sessions rhun drives end with their programs (agent_drv.s)
+    call agent_drv_shutdown
+    xor edi, edi
+    call relist
+    EPILOGUE
+
+# FN agents_sources_changed(): the provider switches changed ([agents] claude, codex, ...: Settings, a
+#   config reload): the list is made again with the new sources. A session rhun drives whose provider is
+#   still listed keeps its program, its row and, when it is open, stays open; one whose provider was
+#   switched off ends with its row (agent_drv_unlisted)
+FN agents_sources_changed
+    PROLOGUE
+    call agent_drv_unlisted
+    mov edi, 1
+    call relist
+    EPILOGUE
+
+# relist(keep): the list is made again from a new discovery run. keep 0: every session goes; 1: the ones
+#   rhun drives stay (keep_live)
+relist:
+    PROLOGUE
+    mov ebx, edi
     call agents_shutdown
     mov rdi, [rip + cfg_agent_sources]
     call strlen
@@ -127,11 +150,15 @@ FN agents_set_project
     mov [rip + sources_hash], rax
     mov eax, [rip + g_show_agents]
     mov [rip + last_visible], eax
-    lea rdi, [rip + pool]
+    test ebx, ebx
+    jz 1f
+    call keep_live
+    jmp 2f
+1:  lea rdi, [rip + pool]
     call agent_records_free
     mov qword ptr [rip + sessions + VEC_len], 0
     mov qword ptr [rip + view], -1
-    mov qword ptr [rip + page_count], 0
+2:  mov qword ptr [rip + page_count], 0
     mov qword ptr [rip + total_count], 0
     mov qword ptr [rip + page_limit], 50
     mov dword ptr [rip + list_scroll], 0
@@ -150,6 +177,51 @@ FN agents_set_project
     call agents_ext_rows
     call agents_scan
     call index_dirty
+    EPILOGUE
+
+# keep_live(): relist's keep: the pool keeps the sessions rhun drives, the others go; the kept ones are the
+#   list's rows (after the page, which is empty until discovery's) and the open one stays open when kept
+keep_live:
+    PROLOGUE
+    xor r14d, r14d              # the open session
+    mov rax, [rip + view]
+    test rax, rax
+    js 1f
+    cmp rax, [rip + sessions + VEC_len]
+    jae 1f
+    mov rcx, [rip + sessions + VEC_ptr]
+    mov r14, [rcx + rax*8]
+1:  mov qword ptr [rip + sessions + VEC_len], 0
+    mov qword ptr [rip + view], -1
+    xor ebx, ebx                # read
+    xor r12d, r12d              # write
+2:  cmp rbx, [rip + pool + VEC_len]
+    jae 9f
+    mov rax, [rip + pool + VEC_ptr]
+    mov r13, [rax + rbx*8]
+    inc rbx
+    cmp qword ptr [r13 + AS_live], 0
+    jne 3f
+    cmp [rip + th_as], r13
+    jne 21f
+    mov qword ptr [rip + th_as], 0
+21: mov rdi, r13
+    call agent_session_free
+    jmp 2b
+3:  mov rax, [rip + pool + VEC_ptr]
+    mov [rax + r12*8], r13
+    inc r12
+    cmp r13, r14
+    jne 4f
+    mov rax, [rip + sessions + VEC_len]
+    mov [rip + view], rax
+4:  lea rdi, [rip + sessions]
+    mov esi, 8
+    call vec_push
+    mov [rax], r13
+    jmp 2b
+9:  mov [rip + pool + VEC_len], r12
+    mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
 # Queue killed children for nonblocking reaping, never wait on the UI thread.

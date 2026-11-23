@@ -1314,6 +1314,61 @@ class LifeTest(DrivenCase):
         self.until(lambda: self.box() == '1', 'the box is back', 15)
         self.assertEqual(len(self.starts()), 1)
 
+    def codex_listed(self):
+        """Whether the list shows the Codex session codex_seed wrote."""
+        return any(line.startswith('Codex') for line in self.command('print-agents').splitlines())
+
+    def codex_seed(self):
+        self.env['CODEX_HOME'] = str(self.work / '.codex')
+        codex = self.work / '.codex/sessions/2026/09/26'
+        codex.mkdir(parents=True)
+        fixture = (ROOT / 'tests/data/agents/codex.jsonl').read_text(encoding='utf-8')
+        (codex / 'rollout-c1.jsonl').write_text(fixture.replace('@PROJECT@', self.project.as_posix()),
+                                                encoding='utf-8')
+
+    def turn_survives(self, switch_off):
+        """A turn runs while switch_off() turns [agents] codex off: the process lives, the turn ends, the
+        conversation is still listed and open."""
+        self.codex_seed()
+        self.start()
+        self.command('cmd focus_agents')
+        self.command('wait-agents')
+        self.assertTrue(self.codex_listed())
+        self.chat('slow', 'working')
+        pid, sid = self.pid(), self.sid()
+        switch_off()
+        self.until(lambda: not self.codex_listed(), 'the Codex row goes', 15)
+        self.assertTrue(alive(pid))
+        self.assertTrue(self.live().startswith('state=working pid=1 '), self.live())
+        self.command('wait-agent ready 20000')
+        self.assertEqual(self.sid(), sid)
+        self.assertTrue(alive(pid))
+        self.assertEqual(len(self.starts()), 1)
+        self.assertEqual(self.thread()[0], 'user slow')
+        self.assertTrue(self.thread()[-1].startswith(REPLY + 'word0 '), self.thread())
+        self.assertEqual(len([line for line in self.command('print-agents').splitlines()
+                              if line.startswith('Claude')]), 1)
+
+    def test_another_providers_switch_leaves_a_turn_alone(self):
+        def settings():
+            self.command('cmd settings')
+            self.command('type show codex sessions')
+            self.assertEqual(self.command('print-settings'), 'agents.codex\n')
+            self.command(f'click {CHAT_SWITCH[0]} {CHAT_SWITCH[1]}')
+        self.turn_survives(settings)
+
+    def test_a_reload_with_another_provider_off_leaves_a_turn_alone(self):
+        self.turn_survives(lambda: self.config.write_text(
+            self.BASE + self.claude_section() + '[agents]\ncodex = false\n', encoding='utf-8'))
+
+    def test_claude_switched_off_in_the_list_stops_processes(self):
+        self.start()
+        self.chat('slow', 'working')
+        pid = self.pid()
+        self.config.write_text(self.BASE + self.claude_section() + '[agents]\nclaude = false\n', encoding='utf-8')
+        self.gone(pid, 15)
+        self.assertEqual(self.live().split(' ')[0], 'state=off')
+
     def test_settings_switch_shows_and_hides_the_box(self):
         self.seed()
         self.start()

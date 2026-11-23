@@ -166,7 +166,7 @@ FN setting_applied
     cmp rdx, 12                 # one of the four provider switches
     ja 4f
     call config_agent_sources
-    call agents_set_project
+    call agents_sources_changed     # a provider switched off ends what rhun drives of it, no other
     jmp 9f
 4:  lea rcx, [rip + cfg_claude_chat]
     cmp rax, rcx

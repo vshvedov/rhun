@@ -25,7 +25,8 @@
 #                                             AGS_WORKING, WAITING and HELD AGS_WAITING, FAILED
 #                                             AGS_ERROR, OFF and READY AGS_IDLE
 #   agent_drv_tick(), agent_drv_timeout() -> eax ms or -1, agent_drv_shutdown() (quit, the project changes),
-#   agent_drv_apply() (the settings changed: a driver switched off ends what it drives)
+#   agent_drv_apply() (the settings changed: a driver switched off ends what it drives),
+#   agent_drv_unlisted() (the provider switches changed: what a provider switched off has ends)
 #   agent_live_dump(sb, AS* or 0)             print-agent-live
 #   agent_uuid(buf)                           a v4 UUID, 36 characters and a NUL
 #   events drivers call (AL* first): ev_note(al, role, ptr, len), ev_failed(al, ptr, len) (could not
@@ -1914,6 +1915,31 @@ FN agent_drv_shutdown
     mov rax, [rip + lives + VEC_ptr]
     mov rdi, [rax + rcx*8 - 8]
     call live_end
+    jmp 1b
+9:  EPILOGUE
+
+# FN agent_drv_unlisted(): the provider switches changed (agents_sources_changed): a session rhun drives
+#   whose provider the list does not show any more ([agents] claude off) ends with its program; the others
+#   go on
+FN agent_drv_unlisted
+    PROLOGUE
+    xor ebx, ebx
+1:  cmp rbx, [rip + lives + VEC_len]
+    jae 9f
+    mov rax, [rip + lives + VEC_ptr]
+    mov r12, [rax + rbx*8]
+    mov rax, [r12 + AL_as]
+    mov eax, [rax + AS_kind]
+    dec eax
+    cmp eax, 3                  # a built-in source's: [agents] claude, codex, grok, opencode in order
+    ja 2f
+    lea rcx, [rip + cfg_agents_claude]
+    cmp dword ptr [rcx + rax*4], 0
+    jne 2f
+    mov rdi, r12                # it leaves lives: the same index is looked at again
+    call live_end
+    jmp 1b
+2:  inc rbx
     jmp 1b
 9:  EPILOGUE
 

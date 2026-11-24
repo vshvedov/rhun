@@ -172,6 +172,7 @@ held_new: .zero SB_SIZE
 .Lt_unread: .asciz "Unread"
 .Lt_here: .asciz "Open here"
 .Lt_other: .asciz "Open in another process"
+.Lt_tab: .asciz "Open in a tab"
 .Lt_awaiting: .asciz " \xe2\x80\x94 awaiting input"
 .Lt_running: .asciz " \xe2\x80\x94 running"
 .Lt_awaiting0: .asciz "Awaiting input"
@@ -223,6 +224,7 @@ held_new: .zero SB_SIZE
 .Ld_kind: .asciz " kind="
 .Ld_dot: .asciz " dot="
 .Ld_ring: .asciz " ring"
+.Ld_intab: .asciz " tab"
 .Ld_match: .asciz " match="
 .Ld_age: .asciz " age="
 .Ld_wt: .asciz " worktree="
@@ -591,6 +593,20 @@ archived:
 # days() -> eax [agents] archive_after_days in days (0: never)
 days:
     mov eax, [rip + cfg_agents_archive_days]
+    ret
+
+# ring_of(AS*) -> eax the ring around its dot: 0 none, 1 another program has it open, 2 it is in a conversation
+#   tab of this window (agenttab.s; the extension's "Open in a tab")
+ring_of:
+    push rbx
+    mov rbx, rdi
+    call held_by_other
+    test eax, eax
+    jnz 1f
+    mov rdi, rbx
+    call agtab_has
+    add eax, eax
+1:  pop rbx
     ret
 
 # held_by_other(AS*) -> eax 1 when another program has it open (agent_store.s, as of the last poll)
@@ -1679,7 +1695,7 @@ draw_row:
     call status_of
     mov [rsp + 32], eax
     mov rdi, r14
-    call held_by_other
+    call ring_of
     mov [rsp + 36], eax
     PM ecx, MI_8
     mov edi, [rsp + 8]
@@ -1929,7 +1945,7 @@ mark_matches:
     jmp 1b
 9:  EPILOGUE
 
-# dot_tip(AS*, status, held) -> rax the dot's tip (in lsb), or 0: who has it, then what it does
+# dot_tip(AS*, status, ring_of's) -> rax the dot's tip (in lsb), or 0: who has it, then what it does
 dot_tip:
     PROLOGUE
     mov rbx, rdi
@@ -1938,8 +1954,11 @@ dot_tip:
     lea rdi, [rip + lsb]
     call sb_clear
     lea rsi, [rip + .Lt_other]
-    test r13d, r13d
-    jnz 1f
+    cmp r13d, 1
+    je 1f
+    lea rsi, [rip + .Lt_tab]
+    cmp r13d, 2
+    je 1f
     mov rdi, rbx
     call is_open
     lea rsi, [rip + .Lt_here]
@@ -4106,7 +4125,7 @@ FN aglist_print_state
 
 # lv_dump(sb, LV*): "list shown=N total=N archived=N filter=F search=Q field=0|1 sel=T|- multi=N
 #   counts=NEEDS,WORKING,DONE,OPEN,CLOSED,ACTIVE rename=T|- drop=0|1 built=N", then each entry: "group NAME (N)
-#   [closed]", "ungrouped (N) [closed]", "archived (N) [closed]", "  row TITLE kind=K dot=D [ring] [match=S-E]
+#   [closed]", "ungrouped (N) [closed]", "archived (N) [closed]", "  row TITLE kind=K dot=D [ring|tab] [match=S-E]
 #   age=A [worktree=W] [selected] [multi]", "none found"
 lv_dump:
     PROLOGUE 16
@@ -4326,11 +4345,14 @@ lv_dump:
     mov rdi, r15
     call sb_push_cstr
     mov rdi, r14
-    call held_by_other
+    call ring_of
     test eax, eax
     jz 71f
-    mov rdi, r15
     lea rsi, [rip + .Ld_ring]
+    cmp eax, 1
+    je 70f
+    lea rsi, [rip + .Ld_intab]
+70: mov rdi, r15
     call sb_push_cstr
 71: mov rdi, rbx                # the match
     call query

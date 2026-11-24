@@ -26,6 +26,7 @@
 #
 #   agtab_open(AS* or 0, kind) -> rax tab index or -1   a tab for that conversation (0: a new draft of kind)
 #   agtab_sync()                       app.s, a frame's start: the active tab takes or gives back the view
+#   agtab_has(AS*) -> eax 1            a tab has that conversation (agentlist.s: the ring, "Open in a tab")
 #   agtab_hosting() -> eax 1           a tab hosts the view (the panel draws its list; Escape stops there)
 #   agtab_opening(AS*, from_panel) -> eax 1 handled   open_session's first step (agents.s)
 #   agtab_draw(tab index, x, y, w, h)  center_draw's
@@ -323,6 +324,16 @@ FN agtab_sync
     jne 9f
     call at_keys_in
 9:  EPILOGUE
+
+# FN agtab_has(AS*) -> eax 1 when a conversation tab of the window has that conversation (the list's ring)
+FN agtab_has
+    sub rsp, 8
+    call at_find_as
+    add rsp, 8
+    test rax, rax
+    setnz al
+    movzx eax, al
+    ret
 
 # FN agtab_hosting() -> eax 1 when a conversation tab hosts the view
 FN agtab_hosting

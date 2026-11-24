@@ -14,9 +14,12 @@ Pinned command line (rhun's)
     --session-id=UUID                             (a new conversation)
       | --resume=ID                               (an existing one)
       | --resume=SRC --fork-session --session-id=UUID   (a copy)
+        [--resume-session-at=ID]                  (a fork from a message: finding 102)
 
   No -p (decision 1). cwd: the conversation's folder. Environment: the login environment plus
-  CLAUDE_CODE_ENTRYPOINT=rhun and MCP_CONNECTION_NONBLOCKING=true, without CLAUDECODE,
+  CLAUDE_CODE_ENTRYPOINT=rhun and MCP_CONNECTION_NONBLOCKING=true (since phase 6 also
+  CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true, finding 103, and for a turn cut off by quitting the two
+  CLAUDE_CODE_RESUME_INTERRUPTED_TURN variables, finding 105), without CLAUDECODE,
   CLAUDE_CODE_CHILD_SESSION, TRACEPARENT, TRACESTATE. The recordings ran with only HOME, PATH, USER,
   LANG, TMPDIR and those two forced values.
   First line on stdin: {"type":"control_request","request_id":"r1","request":{"subtype":"initialize","hooks":null}}
@@ -855,6 +858,47 @@ repository; nothing touched ~/.claude (settings.json had the same SHA-256 before
     full id (name@marketplace), as `claude plugin list` shows it.", exit 1. `plugin marketplace add
     --from-link --resolve-only --json -- SRC` answers {"existing":null} for a new source. reload_plugins
     answers {commands, agents, plugins, mcpServers, error_count}.
+
+Phase 6 part 2 (claude-chat-p6b, 2026-11-24): the installed 2.1.330 in a throwaway HOME and CLAUDE_CONFIG_DIR (so not
+signed in: every prompt got the synthetic assistant "Not logged in · Please run /login" and a result with
+terminal_reason api_error), a temporary git repository with a.txt, the pinned line with --replay-user-messages
+--permission-mode=default, environment HOME, CLAUDE_CONFIG_DIR, PATH, USER, LANG, TMPDIR and rhun's two forced
+values. A second turn with a file checkpoint was written into the file by hand (a user line, a file-history-snapshot
+line naming a.txt and its backup, an assistant line), as the CLI writes them. Six runs, no model call;
+~/.claude/settings.json had the same SHA-256 before and after (the user's own folder was not used).
+
+102. Fork from a message. --resume=SRC --fork-session --session-id=NEW --resume-session-at=ID works without -p
+     (--help hides the flag and says "print mode"): the copy's file, written at its first prompt as in (g), holds
+     SRC's lines up to and including the entry ID, then the new turn (the new prompt's parentUuid is ID), and
+     every file-history-snapshot line of SRC. export_conversation before that prompt already answers with the
+     history up to ID. An ID the file does not have: no initialize answer, one result error_during_execution
+     "No message found with message.uuid of: ID", exit 1 (as (k)). rhun forks from a prompt with ID the prompt
+     line's parentUuid (the entry just before it); the first prompt has none: a new conversation with that
+     prompt, as the extension's onCreateNewSession. (The extension copies the file itself, forkSession @1325994;
+     rhun lets the CLI do it, so the copy is made only when its first prompt goes.)
+103. Checkpoints. With CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true every prompt that starts a turn gets a
+     file-history-snapshot line {type, messageId, snapshot {messageId, trackedFileBackups, timestamp},
+     isSnapshotUpdate} whose messageId is the prompt line's uuid; a tracked file's entry is {backupFileName
+     (sha256 of its absolute path, 16 hex digits, then "@vN"; null: it did not exist), version, backupTime
+     [, realParentDir]}, the backup in <config>/file-history/<session id>/. In these runs the prompt line's uuid
+     WAS the uuid rhun sent (and its turnAttributionKey); finding 27 saw the CLI's own there. rhun uses the
+     line's uuid, which is the snapshot's messageId either way.
+104. rewind_files {user_message_id, dry_run}. Right after a --resume, before any prompt: dry run {canRewind true,
+     filesChanged [absolute paths], insertions, deletions} (a.txt "two\nthree" back to "one": insertions 1,
+     deletions 2; an empty checkpoint: filesChanged [], 0, 0); the real one {canRewind true, skippedLinks 0}
+     and the file was back. Refusals are successes: {canRewind false, error "No file checkpoint found for this
+     message."} (an unknown id), {canRewind false, error "File rewinding is not enabled."} (a process started
+     without the variable). The binary also names "rewindFiles: no turn received yet" and "Failed to rewind: X".
+105. A turn cut off. With CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1 and CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=
+     3600000 (the extension's MJe), --resume of a file that ends in a prompt runs that turn again by itself right
+     after initialize: command_lifecycle started (a command_uuid of its own), system/init, system/status
+     requesting (user_message_uuids the cut prompt's uuid), then the turn; its assistant and result records carry
+     user_message_uuid (the cut prompt's) and resume_reason "interrupted_turn" (the binary: or the host's
+     CLAUDE_CODE_RESUME_REASON); no replay of the prompt. Without the variables nothing runs.
+106. export_conversation answers {text, default_filename}: the conversation as the terminal's /export renders it
+     ("\n❯ PROMPT\n  ⎿  ERROR" and "\n\n⏺ REPLY" lines) and "YYYY-MM-DD-HHMMSS-first-prompt-words.txt" (local
+     time). The extension's /export NAME saves under NAME's last path part, ':' removed, ".txt" added when it has
+     no extension (openExportForSaving).
 
 Other things learned
 

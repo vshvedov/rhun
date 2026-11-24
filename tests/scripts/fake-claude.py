@@ -7,7 +7,8 @@ started (default at once).
 Stream mode takes the command line rhun passes (tests/data/claude-shapes/README.txt):
   --output-format stream-json --verbose --input-format stream-json --include-partial-messages
   --permission-prompt-tool=stdio --setting-sources=SOURCES --max-thinking-tokens=N | --thinking=disabled
-  [--session-id=UUID | --resume=ID | --resume=SRC --fork-session --session-id=UUID] [--permission-mode=MODE]
+  [--session-id=UUID | --resume=ID | --resume=SRC --fork-session --session-id=UUID [--resume-session-at=ID]]
+  [--permission-mode=MODE]
   [--replay-user-messages] [--allow-dangerously-skip-permissions] [--model=VALUE] [--effort=LEVEL]
 every flag as `--flag=value` or `--flag value`, `-p` allowed but not needed; a missing one or a flag it does
 not know is refused (status 2, logged as "refused"). Phase 2 (README.txt findings 10 on): bypassPermissions

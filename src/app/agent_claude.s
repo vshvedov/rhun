@@ -9,7 +9,7 @@
 #     [--model=VALUE] [--effort=LEVEL]                                  (the project's choices)
 #     [--permission-mode=MODE]                                          (claude_start_mode)
 #     [--allow-dangerously-skip-permissions]                            ([claude] allow_bypass_permissions)
-#     --session-id=UUID | --resume=ID | --resume=SRC --fork-session --session-id=UUID
+#     --session-id=UUID | --resume=ID | --resume=SRC --fork-session --session-id=UUID [--resume-session-at=ID]
 #
 # Every user message carries the uuid agent_send made: its command_lifecycle and its replay (finding 17)
 # say when a message written during a turn starts (ev_started) or will not run (ev_dropped).

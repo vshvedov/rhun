@@ -2713,9 +2713,12 @@ def task_end(task, status, notified):
         emit({'type': 'system', 'subtype': 'task_updated', 'task_id': task['task_id'], 'run_id': task['run_id'],
               'patch': {'status': status, 'end_time': int(time.time() * 1000)}, 'uuid': str(uuid.uuid4()),
               'session_id': SID})
+    summary = task['description']   # task 11: an agent's, as the file's <task-notification> has it
+    if task['kind'] == 'agent':
+        summary = ('Agent "%s" completed' if notified == 'completed' else 'Agent "%s" was stopped by user') % summary
     emit({'type': 'system', 'subtype': 'task_notification', 'task_id': task['task_id'], 'run_id': task['run_id'],
           'tool_use_id': task['tid'], 'status': notified,
-          'output_file': task.get('output', '') if task['background'] else '', 'summary': task['description'],
+          'output_file': task.get('output', '') if task['background'] else '', 'summary': summary,
           'uuid': str(uuid.uuid4()), 'session_id': SID})
     if task['background']:
         tasks_changed()
@@ -2875,6 +2878,7 @@ def s_agent(prompt):
             '</output-file>\n<status>%s</status>\n<summary>%s</summary>\n</task-notification>' % (
                 agent['task_id'], tid, agent['output'], status_, summary))
     system_init()
+    time.sleep(OWN_TURN_MS / 1000)  # task 11: the agent's own turn works that long (FAKE_CLAUDE_OWN_TURN_MS)
     origin = {'kind': 'task-notification', 'producer': 'session-task', 'runId': agent['run_id']}
     if REPLAY:
         emit({'type': 'user', 'message': {'role': 'user', 'content': note}, 'session_id': SID,
@@ -2902,6 +2906,72 @@ def mid_reply(pieces):
 SCENARIOS.update({'tools': s_tools, 'read': s_read, 'write': s_write, 'todo': s_todo, 'agent': s_agent,
                   'bg': s_bg, 'image': s_image, 'toolerror': s_toolerror, 'denied': s_denied,
                   'hooks': s_hooks, 'unknownblock': s_unknownblock, 'apierror': s_apierror})
+
+
+# ---- task 11: two agents at once; the agent's own turn's length ----
+OWN_TURN_MS = int(ENV.get('FAKE_CLAUDE_OWN_TURN_MS', '0'))
+
+
+def s_agents2(prompt):
+    """agents2: two Agent calls in one message, both in the background (34), whose records interleave: A's
+    first call, B's first call, A's second call (it fails), B's second call; then both end and the turn the
+    notifications start. Each agent's records are in its own file under subagents/ with its .meta.json."""
+    mid = message_start()
+    agents = []
+    for index, (description, prompt_) in enumerate((('Look at a', 'Look at a.py.'), ('Look at b', 'Look at b.py.'))):
+        tool_input = {'description': description, 'prompt': prompt_, 'subagent_type': 'general-purpose'}
+        tid = tool_use(mid, index, 'Agent', tool_input)
+        agent = new_task('agent', tid, description)
+        agent.update(mid='msg_fake' + uuid.uuid4().hex[:16], calls=0, chain=[None],
+                     file=os.path.join(PROJECTS, SID, 'subagents', 'agent-%s.jsonl' % agent['task_id']),
+                     output=os.path.join(CWD, '.fake-tasks', agent['task_id'] + '.output'))
+        os.makedirs(os.path.dirname(agent['file']), exist_ok=True)
+        with open(agent['file'][:-len('.jsonl')] + '.meta.json', 'w', encoding='utf-8') as stream:
+            json.dump({'agentType': 'general-purpose', 'isBuiltIn': True, 'description': description,
+                       'toolUseId': tid, 'spawnDepth': 1, 'requestShape': 'background',
+                       'requestNonInteractive': True, 'model': current_model()}, stream)
+        transcript({'type': 'user', 'message': {'content': prompt_}}, path=agent['file'], chain=agent['chain'],
+                   agent=agent['task_id'])
+        agents.append(agent)
+    message_end('tool_use')
+    tasks_changed()
+    for agent in agents:
+        emit({'type': 'system', 'subtype': 'task_started', 'task_id': agent['task_id'], 'run_id': agent['run_id'],
+              'tool_use_id': agent['tid'], 'description': agent['description'], 'subagent_type': 'general-purpose',
+              'is_backgrounded': True, 'spawn_depth': 1, 'task_type': 'local_agent', 'prompt': '',
+              'uuid': str(uuid.uuid4()), 'session_id': SID})
+        give(agent['tid'], 'Agent', ([{'type': 'text', 'text': 'Async agent launched successfully.\nagentId: %s' %
+                                       agent['task_id']}], False,
+                                     {'isAsync': True, 'status': 'async_launched', 'agentId': agent['task_id'],
+                                      'description': agent['description'], 'resolvedModel': current_model(),
+                                      'prompt': '', 'outputFile': agent['output'], 'canReadOutputFile': True,
+                                      'canContinueAgent': True}))
+    a, b = agents
+    sub_call(a, 'Bash', {'command': 'cat a.py', 'description': 'Read a'}, bash_outcome('print(1)'))
+    sub_call(b, 'Bash', {'command': 'cat b.py', 'description': 'Read b'}, bash_outcome('print(2)'))
+    result(mid_reply(['Two agents ', 'are working.']))
+    time.sleep(0.2)
+    sub_call(a, 'Bash', {'command': 'wc a.py', 'description': 'Count a'},
+             ('Exit code 1\nwc: a.py: No such file or directory', True, None))
+    sub_call(b, 'Bash', {'command': 'wc b.py', 'description': 'Count b'}, bash_outcome('1 b.py'))
+    for agent in agents:
+        task_end(agent, 'completed', 'completed')
+    system_init()
+    for agent in agents:            # the file's <task-notification> strings (34)
+        transcript({'type': 'user', 'message': {'content': (
+            '<task-notification>\n<task-id>%s</task-id>\n<tool-use-id>%s</tool-use-id>\n<output-file>%s'
+            '</output-file>\n<status>completed</status>\n<summary>%s</summary>\n</task-notification>' % (
+                agent['task_id'], agent['tid'], agent['output'], 'Agent "%s" completed' % agent['description']))},
+            'origin': {'kind': 'task-notification', 'producer': 'session-task', 'runId': agent['run_id']}})
+    mid = message_start()
+    if text(mid, 0, ['Both agents ended.']):
+        message_end()
+        result('Both agents ended.')
+    else:
+        cut_off()
+
+
+SCENARIOS['agents2'] = s_agents2
 
 
 # three of 2.1.330's commands, as its initialize lists them (finding 22; the real list has every built-in,

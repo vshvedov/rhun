@@ -2549,10 +2549,821 @@ FN claude_text
 9:  xor eax, eax
     EPILOGUE
 
-# FN claude_kids(AS*, AT*) -> eax 0: no children read yet (phase 3 task 11)
+# ---------------- task 11: a subagent's calls from its file; the stream's task records ----------------
+
+# FN claude_kids(AS*, AT*) -> eax 1 when its subagent's calls were read from their file (agrow_kids, once, when
+#   its line is first opened: a conversation of 500 agents opens without reading 500 files). They are never in
+#   the conversation's file (finding 34): <its file without .jsonl>/subagents/agent-<agentId>.jsonl, the id
+#   its result gave (AT_aux's more), else the agent-*.meta.json whose toolUseId is the call's (at most 256
+#   looked at; two that claim it: neither). Files on disk are untrusted: an id of other characters than
+#   letters, digits, "-" and "_" names no file; a link (the conversation's folder, subagents, the file) is not
+#   followed; at most AT_REREAD_MAX bytes are read, a last line without its line feed is not; its assistant
+#   lines (a block a line) and tool_result lines go through the stream's fillers, each call an AT under this
+#   one with its place in that file (AT_file), so its texts open as any row's. Nothing: the line stays and the
+#   toast says so
 FN claude_kids
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, [r12 + AT_id]      # its children are made under it: it must be findable by its id
+    call strlen
+    mov rdi, rbx
+    mov rsi, [r12 + AT_id]
+    mov rdx, rax
+    call agrow_find
+    cmp rax, r12
+    jne .Lkid_none
+    mov r13, [rbx + AS_path]    # the folder: the conversation's file without ".jsonl"
+    test r13, r13
+    jz .Lkid_none
+    mov rdi, r13
+    call strlen
+    mov r14, rax
+    cmp r14, 6
+    jbe .Lkid_none
+    mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Lt11_jsonl]
+    call ends
+    test eax, eax
+    jz .Lkid_none
+    lea rdi, [rip + kp]
+    call sb_clear
+    lea rdi, [rip + kp]
+    mov rsi, r13
+    lea rdx, [r14 - 6]
+    call sb_push
+    lea rdi, [rip + kp]
+    mov esi, 0x4000
+    call kid_nolink
+    test eax, eax
+    jz .Lkid_none
+    lea rdi, [rip + kp]
+    lea rsi, [rip + .Lt11_subagents]
+    call sb_push_cstr
+    lea rdi, [rip + kp]
+    mov esi, 0x4000
+    call kid_nolink
+    test eax, eax
+    jz .Lkid_none
+    lea rdi, [rip + kp]
+    mov esi, '/'
+    call sb_push_byte
+    lea rdi, [rip + kf]         # the agent's file: by the id its result gave
+    call sb_clear
+    lea rdi, [rip + kf]
+    mov rsi, [rip + kp + SB_ptr]
+    mov rdx, [rip + kp + SB_len]
+    call sb_push
+    mov rdi, r12
+    call aux_more
+    mov rdi, rax
+    mov rsi, rdx
+    call kid_id_ok
+    test eax, eax
+    jz 1f
+    mov rdi, r12
+    call aux_more
+    mov r13, rax
+    mov r14, rdx
+    lea rdi, [rip + kf]
+    lea rsi, [rip + .Lt11_agent]
+    call sb_push_cstr
+    lea rdi, [rip + kf]
+    mov rsi, r13
+    mov rdx, r14
+    call sb_push
+    jmp 2f
+1:  lea rdi, [rip + km]         # else the .meta.json that names the call
+    call sb_clear
+    mov dword ptr [rip + mk_n], 0
+    mov dword ptr [rip + mk_hits], 0
+    lea rdi, [rip + kp]
+    call kid_cstr
+    mov rdi, rax
+    lea rsi, [rip + kid_meta]
+    mov rdx, r12
+    call vfs_dir_each_names
+    cmp dword ptr [rip + mk_hits], 1
+    jne .Lkid_none
+    lea rdi, [rip + kf]
+    mov rsi, [rip + km + SB_ptr]
+    mov rdx, [rip + km + SB_len]
+    sub rdx, 10                 # without ".meta.json"
+    call sb_push
+2:  lea rdi, [rip + kf]
+    lea rsi, [rip + .Lt11_jsonl]
+    call sb_push_cstr
+    lea rdi, [rip + kf]         # a file, not a link
+    mov esi, 0x8000
+    call kid_nolink
+    test eax, eax
+    jz .Lkid_none
+    lea rdi, [rip + kf]
+    call kid_cstr
+    mov rdi, rax
+    mov esi, AT_REREAD_MAX
+    xor edx, edx
+    call agent_read_window
+    test rax, rax
+    jz .Lkid_none
+    mov r13, rax                # the text
+    mov r14, rdx                # its length
+    mov rax, [rbx + AS_line]    # (the conversation's own place goes back after)
+    mov [rsp], rax
+    mov rax, [rbx + AS_linelen]
+    mov [rsp + 8], rax
+    mov [rip + cb_as], rbx
+    mov dword ptr [rip + cb_flags], ING_FILE
+    mov dword ptr [rip + tm_which], -1
+    xor r15d, r15d              # a line's start
+3:  cmp r15, r14
+    jae 7f
+    mov rax, r15
+31: cmp rax, r14
+    jae 7f                      # a last line without its line feed: cut off, not read
+    cmp byte ptr [r13 + rax], 10
+    je 32f
+    inc rax
+    jmp 31b
+32: mov [rsp + 16], rax         # its line feed
+    mov rcx, rax
+    sub rcx, r15
+    jz 6f
+    mov [rbx + AS_line], r15
+    mov [rbx + AS_linelen], rcx
+    lea rdi, [r13 + r15]
+    mov rsi, rcx
+    call json_parse
+    test rax, rax
+    jz 6f
+    mov rdi, rbx
+    mov rsi, rax
+    mov rdx, r12
+    call kid_line
+6:  mov r15, [rsp + 16]
+    inc r15
+    jmp 3b
+7:  mov rax, [rsp]
+    mov [rbx + AS_line], rax
+    mov rax, [rsp + 8]
+    mov [rbx + AS_linelen], rax
+    mov rdi, r13
+    call mem_free
+    xor r15d, r15d              # the children read: their records are in that file
+8:  cmp r15, [r12 + AT_kids + VEC_len]
+    jae 9f
+    mov rax, [r12 + AT_kids + VEC_ptr]
+    mov r13, [rax + r15*8]
+    inc r15
+    cmp qword ptr [r13 + AT_file], 0
+    jne 8b
+    cmp qword ptr [r13 + AT_uoff], 0
+    jl 8b
+    lea rdi, [rip + kf]
+    call kid_cstr
+    mov rdi, rax
+    mov rsi, [rip + kf + SB_len]
+    call mem_dup
+    mov [r13 + AT_file], rax
+    jmp 8b
+9:  mov eax, 1
+    EPILOGUE
+.Lkid_none:
+    lea rdi, [rip + .Lt11_not_on_disk]
+    call app_toast
     xor eax, eax
-    ret
+    EPILOGUE
+
+# kid_line(AS*, line jv, AT*): a line of a subagent's file: an assistant line's calls under the agent's call,
+#   a user line's results into them; nothing else (its prompt, its text and thinking are not shown)
+kid_line:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov [rsp], rdx
+    mov rdi, r12
+    lea rsi, [rip + .Lk_type]
+    call json_get
+    mov r13, rax
+    mov rdi, r12
+    lea rsi, [rip + .Lk_message]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lk_content]
+    call json_get
+    mov r14, rax
+    mov rdi, r14
+    call json_type
+    cmp eax, JT_ARR
+    jne 9f
+    xor r15d, r15d
+1:  mov rdi, r14
+    call json_len
+    cmp r15d, eax
+    jae 9f
+    mov rdi, r14
+    mov esi, r15d
+    call json_at
+    mov r12, rax
+    inc r15d
+    mov rdi, r12
+    lea rsi, [rip + .Lk_type]
+    call json_get
+    mov [rsp + 8], rax
+    mov rdi, r13
+    lea rsi, [rip + .Lv_assistant]
+    call json_is
+    test eax, eax
+    jz 2f
+    mov rdi, [rsp + 8]
+    lea rsi, [rip + .Lv_tool_use]
+    call json_is
+    test eax, eax
+    jz 1b
+    mov rax, [rsp]
+    mov rdi, [rax + AT_id]
+    call strlen
+    mov rcx, rax
+    mov rax, [rsp]
+    mov rdx, [rax + AT_id]
+    mov rdi, rbx
+    mov rsi, r12
+    call call_block
+    jmp 1b
+2:  mov rdi, r13
+    lea rsi, [rip + .Lv_user]
+    call json_is
+    test eax, eax
+    jz 9f
+    mov rdi, [rsp + 8]
+    lea rsi, [rip + .Lv_tool_result]
+    call json_is
+    test eax, eax
+    jz 1b
+    mov rdi, rbx
+    mov rsi, r12
+    xor edx, edx
+    call result_block
+    jmp 1b
+9:  EPILOGUE
+
+# kid_cstr(sb) -> rax its text as a cstr (a NUL after it, not counted)
+kid_cstr:
+    PROLOGUE
+    mov rbx, rdi
+    mov esi, 0
+    call sb_push_byte
+    dec qword ptr [rbx + SB_len]
+    mov rax, [rbx + SB_ptr]
+    EPILOGUE
+
+# kid_nolink(sb, S_IF type) -> eax 1 when that path is of that type itself (lstat: a link is none)
+kid_nolink:
+    PROLOGUE
+    mov r12d, esi
+    call kid_cstr
+    mov rdi, rax
+    call vfs_lstat
+    test rax, rax
+    js 8f
+    mov eax, [rip + vfs_statbuf + 24]
+    and eax, 0xf000
+    cmp eax, r12d
+    jne 8f
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# kid_id_ok(ptr, len) -> eax 1 for an agent's id that can name a file: 1 to 64 letters, digits, "-", "_"
+kid_id_ok:
+    xor eax, eax
+    test rsi, rsi
+    jz 9f
+    cmp rsi, 64
+    ja 9f
+    xor ecx, ecx
+1:  movzx edx, byte ptr [rdi + rcx]
+    cmp edx, '-'
+    je 2f
+    cmp edx, '_'
+    je 2f
+    lea r8d, [rdx - '0']
+    cmp r8d, 9
+    jbe 2f
+    or edx, 0x20
+    sub edx, 'a'
+    cmp edx, 25
+    ja 9f
+2:  inc rcx
+    cmp rcx, rsi
+    jb 1b
+    mov eax, 1
+9:  ret
+
+# kid_meta(AT*, name cstr): dir_each's callback over subagents/: an agent-*.meta.json (256 looked at) whose
+#   toolUseId is the call's id is a hit (km: its name)
+kid_meta:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    cmp dword ptr [rip + mk_n], 256
+    jae 9f
+    mov rdi, r12
+    call strlen
+    mov r13, rax
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lt11_agent]
+    call starts
+    test eax, eax
+    jz 9f
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lt11_meta]
+    call ends
+    test eax, eax
+    jz 9f
+    inc dword ptr [rip + mk_n]
+    lea rdi, [rip + kq]
+    call sb_clear
+    lea rdi, [rip + kq]
+    mov rsi, [rip + kp + SB_ptr]
+    mov rdx, [rip + kp + SB_len]
+    call sb_push
+    lea rdi, [rip + kq]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    lea rdi, [rip + kq]
+    mov esi, 0x8000
+    call kid_nolink
+    test eax, eax
+    jz 9f
+    lea rdi, [rip + kq]
+    call kid_cstr
+    mov rdi, rax
+    mov esi, 65536
+    xor edx, edx
+    call agent_read_window
+    test rax, rax
+    jz 9f
+    mov r14, rax
+    mov rdi, rax
+    mov rsi, rdx
+    call json_parse
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    lea rsi, [rip + .Lt11_toolUseId]
+    call jstr
+    test rdx, rdx
+    jz 8f
+    mov rdi, rax
+    mov rsi, rdx
+    mov rdx, [rbx + AT_id]
+    call text_is
+    test eax, eax
+    jz 8f
+    inc dword ptr [rip + mk_hits]
+    lea rdi, [rip + km]
+    call sb_clear
+    lea rdi, [rip + km]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+8:  mov rdi, r14
+    call mem_free
+9:  EPILOGUE
+
+# FN claude_task(AS*, record) -> eax 1 when it was a task record: the stream's task records (finding 34) into the conversation's tasks
+#   (agenttask.s): task_started {task_id, tool_use_id, description, task_type, is_backgrounded}, task_progress
+#   {usage {tool_uses, total_tokens}, summary, last_tool_name} (the agent's call count: the row's count),
+#   task_updated {patch {status, is_backgrounded[, error]}}, task_notification {status, summary},
+#   background_tasks_changed {tasks [...]}. A foreground shell task's call may be sent to the background
+#   (ATF_CANBG) until it ends or goes there; a backgrounded task's end is a meta line of its summary (as the
+#   file's <task-notification> string gives it). Nothing here keeps a JSON value
+FN claude_task
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    test rbx, rbx
+    jz .Lct_no
+    mov rdi, r12
+    lea rsi, [rip + .Lt11_subtype]
+    call json_get
+    mov r13, rax
+    mov rdi, r13
+    lea rsi, [rip + .Lt11_bg_changed]
+    call json_is
+    test eax, eax
+    jnz .Lct_list
+    lea r15, [rip + .Lt11_started]  # one of the four task records, else not taken
+    mov rdi, r13
+    mov rsi, r15
+    call json_is
+    test eax, eax
+    jnz 0f
+    mov rdi, r13
+    lea rsi, [rip + .Lt11_progress]
+    call json_is
+    test eax, eax
+    jnz 0f
+    mov rdi, r13
+    lea rsi, [rip + .Lt11_updated]
+    call json_is
+    test eax, eax
+    jnz 0f
+    mov rdi, r13
+    lea rsi, [rip + .Lt11_notification]
+    call json_is
+    test eax, eax
+    jz .Lct_no
+0:  mov rdi, r12
+    lea rsi, [rip + .Lk_task_id]
+    call jstr
+    test rdx, rdx
+    jz 9f
+    mov rdi, rbx
+    mov rsi, rax
+    call agtask_get
+    test rax, rax
+    jz 9f
+    mov r14, rax
+    mov rdi, r12                # the call it runs for
+    lea rsi, [rip + .Lk_tool_use_id]
+    call jstr
+    test rdx, rdx
+    jz 1f
+    mov rdi, r14
+    mov esi, AKX_CALL
+    mov rcx, rdx
+    mov rdx, rax
+    call agtask_text
+1:  mov rdi, r13
+    lea rsi, [rip + .Lt11_started]
+    call json_is
+    test eax, eax
+    jz 2f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_description]
+    call jstr
+    mov rdi, r14
+    mov esi, AKX_LABEL
+    mov rcx, rdx
+    mov rdx, rax
+    call agtask_text
+    mov rdi, r12
+    lea rsi, [rip + .Lt11_task_type]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lt11_local_bash]
+    call json_is
+    mov edx, AKK_AGENT
+    test eax, eax
+    jz 11f
+    mov edx, AKK_SHELL
+11: mov rdi, r14
+    mov esi, AKN_KIND
+    call agtask_num
+    mov rdi, r12
+    lea rsi, [rip + .Lt11_is_bg]
+    call jtrue
+    mov r15d, eax
+    mov rdi, r14
+    mov esi, AKN_BG
+    mov edx, eax
+    call agtask_num
+    test r15d, r15d             # a foreground shell task: its call may go to the background
+    jnz 8f
+    cmp dword ptr [r14 + AK_kind], AKK_SHELL
+    jne 8f
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, 1
+    call task_canbg
+    jmp 8f
+2:  mov rdi, r13
+    lea rsi, [rip + .Lt11_progress]
+    call json_is
+    test eax, eax
+    jz 3f
+    mov rdi, r12
+    lea rsi, [rip + .Lt11_usage]
+    call json_get
+    mov r15, rax
+    mov rdi, r15
+    lea rsi, [rip + .Lt11_tokens]
+    call jnum_or
+    xor edx, edx
+    test eax, eax
+    cmovns edx, eax
+    mov rdi, r14
+    mov esi, AKN_TOKENS
+    call agtask_num
+    mov rdi, r15
+    lea rsi, [rip + .Lt11_uses]
+    call jnum_or
+    mov r15d, eax
+    test eax, eax
+    js 21f
+    mov rdi, r14
+    mov esi, AKN_USES
+    mov edx, eax
+    call agtask_num
+    mov rdi, rbx                # the agent's call count (a background agent's result has none)
+    mov rsi, r14
+    mov edx, r15d
+    call task_count
+21: mov rdi, r12                # what it does: its summary, else the last tool it ran (nAt)
+    lea rsi, [rip + .Lt11_summary]
+    call jstr
+    test rdx, rdx
+    jnz 22f
+    mov rdi, r12
+    lea rsi, [rip + .Lt11_last_tool]
+    call jstr
+    test rdx, rdx
+    jz 8f
+22: mov rdi, r14
+    mov esi, AKX_ACT
+    mov rcx, rdx
+    mov rdx, rax
+    call agtask_text
+    jmp 8f
+3:  mov rdi, r13
+    lea rsi, [rip + .Lt11_updated]
+    call json_is
+    test eax, eax
+    jz 4f
+    mov rdi, r12
+    lea rsi, [rip + .Lt11_patch]
+    call json_get
+    mov r15, rax
+    mov rdi, r15
+    lea rsi, [rip + .Lt11_is_bg]
+    call jtrue
+    test eax, eax
+    jz 31f
+    mov rdi, r14                # sent to the background: a line now, no more "Run in background"
+    mov esi, AKN_BG
+    mov edx, 1
+    call agtask_num
+    mov rdi, rbx
+    mov rsi, r14
+    xor edx, edx
+    call task_canbg
+31: mov rdi, r15                # (failed's "error" is the schema's form only: never recorded)
+    lea rsi, [rip + .Lt11_error]
+    call jstr
+    test rdx, rdx
+    jz 32f
+    mov rdi, r14
+    mov esi, AKX_ERR
+    mov rcx, rdx
+    mov rdx, rax
+    call agtask_text
+32: mov rdi, r15
+    lea rsi, [rip + .Lk_status]
+    call json_get
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, rax
+    call task_status
+    jmp 8f
+4:  mov rdi, r13
+    lea rsi, [rip + .Lt11_notification]
+    call json_is
+    test eax, eax
+    jz 8f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_status]
+    call json_get
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, rax
+    call task_status
+    mov rdi, rbx
+    mov rsi, r14
+    xor edx, edx
+    call task_canbg
+    cmp dword ptr [r14 + AK_bg], 0
+    je 8f
+    mov rdi, r12                # a backgrounded task's end: its summary as a meta line
+    lea rsi, [rip + .Lt11_summary]
+    call jstr
+    test rdx, rdx
+    jz 8f
+    mov rdi, rbx
+    mov esi, R_META
+    mov rcx, rdx
+    mov rdx, rax
+    xor r8d, r8d
+    call agents_row_add
+8:  mov rdi, rbx
+    mov rsi, r14
+    call agtask_touch
+9:  mov eax, 1
+    EPILOGUE
+.Lct_no:
+    xor eax, eax
+    EPILOGUE
+.Lct_list:                      # the tasks in the background now: each one known, with its line
+    mov rdi, r12
+    lea rsi, [rip + .Lt11_tasks]
+    call json_get
+    mov r13, rax
+    xor r15d, r15d
+1:  mov rdi, r13
+    call json_len
+    cmp r15d, eax
+    jae 9b
+    mov rdi, r13
+    mov esi, r15d
+    call json_at
+    mov r12, rax
+    inc r15d
+    mov rdi, r12
+    lea rsi, [rip + .Lk_task_id]
+    call jstr
+    test rdx, rdx
+    jz 1b
+    mov rdi, rbx
+    mov rsi, rax
+    call agtask_get
+    test rax, rax
+    jz 1b
+    mov r14, rax
+    mov rdi, r14
+    mov esi, AKN_BG
+    mov edx, 1
+    call agtask_num
+    cmp qword ptr [r14 + AK_label], 0
+    jne 2f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_description]
+    call jstr
+    mov rdi, r14
+    mov esi, AKX_LABEL
+    mov rcx, rdx
+    mov rdx, rax
+    call agtask_text
+    mov rdi, r12
+    lea rsi, [rip + .Lt11_task_type]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lt11_local_bash]
+    call json_is
+    mov edx, AKK_AGENT
+    test eax, eax
+    jz 11f
+    mov edx, AKK_SHELL
+11: mov rdi, r14
+    mov esi, AKN_KIND
+    call agtask_num
+2:  mov rdi, rbx
+    mov rsi, r14
+    call agtask_touch
+    jmp 1b
+
+# task_status(AS*, AK*, status jv): completed: finished; failed: failed; killed, stopped: stopped
+task_status:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, r13
+    lea rsi, [rip + .Lv_completed]
+    call json_is
+    mov edx, AKS_FINISHED
+    test eax, eax
+    jnz 8f
+    mov rdi, r13
+    lea rsi, [rip + .Lt11_failed]
+    call json_is
+    mov edx, AKS_FAILED
+    test eax, eax
+    jnz 8f
+    mov rdi, r13
+    lea rsi, [rip + .Lt11_killed]
+    call json_is
+    mov edx, AKS_STOPPED
+    test eax, eax
+    jnz 8f
+    mov rdi, r13
+    lea rsi, [rip + .Lt11_stopped]
+    call json_is
+    mov edx, AKS_STOPPED
+    test eax, eax
+    jz 9f
+8:  mov rdi, r12
+    mov esi, AKN_STATE
+    call agtask_num
+9:  EPILOGUE
+
+# task_call(AS*, AK*) -> rax the call it runs for (agrow_find: waiting, or a parent), or 0
+task_call:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rsi + AK_call]
+    xor eax, eax
+    test r12, r12
+    jz 9f
+    mov rdi, r12
+    call strlen
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, rax
+    call agrow_find
+9:  EPILOGUE
+
+# task_canbg(AS*, AK*, on): its call may be sent to the background (ATF_CANBG) or not any more
+task_canbg:
+    PROLOGUE
+    mov rbx, rdi
+    mov r13d, edx
+    call task_call
+    test rax, rax
+    jz 9f
+    mov r12, rax
+    mov eax, [r12 + AT_flags]
+    and eax, ATF_CANBG
+    test r13d, r13d
+    jz 1f
+    test eax, eax
+    jnz 9f
+    mov esi, ATV_SET
+    jmp 2f
+1:  test eax, eax
+    jz 9f
+    mov esi, ATV_CLEAR
+2:  mov rdi, r12
+    mov edx, ATF_CANBG
+    call agrow_num
+    mov rdi, rbx
+    mov rsi, r12
+    call agrow_touch
+9:  EPILOGUE
+
+# task_count(AS*, AK*, n): an agent's call count as its task records give it (usage.tool_uses), on its row
+task_count:
+    PROLOGUE
+    mov rbx, rdi
+    mov r13d, edx
+    cmp dword ptr [rsi + AK_kind], AKK_AGENT
+    jne 9f
+    call task_call
+    test rax, rax
+    jz 9f
+    mov r12, rax
+    cmp [r12 + AT_nkids], r13d
+    je 9f
+    mov rdi, r12
+    mov esi, ATV_NKIDS
+    mov edx, r13d
+    call agrow_num
+    mov rdi, rbx
+    mov rsi, r12
+    call agrow_touch
+9:  EPILOGUE
+
+.bss
+.p2align 3
+kp: .zero SB_SIZE               # claude_kids: the subagents folder, the agent's file, a .meta.json's path,
+kf: .zero SB_SIZE               #   the name of the one that names the call
+kq: .zero SB_SIZE
+km: .zero SB_SIZE
+mk_n: .long 0                   # .meta.json files looked at, and those that named the call
+mk_hits: .long 0
+.section .rodata
+.Lt11_jsonl: .asciz ".jsonl"
+.Lt11_subagents: .asciz "/subagents"
+.Lt11_agent: .asciz "agent-"
+.Lt11_meta: .asciz ".meta.json"
+.Lt11_toolUseId: .asciz "toolUseId"
+.Lt11_not_on_disk: .asciz "This agent's calls are not on disk."
+.Lt11_subtype: .asciz "subtype"
+.Lt11_bg_changed: .asciz "background_tasks_changed"
+.Lt11_started: .asciz "task_started"
+.Lt11_progress: .asciz "task_progress"
+.Lt11_updated: .asciz "task_updated"
+.Lt11_notification: .asciz "task_notification"
+.Lt11_task_type: .asciz "task_type"
+.Lt11_local_bash: .asciz "local_bash"
+.Lt11_is_bg: .asciz "is_backgrounded"
+.Lt11_usage: .asciz "usage"
+.Lt11_tokens: .asciz "total_tokens"
+.Lt11_uses: .asciz "tool_uses"
+.Lt11_summary: .asciz "summary"
+.Lt11_last_tool: .asciz "last_tool_name"
+.Lt11_patch: .asciz "patch"
+.Lt11_error: .asciz "error"
+.Lt11_failed: .asciz "failed"
+.Lt11_killed: .asciz "killed"
+.Lt11_stopped: .asciz "stopped"
+.Lt11_tasks: .asciz "tasks"
+.text
 
 # ---------------- the tool table ----------------
 

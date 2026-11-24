@@ -97,6 +97,10 @@ sec_ptr: .quad 0                # section's text
 sec_len: .quad 0
 xs: .zero SB_SIZE               # scratch: a text shown (an error cut), the whole text of a part
 ys: .zero SB_SIZE
+ks: .zero SB_SIZE               # task 11: the line of the calls under a call (kids_text)
+kc_n: .quad 0                   #   agrow_kid_click's count
+lr_key: .long 0                 #   the unit laid out: its key under its row (0 the row's own call)
+lr_ux: .long 0                  #   and its left (lr_x is its row's)
 
 .text
 
@@ -543,7 +547,14 @@ FN agrow_done
 2:  mov rdi, rbx
     mov rsi, r12
     call wait_del
-    cmp qword ptr [r12 + AT_up], 0
+    mov rax, [r12 + AT_up]      # a call under another one that failed: its parent's count of failures
+    test rax, rax
+    jz 21f
+    cmp dword ptr [r12 + AT_state], ATS_FAILED
+    jne 3f
+    inc dword ptr [rax + AT_nfail]
+    jmp 3f
+21: cmp qword ptr [r12 + AT_up], 0
     jne 3f
     mov rdi, rbx
     movsxd rsi, dword ptr [r12 + AT_row]
@@ -1259,6 +1270,8 @@ FN agrow_kids
     jne 8f
     test dword ptr [r12 + AT_flags], ATF_LOADED
     jnz 7f
+    cmp qword ptr [r12 + AT_t0], 0  # a call the stream gave gets its children from the stream: the file
+    jne 7f                          #   would give them twice
     or dword ptr [r12 + AT_flags], ATF_LOADED
     mov edi, [rbx + AS_kind]
     mov esi, 2
@@ -1553,7 +1566,13 @@ FN agrow_est
     jz 51f
     add r15d, eax
     add r15d, [rip + g_pmt + 4*MI_6]
-51: lea eax, [r13 + r15]
+51: mov rdi, r12                # the line of the calls under it (task 11)
+    call kids_shown
+    test eax, eax
+    jz 52f
+    call kl_h
+    add r13d, eax
+52: lea eax, [r13 + r15]
     xor edx, edx
     xor ecx, ecx
     mov r14, [r12 + AT_items + VEC_len]     # a todo list: a line an item at least, its texts wrap
@@ -3009,24 +3028,42 @@ err_text:
     mov [rip + sec_len], rax
 9:  EPILOGUE
 
-# tr_lay(AS*, row, x, y, w) -> eax the call's row's height, laid out in lr_mode (its slot in lr_slot)
+# tr_lay(AS*, row, x, y, w) -> eax the call's row's height, laid out in lr_mode (its slot in lr_slot): its
+#   call's unit, the calls under it in theirs (unit_lay)
 tr_lay:
-    PROLOGUE 64
+    PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    mov r13d, edx
+    mov r14d, ecx
+    mov r15d, r8d
+    call row_of
+    mov rsi, [rax + AM_x]
+    mov [rip + lr_row], r12
+    mov [rip + lr_x], r13d
+    mov [rip + lr_y], r14d
+    mov dword ptr [rip + lr_key], 0
+    mov rdi, rbx
+    mov edx, r13d
+    mov ecx, r14d
+    mov r8d, r15d
+    call unit_lay
+    EPILOGUE
+
+# unit_lay(AS*, AT*, x, y, w) -> eax the height of a call's unit laid out in lr_mode (lr_row its row, lr_slot
+#   its slot): its header, description and note lines, body, diff or file, todo list, the status of the agent's
+#   task it runs and Stop, Run in background, its children's line and, open, its children's units (task 11)
+unit_lay:
+    PROLOGUE 64
+    mov rbx, rdi
+    mov r15, rsi
+    mov r12, [rip + lr_row]
     mov [rsp], edx
     mov [rsp + 4], ecx
     mov [rsp + 8], r8d
-    call row_of
-    mov r15, [rax + AM_x]
-    mov [rip + lr_row], r12
     mov [rip + lr_at], r15
-    mov eax, [rsp]
-    mov [rip + lr_x], eax
-    mov eax, [rsp + 4]
-    mov [rip + lr_y], eax
-    mov eax, [rsp + 8]
-    mov [rip + lr_w], eax
+    mov [rip + lr_w], r8d
+    mov [rip + lr_ux], edx
     xor eax, eax
     test dword ptr [r15 + AT_flags], ATF_HIDDEN
     jnz 9f
@@ -3129,6 +3166,8 @@ tr_lay:
     xor ecx, ecx
 32: cmp eax, ecx
     cmovg eax, ecx
+    test eax, eax               # no room left for it (a long name in a narrow row): none
+    jz 4f
     mov [rsp + 28], eax
     mov rdi, [r15 + AT_second]
     call strlen
@@ -3335,10 +3374,619 @@ tr_lay:
     mov edx, [rsp + 8]
     call todo_lay
     add r13d, eax
+    mov rdi, rbx                # task 11: the agent's status, Run in background, its children
+    mov rsi, r15
+    mov edx, [rsp]
+    mov ecx, r13d
+    mov r8d, [rsp + 8]
+    call kids_lay
+    add r13d, eax
     add r13d, [rip + g_pmt + 4*MI_4]
     mov eax, r13d
     sub eax, [rsp + 4]
 9:  EPILOGUE
+
+# ---------------- task 11: an agent's status, Run in background, the calls under a call ----------------
+
+# kl_h() -> eax a line of the small face under a call (status, Run in background, its children's count): its
+#   line and MI_4, at least MI_16 (a button's hit area)
+kl_h:
+    mov rax, [rip + ag_fsmall]
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov ecx, [rip + g_pmt + 4*MI_16]
+    cmp eax, ecx
+    cmovl eax, ecx
+    ret
+
+# kids_shown(AT*) -> eax 1 when the call has a line for the calls under it: one that may get them (an agent's),
+#   one that has them, or one whose result counted them
+kids_shown:
+    xor eax, eax
+    test dword ptr [rdi + AT_flags], ATF_HIDDEN
+    jnz 9f
+    mov eax, 1
+    test dword ptr [rdi + AT_flags], ATF_PARENT
+    jnz 9f
+    cmp qword ptr [rdi + AT_kids + VEC_len], 0
+    jne 9f
+    cmp dword ptr [rdi + AT_nkids], 0
+    jge 9f
+    xor eax, eax
+9:  ret
+
+# FN agrow_canbg(AS*, AT*) -> eax 1 when the call can be sent to the background now: it may be (ATF_CANBG: a
+#   foreground shell task runs it), it runs, and rhun drives its conversation (the extension's LMt, @5556700)
+FN agrow_canbg
+    PROLOGUE
+    xor eax, eax
+    test rsi, rsi
+    jz 9f
+    test dword ptr [rsi + AT_flags], ATF_CANBG
+    jz 9f
+    test dword ptr [rsi + AT_flags], ATF_HIDDEN
+    jnz 9f
+    cmp dword ptr [rsi + AT_state], ATS_RUNNING
+    jne 9f
+    call agtask_driven
+9:  EPILOGUE
+
+# kids_text(AS*, AT*): ks, the line of the calls under it: "Running NAME…" while its last one runs (where rhun
+#   drives it), "N tool call(s)" and " · M failed" (" · " between them), or "Tool calls" with no count and
+#   none kept (a background agent read from a file: its file has them)
+kids_text:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    lea rdi, [rip + ks]
+    call sb_clear
+    xor r13d, r13d              # something before the count
+    mov rax, [r12 + AT_kids + VEC_len]
+    test rax, rax
+    jz 2f
+    mov rcx, [r12 + AT_kids + VEC_ptr]
+    mov r14, [rcx + rax*8 - 8]
+    cmp dword ptr [r14 + AT_state], ATS_RUNNING
+    jne 2f
+    mov rdi, rbx
+    call agents_session_live
+    test eax, eax
+    jz 2f
+    lea rdi, [rip + ks]
+    lea rsi, [rip + .Lk11_running]
+    call sb_push_cstr
+    mov rsi, [r14 + AT_name]
+    test rsi, rsi
+    jnz 1f
+    lea rsi, [rip + .Lk11_tool]
+1:  lea rdi, [rip + ks]
+    call sb_push_cstr
+    lea rdi, [rip + ks]
+    lea rsi, [rip + .Lellipsis]
+    call sb_push_cstr
+    mov r13d, 1
+2:  mov r14d, [r12 + AT_nkids]
+    test r14d, r14d
+    jns 3f
+    mov r14, [r12 + AT_kids + VEC_len]
+    test r14, r14
+    jnz 3f
+    test r13d, r13d
+    jnz 9f
+    lea rdi, [rip + ks]
+    lea rsi, [rip + .Lk11_tool_calls]
+    call sb_push_cstr
+    EPILOGUE
+3:  test r13d, r13d
+    jz 31f
+    lea rdi, [rip + ks]
+    lea rsi, [rip + .Lthink_sep]
+    call sb_push_cstr
+31: lea rdi, [rip + ks]
+    mov esi, r14d
+    call sb_push_u64
+    lea rdi, [rip + ks]
+    lea rsi, [rip + .Lk11_tool_call]
+    call sb_push_cstr
+    cmp r14d, 1
+    je 4f
+    lea rdi, [rip + ks]
+    mov esi, 's'
+    call sb_push_byte
+4:  cmp dword ptr [r12 + AT_nfail], 0
+    jle 9f
+    lea rdi, [rip + ks]
+    lea rsi, [rip + .Lthink_sep]
+    call sb_push_cstr
+    lea rdi, [rip + ks]
+    mov esi, [r12 + AT_nfail]
+    call sb_push_u64
+    lea rdi, [rip + ks]
+    lea rsi, [rip + .Lk11_failed]
+    call sb_push_cstr
+9:  EPILOGUE
+
+# kids_lay(AS*, AT*, x, y, w) -> eax the height of the lines under a call's body, laid out in lr_mode (lr_at
+#   the call): the status of the agent's task it runs ("Working in the background…", agtask_status) with
+#   "Stop" at its right while it works; "Run in background" while it can go there; the line of the calls under
+#   it (a button: open, the calls in their own units, indented, kids_units). Frame: [0] x, [4] y, [8] w,
+#   [12] a line, [16] the status's text, [24] Stop asked, [28] Stop's width, [32] the room for a text
+kids_lay:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r15, rsi
+    mov [rsp], edx
+    mov [rsp + 4], ecx
+    mov [rsp + 8], r8d
+    mov r13d, ecx               # cy
+    call kl_h
+    mov [rsp + 12], eax
+    mov rdi, rbx                # the agent's task: its status, Stop
+    mov rsi, [r15 + AT_id]
+    call agtask_status
+    test rax, rax
+    jz 2f
+    mov [rsp + 16], rax
+    mov [rsp + 24], ecx
+    mov dword ptr [rsp + 28], 0
+    mov eax, [rsp + 8]
+    test ecx, ecx
+    jz 1f
+    mov rdi, [rip + ag_fsmall]
+    lea rsi, [rip + .Lk11_stop]
+    call text_w
+    add eax, [rip + g_pmt + 4*MI_8]
+    cmp eax, [rsp + 8]
+    jle 11f
+    mov eax, [rsp + 8]
+11: mov [rsp + 28], eax
+    mov eax, [rsp + 8]
+    sub eax, [rsp + 28]
+    sub eax, [rip + g_pmt + 4*MI_6]
+    jns 1f
+    xor eax, eax
+1:  mov [rsp + 32], eax
+    mov rdi, [rsp + 16]
+    call strlen
+    mov [rip + ln_len], rax
+    mov rax, [rsp + 16]
+    mov [rip + ln_ptr], rax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 12]
+    mov r8, [rip + ln_ptr]
+    mov r9, [rip + ln_len]
+    COLOR eax, T_MUTED
+    mov r10d, [rsp + 32]
+    inc r10d
+    push r10
+    push rax
+    call fit_text
+    add rsp, 16
+    lea rdi, [rip + .Lk11_status]
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 32]
+    mov r8d, [rsp + 12]
+    xor r9d, r9d
+    call lay_line
+    cmp dword ptr [rsp + 24], 0
+    je 12f
+    mov r14d, [rsp]             # Stop, at its right end
+    add r14d, [rsp + 8]
+    sub r14d, [rsp + 28]
+    lea rax, [rip + .Lk11_stop]
+    mov [rip + ln_ptr], rax
+    mov qword ptr [rip + ln_len], 4
+    mov rdi, [rip + ag_fsmall]
+    mov esi, r14d
+    add esi, [rip + g_pmt + 4*MI_4]
+    mov edx, r13d
+    mov ecx, [rsp + 12]
+    mov r8, [rip + ln_ptr]
+    mov r9, [rip + ln_len]
+    COLOR eax, T_ACCENT
+    mov r10d, [rsp + 28]
+    push r10
+    push rax
+    call fit_text
+    add rsp, 16
+    mov edi, PART_STOP
+    mov esi, r14d
+    mov edx, r13d
+    mov ecx, [rsp + 28]
+    mov r8d, [rsp + 12]
+    call lay_btn
+12: add r13d, [rsp + 12]
+2:  mov rdi, rbx                # Run in background
+    mov rsi, r15
+    call agrow_canbg
+    test eax, eax
+    jz 3f
+    mov rdi, [rip + ag_fsmall]
+    lea rsi, [rip + .Lk11_run_bg]
+    call text_w
+    add eax, [rip + g_pmt + 4*MI_8]
+    cmp eax, [rsp + 8]
+    jle 21f
+    mov eax, [rsp + 8]
+21: mov [rsp + 28], eax
+    lea rdi, [rip + .Lk11_run_bg]
+    mov [rip + ln_ptr], rdi
+    call strlen
+    mov [rip + ln_len], rax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [rip + g_pmt + 4*MI_4]
+    mov edx, r13d
+    mov ecx, [rsp + 12]
+    mov r8, [rip + ln_ptr]
+    mov r9, [rip + ln_len]
+    COLOR eax, T_ACCENT
+    mov r10d, [rsp + 28]
+    sub r10d, [rip + g_pmt + 4*MI_4]
+    push r10
+    push rax
+    call fit_text
+    add rsp, 16
+    lea rdi, [rip + .Lk11_bgline]
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 28]
+    mov r8d, [rsp + 12]
+    xor r9d, r9d
+    call lay_line
+    mov edi, PART_BG
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 28]
+    mov r8d, [rsp + 12]
+    call lay_btn
+    add r13d, [rsp + 12]
+3:  mov rdi, r15                # the calls under it: their line
+    call kids_shown
+    test eax, eax
+    jz 8f
+    mov rdi, rbx
+    mov rsi, r15
+    call kids_text
+    PM eax, MI_12               # the chevron's room
+    mov ecx, [rsp + 8]
+    sub ecx, eax
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    jns 31f
+    xor ecx, ecx
+31: mov [rsp + 32], ecx
+    mov rax, [rip + ks + SB_ptr]
+    mov [rip + ln_ptr], rax
+    mov rax, [rip + ks + SB_len]
+    mov [rip + ln_len], rax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 12]
+    mov r8, [rip + ln_ptr]
+    mov r9, [rip + ln_len]
+    COLOR eax, T_MUTED
+    mov r10d, [rsp + 32]
+    inc r10d
+    push r10
+    push rax
+    call fit_text
+    add rsp, 16
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    jne 32f
+    mov edi, IC_CHEV_D          # the chevron
+    test dword ptr [r15 + AT_flags], ATF_KIDS
+    jz 33f
+    mov edi, IC_CHEV_UP
+33: PM ecx, MI_12
+    mov esi, [rsp]
+    add esi, [rsp + 8]
+    sub esi, ecx
+    mov edx, [rsp + 12]
+    sub edx, ecx
+    sar edx, 1
+    add edx, r13d
+    COLOR r8d, T_MUTED
+    call icon_draw
+32: lea rdi, [rip + .Lk11_kids]
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 32]
+    mov r8d, [rsp + 12]
+    xor r9d, r9d
+    call lay_line
+    mov edi, PART_KIDS
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 12]
+    call lay_btn
+    add r13d, [rsp + 12]
+    test dword ptr [r15 + AT_flags], ATF_KIDS   # open: the calls themselves
+    jz 8f
+    cmp qword ptr [r15 + AT_kids + VEC_len], 0
+    je 8f
+    mov rdi, rbx
+    mov rsi, r15
+    mov edx, [rsp]
+    mov ecx, r13d
+    mov r8d, [rsp + 8]
+    call kids_units
+    add r13d, eax
+8:  mov [rip + lr_at], r15      # (the units under it laid out: this one's again)
+    mov eax, [rsp + 8]
+    mov [rip + lr_w], eax
+    mov eax, [rsp]
+    mov [rip + lr_ux], eax
+    mov eax, r13d
+    sub eax, [rsp + 4]
+    EPILOGUE
+
+# kid_key(w) -> eax what a child's cached height (AT_h) is for: its width, the panel's text size, the code's line
+kid_key:
+    PROLOGUE
+    mov ebx, edi
+    call agrow_code_face
+    mov ecx, [rax + FACE_lineh]
+    shl ecx, 24
+    mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_px]
+    shl eax, 16
+    add eax, ebx
+    xor eax, ecx
+    EPILOGUE
+
+# kids_units(AS*, AT*, x, y, w) -> eax the height of the calls under a call, each its own unit indented MI_16
+#   with a 1 px T_BORDER rule at its left, laid out in lr_mode. A unit's height is kept in its AT_h for a width
+#   and text size (kid_key), so a frame lays out only the units inside the clip and adds the others' kept
+#   heights (at most AT_KIDS_MAX a call). Each unit has its own slot for its ids, by (row, its key: its place
+#   under its parent's key). Written out (LM_DUMP) each unit's lines follow "kid N ID". Frame: [0] x, [4] y,
+#   [8] w, [12] the units' x, [16] their w, [20] the parent's slot, [24] the parent's key, [28] the key, [32]
+#   the key's height key, [40] the child
+kids_units:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r15, rsi
+    mov [rsp], edx
+    mov [rsp + 4], ecx
+    mov [rsp + 8], r8d
+    mov eax, [rip + lr_slot]
+    mov [rsp + 20], eax
+    mov eax, [rip + lr_key]
+    mov [rsp + 24], eax
+    PM eax, MI_16               # indented, unless that leaves too little room
+    mov ecx, [rsp + 8]
+    sub ecx, eax
+    PM edx, MI_64
+    cmp ecx, edx
+    jge 1f
+    xor eax, eax
+    mov ecx, [rsp + 8]
+1:  add eax, [rsp]
+    mov [rsp + 12], eax
+    mov [rsp + 16], ecx
+    mov edi, ecx
+    call kid_key
+    mov [rsp + 32], eax
+    mov r13d, [rsp + 4]         # cy
+    xor r14d, r14d
+.Lku_next:
+    cmp r14, [r15 + AT_kids + VEC_len]
+    jae .Lku_done
+    mov rax, [r15 + AT_kids + VEC_ptr]
+    mov r12, [rax + r14*8]
+    mov [rsp + 40], r12
+    inc r14
+    mov eax, [rsp + 24]         # its key
+    imul eax, eax, 1009
+    add eax, r14d
+    xor edx, edx
+    mov ecx, 0xfffe
+    div ecx
+    lea eax, [rdx + 1]
+    mov [rsp + 28], eax
+    mov eax, [r12 + AT_h]       # its height: kept, or measured now
+    test eax, eax
+    js 2f
+    mov ecx, [rsp + 32]
+    cmp [r12 + AT_w], ecx
+    je 3f
+2:  mov eax, [rip + lr_mode]
+    push rax
+    push rax
+    mov dword ptr [rip + lr_mode], LM_MEASURE
+    mov eax, [rsp + 16 + 28]
+    mov [rip + lr_key], eax
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, [rsp + 16 + 12]
+    xor ecx, ecx
+    mov r8d, [rsp + 16 + 16]
+    call unit_lay
+    mov r12, [rsp + 16 + 40]
+    mov [r12 + AT_h], eax
+    mov ecx, [rsp + 16 + 32]
+    mov [r12 + AT_w], ecx
+    pop rcx
+    pop rcx
+    mov [rip + lr_mode], ecx
+3:  test eax, eax
+    jz .Lku_next
+    mov r12, rax                # its height
+    mov ecx, [rip + lr_mode]
+    cmp ecx, LM_MEASURE
+    je .Lku_add
+    cmp ecx, LM_DRAW
+    jne 5f
+    cmp r13d, [rip + g_cv + CV_cy1]   # drawn: only inside the clip
+    jge .Lku_add
+    lea eax, [r13 + r12]
+    cmp eax, [rip + g_cv + CV_cy0]
+    jle .Lku_add
+    mov rdi, [rip + lr_row]
+    mov esi, [rsp + 28]
+    call agrow_slot
+    mov [rip + lr_slot], eax
+    mov edi, [rsp]              # its rule
+    add edi, [rip + g_pmt + 4*MI_6]
+    mov esi, r13d
+    mov edx, 1
+    mov ecx, r12d
+    COLOR r8d, T_BORDER
+    call gfx_fill
+    jmp 6f
+5:  cmp ecx, LM_DUMP
+    jne 6f
+    mov rdi, [rip + lr_row]
+    mov esi, [rsp + 28]
+    call slot_kid
+    mov [rip + lr_slot], eax
+    mov rdi, [rip + lr_out]     # "kid N ID"
+    lea rsi, [rip + .Lk11_kid]
+    call sb_push_cstr
+    mov rdi, [rip + lr_out]
+    mov rsi, r14
+    call sb_push_u64
+    mov rdi, [rip + lr_out]
+    mov esi, ' '
+    call sb_push_byte
+    mov rax, [rsp + 40]
+    mov rdi, [rip + lr_out]
+    mov rsi, [rax + AT_id]
+    call sb_push_cstr
+    mov rdi, [rip + lr_out]
+    mov esi, 10
+    call sb_push_byte
+6:  mov eax, [rsp + 28]
+    mov [rip + lr_key], eax
+    mov rdi, rbx
+    mov rsi, [rsp + 40]
+    mov edx, [rsp + 12]
+    mov ecx, r13d
+    mov r8d, [rsp + 16]
+    call unit_lay
+.Lku_add:
+    add r13d, r12d
+    jmp .Lku_next
+.Lku_done:
+    mov eax, [rsp + 20]
+    mov [rip + lr_slot], eax
+    mov eax, [rsp + 24]
+    mov [rip + lr_key], eax
+    mov eax, r13d
+    sub eax, [rsp + 4]
+    EPILOGUE
+
+# slot_kid(row, key) -> eax the slot that unit had in the last frame, -1 (print-agent-row reads ids)
+slot_kid:
+    shl rdi, 16
+    mov esi, esi
+    lea rdi, [rdi + rsi + 1]
+    lea r9, [rip + slot_key]
+    lea r10, [rip + slot_ser]
+    xor eax, eax
+1:  cmp eax, SLOTS
+    jae 8f
+    cmp dword ptr [r10 + rax*4], 0
+    je 2f
+    cmp [r9 + rax*8], rdi
+    je 9f
+2:  inc eax
+    jmp 1b
+8:  mov eax, -1
+9:  ret
+
+# tree_find(AT*, id cstr) -> rax the call of that id among the calls under it (depth first), or 0
+tree_find:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d
+1:  cmp r13, [rbx + AT_kids + VEC_len]
+    jae 8f
+    mov rax, [rbx + AT_kids + VEC_ptr]
+    mov r14, [rax + r13*8]
+    inc r13
+    mov rdi, [r14 + AT_id]
+    mov rsi, r12
+    call strcmp_eq
+    test eax, eax
+    jnz 7f
+    mov rdi, r14
+    mov rsi, r12
+    call tree_find
+    test rax, rax
+    jz 1b
+    EPILOGUE
+7:  mov rax, r14
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# FN agrow_pend(row, AT*, part): a click on a part of that call (agentfold.s's Run in background on a fold's
+#   line), followed after the frame
+FN agrow_pend
+    jmp pend_set
+
+# FN agrow_text(ptr, len) -> rax an owned copy as a row shows a one-line part (cleaned, 400 bytes at most), or 0
+FN agrow_text
+    xor edx, edx
+    jmp short_text
+
+# FN agrow_kid_click(AS*, row, n, part) -> eax 1: as a click on that part of the n-th unit (from 1, depth
+#   first) under the call of row (agent-kid-click)
+FN agrow_kid_click
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14d, ecx
+    xor eax, eax
+    cmp r12, [rbx + AS_msgs + VEC_len]
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r12
+    call row_of
+    mov rdi, [rax + AM_x]
+    test rdi, rdi
+    jz 8f
+    mov [rip + kc_n], r13
+    call kid_nth
+    test rax, rax
+    jz 8f
+    mov rdi, r12
+    mov rsi, rax
+    mov edx, r14d
+    call pend_set
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+9:  EPILOGUE
+
+# kid_nth(AT*) -> rax the kc_n-th unit under it (depth first, counting down kc_n), or 0
+kid_nth:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12, [rbx + AT_kids + VEC_len]
+    jae 8f
+    mov rax, [rbx + AT_kids + VEC_ptr]
+    mov r13, [rax + r12*8]
+    inc r12
+    dec qword ptr [rip + kc_n]
+    jz 7f
+    mov rdi, r13
+    call kid_nth
+    test rax, rax
+    jz 1b
+    EPILOGUE
+7:  mov rax, r13
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
 
 # todo_lay(x, y, w) -> eax the height of lr_at's todo list (0 without items), laid out in lr_mode (DTt): a
 #   line an item, a box of MI_14 (empty; a dash for the active item; a check for a done one, its text muted
@@ -3627,8 +4275,8 @@ FN agrow_todo_draw
     mov [rip + lr_at], rax
 9:  EPILOGUE
 
-# small_line(kind cstr, text cstr, h, button): a muted line of the small face at lr_x, lr_cy, cut at the
-#   row's width (lr_w); a button (PART_NOTE) when asked
+# small_line(kind cstr, text cstr, h, button): a muted line of the small face at lr_ux, lr_cy, cut at the
+#   unit's width (lr_w); a button (PART_NOTE) when asked
 small_line:
     PROLOGUE 16
     mov rbx, rdi
@@ -3640,7 +4288,7 @@ small_line:
     mov [rip + ln_len], rax
     mov [rip + ln_ptr], r12
     mov rdi, [rip + ag_fsmall]
-    mov esi, [rip + lr_x]
+    mov esi, [rip + lr_ux]
     mov edx, [rip + lr_cy]
     mov ecx, r14d
     mov r8, r12
@@ -3653,7 +4301,7 @@ small_line:
     call fit_text
     add rsp, 16
     mov rdi, rbx
-    mov esi, [rip + lr_x]
+    mov esi, [rip + lr_ux]
     mov edx, [rip + lr_cy]
     mov ecx, [rip + lr_w]
     mov r8d, r14d
@@ -3662,7 +4310,7 @@ small_line:
     cmp dword ptr [rsp], 0
     je 9f
     mov edi, PART_NOTE
-    mov esi, [rip + lr_x]
+    mov esi, [rip + lr_ux]
     mov edx, [rip + lr_cy]
     mov ecx, [rip + lr_w]
     mov r8d, r14d
@@ -3762,8 +4410,12 @@ pend_at:
     jz 8f
     call strcmp_eq
     test eax, eax
-    jz 8f
+    jz 1f
     mov rax, r12
+    EPILOGUE
+1:  mov rdi, r12                # a call under it (task 11)
+    mov rsi, [rip + pend_id]
+    call tree_find
     EPILOGUE
 8:  xor eax, eax
 9:  EPILOGUE
@@ -3772,6 +4424,7 @@ pend_at:
 #   end): a text opens in a tab or its tab is found again, a link is followed, a command is copied
 FN agrow_follow
     PROLOGUE 16
+    call agtask_follow          # a task line's Stop (agenttask.s)
     call agfold_follow          # a fold's line clicked: it opens or closes (agentfold.s)
     cmp dword ptr [rip + pend_think], 0
     je 0f
@@ -3801,6 +4454,12 @@ FN agrow_follow
     je 4f
     cmp r13d, PART_DIFF
     je 5f
+    cmp r13d, PART_KIDS         # task 11: the calls under it, Stop, Run in background
+    je 6f
+    cmp r13d, PART_STOP
+    je 7f
+    cmp r13d, PART_BG
+    je 71f
     mov esi, ATX_IN             # a text in a tab
     cmp r13d, PART_IN
     je 2f
@@ -3838,6 +4497,36 @@ FN agrow_follow
 5:  mov rdi, rbx                # a diff in a diff tab
     mov rsi, r12
     call open_diff
+    jmp 8f
+6:  xor dword ptr [r12 + AT_flags], ATF_KIDS    # the calls under it listed or not; read from their file
+    test dword ptr [r12 + AT_flags], ATF_KIDS   #   the first time (agrow_kids)
+    jz 61f
+    mov rdi, rbx
+    mov rsi, r12
+    call agrow_kids
+61: mov rdi, rbx
+    mov rsi, r12
+    call agrow_touch
+    jmp 8f
+7:  mov rdi, rbx                # Stop: the agent's task it runs
+    mov rsi, [r12 + AT_id]
+    call agtask_of_call
+    test rax, rax
+    jz 8f
+    mov rdi, rbx
+    mov esi, AGK_STOP
+    mov rdx, [rax + AK_id]
+    call agtask_ask
+    jmp 8f
+71: mov rdi, rbx                # Run in background
+    mov rsi, r12
+    call agrow_canbg
+    test eax, eax
+    jz 8f
+    mov rdi, rbx
+    mov esi, AGK_BG
+    mov rdx, [r12 + AT_id]
+    call agtask_ask
 8:  call pend_clear
 9:  EPILOGUE
 
@@ -4308,6 +4997,11 @@ has_action:
     EPILOGUE
 1:  xor eax, eax
     test dword ptr [r12 + AT_flags], ATF_HIDDEN
+    jnz 9f
+    mov rdi, r12                # the calls under it, listed or not (task 11)
+    call kids_shown
+    test eax, eax
+    mov eax, PART_KIDS
     jnz 9f
     mov eax, PART_IN
     test dword ptr [r12 + AT_big], 1
@@ -4823,8 +5517,11 @@ call_dump:
     mov rsi, [rcx + rax*8]
     mov rdi, rbx
     call sb_push_cstr
-    mov rdi, rbx
-    mov esi, [r12 + AT_flags]
+    mov esi, [r12 + AT_flags]   # (content: whether its children are listed or were read is the view's)
+    cmp dword ptr [rsp], 0
+    je 21f
+    and esi, ~(ATF_KIDS | ATF_LOADED)
+21: mov rdi, rbx
     lea rdx, [rip + at_names]
     mov ecx, 1
     call push_flags
@@ -5619,6 +6316,17 @@ FN agrow_fit_dump
 .Lcompacted: .asciz "Compacted chat \302\267 "
 .Lk_freed: .asciz "k tokens freed"
 .Lcompacted_free: .asciz "Conversation was compacted to free up context."
+.Lk11_running: .asciz "Running "      # task 11: the lines under a call
+.Lk11_tool: .asciz "tool"
+.Lk11_tool_calls: .asciz "Tool calls"
+.Lk11_tool_call: .asciz " tool call"
+.Lk11_failed: .asciz " failed"
+.Lk11_stop: .asciz "Stop"
+.Lk11_run_bg: .asciz "Run in background"
+.Lk11_status: .asciz "status"
+.Lk11_bgline: .asciz "background"
+.Lk11_kids: .asciz "kids"
+.Lk11_kid: .asciz "kid "
 .Lk_label: .asciz "label"
 .Lk_text: .asciz "text"
 .Lk_check: .asciz "check"

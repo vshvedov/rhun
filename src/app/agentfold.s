@@ -44,12 +44,14 @@
 .equ FLK_LINE, 0                # line_lay's kinds
 .equ FLK_RUN, 1                 #   the line with a running label (print-agent-folds-fit: the longest)
 .equ FLK_COLLAPSE, 2
+.equ FLK_BG, 3                  #   (fl_note only: a closed fold's Run in background, task 11)
 .equ LL_DRAW, 0                 # line_lay's modes
 .equ LL_FIT, 1
 .equ MK_CALL, 1                 # kind_of: what a row is to a fold
 .equ MK_THINK, 2
 .equ MK_NOTICE, 3
 .equ MK_HIDDEN, 4
+.equ RUN_BG_LEN, 17             # task 11: "Run in background"
 
 .bss
 .p2align 3
@@ -1070,14 +1072,15 @@ fold_label:
 #   drives works or waits: the waiting request's "Waiting for permission…" / "Waiting for your answer…",
 #   "Running NAME…" while its last row is a call that runs, "Thinking…" while it is thinking that streams
 fold_run:
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, rdi
     mov r12, rsi
     mov r13d, edx
     mov rdi, r12
     call live
+    mov [rsp], eax              # (not working: only a background agent's call runs, task 11)
     test eax, eax
-    jz 8f
+    jz 2f
     mov rdi, r12
     call ask_fold
     cmp eax, r13d
@@ -1099,10 +1102,17 @@ fold_run:
     jz 4f
     test dword ptr [rcx + AT_flags], ATF_HIDDEN
     jnz 8f
-    cmp dword ptr [rcx + AT_state], ATS_RUNNING
-    jne 8f
     mov r15, rcx
-    mov rdi, rbx
+    cmp dword ptr [rcx + AT_state], ATS_RUNNING
+    jne 20f
+    cmp dword ptr [rsp], 0
+    jne 21f
+20: mov rdi, r12                # task 11: an agent's call has its result at once; its fold runs while the
+    mov rsi, [r15 + AT_id]      #   agent works, after the turn too
+    call agtask_runs
+    test eax, eax
+    jz 8f
+21: mov rdi, rbx
     lea rsi, [rip + .Lrunning]
     call sb_push_cstr
     mov rsi, [r15 + AT_name]
@@ -1111,12 +1121,22 @@ fold_run:
     lea rsi, [rip + .Ltool]
 3:  mov rdi, rbx
     call sb_push_cstr
+    mov rax, [rbx + SB_len]     # (a name drawn with its colon, "Agent:", without it here)
+    test rax, rax
+    jz 31f
+    mov rcx, [rbx + SB_ptr]
+    cmp byte ptr [rcx + rax - 1], ':'
+    jne 31f
+    dec qword ptr [rbx + SB_len]
+31:
     mov rdi, rbx
     lea rsi, [rip + .Lellipsis]
     call sb_push_cstr
     mov eax, 1
     EPILOGUE
-4:  cmp dword ptr [r14 + AM_role], R_THINK
+4:  cmp dword ptr [rsp], 0
+    je 8f
+    cmp dword ptr [r14 + AM_role], R_THINK
     jne 8f
     test dword ptr [r14 + AM_flags], AMF_LIVE
     jz 8f
@@ -1124,6 +1144,34 @@ fold_run:
 7:  mov rdi, rbx
     call sb_push_cstr
     mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# fold_bg(AS*, fold) -> rax the call of a closed fold's last row when it can be sent to the background now
+#   (agrow_canbg: its "Run in background" is on the fold's line, as the extension's AMt under a closed fold)
+fold_bg:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    call is_open
+    test eax, eax
+    jnz 8f
+    mov rdi, rbx
+    mov esi, r12d
+    call af_of
+    movsxd rsi, dword ptr [rax + AF_last]
+    mov rdi, rbx
+    call am_of
+    mov r13, [rax + AM_x]
+    test r13, r13
+    jz 8f
+    mov rdi, rbx
+    mov rsi, r13
+    call agrow_canbg
+    test eax, eax
+    jz 8f
+    mov rax, r13
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
@@ -1306,7 +1354,31 @@ line_lay:
 31: mov [rsp], eax
     mov eax, [rip + ll_x]
     mov [rsp + 4], eax
-    cmp dword ptr [rip + ll_mode], LL_DRAW      # the dot
+    mov dword ptr [rsp + 16], 0 # task 11: a closed fold whose last call can go to the background: "Run in
+    cmp dword ptr [rip + ll_mode], LL_DRAW      #   background" before the chevron (the extension's AMt)
+    jne 34f
+    mov rdi, rbx
+    mov esi, [rip + ll_fold]
+    call fold_bg
+    test rax, rax
+    jz 34f
+    mov [rsp + 24], rax
+    mov rdi, [rip + ag_fui]
+    lea rsi, [rip + .Lrun_bg]
+    mov edx, RUN_BG_LEN
+    call text_width
+    add eax, [rip + g_pmt + 4*MI_8]
+    mov ecx, [rsp]
+    shr ecx, 1
+    cmp eax, ecx
+    jle 32f
+    mov eax, ecx
+32: mov [rsp + 16], eax
+    add eax, [rip + g_pmt + 4*MI_4]
+    sub [rsp], eax
+    jns 34f
+    mov dword ptr [rsp], 0
+34: cmp dword ptr [rip + ll_mode], LL_DRAW      # the dot
     jne 4f
     cmp dword ptr [rsp + 8], 0
     je 32f
@@ -1447,7 +1519,56 @@ line_lay:
     mov ecx, [rip + ll_w]
     mov r9d, r14d
     call fl_note
-    test r15d, UB_CLICK
+    cmp dword ptr [rsp + 16], 0 # Run in background: its own button over the line's (task 11)
+    je 66f
+    mov eax, r12d               # after the chevron (r12d: its x)
+    add eax, [rsp + 12]
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov [rsp + 20], eax
+    call line_h
+    mov r8d, eax
+    lea edi, [r14 - PART_FOLD + PART_BG]
+    mov esi, [rsp + 20]
+    mov edx, [rip + ll_y]
+    mov ecx, [rsp + 16]
+    call ui_btn
+    mov r13d, eax
+    call line_h
+    mov r8d, eax
+    mov edi, FLK_BG
+    mov esi, [rsp + 20]
+    mov edx, [rip + ll_y]
+    mov ecx, [rsp + 16]
+    lea r9d, [r14 - PART_FOLD + PART_BG]
+    call fl_note
+    test eax, UB_HOVER
+    jz 65f
+    mov dword ptr [rip + g_cursor], CUR_POINTER
+65: call line_h
+    sub eax, [rip + g_pmt + 4*MI_8]
+    mov ecx, eax
+    mov rdi, [rip + ag_fui]
+    mov esi, [rsp + 20]
+    add esi, [rip + g_pmt + 4*MI_4]
+    mov edx, [rip + ll_y]
+    add edx, [rip + g_pmt + 4*MI_4]
+    lea r8, [rip + .Lrun_bg]
+    mov r9d, RUN_BG_LEN
+    COLOR eax, T_ACCENT
+    mov r10d, [rsp + 16]
+    sub r10d, [rip + g_pmt + 4*MI_4]
+    push r10
+    push rax
+    call ui_text_v_fit
+    add rsp, 16
+    test r13d, UB_CLICK
+    jz 66f
+    mov rdi, [rip + ll_row]
+    mov rsi, [rsp + 24]
+    mov edx, PART_BG
+    call agrow_pend
+    jmp 9f
+66: test r15d, UB_CLICK
     jz 7f
     mov rdi, rbx
     mov rsi, [rip + ll_row]
@@ -1915,8 +2036,11 @@ FN agfold_row_dump
     lea rsi, [rip + .Lk_fold]
     lea rax, [rip + fl_kind]
     cmp dword ptr [rax + r13*4], FLK_COLLAPSE
-    jne 2f
+    jne 21f
     lea rsi, [rip + .Lk_collapse]
+21: cmp dword ptr [rax + r13*4], FLK_BG
+    jne 2f
+    lea rsi, [rip + .Lk_bgfold]
 2:  mov rdi, rbx
     call sb_push_cstr
     mov rdi, rbx
@@ -2073,6 +2197,8 @@ fit_kinds: .quad .Lw_line, .Lw_run, .Lw_collapse
 .Lthinking_live: .asciz "Thinking\342\200\246"
 .Lwait_perm: .asciz "Waiting for permission\342\200\246"
 .Lwait_answer: .asciz "Waiting for your answer\342\200\246"
+.Lrun_bg: .asciz "Run in background"     # task 11 (RUN_BG_LEN bytes)
+.Lk_bgfold: .asciz "background"
 .Lrunning: .asciz "Running "
 .Ltool: .asciz "tool"
 .Lellipsis: .asciz "\342\200\246"

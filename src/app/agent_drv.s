@@ -1617,8 +1617,24 @@ cap_room:
 9:  EPILOGUE
 
 # is_idle(AL*) -> eax 1 when its program runs with nothing to do: READY, no request, no prompt waiting,
-#   none held, no turn whose end has not come
+#   none held, no turn whose end has not come, no unfinished task that holds it (agtask_busy)
 is_idle:
+    push rdi
+    call idle_base
+    pop rdi
+    test eax, eax
+    jz 1f
+    push rdi                    # task 11: an unfinished task (a background agent outlives its turn) holds
+    mov rdi, [rdi + AL_as]      #   it, for TASK_HOLD_MS after its last record at most (agtask_busy)
+    call agtask_busy
+    pop rdi
+    test rax, rax
+    setz al
+    movzx eax, al
+1:  ret
+
+# idle_base(AL*) -> eax 1 when it is idle but for its tasks
+idle_base:
     xor eax, eax
     cmp dword ptr [rdi + AL_state], ALS_READY
     jne 1f
@@ -2843,6 +2859,26 @@ last_interrupt:
 9:  mov eax, r12d
     EPILOGUE
 
+# FN ev_turn_begin(al): a turn the agent began by itself (task 11: a background task ended and the CLI answers
+#   it; no prompt of the user's is out): the conversation works until that turn's end (ev_turn_end), with
+#   Stop and the spinner as for any turn; a prompt sent meanwhile is held as during any turn. Nothing when a
+#   turn is out already
+FN ev_turn_begin
+    PROLOGUE
+    mov rbx, rdi
+    cmp qword ptr [rbx + AL_turns], 0
+    jne 9f
+    cmp dword ptr [rbx + AL_state], ALS_READY
+    jne 9f
+    mov qword ptr [rbx + AL_turns], 1
+    mov rdi, rbx
+    mov esi, ALS_WORKING
+    call agent_state_set
+    call time_ms
+    mov [rbx + AL_used], rax
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
 # turns_over(al): every message written has had its end (the last turn's end, or a held one the program
 #   dropped: ev_turn_end, ev_dropped): one still held ran without a word that it started (a command the
 #   program answers itself, without lifecycle or replay) and its row joins now; requests the turns left
@@ -3116,7 +3152,7 @@ idle_left:
     PROLOGUE
     mov rbx, rdi
     mov r12, -1
-    call is_idle
+    call idle_base
     test eax, eax
     jz 9f
     call idle_ms
@@ -3126,6 +3162,12 @@ idle_left:
     add r12, [rbx + AL_used]
     call time_ms
     sub r12, rax
+    mov rdi, [rbx + AL_as]      # an unfinished task holds it longer (agtask_busy: the hold's end is due then)
+    call agtask_busy
+    cmp rax, r12
+    jle 1f
+    mov r12, rax
+1:  test r12, r12
     jg 9f
     xor r12d, r12d              # due: 0, not "none"
 9:  mov rax, r12

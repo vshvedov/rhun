@@ -53,6 +53,8 @@
 .equ OA_FLAGS_END, 9            #   kind (claude_session.s's CLF_*: model, effort, ultracode, thinking)
 .equ OA_PLAN_MODE, 10           # plan review: set_permission_mode auto before a plan's Yes (claude_plan_mode_answer)
 .equ OA_GET_PLAN, 11            # plan review: get_plan for /plan (claude_plan_answer)
+.equ OA_TASK_STOP, 12           # task 11: stop_task (an error answer: a toast)
+.equ OA_TASK_BG, 13             # task 11: background_tasks (task_answer)
 .equ QUESTION_OPTS, 16          # a question's card shows its first 16 options
 .equ AUTH_MS, 10000             # the sign-in question's answer is waited for this long
 .equ AUTH_MAX, 65536            # bytes of its answer kept
@@ -1882,7 +1884,8 @@ h_user:
     call claude_ingest
 9:  EPILOGUE
 
-# h_system(AL*, record): init (the session's id, its folder, the mode) and status (the mode)
+# h_system(AL*, record): init (the session's id, its folder, the mode; a turn the agent began by itself) and
+#   status (the mode); the task records (claude_task)
 h_system:
     PROLOGUE
     mov rbx, rdi
@@ -1915,7 +1918,12 @@ h_system:
     mov esi, eax
     call ev_thought_tokens
     jmp 9f
-0:  mov rdi, r13
+0:  mov rdi, [rbx + AL_as]      # task 11: the task records into the conversation's tasks (claude_blocks.s)
+    mov rsi, r12
+    call claude_task
+    test eax, eax
+    jnz 9f
+    mov rdi, r13
     lea rsi, [rip + .Lv_init]
     call json_is
     test eax, eax
@@ -1934,7 +1942,9 @@ h_system:
     mov rsi, r12
     call claude_commands_changed
     jmp 9f
-1:  mov rdi, r12                # "ultrathink" painted in the box while the session offers it (finding 21)
+1:  mov rdi, rbx                # a turn no prompt of the user's began: the agent's own, after a background
+    call ev_turn_begin          #   task ended (finding 34; task 11)
+    mov rdi, r12                # "ultrathink" painted in the box while the session offers it (finding 21)
     lea rsi, [rip + .Lk_ultrathink]
     call json_get
     mov rdi, rax
@@ -3211,7 +3221,16 @@ h_response:
     mov rdi, rbx
     mov rsi, rax
     call out_take
-    cmp eax, OA_PLAN_MODE       # plan review: auto before a plan's Yes, get_plan (claude_cards.s)
+    cmp eax, OA_TASK_STOP       # task 11: stop_task, background_tasks
+    jb 32f
+    cmp eax, OA_TASK_BG
+    ja 32f
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, eax
+    call task_answer
+    jmp 9f
+32: cmp eax, OA_PLAN_MODE       # plan review: auto before a plan's Yes, get_plan (claude_cards.s)
     jne 33f
     mov rdi, rbx
     mov rsi, r12
@@ -3531,11 +3550,86 @@ err_tail:
     call sb_push_byte
 9:  EPILOGUE
 
-# cl_task(AL*, AGK_*, id cstr) -> eax 0: DRV_task; nothing is asked yet (phase 3 task 11 sends stop_task and
-#   the background request)
+# cl_task(AL*, AGK_*, id cstr) -> eax 1 written: DRV_task (task 11, finding 34). AGK_STOP: stop_task {task_id}
+#   (its answer is an empty success; the task's records follow: task_updated killed, task_notification
+#   stopped, then the agent's own turn); AGK_BG: background_tasks {tool_use_id} (the answer {backgrounded true}:
+#   the call's result comes at once and its task a line; false: it had ended, a toast; an error: a toast)
 cl_task:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rdx
     xor eax, eax
-    ret
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
+    test r13, r13
+    jz 9f
+    mov esi, OA_TASK_STOP
+    cmp r12d, AGK_STOP
+    je 1f
+    mov esi, OA_TASK_BG
+    cmp r12d, AGK_BG
+    jne 9f
+1:  mov rdi, rbx
+    call req_begin
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_stop_task]
+    lea r14, [rip + .Lk_task_id11]
+    cmp r12d, AGK_STOP
+    je 2f
+    lea rsi, [rip + .Lv_bg_tasks]
+    lea r14, [rip + .Lk_tool_use_id11]
+2:  call jw_cstr
+    lea rdi, [rip + cw]
+    mov rsi, r14
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, r13
+    call jw_cstr
+    mov rdi, rbx
+    call req_end
+9:  EPILOGUE
+
+# task_answer(AL*, response jv, act): stop_task's and background_tasks' answers: an error ("Could not move this
+#   to the background. Try again." / "The task could not be stopped. It may have finished already."), or
+#   background_tasks' {backgrounded false} ("… It may have just finished or already be running in the
+#   background."): a toast. The extension's third text ("turned off for this session") has no recorded answer
+task_answer:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov rdi, r12
+    lea rsi, [rip + .Lk_subtype]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_success]
+    call json_is
+    test eax, eax
+    jnz 1f
+    lea rdi, [rip + .Ltask_stop_failed]
+    cmp r13d, OA_TASK_STOP
+    je 8f
+    lea rdi, [rip + .Ltask_bg_failed]
+    jmp 8f
+1:  cmp r13d, OA_TASK_BG
+    jne 9f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_response]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lk_backgrounded]
+    call json_get
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_TRUE
+    je 9f
+    lea rdi, [rip + .Ltask_bg_ended]
+8:  call app_toast
+9:  EPILOGUE
 
 .section .rodata
 .p2align 3
@@ -3677,6 +3771,14 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lv_thinking_tokens: .asciz "thinking_tokens"
 .Lk_estimated: .asciz "estimated_tokens"
 .Lv_init: .asciz "init"
+.Lv_stop_task: .asciz "stop_task"                # task 11
+.Lv_bg_tasks: .asciz "background_tasks"
+.Lk_task_id11: .asciz "task_id"
+.Lk_tool_use_id11: .asciz "tool_use_id"
+.Lk_backgrounded: .asciz "backgrounded"
+.Ltask_bg_ended: .asciz "Could not move this to the background. It may have just finished or already be running in the background."
+.Ltask_bg_failed: .asciz "Could not move this to the background. Try again."
+.Ltask_stop_failed: .asciz "The task could not be stopped. It may have finished already."
 .Lv_status: .asciz "status"
 .Lv_success: .asciz "success"
 .Lv_error: .asciz "error"

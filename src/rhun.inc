@@ -2968,6 +2968,8 @@ F AT_h, 4               # the layout cached for a width; -1 none
 F AT_w, 4
 F AT_rev, 4
 F AT_fold, 4            # what its fold counts of it (agentfold.s): 1 a call, 2 a failed one
+F AT_nfail, 4           # its children that failed (task 11: the count line's " · M failed")
+F AT_kpad, 4
 ENDSTRUCT AT_SIZE
 .equ ATS_RUNNING, 0
 .equ ATS_OK, 1
@@ -3039,6 +3041,40 @@ ENDSTRUCT AT_SIZE
                                 #   in the user's place (a command's output, a task's notification)
 .equ AGK_STOP, 1                # DRV_task's what
 .equ AGK_BG, 2
+# ---- task 11: background tasks and agents (agenttask.s): AK, a task of a conversation (AS_tasks, by value) ----
+STRUCT
+F AK_id, 8              # owned cstr
+F AK_call, 8            # owned cstr or 0: the call it runs for
+F AK_label, 8           # owned cstr or 0: its description
+F AK_act, 8             # owned cstr or 0: what it does now (cut at 120 characters)
+F AK_err, 8             # owned cstr or 0: why it failed (cut at 120 characters)
+F AK_t0, 8              # time_ms it started
+F AK_seen, 8            # time_ms of its last record: the idle stop's hold counts from it
+F AK_tokens, 8          # the tokens it used, 0 unknown
+F AK_kind, 4            # AKK_*
+F AK_state, 4           # AKS_*
+F AK_bg, 4              # it runs in the background: it has a line under the turn
+F AK_uses, 4            # its tool calls, -1 unknown
+ENDSTRUCT AK_SIZE
+.equ AKK_AGENT, 0
+.equ AKK_SHELL, 1
+.equ AKS_WORKING, 0
+.equ AKS_WAITING, 1
+.equ AKS_FAILED, 2
+.equ AKS_FINISHED, 3
+.equ AKS_STOPPED, 4
+.equ AKX_CALL, 0                # agtask_text's which
+.equ AKX_LABEL, 1
+.equ AKX_ACT, 2
+.equ AKX_ERR, 3
+.equ AKN_KIND, 0                # agtask_num's which
+.equ AKN_STATE, 1
+.equ AKN_BG, 2
+.equ AKN_USES, 3
+.equ AKN_TOKENS, 4
+.equ AK_MAX, 256                # tasks kept a conversation (the oldest finished one goes first)
+.equ ID_AG_TASK, 0x620000       # + (line << 2) + 1: a task line's Stop
+.equ TASK_HOLD_MS, 3600000      # an unfinished task holds the idle stop off this long after its last record
 
 # ---- agent session metadata and transcript state ----
 STRUCT

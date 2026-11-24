@@ -10,6 +10,7 @@ folders, no CLAUDE* or ANTHROPIC* variables); nothing here starts the real CLI o
 Claude Code settings."""
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import time
@@ -814,6 +815,7 @@ PARITY = [
     ('apierror', (), {}), ('/context', (), {}), ('hello', (), {}), ('bg', (), {}), ('/compact', (), {}),
     ('/status', (), {}), ('error', (), {}),
     ('agent', (), {'until': 'The folder has a.py and notes.txt.'}),
+    ('agents2', (), {'until': 'Both agents ended.'}),
 ]
 # What a scenario may differ by between the stream and the file, each with the README finding that says why
 # the CLI keeps it in one of the two only: (scenario, kind, what, finding). kind "drop": a row of the stream
@@ -832,9 +834,17 @@ DIFFERENCES = [
     # a request Claude withdrew: control_cancel_request is a stream record, never a line of the file
     # (finding 27: user, assistant and system lines only; C10)
     ('withdraw', 'drop', 'info Withdrawn by Claude', 27),
-    # a subagent's calls: the stream gives them under their call; on disk they are in the agent's own file,
-    # never in the conversation's (finding 34), read when its line is opened (task 11)
+    # a background agent's call count: live it is its task records' usage.tool_uses; its result has none and
+    # the conversation's file has no task record (finding 34), so a reread row says "Tool calls" ("-") until
+    # its line is opened and its own file read (task 11: then the rows are compared again, children and all)
     ('agent', 'kids', 'Agent:', 34),
+    ('agents2', 'kids', 'Agent:', 34),
+    # a backgrounded task's end: the stream's task_notification is a meta line of its summary; the file has
+    # the same summary in a <task-notification> user string (finding 34), whose row is task 8's: until task 8
+    # is merged the reread has no such row (then these three entries go)
+    ('agent', 'drop', 'meta Agent "List the files" completed', 34),
+    ('agents2', 'drop', 'meta Agent "Look at a" completed', 34),
+    ('agents2', 'drop', 'meta Agent "Look at b" completed', 34),
 ]
 
 
@@ -854,8 +864,17 @@ class ParityTest(ToolCase):
 
     def compare(self, name):
         live = blocks(self.command('print-agent-rows content'))
+        opened = None                                 # task 11: the calls under an agent's call, opened
+        if [d for d in DIFFERENCES if d[0] == name and d[1] == 'kids']:
+            for row in self.agent_rows():
+                self.command('agent-row-click %d kids' % (row + 1))
+            opened = blocks(self.command('print-agent-rows content'))
         self.reread()
         reread = blocks(self.command('print-agent-rows content'))
+        if opened is not None:
+            for row in self.agent_rows():
+                self.command('agent-row-click %d kids' % (row + 1))
+            opened_again = blocks(self.command('print-agent-rows content'))
         dropped = False
         for scenario, kind, what, finding in DIFFERENCES:
             if scenario != name:
@@ -872,11 +891,25 @@ class ParityTest(ToolCase):
                 keep = [row for row in live if not (row[0].split(' ', 1)[0] == role and '  text ' + text in row)]
                 self.assertEqual(len(keep), len(live) - 1, (name, what))
                 live, dropped = keep, True
+                if opened is not None:
+                    opened = [row for row in opened if not (row[0].split(' ', 1)[0] == role and
+                                                            '  text ' + text in row)]
         if dropped:                                   # the prompts' places moved with the rows dropped
             live = [[re.sub(r' turn=\S+', '', line) for line in row] for row in live]
             reread = [[re.sub(r' turn=\S+', '', line) for line in row] for row in reread]
+            if opened is not None:
+                opened = [[re.sub(r' turn=\S+', '', line) for line in row] for row in opened]
+                opened_again = [[re.sub(r' turn=\S+', '', line) for line in row] for row in opened_again]
         self.assertEqual(reread, live, name)
+        if opened is not None:
+            self.assertEqual(opened_again, opened, name + ' (opened)')
+            self.assertTrue([row for row in opened_again if row[0].startswith('tool ') and
+                             [l for l in row if l.startswith('  call ')]], name)
         return '\n'.join(line for row in live for line in row)
+
+    def agent_rows(self):
+        return [int(l.split(' ', 1)[0]) for l in self.command('print-agent-rows').splitlines()
+                if re.match(r'\d+ tool .* name=Agent: ', l)]
 
     def test_rows_from_the_file_equal_rows_from_the_stream(self):
         (self.project / '.claude/commands').mkdir(parents=True)     # /hi: a custom command (finding 31)
@@ -2325,6 +2358,552 @@ class ThreadLookTest(TaskEightCase):
             if first != '-' and int(first) >= 0:
                 head = self.drawn(int(first))[0]
                 self.assertGreaterEqual(int(head['y']), 0, (h, head))
+
+
+
+# ---- task 11: a subagent's calls under its call; background tasks with Stop (agentrows.s, agenttask.s) ----
+
+NOT_ON_DISK = "This agent's calls are not on disk."
+BG_ENDED = ('Could not move this to the background. It may have just finished or already be running in the '
+            'background.')
+STOP_FAILED = 'The task could not be stopped. It may have finished already.'
+OWN_REPLY = 'The folder has a.py and notes.txt.'
+
+
+def sub_call(tid, name, tool_input, agent='a0123456789abcdef'):
+    """A subagent's file line with one tool_use block (finding 34: isSidechain, agentId, no parent id)."""
+    return dict(call(tid, name, tool_input, mid='msg-sub'), isSidechain=True, agentId=agent)
+
+
+def sub_result(tid, content, is_error=None, agent='a0123456789abcdef'):
+    return dict(result(tid, content, is_error), isSidechain=True, agentId=agent)
+
+
+def agent_result(tid, agent):
+    """A background agent's result as the conversation's file has it: no count (finding 34)."""
+    return result(tid, [{'type': 'text', 'text': 'Async agent launched successfully.\nagentId: %s' % agent}],
+                  structured={'isAsync': True, 'status': 'async_launched', 'agentId': agent,
+                              'description': 'Look', 'prompt': 'Look around.'})
+
+
+class TaskCase(ToolCase):
+    """An agent's row, its children, the conversation's tasks (print-agent-tasks)."""
+
+    def agents(self, content=True):
+        return [c for c in self.calls(content) if c['name'] == 'Agent:']
+
+    def agent_row(self, n=0):
+        return self.agents()[n]['row']
+
+    def kids(self, row):
+        """print-agent-rows' children of row (from 0): their head lines."""
+        lines = self.command('print-agent-rows %d 1' % row).splitlines()
+        return [l.strip() for l in lines if l.startswith('  call ')]
+
+    def drawn_parts(self, row):
+        return self.command('print-agent-row %d' % (row + 1)).splitlines()[1:]
+
+    def kids_line(self, row):
+        line = [l for l in self.drawn_parts(row) if l.startswith('kids ')]
+        return line[0].split(' ', 2)[2] if line else None
+
+    def status_line(self, row):
+        line = [l for l in self.drawn_parts(row) if l.startswith('status ')]
+        return line[0].split(' ', 2)[2] if line else None
+
+    def tasks(self):
+        """print-agent-tasks: (lines, more, [task dicts], [(kind, text) shown])."""
+        out = self.command('print-agent-tasks').splitlines()
+        head = dict(w.split('=') for w in out[0].split()[1:])
+        tasks, shown = [], []
+        for line in out[1:]:
+            m = re.match(r'task (\S+) kind=(\S+) state=(\S+) bg=(\d) uses=(\S+) call=(\S+) label=(.*) elapsed=(\d+)$',
+                         line)
+            if m:
+                tasks.append(dict(zip(('id', 'kind', 'state', 'bg', 'uses', 'call', 'label', 'elapsed'),
+                                      m.groups())))
+            elif line:
+                kind, _, text = line.partition(' ')
+                shown.append((kind, text))
+        return int(head['lines']), int(head['more']), tasks, shown
+
+    def subagents(self, sid='s1'):
+        folder = self.file(sid).with_suffix('') / 'subagents'
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def write_sub(self, agent, lines, sid='s1', meta=None):
+        folder = self.subagents(sid)
+        path = folder / ('agent-%s.jsonl' % agent)
+        path.write_text(''.join(json.dumps(dict(l, sessionId=sid)) + '\n' for l in lines), encoding='utf-8')
+        if meta is not None:
+            (folder / ('agent-%s.meta.json' % agent)).write_text(json.dumps(
+                {'agentType': 'general-purpose', 'toolUseId': meta, 'spawnDepth': 1}), encoding='utf-8')
+        return path
+
+    def agent_done(self, env=None, prompt='agent'):
+        """The fake's background agent, its own turn ended."""
+        self.start(env=env)
+        self.scenario(prompt)
+        self.until(lambda: [r for r in self.thread() if r.endswith(OWN_REPLY)], 'the agent\'s own turn', 20)
+        self.command('wait-agent ready 15000')
+
+    def requests(self, subtype):
+        return [m['request'] for m in self.stdin()
+                if m.get('type') == 'control_request' and m['request'].get('subtype') == subtype]
+
+
+class KidsTest(TaskCase):
+    """A call that ran under another call is a child of its AT, listed under it; read from the agent's own
+    file when the conversation is read from its file."""
+
+    def test_children_are_under_their_call_not_in_the_thread(self):
+        self.agent_done()
+        a, = self.agents()
+        self.assertEqual(a['kids'], '2')
+        self.assertEqual([r for r in self.thread() if r.startswith('tool(')], ['tool(Agent) List the files'])
+        names = [re.search(r' name=(\S+)', k).group(1) for k in self.kids(a['row'])]
+        self.assertEqual(names, ['Bash', 'Bash'])
+
+    def test_children_after_the_turns_result_still_nest(self):
+        # the agent's first call comes before the turn's result, its second after it (21-agent)
+        self.agent_done()
+        row = self.agent_row()
+        self.assertIn('wc -l notes.txt', '\n'.join(self.command('print-agent-rows %d 1' % row).splitlines()))
+        self.assertEqual(len([r for r in self.calls() if r['name'] == 'Bash']), 0)
+
+    def test_children_line_and_opening_it(self):
+        self.agent_done()
+        row = self.agent_row()
+        self.assertEqual(self.kids_line(row), '2 tool calls')
+        self.assertNotIn('kid 1', '\n'.join(self.drawn_parts(row)))
+        h0 = int(self.drawn(row)[0]['height'])
+        self.command('agent-row-click %d kids' % (row + 1))
+        parts = '\n'.join(self.drawn_parts(row))
+        self.assertIn('kid 1 ', parts)
+        self.assertIn('kid 2 ', parts)
+        self.assertGreater(int(self.drawn(row)[0]['height']), h0)
+        self.assertIn('kids', self.agents(content=False)[0]['flags'])
+        self.assertNotIn('kids', self.agents()[0]['flags'])           # (content: the view's)
+        self.command('agent-row-click %d kids' % (row + 1))
+        self.assertNotIn('kid 1', '\n'.join(self.drawn_parts(row)))
+        self.assertEqual(int(self.drawn(row)[0]['height']), h0)
+
+    def test_the_count_follows_task_progress(self):
+        self.start()
+        self.scenario('agent wait', wait=None)
+        self.until(lambda: self.agents() and self.agents()[0]['kids'] == '1', 'the first call counted', 15)
+        row = self.agent_row()
+        self.until(lambda: self.kids_line(row) == '1 tool call', 'one tool call', 5)
+        _, _, tasks, _ = self.tasks()
+        self.assertEqual((tasks[0]['uses'], tasks[0]['state'], tasks[0]['bg']), ('1', 'working', '1'))
+        self.assertTrue(self.status_line(row).startswith('Working in the background'), self.status_line(row))
+
+    def test_a_childs_result_and_failure_count(self):
+        self.start()
+        self.scenario('agents2')
+        self.until(lambda: [r for r in self.thread() if r.endswith('Both agents ended.')], 'the own turn', 20)
+        self.command('wait-agent ready 15000')
+        a, b = self.agents()
+        self.assertEqual(self.kids_line(a['row']), '2 tool calls · 1 failed')
+        self.assertEqual(self.kids_line(b['row']), '2 tool calls')
+
+    def test_parallel_agents_do_not_mix(self):
+        self.start()
+        self.scenario('agents2')
+        self.until(lambda: [r for r in self.thread() if r.endswith('Both agents ended.')], 'the own turn', 20)
+        self.command('wait-agent ready 15000')
+        a, b = self.agents()
+        dump_a = self.command('print-agent-rows content %d 1' % a['row'])
+        dump_b = self.command('print-agent-rows content %d 1' % b['row'])
+        self.assertIn('cat a.py', dump_a)
+        self.assertIn('wc a.py', dump_a)
+        self.assertNotIn('b.py', dump_a)
+        self.assertIn('cat b.py', dump_b)
+        self.assertNotIn('a.py', dump_b)
+        self.assertIn('state=failed', dump_a)
+        self.reread()                                  # the same from their files
+        for n, dump in enumerate((dump_a, dump_b)):
+            row = self.agent_row(n)
+            self.command('agent-row-click %d kids' % (row + 1))
+            again = self.command('print-agent-rows content %d 1' % row)
+            self.assertEqual(again, dump.replace(' kids=2', ' kids=2'), n)
+
+    def test_children_from_the_file(self):
+        self.agent_done()
+        self.reread()
+        a, = self.agents()
+        self.assertEqual(a['kids'], '-')
+        self.assertEqual(self.kids_line(a['row']), 'Tool calls')
+        self.command('agent-row-click %d kids' % (a['row'] + 1))
+        a, = self.agents()
+        self.assertEqual(a['kids'], '2')
+        self.assertEqual(self.kids_line(a['row']), '2 tool calls')
+        self.command('agent-kid-click %d 1 out' % (a['row'] + 1))
+        self.assertTrue(self.command('print-doc').startswith('a.py\nnotes.txt\n'))
+        self.assertIn('loaded', self.agents(content=False)[0]['flags'])
+
+    def test_a_conversation_of_many_agents_reads_no_subagent_file_to_open(self):
+        lines = []
+        for i in range(500):
+            lines += [call('ag%d' % i, 'Agent', {'description': 'd%d' % i, 'prompt': 'p'}),
+                      agent_result('ag%d' % i, 'a%016x' % i)]
+        self.seed_lines([prompt('look')] + lines)
+        folder = self.subagents()
+        (folder / 'agent-a0000000000000000.jsonl').write_text('{', encoding='utf-8')
+        os.chmod(folder, 0)                           # unreadable: opening the conversation never needs it
+        try:
+            self.start()
+            self.open_listed()
+            self.assertEqual(len(self.agents()), 500)
+            self.assertEqual(self.command('print-toast'), 'toast=\n')
+        finally:
+            os.chmod(folder, 0o755)
+
+    def test_children_of_a_call_without_a_result_by_meta_json(self):
+        self.seed_lines([prompt('look'), call('ag1', 'Agent', {'description': 'Look', 'prompt': 'p'})])
+        self.write_sub('a1111111111111111', [sub_call('k1', 'Bash', {'command': 'ls'}), sub_result('k1', 'x')],
+                       meta='ag1')
+        self.write_sub('a2222222222222222', [sub_call('k9', 'Bash', {'command': 'other'})], meta='someone-else')
+        self.start()
+        self.open_listed()
+        row = self.agent_row()
+        self.command('agent-row-click %d kids' % (row + 1))
+        kids = self.kids(row)
+        self.assertEqual(len(kids), 1, kids)
+        self.assertIn('call k1 ', kids[0])
+
+    def test_no_subagent_file(self):
+        self.seed_lines([prompt('look'), call('ag1', 'Agent', {'description': 'Look', 'prompt': 'p'}),
+                         agent_result('ag1', 'a9999999999999999')])
+        self.start()
+        self.open_listed()
+        row = self.agent_row()
+        self.command('agent-row-click %d kids' % (row + 1))
+        self.assertIn(NOT_ON_DISK, self.command('print-toast'))
+        self.assertEqual(self.kids_line(row), 'Tool calls')
+        self.assertEqual(self.kids(row), [])
+
+    def test_untrusted_subagent_files(self):
+        outside = self.work / 'outside.jsonl'
+        outside.write_text(json.dumps(sub_call('x1', 'Bash', {'command': 'secret'})) + '\n', encoding='utf-8')
+        lines = [prompt('look')]
+        for tid, agent in (('ag1', 'a1111111111111111'), ('ag2', 'a2222222222222222'), ('ag3', '../../outside'),
+                           ('ag4', 'a4444444444444444'), ('ag5', 'a5555555555555555')):
+            lines += [call(tid, 'Agent', {'description': tid, 'prompt': 'p'}), agent_result(tid, agent)]
+        self.seed_lines(lines)
+        # ag1: its own file, and a .meta.json that lies (it claims ag1 for another file): the result's id wins
+        self.write_sub('a1111111111111111', [sub_call('k1', 'Bash', {'command': 'mine'}), sub_result('k1', 'ok')])
+        self.write_sub('a1999999999999999', [sub_call('k2', 'Bash', {'command': 'liar'})], meta='ag1')
+        # ag2: a link out of the folder: not followed
+        (self.subagents() / 'agent-a2222222222222222.jsonl').symlink_to(outside)
+        # ag4: cut in the middle of its last line; ag5: past AT_KIDS_MAX calls (counted, not kept)
+        path = self.write_sub('a4444444444444444', [sub_call('k4', 'Bash', {'command': 'whole'}),
+                                                     sub_result('k4', 'done')])
+        path.write_text(path.read_text() + json.dumps(sub_call('k5', 'Bash', {'command': 'cut'}))[:40],
+                        encoding='utf-8')
+        many = []
+        for i in range(1200):
+            many += [sub_call('m%d' % i, 'Bash', {'command': 'n%d' % i}), sub_result('m%d' % i, 'o')]
+        self.write_sub('a5555555555555555', many)
+        self.start()
+        self.open_listed()
+        rows = [a['row'] for a in self.agents()]
+        for row in rows:
+            self.command('agent-row-click %d kids' % (row + 1))
+        dumps = [self.command('print-agent-rows content %d 1' % row) for row in rows]
+        self.assertIn('mine', dumps[0])
+        self.assertNotIn('liar', dumps[0])
+        self.assertNotIn('secret', dumps[1])
+        self.assertNotIn('secret', dumps[2])
+        self.assertIn('whole', dumps[3])
+        self.assertNotIn('cut', dumps[3])
+        self.assertIn(' kids=1200', dumps[4].splitlines()[0])
+        self.assertEqual(len(self.kids(rows[4])), 1000)
+        self.assertIn(NOT_ON_DISK, self.command('print-toast'))
+
+    def test_kids_rows_fit(self):
+        self.codex()
+        self.tool('p name=Agent: second=Look around in=Look around the project. flags=512 state=ok')
+        for i in range(3):
+            self.tool('k%d up=p name=Bash second=Step %d in=ls -la out=%s flags=2 state=%s ready=1 done=1'
+                      % (i, i, '\\n'.join('line %d' % j for j in range(5)), 'failed' if i == 1 else 'ok'))
+        row = self.agents()[0]['row']
+        self.command('agent-row-click %d kids' % (row + 1))
+        self.assertEqual(self.kids_line(row), '3 tool calls · 1 failed')
+        ui = int(re.search(r'points=(\d+)', self.command('print-agents-metrics')).group(1))
+        fit_check(self, self.command('print-agent-rows-fit'), ui, rows=(row,))
+
+
+def fit_check(case, dump, ui, rows=None, head_key='size'):
+    """Every box of a fit dump inside its width and height, no two texts or two buttons overlapping, every
+    button at least MI_16 tall."""
+    blocks, current = [], None
+    for line in dump.splitlines():
+        if line.startswith(head_key + '='):
+            current = (dict(w.split('=', 1) for w in line.split(' ')), [])
+            blocks.append(current)
+        elif current is not None:
+            current[1].append(line.strip())
+    case.assertTrue(blocks)
+    for head, parts in blocks:
+        if rows is not None and 'row' in head and int(head['row']) not in rows:
+            continue
+        size, tw = int(head['size']), int(head['tw'])
+        boxes = []
+        for p in parts:
+            words = p.split(' ')
+            kind = words[0] if words[0] != 'button' else 'button' + words[1]
+            x, y, w, h = (int(v) for v in words[-1].split(','))
+            case.assertGreaterEqual(x, 0, (head, p))
+            case.assertLessEqual(x + w, tw, (head, p))
+            case.assertLessEqual(y + h, int(head['h']), (head, p))
+            if kind.startswith('button'):
+                case.assertGreaterEqual(h, mi(16, size, ui) - 1, (head, p))
+            boxes.append((kind, x, y, w, h))
+        for group in ([b for b in boxes if not b[0].startswith('button')],
+                      [b for b in boxes if b[0].startswith('button')]):
+            for i, a in enumerate(group):
+                for b in group[i + 1:]:
+                    overlap = (a[1] < b[1] + b[3] and b[1] < a[1] + a[3] and
+                               a[2] < b[2] + b[4] and b[2] < a[2] + a[4] and a[3] and b[3] and a[4] and b[4])
+                    case.assertFalse(overlap, (head, a, b))
+
+
+class TasksTest(TaskCase):
+    """Background tasks: their lines under the turn, Stop, Run in background, the agent's own turn, the idle
+    stop that waits for them."""
+
+    def test_task_lines_only_for_backgrounded_tasks(self):
+        self.start(extra='[ui]\nagents_width = 700\n', env={'FAKE_CLAUDE_BG_MS': '4000'})
+        self.scenario('bg', wait='working')
+        self.until(lambda: self.tasks()[2], 'the foreground task', 5)
+        lines, _, tasks, _ = self.tasks()
+        self.assertEqual((lines, tasks[0]['kind'], tasks[0]['bg']), (0, 'shell', '0'))
+        self.command('agent-stop')
+        self.command('wait-agent ready 15000')
+        self.command('agent-prompt agent wait')
+        self.until(lambda: self.tasks()[0] == 1, 'the agent\'s line', 15)
+        _, _, tasks, shown = self.tasks()
+        agent = [t for t in tasks if t['kind'] == 'agent'][0]
+        self.assertEqual((agent['bg'], agent['state'], agent['label']), ('1', 'working', 'List the files'))
+        label = [text for kind, text in shown if kind == 'label'][0]
+        self.assertEqual(label, 'List the files: Bash')
+        self.assertRegex([text for kind, text in shown if kind == 'right'][0], r'^34\.6k tokens · 1 tool · \d+s$')
+
+    def test_task_lines_and_states(self):
+        self.codex('[ui]\nagents_width = 700\n')       # (room for the tokens and calls: a narrow line has the time)
+        self.command('agent-test-task t1 kind=agent bg=1 uses=3 tokens=1234567 age=65000 label=Explore')
+        self.command('agent-test-task t1 act=Running grep')
+        self.command('agent-test-task t2 kind=shell bg=1 age=2000 label=Sleep 20 seconds')
+        self.command('agent-test-task t3 kind=shell bg=0 label=Foreground')
+        self.command('agent-test-task t4 kind=agent bg=1 state=finished label=Done')
+        lines, more, tasks, shown = self.tasks()
+        self.assertEqual((lines, more), (2, 0))
+        self.assertEqual([t for k, t in shown if k == 'label'], ['Explore: Running grep', 'Sleep 20 seconds'])
+        rights = [t for k, t in shown if k == 'right']
+        self.assertRegex(rights[0], r'^1\.2M tokens · 3 tools · 1m [56]s$')
+        self.assertRegex(rights[1], r'^[23]s$')
+        self.assertEqual(len([t for k, t in shown if k == 'button']), 2)
+        self.command('agent-test-task t2 state=stopped')
+        self.assertEqual(self.tasks()[0], 1)
+        self.stop()                                     # narrow: the time alone
+        self.start(extra='[ui]\nagents_width = 240\n')
+        self.command('cmd focus_agents')
+        self.command('wait-agents')
+        self.command('print-agents 1')
+        self.command('agent-test-task t1 kind=agent bg=1 uses=3 tokens=1234567 age=65000 label=Explore')
+        self.assertRegex([t for k, t in self.tasks()[3] if k == 'right'][0], r'^1m [56]s$')
+
+    def test_overflow_line(self):
+        self.codex('[ui]\nagents_width = 700\n')
+        for i in range(4):
+            self.command('agent-test-task t%d kind=agent bg=1 uses=%d tokens=1000 label=Agent %d' % (i, i, i))
+        lines, more, _, shown = self.tasks()
+        self.assertEqual((lines, more), (4, 0))                   # 4 are shown whole
+        self.assertEqual(len([t for k, t in shown if k == 'label']), 4)
+        self.command('agent-test-task t4 kind=agent bg=1 uses=4 tokens=1000 label=Agent 4')
+        lines, more, _, shown = self.tasks()
+        self.assertEqual((lines, more), (5, 2))
+        self.assertEqual([t for k, t in shown if k == 'label'], ['Agent 0', 'Agent 1', 'Agent 2'])
+        self.assertEqual([t for k, t in shown if k == 'more'], ['+2 more agents'])
+        self.assertRegex([t for k, t in shown if k == 'right'][-1], r'^2\.0k tokens · 7 tools · \d+s combined$')
+        self.assertEqual(len([t for k, t in shown if k == 'button']), 3)  # (no Stop on the overflow line)
+
+    def test_task_lines_fit(self):
+        self.codex()
+        for i in range(6):
+            self.command('agent-test-task t%d kind=agent bg=1 uses=12 tokens=345678 age=4000000 label=%s'
+                         % (i, 'A long description of what this agent does ' * 3))
+        ui = int(re.search(r'points=(\d+)', self.command('print-agents-metrics')).group(1))
+        dump = self.command('print-agent-tasks-fit')
+        self.assertEqual(dump.count('size='), 25 * 34)
+        fit_check(self, dump, ui)
+
+    def test_elapsed_adds_no_timer(self):
+        self.codex()
+        self.command('wait 1500')
+        def passes():
+            return int(self.command('print-loop-stats').split()[0].split('=')[1])
+        before = passes()
+        time.sleep(3)
+        base = passes() - before
+        self.command('agent-test-task t1 kind=agent bg=1 label=Ticking')
+        self.command('wait 300')
+        before = passes()
+        time.sleep(3)
+        with_line = passes() - before
+        self.assertLessEqual(with_line, base + 5, (base, with_line))     # a frame a second at most
+
+    def test_no_task_lines_for_a_reader(self):
+        self.agent_done()
+        self.reread()
+        self.assertEqual(self.tasks()[:3], (0, 0, []))
+        self.stop()
+        self.start(self.claude_section('chat = false\n'))
+        self.open_listed()
+        self.assertEqual(self.tasks()[:3], (0, 0, []))
+
+    def test_stop_sends_stop_task(self):
+        self.start()
+        self.scenario('agent wait', wait=None)
+        self.until(lambda: self.tasks()[0] == 1, 'the agent\'s line', 15)
+        _, _, tasks, _ = self.tasks()
+        row = self.agent_row()
+        self.command('agent-row-click %d stop' % (row + 1))
+        self.until(lambda: self.requests('stop_task'), 'stop_task sent', 5)
+        self.assertEqual(self.requests('stop_task'), [{'subtype': 'stop_task', 'task_id': tasks[0]['id']}])
+        self.until(lambda: self.tasks()[2][0]['state'] == 'stopped', 'stopped', 10)
+        self.assertEqual(self.tasks()[0], 0)
+        self.assertEqual(self.status_line(row), 'Stopped')
+        self.until(lambda: [r for r in self.thread() if r.endswith('The agent stopped.')], 'its own turn', 15)
+        self.command('wait-agent ready 15000')
+        self.assertNotIn('info Interrupted', self.thread())       # the agent's mark is not a row of the thread
+        self.assertIn('meta Agent "List the files" was stopped by user', self.thread())
+
+    def test_stop_on_a_task_line(self):
+        self.start()
+        self.scenario('agent wait', wait=None)
+        self.until(lambda: self.tasks()[0] == 1, 'the agent\'s line', 15)
+        _, _, tasks, _ = self.tasks()
+        self.command('agent-task-click 1')
+        self.until(lambda: self.requests('stop_task'), 'stop_task sent', 5)
+        self.assertEqual(self.requests('stop_task')[0]['task_id'], tasks[0]['id'])
+
+    def test_the_answers_that_fail_are_toasts(self):
+        self.start()
+        self.chat('hello')
+        self.command('agent-task-ask stop nosuchtask')
+        self.until(lambda: STOP_FAILED in self.command('print-toast'), 'the stop failed', 5)
+        self.command('agent-task-ask bg toolu_nobody')
+        self.until(lambda: BG_ENDED in self.command('print-toast'), 'it had ended', 5)
+
+    def test_run_in_background(self):
+        self.start(env={'FAKE_CLAUDE_BG_MS': '6000'})
+        self.scenario('bg', wait='working')
+        call_ = self.until(lambda: [c for c in self.calls() if 'canbg' in c['flags']], 'canbg', 5)[0]
+        parts = self.drawn_parts(call_['row'])
+        self.assertIn('Run in background', '\n'.join(p for p in parts if p.startswith('background ')))
+        self.assertTrue([p for p in parts if p.startswith('button 12 ')], parts)
+        self.command('agent-row-click %d bg' % (call_['row'] + 1))
+        self.until(lambda: self.requests('background_tasks'), 'the request', 5)
+        self.assertTrue(self.requests('background_tasks')[0]['tool_use_id'].startswith('toolu_fake'))
+        self.command('wait-agent ready 10000')
+        c = [c for c in self.calls() if c['row'] == call_['row']][0]
+        self.assertEqual(c['state'], 'ok')
+        self.assertNotIn('canbg', c['flags'])
+        self.assertTrue(c['out'].split(' ', 1)[1].startswith('Command was manually backgrounded'), c)
+        self.assertFalse([p for p in self.drawn_parts(call_['row']) if p.startswith('background ')])
+        lines, _, tasks, shown = self.tasks()
+        self.assertEqual((lines, tasks[0]['bg'], tasks[0]['kind']), (1, '1', 'shell'))
+        self.assertEqual([t for k, t in shown if k == 'label'], ['Sleep 20 seconds then echo done'])
+        self.until(lambda: self.tasks()[0] == 0, 'the task ends', 10)
+        self.assertIn('meta Sleep 20 seconds then echo done', self.thread())
+
+    def test_run_in_background_in_a_closed_fold(self):
+        self.start(self.claude_section() + '[agents]\nfocus_view = true\n', env={'FAKE_CLAUDE_BG_MS': '6000'})
+        self.scenario('bg', wait='working')
+        call_ = self.until(lambda: [c for c in self.calls() if 'canbg' in c['flags']], 'canbg', 5)[0]
+        self.command('print-frames')
+        parts = self.command('print-agent-row %d' % (call_['row'] + 1)).splitlines()
+        bg = [p for p in parts if p.startswith('background ')]
+        self.assertEqual(len(bg), 1, parts)
+        self.assertEqual(int(bg[0].split()[-1]) & 63, 12)
+
+    def test_a_fold_runs_while_its_agent_works(self):
+        # focus view: an agent's call has its result at once; its fold still runs while the agent works
+        self.start(self.claude_section() + '[agents]\nfocus_view = true\n')
+        self.scenario('agent wait', wait=None)
+        self.until(lambda: self.tasks()[0] == 1, 'the agent\'s line', 15)
+        self.until(lambda: ' run=Running_Agent… ' in self.command('print-agent-folds'), 'the fold runs', 5)
+        self.command('agent-row-click %d stop' % (self.agent_row() + 1))
+        self.until(lambda: self.tasks()[2][0]['state'] == 'stopped', 'stopped', 10)
+        self.until(lambda: ' run=Running_Agent… ' not in self.command('print-agent-folds'), 'the fold ends', 15)
+
+    def test_the_agents_own_turn_works_and_ends(self):
+        self.start(env={'FAKE_CLAUDE_OWN_TURN_MS': '2500'})
+        self.scenario('agent', wait=None)
+        self.until(lambda: [r for r in self.thread() if r.startswith('meta Agent ')], 'the agent ended', 15)
+        self.until(lambda: self.live().startswith('state=working'), 'its own turn works', 5)
+        self.assertEqual(self.command('print-agent-spinner').split()[0], 'shown=1')
+        self.command('agent-prompt more')                       # held as during any turn
+        self.command('wait-agent ready 20000')
+        self.assertEqual(self.prompts(), ['agent', 'more'])
+        thread = self.thread()
+        self.assertLess(thread.index('agent ' + OWN_REPLY) if 'agent ' + OWN_REPLY in thread else
+                        [i for i, r in enumerate(thread) if r.endswith(OWN_REPLY)][0], thread.index('user more'))
+        self.assertEqual(thread[-1].split(' ', 1)[1], 'ok: more')
+
+    def test_stop_ends_the_agents_own_turn(self):
+        self.start(env={'FAKE_CLAUDE_OWN_TURN_MS': '2500'})
+        self.scenario('agent', wait=None)
+        self.until(lambda: [r for r in self.thread() if r.startswith('meta Agent ')], 'the agent ended', 15)
+        self.until(lambda: self.live().startswith('state=working'), 'its own turn works', 5)
+        self.command('agent-stop')
+        self.command('wait-agent ready 15000')
+        self.assertEqual(len(self.requests('interrupt')), 1)
+        self.assertEqual(self.thread()[-1], 'info Interrupted')
+
+    def test_idle_stop_waits_for_a_background_task(self):
+        self.start(env={'FAKE_CLAUDE_BG_MS': '3500'})
+        self.scenario('bg', wait='working')
+        call_ = self.until(lambda: [c for c in self.calls() if 'canbg' in c['flags']], 'canbg', 5)[0]
+        self.command('agent-row-click %d bg' % (call_['row'] + 1))
+        self.command('wait-agent ready 10000')
+        self.command('agent-timing idle=300')
+        time.sleep(1.5)
+        self.assertTrue(self.live().startswith('state=ready pid=1 '), self.live())     # the task holds it
+        self.until(lambda: self.live().startswith('state=off'), 'the idle stop after the task', 10)
+        self.assertEqual(self.tasks()[:3], (0, 0, []))
+
+    def test_an_endless_task_holds_the_idle_stop_for_its_bound(self):
+        self.start(env={'FAKE_CLAUDE_BG_MS': '30000'})
+        self.scenario('bg', wait='working')
+        call_ = self.until(lambda: [c for c in self.calls() if 'canbg' in c['flags']], 'canbg', 5)[0]
+        self.command('agent-row-click %d bg' % (call_['row'] + 1))
+        self.command('wait-agent ready 10000')
+        self.command('agent-task-hold 1500')
+        self.command('agent-timing idle=300')
+        time.sleep(0.8)
+        self.assertTrue(self.live().startswith('state=ready pid=1 '), self.live())
+        self.until(lambda: self.live().startswith('state=off'), 'the hold ends', 5)
+
+    def test_resync_with_tasks_and_children(self):
+        self.start()
+        self.scenario('agent wait', wait=None)
+        self.until(lambda: self.tasks()[0] == 1, 'the agent\'s line', 15)
+        row = self.agent_row()
+        self.command('agent-row-click %d kids' % (row + 1))
+        self.command('agent-kid-click %d 1 out' % (row + 1))
+        self.assertTrue(self.command('print-doc').startswith('a.py\nnotes.txt\n'))
+        self.command('key Down')                       # a row focused
+        self.command('agent-release')
+        self.command('wait-agent off')
+        self.until_gone()
+        self.command('print-frames')
+        self.assertEqual(self.tasks()[:3], (0, 0, []))
+        self.assertIn(' focus=- ', ' ' + self.command('print-agent-thread') + ' ')
+        self.assertEqual(self.agents()[0]['kids'], '-')
 
 
 if __name__ == '__main__':

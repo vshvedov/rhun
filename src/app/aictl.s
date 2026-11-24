@@ -1618,6 +1618,354 @@ c_agent_fold_click:
 .Lc_agent_fold_click: .asciz "agent-fold-click"
 .text
 
+# ---- task 11: background tasks and the calls under a call (agenttask.s, agentrows.s) ----
+
+# print-agent-tasks: the open conversation's tasks and what their lines show (agtask_dump)
+c_print_agent_tasks:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    mov rbx, rax
+    call ai_out
+    mov rdi, rax
+    mov rsi, rbx
+    call agtask_dump
+    xor eax, eax
+    EPILOGUE
+
+# print-agent-tasks-fit: their lines laid out at every panel size and width (agtask_fit_dump)
+c_print_agent_tasks_fit:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agtask_fit_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-task-hold MS: how long an unfinished task holds the idle stop after its last record (0: TASK_HOLD_MS)
+c_agent_task_hold:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov [rip + agtask_hold_ms], eax
+    xor eax, eax
+    EPILOGUE
+
+# agent-kid-click N K PART: as a click on that part of the K-th call (from 1, depth first) under the call of
+#   row N (from 1) of the open conversation (agent-row-click's part words), followed after the frame
+c_agent_kid_click:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    test rax, rax
+    jz 8f
+    lea r12, [rax - 1]
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    test rax, rax
+    jz 8f
+    mov r14, rax
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + part_words]
+    call ai_opt_word
+    test eax, eax
+    js 8f
+    lea rcx, [rip + part_nums]
+    mov r13d, [rcx + rax*4]
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r14
+    mov ecx, r13d
+    call agrow_kid_click
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# agent-test-task ID [call=ID] [kind=agent|shell] [state=working|waiting|failed|finished|stopped] [bg=0|1]
+#   [uses=N] [tokens=N] [age=MS] [seen=MS] [label=T | act=T | err=T]: a task of the open conversation made or
+#   changed through agtask_* alone (no driver): label, act and err take the rest of the line; age and seen
+#   put its start and its last record that long ago
+c_agent_test_task:
+    PROLOGUE 32
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    call ai_arg
+    test rdx, rdx
+    jz 8f
+    mov rdi, rbx
+    mov rsi, rax
+    call agtask_get
+    test rax, rax
+    jz 8f
+    mov r12, rax
+    mov qword ptr [rsp], -1     # age
+    mov qword ptr [rsp + 8], -1 # seen
+1:  call ai_arg
+    test rdx, rdx
+    jz 7f
+    mov r13, rax
+    mov r14, rdx
+    mov r15d, AKX_LABEL
+    mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Ltk_label]
+    call tk_key
+    test rax, rax
+    jnz .Ltk_text
+    mov r15d, AKX_ACT
+    mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Ltk_act]
+    call tk_key
+    test rax, rax
+    jnz .Ltk_text
+    mov r15d, AKX_ERR
+    mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Ltk_err]
+    call tk_key
+    test rax, rax
+    jnz .Ltk_text
+    mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Ltk_call]
+    call tk_key
+    test rax, rax
+    jz 2f
+    mov rdi, r12
+    mov esi, AKX_CALL
+    mov rcx, rdx
+    mov rdx, rax
+    call agtask_text
+    jmp 1b
+2:  mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Ltk_kind]
+    call tk_key
+    test rax, rax
+    jz 3f
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + .Ltk_shell]
+    call str_eq_cstr
+    mov edx, AKK_AGENT
+    test eax, eax
+    jz 21f
+    mov edx, AKK_SHELL
+21: mov rdi, r12
+    mov esi, AKN_KIND
+    call agtask_num
+    jmp 1b
+3:  mov rdi, r13
+    mov rsi, r14
+    lea rdx, [rip + .Ltk_state]
+    call tk_key
+    test rax, rax
+    jz 4f
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + tk_states]
+    call ai_opt_word
+    test eax, eax
+    js 1b
+    mov rdi, r12
+    mov edx, eax
+    mov esi, AKN_STATE
+    call agtask_num
+    jmp 1b
+4:  xor r15d, r15d              # the numbers: bg, uses, tokens, age, seen
+5:  lea rax, [rip + tk_nums]
+    mov rdx, [rax + r15*8]
+    test rdx, rdx
+    jz 1b
+    mov rdi, r13
+    mov rsi, r14
+    call tk_key
+    test rax, rax
+    jnz 6f
+    inc r15d
+    jmp 5b
+6:  mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    cmp r15d, 3
+    jb 61f
+    mov [rsp + r15*8 - 24], rax # age, seen
+    jmp 1b
+61: mov rdi, r12
+    lea rcx, [rip + tk_akn]
+    mov esi, [rcx + r15*4]
+    mov edx, eax
+    call agtask_num
+    jmp 1b
+.Ltk_text:
+    mov r13, rax                # the rest of the line, from the value on
+    call ai_arg_rest
+    lea rcx, [rax + rdx]
+    sub rcx, r13
+    mov rdi, r12
+    mov esi, r15d
+    mov rdx, r13
+    call agtask_text
+    jmp 7f
+7:  mov rdi, rbx
+    mov rsi, r12
+    call agtask_touch
+    call time_ms
+    mov rcx, [rsp]
+    test rcx, rcx
+    js 71f
+    mov rdx, rax
+    sub rdx, rcx
+    mov [r12 + AK_t0], rdx
+71: mov rcx, [rsp + 8]
+    test rcx, rcx
+    js 72f
+    sub rax, rcx
+    mov [r12 + AK_seen], rax
+72: xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# agent-task-click N: as a click on the Stop of the open conversation's N-th task line (from 1)
+c_agent_task_click:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov rdi, rbx
+    mov rsi, rax
+    call agtask_click
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# agent-task-ask stop|bg ID: the open conversation's driver asked to stop task ID or to send call ID to the
+#   background, whatever the rows show (the answers' paths: an id the program does not know)
+c_agent_task_ask:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + .Ltk_stop]
+    call str_eq_cstr
+    mov r12d, AGK_BG
+    test eax, eax
+    jz 1f
+    mov r12d, AGK_STOP
+1:  call ai_arg
+    test rdx, rdx
+    jz 8f
+    mov rdi, rax
+    mov rsi, rdx
+    call mem_dup
+    mov r13, rax
+    mov rdi, rbx
+    mov esi, r12d
+    mov rdx, r13
+    call agtask_ask
+    mov r14d, eax
+    mov rdi, r13
+    call mem_free
+    test r14d, r14d
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# tk_key(ptr, len, "KEY=") -> rax, rdx the value after it, or 0
+tk_key:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, rdx
+    call strlen
+    mov r14, rax
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    mov rcx, r14
+    call str_starts
+    test eax, eax
+    jz 8f
+    lea rax, [rbx + r14]
+    mov rdx, r12
+    sub rdx, r14
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    EPILOGUE
+
+.section .rodata
+.Lc_print_agent_tasks: .asciz "print-agent-tasks"
+.Lc_print_agent_tasks_fit: .asciz "print-agent-tasks-fit"
+.Lc_agent_task_hold: .asciz "agent-task-hold"
+.Lc_agent_kid_click: .asciz "agent-kid-click"
+.Lc_agent_test_task: .asciz "agent-test-task"
+.Lc_agent_task_click: .asciz "agent-task-click"
+.Lc_agent_task_ask: .asciz "agent-task-ask"
+.Ltk_stop: .asciz "stop"
+.Ltk_label: .asciz "label="
+.Ltk_act: .asciz "act="
+.Ltk_err: .asciz "err="
+.Ltk_call: .asciz "call="
+.Ltk_kind: .asciz "kind="
+.Ltk_state: .asciz "state="
+.Ltk_shell: .asciz "shell"
+.Ltk_bg: .asciz "bg="
+.Ltk_uses: .asciz "uses="
+.Ltk_tokens: .asciz "tokens="
+.Ltk_age: .asciz "age="
+.Ltk_seen: .asciz "seen="
+.Ltk_working: .asciz "working"
+.Ltk_waiting: .asciz "waiting"
+.Ltk_failed: .asciz "failed"
+.Ltk_finished: .asciz "finished"
+.Ltk_stopped: .asciz "stopped"
+.p2align 3
+tk_states: .quad .Ltk_working, .Ltk_waiting, .Ltk_failed, .Ltk_finished, .Ltk_stopped, 0
+tk_nums: .quad .Ltk_bg, .Ltk_uses, .Ltk_tokens, .Ltk_age, .Ltk_seen, 0
+tk_akn: .long AKN_BG, AKN_USES, AKN_TOKENS
+.text
+
 .bss
 .p2align 3
 tt_rest: .quad 0                # agent-test-tool: its keys and values, where each key's value starts
@@ -2522,6 +2870,10 @@ ai_ctl:
     .quad .Lc_agent_test_truncate, c_agent_test_truncate
     .quad .Lc_print_agent_folds, c_print_agent_folds, .Lc_print_agent_folds_fit, c_print_agent_folds_fit   # task 9
     .quad .Lc_agent_fold_click, c_agent_fold_click
+    .quad .Lc_print_agent_tasks, c_print_agent_tasks, .Lc_print_agent_tasks_fit, c_print_agent_tasks_fit  # task 11
+    .quad .Lc_agent_task_hold, c_agent_task_hold, .Lc_agent_kid_click, c_agent_kid_click
+    .quad .Lc_agent_test_task, c_agent_test_task, .Lc_agent_task_click, c_agent_task_click
+    .quad .Lc_agent_task_ask, c_agent_task_ask
     .quad .Lc_print_agents_metrics, c_print_agents_metrics, .Lc_print_agents_box, c_print_agents_box
     .quad .Lc_print_agent_placeholder, c_print_agent_placeholder, .Lc_print_sh_quote, c_print_sh_quote
     .quad .Lc_print_holder, c_print_holder

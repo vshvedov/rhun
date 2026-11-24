@@ -641,8 +641,8 @@ FN claude_dlg2_open
     mov eax, 1
 9:  EPILOGUE
 
-# mod() -> rax the open dialog's module row (0 none)
-mod:
+# mod_row() -> rax the open dialog's module row (0 none)
+mod_row:
     mov rax, [rip + c2_kind]
     cmp rax, K_COUNT
     jae 1f
@@ -751,7 +751,7 @@ send:
     PROLOGUE
     mov r12, rdi
     mov rbx, rsi
-    call mod
+    call mod_row
     test rax, rax
     jz 9f
     mov [rip + c2_rq], r12
@@ -787,7 +787,7 @@ FN claude_dlg2_answer
     call agentdlg_waits
     test eax, eax
     jz 9f
-    call mod
+    call mod_row
     test rax, rax
     jz 9f
     mov qword ptr [rip + c2_busy], 0
@@ -815,7 +815,7 @@ c2_act:
     mov rsi, rax
     call send
     jmp 9f
-1:  call mod
+1:  call mod_row
     test rax, rax
     jz 9f
     mov edi, r12d
@@ -828,7 +828,7 @@ c2_act:
 #   its answer dropped)
 c2_free:
     PROLOGUE
-    call mod
+    call mod_row
     test rax, rax
     jz 1f
     call [rax + M_FREE]
@@ -920,7 +920,7 @@ FN c2_arg_n
 
 # FN c2_run(what) -> eax 1 when it runs: claude with the arguments made (c2_args ...); none may run already
 FN c2_run
-    PROLOGUE 16 + 8 * (ARGS_MAX + 16)
+    PROLOGUE 16+8*(ARGS_MAX+16)
     mov [rsp], rdi
     xor eax, eax
     cmp qword ptr [rip + run_pid], 0
@@ -1150,7 +1150,7 @@ run_end:
 1:  mov rax, [rip + run_gen]
     cmp rax, [rip + c2_gen]
     jne 9f
-    call mod
+    call mod_row
     test rax, rax
     jz 9f
     mov qword ptr [rip + c2_busy], 0
@@ -1203,7 +1203,7 @@ FN claude_dlg2_tick
     mov rax, [rip + c2_tick_gen]
     cmp rax, [rip + c2_gen]
     jne 9f
-    call mod
+    call mod_row
     test rax, rax
     jz 9f
     call [rax + M_TICK]

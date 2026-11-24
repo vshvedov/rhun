@@ -92,10 +92,11 @@ so you can go on with it in either place.
 **+ Claude Code** in the panel's header opens a new conversation, "New Claude Code session": write
 the first prompt in the box, which says "Start a conversation", and press Enter. To continue an
 existing conversation, open it from the list and write in the box under it. In the panel, Enter or
-Tab goes to the box and Escape leaves it. The reply streams in as Claude writes it. A tool call
-shows as a row once Claude has written it, and its output as a result row; thinking and the work
-of subagents are not shown. Under the box a row holds the permission mode, the model and the
-command menu (see [Modes, model and the command menu](#modes-model-and-the-command-menu)).
+Tab goes to the box and Escape leaves it. The reply streams in as Claude writes it, with its
+thinking, tool calls, diffs and subagents as rows of their own (see [Conversation
+rows](#conversation-rows)). Under the box a row holds **+** for attachments, the permission mode,
+the model and the command menu (see [Modes, model and the command
+menu](#modes-model-and-the-command-menu)).
 
 The process starts when you type or paste the first character in a conversation's box, so it is
 usually ready by the time you send; reading conversations starts nothing. It runs in the
@@ -155,7 +156,65 @@ window](#in-a-remote-window)).
 | Left, Right | On a permission card: change where a rule is saved; on a question card: the next or previous question |
 | Space | On a question card: pick or tick the focused answer |
 | 1 to 9; arrows and Enter | Pick an option of rhun's own cards, such as Sign In (while the panel, not the box, has the focus) |
-| Ctrl+Plus, Ctrl+Minus, Ctrl+0 | The panel's text size, while the panel or its box has the focus |
+| Escape, Escape | In an empty box, twice within 800 ms: Rewind (see [Fork, rewind and export](#fork-rewind-and-export)) |
+| Ctrl+O | In the panel: open or close every thinking row |
+| Ctrl+C, Ctrl+A (Cmd on macOS); Shift+F10 | In a conversation: copy or select the text of a row; a row's menu |
+| Ctrl+Plus, Ctrl+Minus, Ctrl+0 (Cmd on macOS) | The panel's text size, while the panel or its box has the focus |
+
+The commands and their keys for the rest of the editor are in [Commands and keys](#commands-and-keys).
+
+### Conversation rows
+
+A conversation is drawn as Claude Code's VS Code extension draws it, the same whether it streams
+from the process or is read from Claude Code's file:
+
+- **Your prompt** is a bubble at the right, plain text with its chips (files, images, mentions,
+  the editor's selection) above it. A long one is cut at three lines with **Show more**; **Show
+  less** cuts it again. While you scroll through a reply, its prompt stays at the top of the view;
+  a click on it scrolls to it. A command you ran shows as one muted line.
+- **Claude's reply** is Markdown (see [Markdown replies](#markdown-replies)). Under the last reply
+  of a turn, **Copy response** copies its Markdown.
+- **Thinking** shows as "Thinking..." with an estimate of its tokens while Claude thinks, then
+  "Thought for Ns". It is closed; a click, Enter on it or Ctrl+O opens or closes every thinking row.
+- **A tool call** is a row with the tool's name in bold, what it acts on (a file is a link), a
+  description and its input and output (IN, OUT). A long input or output shows its start; a click,
+  or Enter on it, opens the whole text in an editor tab. A call that runs has a blinking dot, one
+  that failed or was refused says so. An edit shows its diff in the row, at most about ten lines
+  high with **Click to expand**, which opens it in a "Diff View: FILE" tab; a written file shows
+  its text, coloured by its language. A todo list shows its items with their state. An image a tool
+  returned shows as its picture under the output.
+- **A subagent's** tool calls show under the call that started it, with a line saying what it does.
+  Agents and shell commands that run in the background have a line each under the turn ("Working
+  in the background", the time and the tokens they used so far) with **Stop**; at most three show,
+  then "+N more agents". A shell command or an agent that is still running in the turn has **Run
+  in background**.
+- **Notes from Claude Code** are muted lines: "Switched to NAME", "Interrupted", a compaction
+  ("Compacted chat · auto · 12k tokens freed", a click shows the summary), the **Diagnostics** row
+  (see [What Claude can ask the editor](#what-claude-can-ask-the-editor)), and "Unsupported content
+  type: TYPE" for a block rhun does not know.
+- **While Claude works** a spinner line ends the conversation: a turning star and a verb that
+  changes every few seconds ("Compacting" while Claude Code compacts). Its verbs can be your own:
+  add `spinner_verb = Pondering` lines under `[claude]`, and set **Spinner verbs**
+  (`[claude] spinner_verbs`) to `append` (the default, mixed with the built-in ones) or `replace`.
+- **Times**: with **Timestamps** (`[agents] timestamps`, on by default) each prompt and reply shows
+  its time ("3:45 PM"; the full date and zone in its tip), and a line such as "Mon, Nov 23" marks
+  where the day changes.
+- **A conversation that cannot be read** shows a block at the top: "Couldn't load this
+  conversation's saved history, so it can't be continued." with **Retry**, **Start a new
+  conversation**, **View output logs** and × to dismiss it.
+
+**Focus view** (`[agents] focus_view`, off by default; **Agents: Toggle Focus View**, Ctrl+Alt+F,
+Cmd+Alt+F on macOS, or the switch in the command menu) shows only your prompts and Claude's
+replies: each run of tool calls and thinking folds into one line ("4 tool calls · 1 failed", "Thought for 12s"; "Running
+Bash…" or "Waiting for permission…" while it runs or waits). A click on the line opens the run, and
+**Collapse** closes it. A run that waits for your permission stays open.
+
+Text in a row can be selected with the mouse, inside one row at a time, and Ctrl+C (Cmd+C on
+macOS) copies it; Ctrl+A selects all of the part under the focus. A right click, Shift+F10 or the
+Menu key opens the row's menu: **Copy Message**, **Copy Link** on a link, and on a prompt the fork
+and rewind entries. When you scroll up, the conversation stops following the reply; the arrow at the
+bottom right goes back to the end and follows again. **Agents: Focus Last Message** gives the panel
+the keys at the conversation's end. An empty conversation shows a tip.
 
 ### Writing prompts
 
@@ -334,8 +393,14 @@ type them.
 | General config… | Opens Settings > Claude Code |
 | Switch account, `/login`; Sign out, `/logout` | Opens rhun's terminal prompt with `claude auth login` or `claude auth logout` |
 | View help docs | Asks before opening Claude Code's documentation |
+| Attach file…, Mention file from this project… | As **+** under the box (see [Attaching files and images](#attaching-files-and-images)) |
+| Resume conversation, `/resume`, `/continue` | Opens **Session history** (see [The list of conversations](#the-list-of-conversations)) |
+| Rewind, `/rewind` (`/checkpoint`, `/undo`); Export conversation, `/export [NAME]` | See [Fork, rewind and export](#fork-rewind-and-export) |
+| Focus view | Turns [focus view](#conversation-rows) on or off |
 | Status, `/status`; Account & usage…, `/usage`; `/context` | Open the dialogs of [Status, usage and other dialogs](#status-usage-and-other-dialogs) |
 | Slash commands, `/skills`, `/help`; Memory, `/memory`; Instructions; Output styles | The same |
+| MCP servers, `/mcp`; Hooks, `/hooks`; Permissions, `/permissions` (`/allowed-tools`); Sandbox, `/sandbox`; Manage plugins, `/plugin` (`/plugins`, `/marketplace`) | Open the dialogs of [Claude Code's configuration](#claude-codes-configuration) |
+| Bookmarks, `/bookmarks`; `/btw [QUESTION]`; `/tasks` (`/bashes`); Claude in Chrome, `/chrome`; `/remote-control` (`/rc`); `/agents` | See [Side questions, bookmarks and the agent map](#side-questions-bookmarks-and-the-agent-map) |
 | `/plan [open\|TEXT]` | Switches to Plan mode, and sends TEXT as a prompt; in Plan mode `/plan`, with or without words, shows the plan Claude wrote in a tab instead |
 | `/copy [N]` | Copies Claude's last reply, or the Nth last, to the clipboard |
 | Every other command | Goes to Claude Code as typed, as the list of its commands shows them |
@@ -384,6 +449,47 @@ as typing would, and sends no prompt; **Slash commands** starts nothing.
   reminder that Claude reads it when a session starts.
 - **Output styles**: the styles Claude Code knows, the one in effect checked. Picking one saves it
   in the project's `.claude/settings.local.json`, as Claude Code's `/output-style` does.
+
+### Claude Code's configuration
+
+Five dialogs change Claude Code's own configuration, from the command menu's Customize section or
+typed in the box. They list what the conversation's Claude Code reports, and every change goes
+through Claude Code itself (`claude mcp add`, `claude edit-hook`, `claude plugin install` and the
+like, run in the conversation's folder with its environment): rhun never writes a settings file.
+Nothing changes but what you do in the dialog, saved where it says; removing something asks first.
+
+- **MCP servers** (`/mcp`): the servers by where they are configured (Project, Local, User,
+  claude.ai, Managed, Enterprise) with their state and a filter. A server's page has **Reconnect**,
+  **Enable** or **Disable**, **Authenticate** (in the browser; when the page it returns to shows a
+  connection error, paste its address in the field), **Clear authentication**, **View tools** and
+  **Remove**. **Add server** asks for a name, the transport (**Local command (stdio)**, **HTTP
+  (remote)** or **SSE (remote, legacy)**), the command and its arguments or the URL and headers,
+  environment variables, and who gets it: you in this project, you in all projects, or everyone
+  through the project's `.mcp.json`. rhun keeps no header or environment value a server reports.
+- **Hooks** (`/hooks`): the hooks by event and matcher, with their type and where they come from
+  (User, Project, Local, Flag, Managed, Session, Plugin, Built-in). A hook from your own settings
+  files opens in a form (Event, Matcher, Type: Command, Prompt, Agent, HTTP or MCP tool, and that
+  type's fields) with **Save hook** and **Remove**; the others are read-only and say why. **Add
+  hook** saves to the settings file you pick. A hook's HTTP header values are never shown: retype a
+  header to change it.
+- **Permissions** (`/permissions`, `/allowed-tools`): the rules in force, under Allow, Ask and Deny,
+  each with the file it comes from (or "this session only"), and the workspace's folders. **Add
+  rule…** takes a rule such as `WebFetch` or `Bash(ls *)` and the file to save it in; a rule's ×
+  removes it from its file.
+- **Sandbox** (`/sandbox`): how Claude Code sandboxes commands: **Sandbox commands, with
+  auto-allow**, **Sandbox commands, with regular permissions** or **No sandbox**, the overrides
+  (**Allow unsandboxed fallback**), the excluded commands, and why it cannot run when it cannot.
+  `/sandbox exclude PATTERN` excludes a command.
+- **Manage Plugins** (`/plugin`, `/plugins`, `/marketplace`): **Plugins** lists the installed and
+  the available ones with a search; a plugin can be installed (for you, for the project, or only
+  for you in this repository), enabled, disabled, configured, updated or uninstalled. A warning
+  says plugins run code on your computer. **Marketplaces** adds one (a GitHub repository, a URL or
+  a path), refreshes or removes it. After a change the running Claude Code reloads its plugins;
+  when it cannot, "Restart Claude to apply plugin changes" with **Restart** ends it, and the next
+  message starts it again. **Agents: Install Plugin** runs `claude /plugin` in rhun's terminal
+  instead.
+
+Opening one of these with no process running starts it quietly, as typing would.
 
 ### Permissions, questions and plans
 
@@ -637,6 +743,40 @@ is opened again when rhun starts in the project; going back to the list forgets 
 finish opening it twice in a row, it is not tried again: the list says "TITLE was not reopened. It
 did not finish opening the last 2 times." with **Open it anyway**.
 
+### Fork, rewind and export
+
+Hovering one of your prompts shows **Message actions** left of its bubble; it, a right click on the
+prompt or Shift+F10 opens:
+
+- **Fork conversation from here**: a new conversation, "TITLE (fork)", with the rows before that
+  prompt and the prompt in its box to change and send. Claude Code makes it as a copy of the
+  conversation up to there when you send; the original is left alone. A fork from the first prompt
+  is a new conversation with that prompt.
+- **Rewind code to here**: the files Claude changed since that prompt go back to what they were.
+- **Fork conversation and rewind code**: both.
+
+**Rewind** in the command menu, `/rewind` (`/checkpoint`, `/undo`) or Escape twice within 800 ms in
+an empty box opens "Rewind to…": your prompts, newest first, with their age ("just now", "5m ago").
+Up, Down and Enter pick one, Escape closes it. rhun then asks Claude Code what would change
+("Checking code changes…") and offers **Restore code and conversation** (a fork, with the code
+restored), **Restore conversation** (a fork; the code stays) or **Restore code** (the conversation
+stays), the code ones only when there is code to restore, with "N lines will be removed and M lines
+will be added across K files:" and the files. Restored files go back whole, losing later changes by
+anyone, and what shell commands changed is not undone. **Restore** does it and "Code rewind
+successful" shows in the conversation; **Never mind** does nothing. Claude Code keeps the checkpoints
+this needs because rhun starts it with its file checkpoints on; a conversation started elsewhere may
+have none ("No file checkpoint found").
+
+**Export conversation** (or `/export`) shows the conversation as plain text, "The whole conversation
+as plain text, N characters.", with **Copy to clipboard** and **Save to file**, which opens it in a
+new, unsaved editor tab under the name Claude Code offers. `/export NAME` puts it in a tab named NAME
+at once.
+
+When rhun quits while Claude works, the step it was taking is cut off. Opening that conversation
+again within an hour starts Claude Code at once, which takes the step again: "Continuing the step
+that was interrupted when rhun quit." A step is taken again at most twice. **Continue after a
+restart** (`[agents] continue_after_restart`, on by default) turns this off.
+
 ### Sign-in and folder trust
 
 Signing in is Claude Code's own: run `claude auth login` in rhun's terminal, or anywhere else, and
@@ -695,8 +835,8 @@ attached there.
 
 ### Settings for the chat
 
-These are in Settings > Claude Code and Settings > Agents; the `env.` lines are in the config file
-only:
+These are in Settings > Claude Code and Settings > Agents; the `env.` and `spinner_verb` lines are
+in the config file only:
 
 ```ini
 [claude]
@@ -710,12 +850,16 @@ use_terminal = false
 ide = true
 disable_login_prompt = false
 python_env = true
+spinner_verbs = append
+spinner_verb = Pondering
 env.CLAUDE_CONFIG_DIR = /home/me/.claude-work
 [agents]
 idle_stop_minutes = 10
 font_size = 0
 ctrl_enter_sends = false
 scroll_on_send = true
+timestamps = true
+focus_view = false
 archive_after_days = 14
 location = panel
 autosave = true
@@ -754,6 +898,9 @@ continue_after_restart = true
   folder of a trusted project that holds `bin/python` (`Scripts\python.exe` on Windows) goes first
   on Claude Code's `PATH`, and `VIRTUAL_ENV` names it, so the commands Claude runs use the project's
   Python. An `env.PATH` or `env.VIRTUAL_ENV` line wins; a remote window's host is left alone.
+- `spinner_verbs` (**Spinner verbs**, `append` by default, or `replace`) and `spinner_verb = TEXT`
+  lines (at most 64 of at most 40 bytes): the spinner's own verbs, added to the built-in ones or in
+  their place (see [Conversation rows](#conversation-rows)).
 - `env.NAME = value`: a variable for Claude Code's environment, a line each, at most 64 of at most
   8 KiB each. NAME is letters, digits and `_`, and does not start with a digit; a line that breaks
   these rules is dropped with a log line that names it. The values are only in the config file:
@@ -770,6 +917,10 @@ continue_after_restart = true
   and Ctrl+Enter (Cmd+Enter on macOS) sends.
 - `scroll_on_send` (**Scroll to the end on send**, on by default): sending a prompt moves the
   conversation to its end.
+- `timestamps` (**Timestamps**, on by default): each prompt and reply shows its time, and a line
+  marks where the day changes.
+- `focus_view` (**Focus view**, off by default): runs of tool calls and thinking fold into one line
+  (see [Conversation rows](#conversation-rows)).
 - `archive_after_days` (**Archive sessions after**, 14 by default, 0 to 365): a conversation
   nothing was written to for that many days goes to **Archived sessions** in the list; 0 never moves
   one there
@@ -784,7 +935,8 @@ continue_after_restart = true
   the open file**, **Leave out ignored files**, all on by default): what goes with a message from
   the editor, and what git ignores; see "Mentions and the editor's selection" above.
 - `continue_after_restart` (**Continue after a restart**, on by default): a step Claude was taking
-  when rhun quit goes on when its conversation opens again.
+  when rhun quit goes on when its conversation opens again within an hour (see [Fork, rewind and
+  export](#fork-rewind-and-export)).
 
 Otherwise Claude Code gets your environment: rhun's own when rhun was started from a terminal or
 runs on Windows, else the one your login shell gives, without the variables a Claude Code that
@@ -894,7 +1046,7 @@ rhun's own: `agentsFocus` (the agents panel has the keys), `agentsInputFocus` (i
 | Add to Chat (explorer) | **Agents: Add to Chat**, also in the explorer's menu | |
 | Accept / Reject Proposed Changes | **Review: Accept Proposed Changes**, **Review: Reject Proposed Changes** | `a`, `r` in the tab |
 | Accept / Reject change (hunk) | **Review: Accept Change at Cursor**, **Review: Reject Change at Cursor** | `A`, `R` in the tab |
-| Toggle Focus View | **Agents: Toggle Focus View** | Ctrl+Alt+F |
+| Toggle Focus View | **Agents: Toggle Focus View** | Ctrl+Alt+F (Cmd+Alt+F) |
 | Expand or collapse thinking | **Agents: Expand or Collapse Thinking** | Ctrl+O in the panel |
 | Mark Session as Unread | **Agents: Mark Conversation as Unread** | |
 | Rename Session | **Agents: Rename Conversation** | |
@@ -973,8 +1125,8 @@ Appearance); otherwise it is 8 to 32, and 1 to 7 act as 8. It sizes all the pane
 list, the conversation and its Markdown, cards and the prompt box. Rows, badges and buttons grow
 with it. When the panel is too narrow for its text size, the prompt box keeps room for about ten
 characters: **Send** (or **Stop**) shows as an icon, an arrow (or a square), and then it goes on a
-row under the box. The row under the box cuts the mode's name, leaves out the prompt cache's clock,
-and then puts the model on a row of its own.
+row under the box; the row under the box makes room as in [Modes, model and the command
+menu](#modes-model-and-the-command-menu).
 
 **Agents: Increase Font Size**, **Agents: Decrease Font Size** and **Agents: Reset Font Size** in
 the command palette change it wherever the focus is (`agents_font_increase`,

@@ -9,12 +9,14 @@
 <p>Click <strong>+ Claude Code</strong> to start a conversation, or open one from the list to continue it. <kbd>Enter</kbd> sends and <kbd>Shift</kbd> + <kbd>Enter</kbd> starts a new line; <kbd>↑</kbd> recalls an earlier prompt. Send while Claude works and your message waits as queued for its own turn. <strong>Stop</strong> or <kbd>Esc</kbd> interrupts a reply.</p>
 <p>Under the prompt box, pick the permission mode (or press <kbd>Shift</kbd> + <kbd>Tab</kbd>), the model and its effort, or open the command menu with <kbd>/</kbd>. The model and effort you pick apply to rhun’s conversations in this project only: <code>claude</code> in a terminal and Claude Code’s own defaults stay as they are.</p>
 <p>When Claude asks to use a tool, a card shows the question with <strong>Yes</strong>, <strong>No</strong> and, when Claude Code suggests a rule, a button that allows it from now on, saved by Claude Code where you choose: this project, all projects or this session. You can edit a command before allowing it, or tell Claude what to do instead. Questions come with tabs, several answers and your own; a plan opens in a tab where you can select text and comment on it. Click an answer, or use <kbd>1</kbd>, <kbd>2</kbd>, <kbd>3</kbd> and the arrow keys once the card has the keyboard.</p>
+<p>Attach files and images with <strong>+</strong>, by pasting or by dropping them on the conversation; type <kbd>@</kbd> to mention a file, a folder or a terminal. Your selection in the editor goes along with the next message. Thinking, tool calls, diffs and subagents show as rows of their own, and an edit Claude asks about opens in a Review tab where you accept or reject each change.</p>
+<p>Fork a conversation from any of your prompts, rewind the code Claude changed, or export the conversation as text. The command menu also opens Claude Code’s status, usage, context, MCP servers, hooks, permission rules, sandbox and plugins as dialogs.</p>
 <div class="doc-note"><strong>Only while you use it</strong><p>Claude Code starts when you begin to type and stops after ten idle minutes; your next prompt starts it again. Change that with <strong>Stop idle agents after</strong> in <strong>Settings › Agents</strong>.</p></div>
 </section>
 <section id="sessions">
 <h2>Follow your sessions</h2>
 <p>The panel brings Claude Code, Codex, Grok Build and OpenCode sessions into one list. Sessions update in the background while you work, without needing a manual refresh.</p>
-<p>The first view shows the 50 most recent sessions across providers and worktrees. Use <strong>Load more</strong> to bring in the next 50.</p>
+<p>The first view shows the 50 most recent sessions across providers and worktrees. Use <strong>Load more</strong> to bring in the next 50. Search the list, filter it by status, sort conversations into groups, and archive the ones you are done with.</p>
 <p>Replies are drawn as Markdown, with headings, lists, tables and code. A link to a file opens it in the editor at its line.</p>
 <p>The panel has its own text size. Focus it and use <kbd>Ctrl</kbd> + <kbd>+</kbd> and <kbd>Ctrl</kbd> + <kbd>-</kbd> (<kbd>Cmd</kbd> on macOS), run <strong>Agents: Increase Font Size</strong> from the command palette, or set <strong>Font size</strong> in <strong>Settings › Agents</strong>.</p>
 <div class="doc-note"><strong>Out of the way when you are done</strong><p>Background refresh pauses when the Agents panel is hidden.</p></div>
@@ -27,5 +29,6 @@
 <section id="changes">
 <h2>Review the changes</h2>
 <p>When an agent changes a file on disk, rhun reloads it. If you have unsaved edits in that file, your buffer stays intact and a warning lets you choose what to keep.</p>
+<p>Edits that Claude Code asks about open in a Review tab first; <code>claude</code> in rhun’s terminal connects to rhun and does the same.</p>
 <p>Use <a href="/docs/git/#changes">Git diffs</a> to inspect the changes, then stage and commit the parts you want.</p>
 </section>

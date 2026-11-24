@@ -359,6 +359,74 @@ is still open somewhere else." **Open here anyway** continues it in rhun too. **
 makes a new conversation from it, "Copy of TITLE", sends your prompt there and leaves the original
 alone. **Cancel** puts your prompt back into the box. rhun does not check on Windows.
 
+### The list of conversations
+
+The panel lists the project's conversations of every agent it shows, newest first. A row has a dot,
+the title, the agent's badge, the worktree's name when the conversation ran in another checkout of
+the repository, the model and its age ("now", "5m", "3h", "2d", "4mo", "1y"). The dot is green while
+Claude works (or the file was written in the last 20 seconds), amber while it waits for you, in the
+agent's colour when the conversation is unread, and grey otherwise; a ring around it means another
+program, such as `claude` in a terminal or another rhun window, has the conversation open. Hover the
+dot for what it means. A conversation is unread when its file grows while you are not looking at it;
+opening it reads it.
+
+**Search sessions** (the magnifier in the panel's header), or just typing while the list has the
+focus, filters the rows by their titles and marks the matches; **Clear search** (×) or Escape empties
+the search, and a second Escape hides the field. A search, or the status filter, asks for every
+conversation of the project, not only the first page, and says "No sessions found" when none is
+left. **Filter by status** (the funnel) shows **Needs input**, **Working** and **Completed**, then
+**Open** (rhun has it open or runs its program) and **Closed**, then **Active** (needs input, working
+or unread), each with how many conversations it holds; checking several in a group shows any of
+them. The funnel is highlighted while a filter is on, and **Clear filters** turns them off.
+
+**New group** (the folder with a plus) makes a group and names it in place: type the name and press
+Enter (Escape keeps "New group"). Groups come first, each under its header with its count, then
+**Ungrouped**, then **Archived sessions**. A click on a header collapses or opens the section; a
+group's header has a menu (its ⋯ or a right click) with **Rename group**, **Delete group** (its
+conversations go back to Ungrouped) and **Start new session in this group**, and a double click
+renames it. Drag a row onto a group's header to move it there, or onto **Ungrouped** to take it out.
+
+A row's menu (a right click) has **Resume session** (**Switch to session** when it is open),
+**Rename session**, **New group from session**, **Add to group ▸**, **Remove from group**, **Mark as
+unread** or **Mark as read**, and **Archive session**. Cmd+click (Ctrl+click) adds rows to a
+selection and Shift+click selects a range; the menu of a selected row then acts on all of them ("New
+group from 3 sessions", "Archive 3 sessions"). Hovering a row shows **Rename session** (the pencil)
+and **Archive session** (the down arrow; **Unarchive session** on an archived row).
+
+**Archived sessions** starts collapsed. A conversation goes there when you archive it, and by itself
+once nothing was written to it for **Archive sessions after** (`[agents] archive_after_days`, 14 days
+by default), unless it is unread, open or running, or you unarchived it. Its header offers
+**Unarchive all N sessions**, and opening an archived conversation lists it again.
+
+Renaming a conversation writes its new title where its agent keeps titles: for Claude Code that is
+a `custom-title` line at the end of its file, the one `/rename` writes, so `claude --resume` in a
+terminal shows the same name. Titles of other agents' conversations, the groups, the archive, the
+unread marks, the filter and the collapsed sections are rhun's own, kept per project in rhun's state
+folder; nothing of them is written to the agents' folders.
+
+| Key | Action |
+| --- | --- |
+| Up, Down; PageUp, PageDown | In the list: the next or previous row; a page |
+| Enter | Open the selected row (in a search with none selected: the first) |
+| F2 | Rename the selected row |
+| Any character | Start a search with it |
+| Escape | Empty the search, then hide it, then clear the selection, then leave the panel |
+| Enter, Escape | In a rename field: keep the name, or leave it as it was |
+
+An open conversation's header has **Back**, its title, **Session history** and **New session**. A
+click on the title renames it in place, as in the list. **Session history** opens "Past
+conversations", the same list for that agent's conversations, under the button, its search ready
+for typing; Enter or a click opens a conversation, and Escape (after emptying the search) or a click
+outside closes it. **Resume conversation** in the command menu and `/resume` (or `/continue`) open
+it too. **New session** starts a new conversation of the same agent. A conversation that ran in
+another worktree of the repository shows "This session is in worktree NAME" under the header, with
+**Open worktree**, which opens that folder in a new window.
+
+With **Restore open files** (`[files] restore_session`) on, the conversation you opened from the list
+is opened again when rhun starts in the project; going back to the list forgets it. If rhun did not
+finish opening it twice in a row, it is not tried again: the list says "TITLE was not reopened. It
+did not finish opening the last 2 times." with **Open it anyway**.
+
 ### Sign-in and folder trust
 
 Signing in is Claude Code's own: run `claude auth login` in rhun's terminal, or anywhere else, and
@@ -414,6 +482,7 @@ idle_stop_minutes = 10
 font_size = 0
 ctrl_enter_sends = false
 scroll_on_send = true
+archive_after_days = 14
 ```
 
 - `chat` (**Chat with Claude Code**, on by default): off, Claude Code's conversations get no box,
@@ -454,6 +523,9 @@ scroll_on_send = true
   and Ctrl+Enter (Cmd+Enter on macOS) sends.
 - `scroll_on_send` (**Scroll to the end on send**, on by default): sending a prompt moves the
   conversation to its end.
+- `archive_after_days` (**Archive sessions after**: 0 never, 1, 2, 7 or 14, the default): a
+  conversation nothing was written to for that many days goes to **Archived sessions** in the list
+  (see [The list of conversations](#the-list-of-conversations)).
 
 Otherwise Claude Code gets your environment: rhun's own when rhun was started from a terminal or
 runs on Windows, else the one your login shell gives, without the variables a Claude Code that

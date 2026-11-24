@@ -190,8 +190,13 @@ FN setting_applied
     jmp 9f
 41: lea rcx, [rip + cfg_agents_timestamps]
     cmp rax, rcx
-    jne 42f
+    jne 45f
     call agents_view_changed    # a time line above every prompt, a pill where the day changes
+    jmp 9f
+45: lea rcx, [rip + cfg_agents_focus_view]
+    cmp rax, rcx
+    jne 42f
+    call agfold_view_changed    # focus view: the folds' lines (agentfold.s)
     jmp 9f
 42: lea rcx, [rip + cfg_claude_spinner_verbs]
     cmp rax, rcx

@@ -1564,6 +1564,60 @@ c_agent_test_truncate:
 8:  mov rax, -1
     EPILOGUE
 
+# ---- focus view (agentfold.s, phase 3 task 9)
+
+# print-agent-folds: the open conversation's folds (agfold_dump); "focus=0|1" alone without one open
+c_print_agent_folds:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    mov rbx, rax
+    call ai_out
+    mov rdi, rax
+    mov rsi, rbx
+    call agfold_dump
+    xor eax, eax
+    EPILOGUE
+
+# print-agent-folds-fit: their lines laid out at every panel size and width (agfold_fit_dump)
+c_print_agent_folds_fit:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agfold_fit_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-fold-click N: the fold of row N (from 1, as print-agent-row) of the open conversation opened or closed,
+#   as a click on its line or its Collapse line
+c_agent_fold_click:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    test rax, rax
+    jz 8f
+    lea rsi, [rax - 1]
+    mov rdi, rbx
+    call agfold_toggle_row
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+.section .rodata
+.Lc_print_agent_folds: .asciz "print-agent-folds"
+.Lc_print_agent_folds_fit: .asciz "print-agent-folds-fit"
+.Lc_agent_fold_click: .asciz "agent-fold-click"
+.text
+
 .bss
 .p2align 3
 tt_rest: .quad 0                # agent-test-tool: its keys and values, where each key's value starts
@@ -2444,6 +2498,8 @@ ai_ctl:
     .quad .Lc_print_agent_rows, c_print_agent_rows, .Lc_print_agent_rows_fit, c_print_agent_rows_fit
     .quad .Lc_agent_test_tool, c_agent_test_tool, .Lc_agent_row_click, c_agent_row_click
     .quad .Lc_agent_test_truncate, c_agent_test_truncate
+    .quad .Lc_print_agent_folds, c_print_agent_folds, .Lc_print_agent_folds_fit, c_print_agent_folds_fit   # task 9
+    .quad .Lc_agent_fold_click, c_agent_fold_click
     .quad .Lc_print_agents_metrics, c_print_agents_metrics, .Lc_print_agents_box, c_print_agents_box
     .quad .Lc_print_agent_placeholder, c_print_agent_placeholder, .Lc_print_sh_quote, c_print_sh_quote
     .quad .Lc_print_holder, c_print_holder

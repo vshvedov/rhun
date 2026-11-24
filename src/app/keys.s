@@ -2281,6 +2281,7 @@ g_commands:
     COMMAND agents_font_reset, "Agents: Reset Font Size", cmd_agents_font_reset, ""
     COMMAND agents_focus_last, "Agents: Focus Last Message", agents_focus_last, ""
     COMMAND agents_toggle_thinking, "Agents: Expand or Collapse Thinking", agents_toggle_thinking, ""
+    COMMAND agents_toggle_focus_view, "Agents: Toggle Focus View", agents_toggle_focus_view, "ctrl+alt+f"
     COMMAND open_file, "Open File", cmd_open_file, "ctrl+o"
     COMMAND open_folder, "Open Folder", cmd_open_folder, "ctrl+shift+o"
     COMMAND add_workspace_folder, "Add Folder to Workspace", cmd_add_workspace_folder, ""   # resources: workspace.s

@@ -2882,6 +2882,7 @@ ENDSTRUCT AM_SIZE
 .equ AMF_MANUAL, 256            # a compaction asked for
 .equ AMF_ECHO, 512              # a slash command's echo
 .equ AMF_CHIPS, 1024            # AM_name holds its chips, LF between them
+.equ AMF_FMS, 2048              # a thinking row's time is counted in its fold's (agentfold.s)
 # HX: the sums of 64 rows (AS_hx; agents.s keeps them)
 STRUCT
 F HX_sum, 4             # its rows' heights and gaps, for the key (HXF_ROWS), else from the aggregates
@@ -2889,10 +2890,12 @@ F HX_fix, 4             # the pixels of its rows that do not depend on the width
 F HX_lines, 4           # of those that do: their lines (AM_nl + 1) and bytes, summed
 F HX_bytes, 4
 F HX_flags, 4           # HXF_*
-F HX_pad, 4
+F HX_ffix, 4            # the same three as focus view shows its rows (agentfold.s agfold_parts): a toggle
+F HX_flines, 4          #   picks the other three, nothing is summed again
+F HX_fbytes, 4
 ENDSTRUCT HX_SIZE
 .equ HXF_ROWS, 1                # HX_sum is its rows' own heights
-.equ HXF_AGG, 2                 # the aggregates are valid for the text size and ag_gen
+.equ HXF_AGG, 2                 # both sets of aggregates are valid for the text size and ag_gen
 .equ HX_SHIFT, 6                # 64 rows a chunk
 # AC: a call of AS_calls (open addressing, a power of two slots, doubled at half full)
 STRUCT
@@ -2962,7 +2965,7 @@ F AT_diff, 8            # agentdiff.s's record, or 0
 F AT_h, 4               # the layout cached for a width; -1 none
 F AT_w, 4
 F AT_rev, 4
-F AT_pad, 4
+F AT_fold, 4            # what its fold counts of it (agentfold.s): 1 a call, 2 a failed one
 ENDSTRUCT AT_SIZE
 .equ ATS_RUNNING, 0
 .equ ATS_OK, 1
@@ -3023,6 +3026,8 @@ ENDSTRUCT AT_SIZE
 .equ PART_MORE, 10
 .equ PART_STOP, 11
 .equ PART_BG, 12
+.equ PART_FOLD, 13              # focus view: a fold's line (agentfold.s)
+.equ PART_COLLAPSE, 14          #   and its "Collapse" line
 .equ PART_CHIP, 16              # + n, n < 16
 .equ PART_ERR, 32               # + n, n < 8
 .equ ING_FILE, 0                # the reader's flags (agent_ingest): a line of the file
@@ -3091,6 +3096,10 @@ F AS_line, 8            # where the line being read is in the session's file (se
 F AS_linelen, 8         #   before ingest_line); a length of 0: no place (the stream feeds it)
 F AS_tasks, VEC_SIZE    # AK (agenttask.s, task 11)
 F AS_rdata, 8           # the reader's own for this conversation (one mem_alloc'd block, freed when the rows go)
+F AS_fview, 4           # focus view (agentfold.s): the setting the chunks' own sums are for
+F AS_fask, 4            # the fold a waiting request holds open, + 1 (0 none), as the sums have it
+F AS_ftodo, 4           # the todo row the folds' counts leave out (AS_todo as they follow it), + 1 (0 none)
+F AS_fpad, 4
 ENDSTRUCT AS_SIZE
 .equ AG_CLAUDE, 1               # AS_kind of the built-in sources (AS_KIND_EXT 5: an extension's)
 .equ AG_CODEX, 2

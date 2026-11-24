@@ -745,10 +745,14 @@ think_block:
     call agents_row_add
     test rax, rax
     js 9f
+    mov r12, rax
     imul rax, rax, AM_SIZE
     add rax, [rbx + AS_msgs + VEC_ptr]
     mov ecx, [rsp + 4]
     mov [rax + AM_ms], ecx
+    mov rdi, rbx                # its fold counts its time (agentfold.s)
+    mov rsi, r12
+    call agfold_state
 9:  EPILOGUE
 
 # jnum_or(obj, key cstr) -> eax the member's value when it is a number from 0 to 2^31 - 1, else -1

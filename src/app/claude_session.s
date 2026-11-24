@@ -3966,6 +3966,10 @@ menu_tbl:
     .quad .Lm_settings, .Lm_settings_d
     .long APK_ROW, 0
     .quad 0
+    .long APS_SETTINGS, ACT_FOCUSVIEW       # (agentpop.s runs it for every driver; agentfold.s)
+    .quad .Lm_focus, .Lm_focus_d
+    .long APK_SWITCH, 0
+    .quad agfold_on
     .long APS_SETTINGS, ACT_SIGNIN
     .quad .Lm_signin, .Ld_login
     .long APK_ROW, 0
@@ -4021,6 +4025,8 @@ local_cmds:
 .Lm_term_d: .asciz "Open a new Claude instance in the Terminal"
 .Lm_settings: .asciz "General config\342\200\246"
 .Lm_settings_d: .asciz "Open Claude Code's settings"
+.Lm_focus: .asciz "Focus view"
+.Lm_focus_d: .asciz "Show only your prompts and Claude's responses"
 .Lm_signin: .asciz "Switch account"
 .Lm_signout: .asciz "Sign out"
 .Lm_help: .asciz "View help docs"

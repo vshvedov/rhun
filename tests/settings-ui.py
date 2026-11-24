@@ -37,7 +37,7 @@ BOOLS = {
                'folding inline_complete color_swatches highlight_occurrences code_lens inlay_hints '
                'semantic_highlighting'),
     'files': 'trim_trailing_whitespace final_newline format_on_save restore_session restore_project',
-    'agents': 'claude codex grok opencode ctrl_enter_sends scroll_on_send timestamps',
+    'agents': 'claude codex grok opencode ctrl_enter_sends scroll_on_send timestamps focus_view',
     'claude': 'chat allow_bypass_permissions prompt_suggestions',
     'git': 'enabled', 'updates': 'check',
     'testing': 'gutter',

@@ -905,6 +905,8 @@ FN agents_msg_changed
     cmp rsi, [rdi + AS_msgs + VEC_len]
     jae 1f
     PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
     imul rax, rsi, AM_SIZE
     add rax, [rdi + AS_msgs + VEC_ptr]
     inc dword ptr [rax + AM_rev]
@@ -912,6 +914,9 @@ FN agents_msg_changed
     or dword ptr [rax + AM_flags], AMF_EST
     mov dword ptr [rip + g_dirty], 1
     call hx_dirty               # its chunk: one chunk made again, whatever the conversation's length
+    mov rdi, rbx                # its fold's counts follow it (agentfold.s)
+    mov rsi, r12
+    call agfold_touch
     EPILOGUE
 1:  ret
 
@@ -4291,6 +4296,9 @@ row_copy_parts:
     test r15, r15
     jz 9f
     mov [r15 + AT_row], r12d
+    mov rdi, rbx                # a call joins a fold as it did in its source (agentfold.s)
+    mov rsi, r12
+    call agfold_add
 9:  mov rdi, rbx
     mov rsi, r12
     call agents_msg_changed
@@ -4739,22 +4747,9 @@ FN agents_rows_cut
     mov rdi, rbx
     lea rsi, [r12 - 1]
     call hx_dirty
-5:  mov rcx, [rbx + AS_folds + VEC_len]     # the folds
-6:  test rcx, rcx
-    jz 7f
-    dec rcx
-    imul rax, rcx, AF_SIZE
-    add rax, [rbx + AS_folds + VEC_ptr]
-    movsxd rdx, dword ptr [rax + AF_first]
-    cmp rdx, r12
-    jb 61f
-    mov [rbx + AS_folds + VEC_len], rcx
-    jmp 6b
-61: movsxd rdx, dword ptr [rax + AF_last]
-    cmp rdx, r12
-    jb 7f
-    lea rdx, [r12 - 1]
-    mov [rax + AF_last], edx
+5:  mov rdi, rbx                # the folds (agentfold.s: one cut in its middle counts its rows again)
+    mov rsi, r12
+    call agfold_cut
 7:  movsxd rax, dword ptr [rbx + AS_todo]
     cmp rax, r12
     jl 71f
@@ -5513,7 +5508,8 @@ row_measure:
     call agrow_h
     EPILOGUE
 
-# hx_agg(AS*, chunk): its aggregates from its rows' parts (no height asked)
+# hx_agg(AS*, chunk): its aggregates from its rows' parts (no height asked): as its rows are, and as focus
+#   view shows them (agentfold.s agfold_parts), so the setting's toggle sums nothing again
 hx_agg:
     PROLOGUE 16
     mov rbx, rdi
@@ -5523,6 +5519,9 @@ hx_agg:
     mov dword ptr [r15 + HX_fix], 0
     mov dword ptr [r15 + HX_lines], 0
     mov dword ptr [r15 + HX_bytes], 0
+    mov dword ptr [r15 + HX_ffix], 0
+    mov dword ptr [r15 + HX_flines], 0
+    mov dword ptr [r15 + HX_fbytes], 0
     mov r13, r12
     shl r13, HX_SHIFT
     lea r14, [r13 + 64]
@@ -5534,31 +5533,53 @@ hx_agg:
     mov rdi, rbx
     mov rsi, r13
     call row_parts
+    mov [rsp], eax
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
     imul r15, r12, HX_SIZE
     add r15, [rbx + AS_hx + VEC_ptr]
-    mov r8d, eax
-    or r8d, edx
-    or r8d, ecx
-    jz 2f
-    add eax, [rip + g_pmt + 4*MI_8]
-    add [r15 + HX_fix], eax
-    mov r8d, [r15 + HX_lines]
-    add r8, rdx
-    mov r9d, 0x3fffffff
-    cmp r8, r9
-    cmova r8, r9
-    mov [r15 + HX_lines], r8d
-    mov r8d, [r15 + HX_bytes]
-    add r8, rcx
-    cmp r8, r9
-    cmova r8, r9
-    mov [r15 + HX_bytes], r8d
-2:  inc r13
+    lea rdi, [r15 + HX_fix]
+    mov esi, eax
+    call hx_add
+    mov rdi, rbx
+    mov rsi, r13
+    mov edx, [rsp]
+    mov ecx, [rsp + 4]
+    mov r8d, [rsp + 8]
+    call agfold_parts
+    imul r15, r12, HX_SIZE
+    add r15, [rbx + AS_hx + VEC_ptr]
+    lea rdi, [r15 + HX_ffix]
+    mov esi, eax
+    call hx_add
+    inc r13
     jmp 1b
 9:  imul r15, r12, HX_SIZE
     add r15, [rbx + AS_hx + VEC_ptr]
     or dword ptr [r15 + HX_flags], HXF_AGG
     EPILOGUE
+
+# hx_add(fix* (then lines, bytes), fix, lines, bytes): a row's parts summed in (with its gap); none of a row of
+#   no height at all
+hx_add:
+    mov eax, esi
+    or eax, edx
+    or eax, ecx
+    jz 9f
+    add esi, [rip + g_pmt + 4*MI_8]
+    add [rdi], esi
+    mov r8d, [rdi + 4]
+    add r8, rdx
+    mov r9d, 0x3fffffff
+    cmp r8, r9
+    cmova r8, r9
+    mov [rdi + 4], r8d
+    mov r8d, [rdi + 8]
+    add r8, rcx
+    cmp r8, r9
+    cmova r8, r9
+    mov [rdi + 8], r8d
+9:  ret
 
 # hx_value(AS*, chunk, w) -> eax its height: its rows' own sum when it has one, else its aggregates at the
 #   width (one step, whatever the width)
@@ -5582,18 +5603,22 @@ hx_value:
     cmp r15d, 1
     jge 3f
     mov r15d, 1
-3:  mov rax, [rip + ag_fui]
+3:  lea r14, [r14 + HX_fix]      # the set focus view shows, or the rows' own
+    cmp dword ptr [rip + cfg_agents_focus_view], 0
+    je 4f
+    add r14, HX_ffix - HX_fix
+4:  mov rax, [rip + ag_fui]
     mov eax, [rax + FACE_cellw]
-    mov ecx, [r14 + HX_bytes]
+    mov ecx, [r14 + 8]
     imul rax, rcx
     xor edx, edx
     div r15
-    mov ecx, [r14 + HX_lines]
+    mov ecx, [r14 + 4]
     add rax, rcx
     mov r8, rax
     call est_lh
     imul rax, r8
-    mov ecx, [r14 + HX_fix]
+    mov ecx, [r14]
     add rax, rcx
     mov ecx, HX_CAP
     cmp rax, rcx
@@ -5640,6 +5665,7 @@ th_key:
     PROLOGUE
     mov rbx, rdi
     mov r12d, esi
+    call agfold_key             # focus view's setting and the fold a request holds open (agentfold.s)
     call panel_px
     mov r13d, eax
     xor r14d, r14d              # the flags kept
@@ -5918,32 +5944,6 @@ th_begin:
     call th_key
     EPILOGUE
 
-# th_resolve_rows(AS*, first, last, w): the chunks of those rows summed from their rows (the rows in view:
-#   the content's height is right around them)
-th_resolve_rows:
-    PROLOGUE
-    mov rbx, rdi
-    mov r12, rsi
-    shr r12, HX_SHIFT
-    mov r13, rdx
-    shr r13, HX_SHIFT
-    mov r14d, ecx
-1:  cmp r12, r13
-    ja 9f
-    cmp r12, [rbx + AS_hx + VEC_len]
-    jae 9f
-    imul rax, r12, HX_SIZE
-    add rax, [rbx + AS_hx + VEC_ptr]
-    test dword ptr [rax + HX_flags], HXF_ROWS
-    jnz 2f
-    mov rdi, rbx
-    mov rsi, r12
-    mov edx, r14d
-    call hx_resolve
-2:  inc r12
-    jmp 1b
-9:  EPILOGUE
-
 # th_end(AS*, w, area h): the last rows measured exactly until they fill the area, and their chunks summed
 #   from their rows: the end of the content is exact (following: the last row's bottom is the area's)
 th_end:
@@ -5957,9 +5957,9 @@ th_end:
     dec r14
     xor r15d, r15d
 1:  test r14, r14
-    js 2f
+    js 9f
     cmp r15d, r13d
-    jge 2f
+    jge 9f
     mov rdi, rbx
     mov rsi, r14
     mov edx, r12d
@@ -5967,15 +5967,31 @@ th_end:
     mov edi, eax
     call gap_of
     add r15d, eax
-    dec r14
-    jmp 1b
-2:  lea rsi, [r14 + 1]
-    mov rdx, [rbx + AS_msgs + VEC_len]
-    dec rdx
     mov rdi, rbx
-    mov ecx, r12d
-    call th_resolve_rows
+    mov rsi, r14
+    mov edx, r12d
+    call th_resolve_row
+    mov rdi, rbx                # the row before it that may show (a closed fold in one step)
+    mov rsi, r14
+    call agfold_prev
+    mov r14, rax
+    jmp 1b
 9:  EPILOGUE
+
+# th_resolve_row(AS*, row, w): that row's chunk summed from its rows (a row in view: the content is exact
+#   around it; the chunks a closed fold hides whole keep their aggregates, which are exact there)
+th_resolve_row:
+    mov rax, rsi
+    shr rax, HX_SHIFT
+    cmp rax, [rdi + AS_hx + VEC_len]
+    jae 9f
+    imul rcx, rax, HX_SIZE
+    add rcx, [rdi + AS_hx + VEC_ptr]
+    test dword ptr [rcx + HX_flags], HXF_ROWS
+    jnz 9f
+    mov rsi, rax
+    jmp hx_resolve
+9:  ret
 
 # th_step(AS*, w): the anchor (lay_row, lay_off) moved to the row under the top edge again after its offset
 #   changed (a wheel step, a page): over the rows passed, measured exactly, so the rows in view move by the
@@ -5995,7 +6011,10 @@ th_step:
     jge 9f
     mov [rip + lay_off], ecx
     jmp 9f
-2:  dec qword ptr [rip + lay_row]
+2:  mov rdi, rbx                # the row before it that may show (a closed fold in one step)
+    mov rsi, [rip + lay_row]
+    call agfold_prev
+    mov [rip + lay_row], rax
     mov rdi, rbx
     mov rsi, [rip + lay_row]
     mov edx, r12d
@@ -6012,12 +6031,14 @@ th_step:
     call gap_of
     cmp [rip + lay_off], eax
     jl 9f
-    mov rcx, [rbx + AS_msgs + VEC_len]
-    dec rcx
-    cmp [rip + lay_row], rcx
+    mov r13d, eax
+    mov rdi, rbx
+    mov rsi, [rip + lay_row]
+    call agfold_next
+    cmp rax, [rbx + AS_msgs + VEC_len]
     jge 9f
-    sub [rip + lay_off], eax
-    inc qword ptr [rip + lay_row]
+    sub [rip + lay_off], r13d
+    mov [rip + lay_row], rax
     jmp 1b
 9:  EPILOGUE
 
@@ -6034,9 +6055,9 @@ th_view:
     mov r15d, [rip + lay_off]
     neg r15d                    # the row's top in the area
 1:  cmp r14, [rbx + AS_msgs + VEC_len]
-    jae 2f
+    jae 9f
     cmp r15d, r13d
-    jge 2f
+    jge 9f
     mov rdi, rbx
     mov rsi, r14
     mov edx, r12d
@@ -6044,16 +6065,15 @@ th_view:
     mov edi, eax
     call gap_of
     add r15d, eax
-    inc r14
+    mov rdi, rbx
+    mov rsi, r14
+    mov edx, r12d
+    call th_resolve_row
+    mov rdi, rbx                # the next row that may show (a closed fold in one step)
+    mov rsi, r14
+    call agfold_next
+    mov r14, rax
     jmp 1b
-2:  lea rdx, [r14 - 1]
-    mov rsi, [rip + lay_row]
-    cmp rdx, rsi
-    jge 3f
-    mov rdx, rsi
-3:  mov rdi, rbx
-    mov ecx, r12d
-    call th_resolve_rows
 9:  EPILOGUE
 
 # th_from_end(AS*, w, area h): following: the end made exact, the scroll its largest, the anchor the row at it
@@ -6124,7 +6144,15 @@ th_layout:
     mov [rip + lay_row], rax
     mov eax, [rip + th_aoff]
     mov [rip + lay_off], eax
-    mov eax, [rip + th_aabove]  # what is above its own part changed: the offset follows
+    mov rdi, rbx                # a row focus view hides now (a toggle, a fold closed over it): its fold's
+    mov rsi, [rip + lay_row]    #   line at the top
+    call agfold_shown
+    cmp rax, [rip + lay_row]
+    je 31f
+    mov [rip + lay_row], rax
+    mov dword ptr [rip + lay_off], 0
+    jmp 6f
+31: mov eax, [rip + th_aabove]  # what is above its own part changed: the offset follows
     test eax, eax
     js 6f
     mov rdi, rbx
@@ -7726,17 +7754,29 @@ thread_draw:
     test eax, eax
     jz .Ltd_next                # a row of no height (a hidden call, a fold's row)
     mov [rip + th_last], r12d
+    mov rdi, rbx                # focus view: a fold's line, its Collapse line, a list alone (agentfold.s)
+    mov rsi, r12
+    mov edx, [rsp]
+    add edx, [rsp + 28]
+    mov ecx, r13d
+    mov r8d, [rsp + 32]
+    mov r9d, r15d
+    call agfold_draw
+    test edx, edx
+    jz .Ltd_next                # (nothing of its own drawn)
+    mov esi, eax
     imul rdi, r12, AM_SIZE
     add rdi, [rbx + AS_msgs + VEC_ptr]
-    mov esi, r13d
-    mov edx, r15d
     lea rcx, [rsp]
     call draw_msg
 .Ltd_next:
     mov edi, r15d
     call gap_of
     add r13d, eax
-    inc r12
+    mov rdi, rbx                # the next row that may show (a closed fold in one step)
+    mov rsi, r12
+    call agfold_next
+    mov r12, rax
     jmp .Ltd_msg
 .Ltd_after:                     # then the spinner, the task lines, the queued messages
     mov rdi, rbx
@@ -9291,6 +9331,10 @@ FN agents_row_dump
 43: mov rdi, r15
     mov esi, 10
     call sb_push_byte
+    mov rdi, r15                # focus view: a fold's lines drawn on it (agentfold.s)
+    mov rsi, r13
+    mov rdx, r12
+    call agfold_row_dump
     cmp qword ptr [rbx + AM_x], 0       # a typed row: its parts as drawn (agentrows.s)
     jne 42f
     mov eax, [rbx + AM_role]

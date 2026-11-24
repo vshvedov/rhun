@@ -572,6 +572,9 @@ build_sig:
     lea rdi, [rip + g_agentcfg_gen]
     mov esi, 8
     call sig_mix
+    lea rdi, [rip + cfg_agents_focus_view]  # the focus view switch's state
+    mov esi, 4
+    call sig_mix
     mov rdi, [rip + pop_q + SB_ptr]
     mov rsi, [rip + pop_q + SB_len]
     test rdi, rdi
@@ -2186,6 +2189,8 @@ FN agentpop_run
     je .Lr_noconv
     cmp r13d, ACT_SETTINGS
     je .Lr_noconv
+    cmp r13d, ACT_FOCUSVIEW     # focus view: the panel's setting, whatever the driver (agentfold.s)
+    je .Lr_focus
     test rbx, rbx
     jnz 1f
     cmp r13d, ACT_THINKING      # a draft's switches: the project's choices, no conversation made
@@ -2258,6 +2263,12 @@ FN agentpop_run
     mov rsi, r14
     mov rdx, r15
     call copy_reply
+    EPILOGUE
+.Lr_focus:
+    mov esi, 2                  # no "on" or "off": flipped
+    call switch_arg
+    mov edi, esi
+    call agfold_set
     EPILOGUE
 .Lr_draft_switch:
     mov edi, r12d

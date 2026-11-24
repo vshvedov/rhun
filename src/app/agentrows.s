@@ -499,19 +499,17 @@ FN agrow_tool
     EPILOGUE
 
 # FN agrow_ready(AS*, AT*): its input is filled and its flags are final: its fold is chosen now (a hidden
-#   call: none), the latest todo row noted, its row measured again
+#   call joins a run and counts nothing), the latest todo row noted, its row measured again
 FN agrow_ready
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
     cmp qword ptr [r12 + AT_up], 0
     jne 8f
-    test dword ptr [r12 + AT_flags], ATF_HIDDEN
-    jnz 1f
-    mov rdi, rbx
+    mov rdi, rbx                # (a hidden call too: it joins a run, counts nothing and ends none)
     movsxd rsi, dword ptr [r12 + AT_row]
     call agfold_add
-1:  cmp qword ptr [r12 + AT_items + VEC_len], 0
+    cmp qword ptr [r12 + AT_items + VEC_len], 0
     je 8f
     mov eax, [r12 + AT_row]
     mov [rbx + AS_todo], eax
@@ -1770,6 +1768,11 @@ FN agrow_draw
 2:  mov [rsp], eax
     cmp [rip + rf_row], r12     # the row focus: a frame around it
     jne 9f
+    mov rdi, rbx                # (on a fold's first row the focus is its line's: agentfold.s frames it)
+    mov rsi, r12
+    call agfold_action
+    cmp eax, PART_FOLD
+    je 9f
     mov edi, r13d
     sub edi, [rip + g_pmt + 4*MI_4]
     mov esi, r14d
@@ -3556,6 +3559,74 @@ todo_lay:
     sub eax, [rip + g_pmt + 4*MI_4]     # the last gap: the row's own pad follows
 9:  EPILOGUE
 
+# FN agrow_todo_h(AT*, w) -> eax its todo list alone at width w (focus view's latest list, agentfold.s): the
+#   list and MI_4 above and below it; 0 without items
+FN agrow_todo_h
+    PROLOGUE 16
+    mov rax, [rip + lr_at]
+    mov [rsp], rax
+    mov eax, [rip + lr_mode]
+    mov [rsp + 8], eax
+    mov [rip + lr_at], rdi
+    mov dword ptr [rip + lr_mode], LM_MEASURE
+    xor edi, edi
+    mov edx, esi
+    xor esi, esi
+    call todo_lay
+    test eax, eax
+    jz 1f
+    add eax, [rip + g_pmt + 4*MI_4]
+    add eax, [rip + g_pmt + 4*MI_4]
+1:  mov rcx, [rsp]
+    mov [rip + lr_at], rcx
+    mov ecx, [rsp + 8]
+    mov [rip + lr_mode], ecx
+    EPILOGUE
+
+# FN agrow_todo_draw(AS*, row, x, y, w): its call's todo list alone at x, y (agrow_todo_h tall), the call's
+#   dot before its first line
+FN agrow_todo_draw
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov r14d, ecx
+    mov r15d, r8d
+    call row_of
+    mov rax, [rax + AM_x]
+    test rax, rax
+    jz 9f
+    mov [rsp], rax
+    mov rdi, rbx
+    mov rsi, rax
+    call state_color
+    mov ecx, eax
+    mov rax, [rip + ag_fui]
+    mov edx, [rax + FACE_lineh]
+    mov edi, r13d
+    mov esi, r14d
+    add esi, [rip + g_pmt + 4*MI_4]
+    call row_dot
+    mov rax, [rip + lr_at]
+    mov [rsp + 8], rax
+    mov rax, [rsp]
+    mov [rip + lr_at], rax
+    mov eax, [rip + lr_mode]
+    push rax
+    push rax
+    mov dword ptr [rip + lr_mode], LM_DRAW
+    mov edi, r13d
+    mov esi, r14d
+    add esi, [rip + g_pmt + 4*MI_4]
+    mov edx, r15d
+    call todo_lay
+    pop rax
+    pop rax
+    mov [rip + lr_mode], eax
+    mov rax, [rsp + 8]
+    mov [rip + lr_at], rax
+9:  EPILOGUE
+
 # small_line(kind cstr, text cstr, h, button): a muted line of the small face at lr_x, lr_cy, cut at the
 #   row's width (lr_w); a button (PART_NOTE) when asked
 small_line:
@@ -3701,6 +3772,7 @@ pend_at:
 #   end): a text opens in a tab or its tab is found again, a link is followed, a command is copied
 FN agrow_follow
     PROLOGUE 16
+    call agfold_follow          # a fold's line clicked: it opens or closes (agentfold.s)
     cmp dword ptr [rip + pend_think], 0
     je 0f
     mov dword ptr [rip + pend_think], 0     # a thinking row's label: all of them open or close
@@ -4191,9 +4263,19 @@ FN agrow_full
 
 # has_action(AS*, row) -> eax the part Enter runs on that row (0: none): a long IN, a long OUT, a note with a
 #   tab, a written file's text, a diff, the header's link; thinking and a compaction marker (their own forms
-#   come later: PART_TOGGLE)
+#   come later: PART_TOGGLE); with focus view a fold's line (PART_FOLD) and none for what it hides
 has_action:
     PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    call agfold_action          # focus view: a fold's line, or nothing shown to act on
+    test eax, eax
+    jz 0f
+    jns 9f
+    xor eax, eax
+    EPILOGUE
+0:  mov rdi, rbx
+    mov rsi, r12
     call row_of
     mov r12, [rax + AM_x]
     test r12, r12
@@ -4292,6 +4374,11 @@ FN agrow_key
     js 9f
     cmp r13, [rbx + AS_msgs + VEC_len]
     jae 9f
+    mov rdi, rbx                # (a row focus focus view hides: its fold's line)
+    mov rsi, r13
+    call agfold_shown
+    mov r13, rax
+    mov [rip + rf_row], rax
     mov rdi, rbx
     mov rsi, r13
     call has_action
@@ -4299,6 +4386,13 @@ FN agrow_key
     jz 8f
     cmp eax, PART_MORE
     je 610f
+    cmp eax, PART_FOLD          # a fold's line: it opens or closes (agentfold.s)
+    jne .Lk_enter_act
+    mov rdi, rbx
+    mov rsi, r13
+    call agfold_click
+    jmp 8f
+.Lk_enter_act:
     cmp eax, PART_TOGGLE
     jne 0f
     mov rdi, rbx                # thinking: all of them open or close; a marker, a notice, a long prompt:
@@ -4325,7 +4419,11 @@ FN agrow_key
     jns 1f
     call agents_view_last       # no focus yet: from the last row shown
     lea r13, [rax + 1]
-1:  dec r13
+1:  mov rdi, rbx                # the previous row that may show (over a closed fold in one step)
+    mov rsi, r13
+    call agfold_prev
+    mov r13, rax
+    test r13, r13
     js 7f
     cmp r13, [rbx + AS_msgs + VEC_len]
     jae 1b
@@ -4341,7 +4439,10 @@ FN agrow_key
     jns 2f
     call agents_view_first      # no focus yet: from the first row shown
     lea r13, [rax - 1]
-2:  inc r13
+2:  mov rdi, rbx
+    mov rsi, r13
+    call agfold_next
+    mov r13, rax
     cmp r13, [rbx + AS_msgs + VEC_len]
     jae 7f
     mov rdi, rbx
@@ -4394,7 +4495,14 @@ FN agrow_click
     mov r13d, eax
     test eax, eax
     jz 9f
-1:  mov rdi, rbx
+1:  cmp r13d, PART_FOLD         # a fold's line (agentfold.s)
+    jne 11f
+    mov rdi, rbx
+    mov rsi, r12
+    call agfold_click
+    mov eax, 1
+    EPILOGUE
+11: mov rdi, rbx
     mov rsi, r12
     call row_of
     mov rsi, [rax + AM_x]
@@ -4503,6 +4611,11 @@ FN agrow_row_dump
     mov r15, rdi
     mov rbx, rsi
     mov r12, rdx
+    mov rdi, rbx                # its own parts are not drawn (focus view): none
+    mov rsi, r12
+    call agfold_own
+    test eax, eax
+    jz 9f
     mov rdi, rbx
     mov rsi, r12
     call row_of

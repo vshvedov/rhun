@@ -117,6 +117,9 @@ cfg_agents_scroll_on_send: .long 1      # [agents] scroll_on_send: sending scrol
 cfg_agents_timestamps: .long 1          # [agents] timestamps: prompts and replies show their time, days a pill
 cfg_claude_spinner_verbs: .long 0       # [claude] spinner_verbs: 0 the spinner_verb lines are added, 1 they replace
 ts_seen: .long 1                        # cfg_agents_timestamps as the last read left it (a reload that changes it)
+.globl cfg_agents_focus_view
+cfg_agents_focus_view: .long 0          # [agents] focus_view: runs of tool calls and thinking fold into a line
+fv_seen: .long 0                        # cfg_agents_focus_view as the last read left it
 .p2align 3
 cfg_theme: .quad cfg_def_theme
 cfg_dark_theme: .quad cfg_def_theme
@@ -553,7 +556,12 @@ FN config_load
     je 2f
     mov [rip + ts_seen], eax
     call agents_view_changed
-2:
+2:  mov eax, [rip + cfg_agents_focus_view]  # and its folds a changed [agents] focus_view (agentfold.s)
+    cmp eax, [rip + fv_seen]
+    je 3f
+    mov [rip + fv_seen], eax
+    call agfold_view_changed
+3:
     mov rdi, r15
     call mem_free
     EPILOGUE
@@ -1023,6 +1031,7 @@ g_settings:
     SETTING .Ls_agents, ctrl_enter_sends, ST_BOOL, cfg_agents_ctrl_enter_sends, 0, 1, 1, 0, "Ctrl+Enter sends", "Enter starts a new line; Ctrl+Enter (Cmd+Enter on macOS) sends."
     SETTING .Ls_agents, scroll_on_send, ST_BOOL, cfg_agents_scroll_on_send, 0, 1, 1, 0, "Scroll to the end on send", "Sending a prompt scrolls the conversation to its end."
     SETTING .Ls_agents, timestamps, ST_BOOL, cfg_agents_timestamps, 0, 1, 1, 0, "Timestamps", "Show the time on prompts and replies, and a line where the day changes."
+    SETTING .Ls_agents, focus_view, ST_BOOL, cfg_agents_focus_view, 0, 1, 1, 0, "Focus view", "Show only your prompts and the replies; tool calls and thinking fold into one line."
     # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
     SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
     SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."

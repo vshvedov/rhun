@@ -1049,7 +1049,8 @@ class CommandsTest(ContextCase):
         self.explorer_project()
         self.chat('hello')
         items = self.explorer_pick(94)                  # a folder: with its "/"
-        self.assertEqual(items[0], 'Add to Chat')
+        self.assertEqual(items[-2:], ['-', 'Add to Chat'])          # after the built-in items, a group of its own
+        self.assertEqual(items[0], 'New File')
         self.explorer_pick(122)                         # a file
         self.assertEqual(self.box(), '@sub/ @a.py ')
         self.assertEqual(self.focused(), '1')

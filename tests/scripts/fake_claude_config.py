@@ -108,6 +108,7 @@ def set_disabled(cwd, config, names):
 
 
 AUTHED = set()                      # servers whose sign-in finished in this process
+RELOADS = []                        # the reload_plugins requests of this process
 
 
 def mcp_status(cwd, config):
@@ -185,7 +186,13 @@ def mcp_sub(args):
             write(project_path, project)
         else:
             write(path, data)
-        print('Added %s MCP server %s to %s config' % (transport, name, scope))
+        if transport == 'stdio':
+            print('Added stdio MCP server %s with command: %s to %s config'
+                  % (name, ' '.join(rest[1:]), scope))
+        else:
+            print('Added %s MCP server %s with URL: %s to %s config'
+                  % ({'http': 'HTTP', 'sse': 'SSE'}.get(transport, transport), name, conf['url'], scope))
+        print('File modified: %s' % (project_path if scope == 'project' else path))
         return 0
     if verb == 'remove':
         if scope == 'user':
@@ -246,14 +253,32 @@ def edit_hook(edit, cwd, config):
     """{op: add|replace|remove, source, event, matcher, hook, target}; the real CLI's answers."""
     source = edit.get('source')
     if source not in SOURCES:
-        return fail({'ok': False, 'error': 'edit_hook: unknown source %s' % source, 'code': 'bad_source'})
+        return fail({'ok': False, 'error': 'edit_hook: source must be userSettings, projectSettings, or localSettings',
+                     'code': 'bad_request'})
     path = settings_path(source, cwd, config)
-    settings = read(path, {})
+    try:
+        with open(path, encoding='utf-8') as stream:
+            settings = json.load(stream)
+    except OSError:
+        settings = {}
+    except ValueError:
+        return fail({'ok': False, 'error': 'edit_hook: the %s file has errors and could not be loaded; fix it by hand '
+                     'first' % source, 'code': 'file_unloadable', 'refusal': {'code': 'unloadable', 'file': path}})
     table = settings.setdefault('hooks', {})
     op = edit.get('op')
+    for event in {edit.get('event'), (edit.get('target') or {}).get('event')} - {None}:
+        if event in table and not isinstance(table[event], list):
+            return fail({'ok': False, 'error': 'edit_hook: the %s entry in %s is not a list; fix the file by hand'
+                         % (event, source), 'code': 'not_a_list', 'refusal': {'code': 'not-a-list', 'file': path}})
     if op in ('replace', 'remove'):
         target = edit.get('target') or {}
         groups = table.get(target.get('event'), [])
+        same = [h for g in groups if g.get('matcher', '') == target.get('matcher', '')
+                for h in g.get('hooks', []) if h == target.get('hook')]
+        if len(same) > 1:
+            return fail({'ok': False, 'error': 'edit_hook: more than one identical hook is configured for %s in %s; '
+                         'edit the file by hand' % (target.get('event'), source), 'code': 'target_ambiguous',
+                         'refusal': {'code': 'twins', 'file': path}})
         for group in groups:
             if group.get('matcher', '') == target.get('matcher', '') and target.get('hook') in group.get('hooks', []):
                 group['hooks'].remove(target['hook'])
@@ -582,5 +607,8 @@ def control(rid, sub, request, respond, respond_error, cwd, config):
         respond(rid, rules_state(cwd, config))
     elif sub == 'get_sandbox_dialog':
         respond(rid, sandbox_dialog(cwd, config))
-    elif sub == 'reload_plugins':
-        respond(rid, {'commands': [], 'agents': [], 'plugins': [], 'mcpServers': [], 'error_count': 0})
+    elif sub == 'reload_plugins':           # FAKE_CLAUDE_RELOAD_FAIL: the first N reloads count an error
+        failing = int(os.environ.get('FAKE_CLAUDE_RELOAD_FAIL', '0'))
+        RELOADS.append(rid)
+        respond(rid, {'commands': [], 'agents': [], 'plugins': [], 'mcpServers': [],
+                      'error_count': 1 if len(RELOADS) <= failing else 0})

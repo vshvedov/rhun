@@ -34,7 +34,9 @@ class Case(chat.DrivenCase):
             self.command('key ' + name)
 
     def control(self, subtype=None):
-        return [m['request'] for m in self.stdin() if m.get('type') == 'control_request'
+        """The control requests the fake read (not the subcommands' stdin, which the log keeps too)."""
+        lines = [json.loads(r['stdin']) for r in self.records() if 'stdin' in r and 'sub' not in r]
+        return [m['request'] for m in lines if m.get('type') == 'control_request'
                 and (subtype is None or m['request'].get('subtype') == subtype)]
 
     def subs(self):
@@ -450,6 +452,56 @@ class HooksTest(Case):
             'hook': {'type': 'http', 'url': 'https://hooks.example.invalid/x', 'headers': {'X-Key': 'k1'},
                      'timeout': 7}})
         self.assertNotIn('k1', self.command('print-agent-dialog'))
+
+    def test_a_refusal_offers_the_settings_file(self):
+        """edit-hook's {"refusal":{"code","file"}} (README finding 83): the extension's words, Open settings file
+        opens that file in a tab, Copy error copies what edit-hook said."""
+        local = self.project / '.claude/settings.local.json'
+        self.write_json(local, {'hooks': {'Stop': {'not': 'a list'}}})
+        self.panel()
+        self.open('hooks')
+        self.until_ready()
+        self.press('Add hook')
+        self.pick('Event: PreToolUse')
+        self.pick('Stop')
+        fields = [l for l in self.body() if l.startswith('field')]
+        cmd = [i for i, l in enumerate(fields) if '] Command\t' in l][0]
+        self.field(cmd + 1, 'echo done')
+        self.press('Add hook')
+        body = self.until_body(lambda b: any(l.endswith(' error') for l in b), 'the refusal')
+        self.assertIn('text The Stop entry in the local settings file is not a list, so the hook could not be saved. '
+                      'error', body)
+        links = [l for l in body if l.startswith('link[')]
+        self.assertEqual([l.split('] ')[1] for l in links], ['Open settings file', 'Copy error'])
+        self.pick('Copy error')
+        self.assertEqual(self.command('print-toast').strip(), 'toast=Copied to clipboard')
+        self.pick('Open settings file')
+        self.assertIn('settings.local.json', self.command('print-tabs'))
+        body = self.body()
+        self.assertFalse([l for l in body if l.endswith(' error') or l.startswith('link[') and 'settings file' in l])
+        self.assertEqual(body[0], 'head Add hook')                  # the dialog stays, on the form
+        self.assertEqual(json.loads(local.read_text()), {'hooks': {'Stop': {'not': 'a list'}}})
+
+    def test_an_unloadable_file_and_twins(self):
+        local = self.project / '.claude/settings.local.json'
+        twin = {'type': 'command', 'command': 'echo twin'}
+        self.write_json(local, {'hooks': {'Stop': [{'hooks': [twin, dict(twin)]}]}})
+        self.panel()
+        self.open('hooks')
+        self.until_ready()
+        self.pick('echo twin')
+        self.press('Remove')
+        self.press('Confirm remove')
+        body = self.until_body(lambda b: any(l.endswith(' error') for l in b), 'the refusal')
+        self.assertIn('text More than one identical hook is in the local settings file, so the dialog cannot tell '
+                      'which one to change. error', body)
+        self.assertIn('Open settings file', '\n'.join(body))
+        local.write_text('{"hooks": [', encoding='utf-8')     # broken since the listing was read
+        self.press('Save hook')
+        body = self.until_body(lambda b: any('could not be loaded' in l for l in b), 'the second refusal')
+        self.assertIn('text The local settings file could not be loaded, so the hook could not be saved. error', body)
+        self.pick('Open settings file')
+        self.assertIn('settings.local.json', self.command('print-tabs'))
 
 
 class PluginsTest(Case):

@@ -26,6 +26,8 @@
 .equ HA_REMOVE, 12
 .equ HA_CONFIRM, 13
 .equ HA_CANCEL, 14
+.equ HA_OPENFILE, 15              # a refusal's settings file opened (Open settings file)
+.equ HA_COPYERR, 16               # a refusal's error copied (Copy error)
 .equ HR_LIST, 1
 .equ HW_SAVE, 1
 .equ HW_REMOVE, 2
@@ -65,6 +67,8 @@ h_omatch: .quad 0               # owned cstrs
 h_oevent: .quad 0
 h_osource: .quad 0
 h_otype: .quad 0                # its type's index
+h_refpath: .quad 0              # owned cstrs: a refusal's settings file and its error, as edit-hook said them
+h_referr: .quad 0
 h_hdr0: .zero SB_SIZE           # the headers field as it was filled (names only)
 h_tfs: .zero TF_SIZE * FIELDS_N # the fields' text (FD_tf points here)
 h_tf_matcher: .zero TF_SIZE
@@ -133,9 +137,51 @@ form_clear:
     call free_q
     lea rax, [rip + h_osource]
     call free_q
+    call ref_clear
     mov qword ptr [rip + h_confirm], 0
     mov qword ptr [rip + h_shell], 0
     EPILOGUE
+
+# ref_clear(): no refusal kept
+ref_clear:
+    PROLOGUE
+    lea rax, [rip + h_refpath]
+    call free_q
+    lea rax, [rip + h_referr]
+    call free_q
+    EPILOGUE
+
+# ref_keep(slot rax, ptr, len): an owned copy of the string in the slot (none for an empty one)
+ref_keep:
+    PROLOGUE
+    mov rbx, rax
+    mov r12, rdi
+    mov r13, rsi
+    call free_q
+    test r13, r13
+    jz 9f
+    mov rdi, r12
+    mov rsi, r13
+    call mem_dup
+    mov [rbx], rax
+9:  EPILOGUE
+
+# ref_rows(): under a refusal's words, Open settings file and Copy error (the extension's LMn)
+ref_rows:
+    PROLOGUE
+    cmp qword ptr [rip + h_refpath], 0
+    je 9f
+    cmp qword ptr [rip + c2_err + SB_len], 0
+    je 9f
+    lea rdi, [rip + .Lh_open_file]
+    mov esi, HA_OPENFILE
+    call c2_link
+    cmp qword ptr [rip + h_referr], 0
+    je 9f
+    lea rdi, [rip + .Lh_copy_error]
+    mov esi, HA_COPYERR
+    call c2_link
+9:  EPILOGUE
 
 # free_q(rax: an owned cstr's slot): freed, 0
 free_q:
@@ -1470,6 +1516,7 @@ edit_rows:
     lea rdi, [rip + .Lh_edit_title]
 1:  call c2_head
     call c2_msgs
+    call ref_rows
     cmp qword ptr [rip + h_edit], -1    # Save to (adding only)
     jne 2f
     lea rdi, [rip + .Lh_save_to]
@@ -1902,7 +1949,29 @@ hooks_act:
     lea rsi, [rip + .Lh_url]
     call links_ask_open
     jmp 9f
-1:  cmp qword ptr [rip + c2_busy], 0
+1:  cmp r12d, HA_OPENFILE
+    jne 11f
+    mov rdi, [rip + h_refpath]  # the file in an editor tab; the dialog stays, without the refusal
+    test rdi, rdi
+    jz 9f
+    call app_open_file
+    call c2_notes_clear
+    call ref_clear
+    jmp 8f
+11: cmp r12d, HA_COPYERR
+    jne 12f
+    mov rdi, [rip + h_referr]
+    test rdi, rdi
+    jz 9f
+    call strlen
+    mov rsi, rax
+    mov rdi, [rip + h_referr]
+    xor edx, edx
+    call ed_clip_set
+    lea rdi, [rip + .Lh_copied]
+    call app_toast
+    jmp 9f
+12: cmp qword ptr [rip + c2_busy], 0
     jne 9f
     lea rdi, [rip + c2_doc]
     call c2_parse
@@ -2108,6 +2177,7 @@ run_edit:
     mov rbx, rdi
     mov r12, rsi
     call c2_notes_clear
+    call ref_clear
     call c2_args
     lea rdi, [rip + .La_edit_hook]
     call c2_arg_c
@@ -2701,9 +2771,13 @@ hooks_ran:
     call c2_ask
     call hooks_build
     EPILOGUE
-2:  test r13, r13               # refused: its code's words (TMn)
+2:  test r13, r13               # refused: {"refusal":{"code","file"}} in the extension's words (Tir, TMn)
     jz 4f
     mov rdi, r13
+    lea rsi, [rip + .Lk_refusal]
+    call json_get
+    mov r14, rax
+    mov rdi, rax
     lea rsi, [rip + .Lk_code]
     call c2_jstr
     test rdx, rdx
@@ -2712,7 +2786,22 @@ hooks_ran:
     mov rsi, rdx
     call refusal_f
     test eax, eax
-    jnz 5f
+    jz 3f
+    mov rdi, r14                # its file, for Open settings file; its error, for Copy error
+    lea rsi, [rip + .Lk_file]
+    call c2_jstr
+    mov rdi, rax
+    mov rsi, rdx
+    lea rax, [rip + h_refpath]
+    call ref_keep
+    mov rdi, r13
+    lea rsi, [rip + .Lk_error]
+    call c2_jstr
+    mov rdi, rax
+    mov rsi, rdx
+    lea rax, [rip + h_referr]
+    call ref_keep
+    jmp 5f
 3:  mov rdi, r13                # its error, its settings named in words (ePt)
     lea rsi, [rip + .Lk_error]
     call c2_jstr
@@ -2995,6 +3084,8 @@ protos: .quad .Lv_proto, .Lv_constructor, .Lv_prototype, 0
 .Lk_hook: .asciz "hook"
 .Lk_ok: .asciz "ok"
 .Lk_code: .asciz "code"
+.Lk_refusal: .asciz "refusal"
+.Lk_file: .asciz "file"
 .Lk_error: .asciz "error"
 .Lv_listing: .asciz "get_hooks_listing"
 .Lv_pretool: .asciz "PreToolUse"
@@ -3111,6 +3202,9 @@ protos: .quad .Lv_proto, .Lv_constructor, .Lv_prototype, 0
 .Lh_foot_edit: .asciz "Click a hook to view, edit, or remove it. Managed, plugin, session, and built-in hooks are read-only."
 .Lh_foot: .asciz "To add or modify hooks, edit settings.json directly or ask Claude."
 .Lh_learn: .asciz "Learn more about hooks"
+.Lh_open_file: .asciz "Open settings file"
+.Lh_copy_error: .asciz "Copy error"
+.Lh_copied: .asciz "Copied to clipboard"
 .Lh_url: .asciz "https://code.claude.com/docs/en/hooks"
 .Lh_add: .asciz "Add hook"
 .Lh_save: .asciz "Save hook"

@@ -188,17 +188,34 @@ class PermissionCardTest(CardCase):
 
     def test_the_place_is_remembered(self):
         self.ask('tool')
-        self.keys('Down', 'Right')                  # all projects: kept, though nothing is saved here
+        self.keys('Down', 'Right', 'Right')         # this project (shared): kept, though nothing is saved here
+        self.assertEqual(self.head()['dest'], 'projectSettings')
+        self.keys('3')                              # No
+        self.command('wait-agent ready')
+        self.assertIn('dest projectSettings', self.command('print-agent-cfg'))
+        self.command('agent-prompt tool touch again.txt')
+        self.command('wait-agent waiting')
+        self.assertEqual(self.head()['dest'], 'projectSettings')
+        self.command('agent-card 3')
+        self.command('wait-agent ready')
+        self.assertEqual([a['behavior'] for a in self.answers()], ['deny', 'deny'])
+
+    def test_all_projects_is_never_preselected(self):
+        """The user's own settings file is written only on a pick of it on that card: a remembered "all
+        projects" opens the next card on this session, and Enter there writes no settings file."""
+        self.ask('tool')
+        self.keys('Down', 'Right')                  # all projects, picked: kept as the project's last
         self.assertEqual(self.head()['dest'], 'userSettings')
         self.keys('3')                              # No
         self.command('wait-agent ready')
         self.assertIn('dest userSettings', self.command('print-agent-cfg'))
         self.command('agent-prompt tool touch again.txt')
         self.command('wait-agent waiting')
-        self.assertEqual(self.head()['dest'], 'userSettings')
-        self.command('agent-card 3')
-        self.command('wait-agent ready')
-        self.assertEqual([a['behavior'] for a in self.answers()], ['deny', 'deny'])
+        self.assertEqual(self.head()['dest'], 'session')
+        self.command('agent-card 2')                # the rule button
+        answer = self.until_answered(2)[-1]
+        self.assertEqual({u['destination'] for u in answer['updatedPermissions'] if u['type'] != 'setMode'},
+                         {'session'})
 
     def test_no_rule_button_when_suppressed(self):
         self.ask('nosave')

@@ -333,6 +333,19 @@ class RulesTest(Case):
                           'destination': 'projectSettings'})
         self.assertEqual(self.settings('project')['permissions']['allow'], ['Bash(ls *)'])
 
+    def test_a_remembered_all_projects_is_not_the_first_place(self):
+        """The user's own settings file is written only on a pick of it: a remembered "all projects" (the card's or
+        this page's last) is not where Add rule saves to first; this project (just you) is."""
+        self.panel()
+        self.command('agent-cfg-set dest userSettings')
+        self.open('permissions')
+        self.until_ready()
+        self.pick('Add rule…')
+        self.field(1, 'Bash(ls *)')
+        self.press('Add rule')
+        self.until_body(lambda b: 'head Allow (1)' in b, 'added')
+        self.assertEqual(json.loads(self.subs()[-1][1])['destination'], 'localSettings')
+
     def test_a_bad_rule_says_why(self):
         self.panel()
         self.open('permissions')

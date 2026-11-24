@@ -20,7 +20,8 @@
 # card shows (a setMode keeps its own). The places cycle "this project (just you)" (localSettings), "all
 # projects" (userSettings), "this project (shared)" (projectSettings), "this session" (session); the first
 # is the project's remembered one (agentcfg AGF_DEST), else the suggestions' own (the widest of theirs, the
-# extension's SPn order), and a remembered value that is none of the four is "this session".
+# extension's SPn order), and a remembered value that is none of the four is "this session"; so is a remembered
+# "all projects": the user's own settings file is written only on a pick of it on that card.
 #
 # Answers (claude_reply): Yes allows with the input (its command as edited: the input written again member
 # by member with the new "command"); the rule button sends set_permission_mode first for a setMode whose
@@ -1864,7 +1865,10 @@ FN claude_card_show
     test eax, eax
     jns 1f
     mov eax, D_SESSION          # remembered, but none of the four
-1:  mov [r13 + CD_dest], eax
+1:  cmp eax, D_USER             # all projects (the user's own settings file) is never preselected: a pick of
+    jne 2f                      #   it is the user's each time; remembered, this session's
+    mov eax, D_SESSION
+2:  mov [r13 + CD_dest], eax
 8:  mov rdi, rbx
     mov rsi, r12
     mov rdx, r13

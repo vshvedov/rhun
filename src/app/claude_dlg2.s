@@ -45,6 +45,7 @@
 .equ M_TICK, 72                 #   () the time c2_later asked for has come
 .equ M_SIZE, 80
 .equ OUT_MAX, 4194304           # a run's output kept at most (bytes)
+.equ JSON_TRIES, 8             # c2_last_json: lines that start with { or [ tried at most
 .equ IN_MAX, 61440              # what a run is given on its stdin at most (it fits a pipe's buffer)
 .equ ARGS_MAX, 64               # a run's arguments (after the program)
 .equ CLEAN_MAX, 2000            # a text from the CLI shown at most (bytes)
@@ -91,6 +92,7 @@
 c2_kind: .quad -1               # the open dialog (K_*), -1 none
 run_fd_out: .long -1
 run_fd_err: .long -1
+run_fd_in: .long -1             # a run's stdin while what it is given is still being written, -1 none
 
 .bss
 .p2align 3
@@ -121,6 +123,10 @@ run_pid: .quad 0                # the run's process, 0 none
 run_gen: .quad 0
 run_what: .quad 0
 run_open: .long 0               # pipes still open (2: stdout and stderr)
+run_in_w: .long 0               # run_fd_in is watched (POLLOUT)
+.p2align 3
+run_in: .zero SB_SIZE           # what the run is given on its stdin (wiped once written), and how much went
+run_in_off: .quad 0
 .p2align 3
 c2_tick_at: .quad 0             # time_ms of the module's M_TICK (c2_later), 0 none
 c2_tick_gen: .quad 0
@@ -1000,17 +1006,23 @@ FN c2_run
     SYS SYS_close
     test r12, r12
     jle .Lr_spawnfail
-    mov rsi, [rip + c2_in + SB_ptr]     # its stdin: what was made, then closed
+    call in_stop                # its stdin: what was made, written as the pipe takes it (in_feed), then
+    lea rdi, [rip + run_in]     #   closed; the loop goes on meanwhile (a child that does not read yet
+    mov rsi, [rip + c2_in + SB_ptr]     #   blocks nothing)
     mov rdx, [rip + c2_in + SB_len]
     cmp rdx, IN_MAX
     jbe 5f
     mov rdx, IN_MAX
-5:  test rdx, rdx
+5:  test rsi, rsi
     jz 6f
+    call sb_push
+6:  mov qword ptr [rip + run_in_off], 0
     mov edi, [rsp + 4]
-    SYS SYS_write
-6:  mov edi, [rsp + 4]
-    SYS SYS_close
+    mov [rip + run_fd_in], edi
+    mov esi, F_SETFL
+    mov edx, O_NONBLOCK
+    SYS SYS_fcntl
+    call in_feed
     lea rdi, [rip + c2_in]
     call wipe
     lea rdi, [rip + c2_out]
@@ -1060,6 +1072,7 @@ FN c2_run
     mov edi, [rsp + 8]
     call watch_remove
 .Lr_nowatch:
+    call in_stop
     mov edi, r12d
     mov esi, 2000
     call uproc_end
@@ -1098,6 +1111,66 @@ FN c2_run
     call wipe
     xor eax, eax
 9:  EPILOGUE
+
+# in_feed(): what the run is given goes to its stdin as far as the pipe takes it; the rest when it can take more
+#   (on_in, a POLLOUT watch); all of it written, or the pipe gone: stdin closed (in_stop)
+in_feed:
+    PROLOGUE
+1:  mov edi, [rip + run_fd_in]
+    test edi, edi
+    js 9f
+    mov rdx, [rip + run_in + SB_len]
+    sub rdx, [rip + run_in_off]
+    jbe 8f
+    mov rsi, [rip + run_in + SB_ptr]
+    add rsi, [rip + run_in_off]
+    SYS SYS_write
+    cmp rax, -EINTR
+    je 1b
+    cmp rax, -EAGAIN
+    je 5f
+    test rax, rax
+    jle 8f
+    add [rip + run_in_off], rax
+    jmp 1b
+5:  cmp dword ptr [rip + run_in_w], 0       # full: the rest once it drains
+    jne 9f
+    mov edi, [rip + run_fd_in]
+    mov esi, POLLOUT
+    lea rdx, [rip + on_in]
+    xor ecx, ecx
+    call watch_try_add
+    test eax, eax
+    jz 8f
+    mov dword ptr [rip + run_in_w], 1
+    jmp 9f
+8:  call in_stop
+9:  EPILOGUE
+
+# on_in(fd, events, ctx): the run's stdin takes more
+on_in:
+    sub rsp, 8
+    call in_feed
+    add rsp, 8
+    ret
+
+# in_stop(): the run's stdin closed (its watch gone), what it was given wiped
+in_stop:
+    PROLOGUE
+    mov ebx, [rip + run_fd_in]
+    test ebx, ebx
+    js 9f
+    mov dword ptr [rip + run_fd_in], -1
+    cmp dword ptr [rip + run_in_w], 0
+    je 1f
+    mov dword ptr [rip + run_in_w], 0
+    mov edi, ebx
+    call watch_remove
+1:  mov edi, ebx
+    SYS SYS_close
+9:  lea rdi, [rip + run_in]
+    call wipe
+    EPILOGUE
 
 # on_out(fd, events, sb ctx): a run's output, kept up to OUT_MAX bytes; both ends closed: its end
 on_out:
@@ -1141,6 +1214,7 @@ on_out:
 #   the dialog that ran it still shows
 run_end:
     PROLOGUE
+    call in_stop                # (a run that ended before it read all it was given)
     mov rdi, [rip + run_pid]
     mov qword ptr [rip + run_pid], 0
     mov r12, rdi
@@ -1246,7 +1320,8 @@ FN c2_running
 
 # FN c2_last_json(sb) -> rax the last JSON object or array of the output (0 none): from its end, each line that
 #   starts with { or [ alone (one-line JSON, as `--json` changes print it), then from there to the output's end
-#   (indented JSON over many lines, as `plugin list --json` prints it). The CLI's own lines are skipped.
+#   (indented JSON over many lines, as `plugin list --json` prints it). The CLI's own lines are skipped. At most
+#   JSON_TRIES such lines are tried (an output of many lines that start so costs no more than that many parses)
 FN c2_last_json
     PROLOGUE
     mov rbx, [rdi + SB_ptr]
@@ -1254,6 +1329,7 @@ FN c2_last_json
     xor eax, eax
     test rbx, rbx
     jz 9f
+    mov r15d, JSON_TRIES
     mov r14, -1                 # the output's end without its line ends (found first)
 1:  test r12, r12               # the last line's end without its line ends
     jz 8f
@@ -1277,7 +1353,9 @@ FN c2_last_json
     je 5f
     cmp eax, '['
     jne 7f
-5:  lea rdi, [rbx + r13]        # the line alone
+5:  dec r15d
+    js 8f
+    lea rdi, [rbx + r13]        # the line alone
     mov rsi, r12
     sub rsi, r13
     call json_parse

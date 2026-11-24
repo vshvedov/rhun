@@ -86,6 +86,7 @@ wk_lh: .long 0
 wk_limit: .long 0               # content walked at most (px)
 wk_bot: .long 0                 # dumped: the rows whose bottom is at most this
 wk_cls: .long 0                 # 1: cls_buf holds the line's classes
+wk_line: .long 0                # task 10: the line of the row row_draw draws (agsel_diff_row)
 chip_x: .long 0                 # "Click to expand" (chip_box)
 chip_y: .long 0
 chip_w: .long 0
@@ -982,7 +983,14 @@ row_draw:
     add edx, [rdi + FACE_ascent]
     mov r8d, 1
     call text_draw
-2:  mov r15d, [rip + wk_x]      # the text, a run of one class at a time
+2:  mov rdi, r12                # task 10: a selection's band over the row's, the pointer's place in it
+    mov rsi, r13                #   (agentsel.s)
+    mov rdx, r14
+    mov ecx, ebx
+    mov r8d, [rip + wk_x]
+    mov r9d, [rip + wk_line]
+    call agsel_diff_row
+    mov r15d, [rip + wk_x]      # the text, a run of one class at a time
 3:  cmp r13, r14
     jae 9f
     cmp byte ptr [r12 + r13], 9
@@ -1213,7 +1221,8 @@ ad_walk:
     mov rsi, [rsp + 8]
     mov edx, [r13 + ADL_state]
     call wk_tok
-4:  mov rdi, [rsp]
+4:  mov [rip + wk_line], r12d  # (task 10: the line row_draw draws a row of, for a selection)
+    mov rdi, [rsp]
     mov rsi, r14
     mov rdx, [rsp + 24]
     mov ecx, [rsp + 40]
@@ -1417,9 +1426,14 @@ FN agdiff_draw
     mov ecx, [rsp + 16]
     sub ecx, eax
     mov [rip + wk_limit], ecx
+    mov rdi, r12                # task 10: its rows select (agentsel.s): a press, a drag
+    mov esi, [rsp + 20]
+    call agsel_diff_begin
     mov dword ptr [rip + wk_mode], WK_DRAW
     call ad_walk
     mov dword ptr [rip + wk_mode], WK_MEASURE
+    mov rdi, r12
+    call agsel_diff_end
     call gfx_clip_pop
     cmp dword ptr [rbx + AD_cut], 0
     je 2f
@@ -1443,6 +1457,71 @@ FN agdiff_draw
     test dword ptr [rsp + 20], UB_CLICK
     setnz al
     EPILOGUE
+
+# FN agdiff_text(AT*, from, to, sb) -> eax 1: the text its block shows from one place to another (a place: its
+#   line << 32 | a byte of it), the lines' text without their signs, a line feed between lines; 0 without a
+#   record (phase 3 task 10: a selection's copy, agentsel.s)
+FN agdiff_text
+    PROLOGUE 32
+    mov rbx, rdi
+    mov [rsp], rsi
+    mov [rsp + 8], rdx
+    mov r15, rcx
+    xor eax, eax
+    mov r14, [rbx + AT_diff]
+    test r14, r14
+    jz 9f
+    mov r12, [rsp]
+    shr r12, 32                 # the line
+1:  mov rax, [rsp + 8]
+    shr rax, 32
+    cmp r12, rax
+    ja 8f
+    cmp r12d, [r14 + AD_n]
+    jae 8f
+    mov eax, r12d
+    shl eax, 4
+    lea r13, [r14 + rax + AD_lines]
+    mov rdi, rbx
+    mov esi, [r13 + ADL_kind]
+    call side_of
+    mov ecx, [r13 + ADL_off]
+    add rax, rcx
+    mov [rsp + 16], rax         # its text
+    mov ecx, [r13 + ADL_len]
+    mov rdx, rcx                # to
+    mov rax, [rsp + 8]
+    shr rax, 32
+    cmp r12, rax
+    jne 2f
+    mov eax, [rsp + 8]
+    cmp rax, rdx
+    cmova rax, rdx
+    mov rdx, rax
+2:  xor eax, eax                # from
+    mov rcx, [rsp]
+    shr rcx, 32
+    cmp r12, rcx
+    jne 3f
+    mov eax, [rsp]
+3:  cmp rax, rdx
+    jae 4f
+    mov rsi, [rsp + 16]
+    add rsi, rax
+    sub rdx, rax
+    mov rdi, r15
+    call sb_push
+4:  mov rax, [rsp + 8]
+    shr rax, 32
+    cmp r12, rax
+    jae 5f
+    mov rdi, r15
+    mov esi, 10
+    call sb_push_byte
+5:  inc r12
+    jmp 1b
+8:  mov eax, 1
+9:  EPILOGUE
 
 # ---------------- dumps ----------------
 

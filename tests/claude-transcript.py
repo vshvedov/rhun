@@ -2465,6 +2465,23 @@ class SelectTest(SelectCase):
         sel = self.selection()
         self.assertEqual((sel['row'], sel['part'], sel['text']), (str(u), 'prompt', 'first prompt here'), sel)
 
+    def test_drag_selects_in_a_diff(self):
+        u, t = self.rows10(('user', 'first prompt here'),
+                           ('tool', 'e1 name=Edit second=a.py a=one\\ntwo\\nthree b=one\\nTWO\\nthree flags=8 state=ok'))
+        x, y, w, h, _ = self.buttons(t)[5]                  # the diff: a button that opens the diff tab
+        tabs = self.command('print-state')
+        lh = mi(20, 13)
+        self.drag((x + w // 2, y + mi(6, 13) + 4), (x + w - 2, y + mi(6, 13) + lh + 6))
+        sel = self.selection()
+        self.assertEqual(sel['part'], 'diff', sel)
+        self.assertEqual((sel['from'], sel['to'], sel['text']), ('0:3', '1:3', '\ntwo'), sel)   # (no sign)
+        self.assertEqual(self.command('print-state'), tabs)  # the release opened nothing
+        self.command('key ' + chat.MOD + '+c')
+        self.assertEqual(self.clip(), sel['text'])
+        self.command('wait 700')
+        self.command('click %d %d' % (x + w // 2, y + mi(6, 13) + 4))     # a click still opens its tab
+        self.assertIn('Diff View: a.py', self.command('print-state') + self.command('print-tabs'))
+
     def test_double_click_takes_a_word(self):
         u, m = self.rows10(('user', 'first prompt here'), ('meta', 'a meta line'))
         bx, by, bw, bh = rect(self.head(u)['bubble'])

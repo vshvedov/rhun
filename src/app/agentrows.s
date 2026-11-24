@@ -3439,6 +3439,9 @@ unit_lay:
     call agdiff_draw
     test eax, eax
     jz 81f
+    call agsel_moved            # task 10: a drag that selected in it is no click (agentsel.s)
+    test eax, eax
+    jnz 81f
     mov rdi, r12
     mov rsi, r15
     mov edx, PART_DIFF

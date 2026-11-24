@@ -1687,6 +1687,11 @@ FN agents_open_link
     mov r13, rdx
     test r13, r13
     jz 8f
+    mov rdi, r12                # (task 10: no control, bidi or invisible character in it: link_ok)
+    mov rsi, r13
+    call link_ok
+    test eax, eax
+    jz 8f
     mov rdi, r12
     mov rsi, r13
     call link_scheme

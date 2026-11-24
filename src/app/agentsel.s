@@ -74,7 +74,7 @@ menu_link: .quad 0              # owned cstr: what Copy Link copies
 .globl agsel_lines
 agsel_lines: .quad 0            # SB* while agentrows.s's wrap gives its lines (agsel_line_add)
 lines: .zero SB_SIZE            # (start, end) u32 pairs of the unit wrapped last
-cs: .zero SB_SIZE               # a copy's text
+copy_sb: .zero SB_SIZE               # a copy's text
 ws: .zero SB_SIZE               # a part's whole text
 sw: .zero SW_SIZE               # a wrap's record, copied
 menu_items: .zero 16 * 4 + 16
@@ -89,6 +89,16 @@ resp_rows: .zero 8 * RESP_KEPT  # the Copy response buttons drawn in the frame r
 resp_r: .zero 16 * RESP_KEPT    #   and x, y, w, h (print-agent-selection)
 resp_n: .long 0
 resp_ser: .long 0
+diff_on: .long 0                # agsel_diff_*: the block being drawn selects (a top-level call's)
+diff_want: .long 0              #   1 a press, 2 a drag wants the place under the pointer
+diff_dbl: .long 0               #   (a double click: its line)
+diff_top: .long 0               #   the first row's top
+.p2align 3
+diff_as: .quad 0
+diff_row: .quad 0
+diff_hit: .quad 0               #   the place found, -1 none
+diff_first: .quad 0             #   the first row's start, the last row's end, -1 none
+diff_last: .quad 0
 
 .text
 
@@ -180,7 +190,28 @@ sel_text:
     je 8f
     mov eax, 1
     EPILOGUE
-2:  mov rdi, rbx                # a plain text: its bytes, as drawn
+2:  cmp dword ptr [rip + sel_part], PART_DIFF   # a diff's or a file's lines (agentdiff.s)
+    jne 21f
+    mov rdi, [rbx + AM_x]
+    test rdi, rdi
+    jz 8f
+    mov rsi, [rip + sel_a]
+    mov rdx, [rip + sel_b]
+    cmp rsi, rdx
+    jbe 20f
+    xchg rsi, rdx
+20: cmp rsi, rdx
+    je 8f
+    mov r12, [r15 + SB_len]
+    mov rcx, r15
+    call agdiff_text
+    test eax, eax
+    jz 8f
+    cmp [r15 + SB_len], r12
+    je 8f
+    mov eax, 1
+    EPILOGUE
+21: mov rdi, rbx                # a plain text: its bytes, as drawn
     mov esi, [rip + sel_part]
     call plain_of
     mov r12, rax
@@ -646,7 +677,7 @@ seg_px:
 # hit(RW*, x, y) -> rax the byte of its text nearest the point (its lines: wrap_lines): above the first line
 #   0, below the last laid out that line's end
 hit:
-    PROLOGUE 32
+    PROLOGUE 16
     mov rbx, rdi
     mov [rsp], esi
     mov rax, [rip + lines + SB_len]
@@ -672,17 +703,35 @@ hit:
 1:  mov rcx, [rip + lines + SB_ptr]
     mov r12d, [rcx + rax*8]     # the line's start
     mov r13d, [rcx + rax*8 + 4] # its end
-    mov r14d, [rsp]             # the pixels into it
-    sub r14d, [rbx + SW_x]
-    mov r15, [rbx + SW_text]
-2:  cmp r12d, r13d              # a run at a time: a TAB is four cells
+    mov rdi, [rbx + SW_face]
+    mov rsi, [rbx + SW_text]
+    add rsi, r12
+    mov edx, r13d
+    sub edx, r12d
+    mov ecx, [rsp]
+    sub ecx, [rbx + SW_x]
+    call fit_px
+    add eax, r12d
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# fit_px(face, ptr, len, px) -> eax the bytes of a row before the point px into it, to the nearer edge of the
+#   character under it (a TAB four cells, as the wraps draw it)
+fit_px:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov r15, rsi
+    mov r13d, edx               # the row's end
+    mov r14d, ecx               # the pixels into it
+    xor r12d, r12d
+2:  cmp r12d, r13d              # a run at a time
     jae 7f
     test r14d, r14d
     jle 7f
     cmp byte ptr [r15 + r12], 9
     jne 3f
-    mov rax, [rbx + SW_face]
-    mov eax, [rax + FACE_cellw]
+    mov eax, [rbx + FACE_cellw]
     shl eax, 2
     mov ecx, eax
     shr ecx, 1
@@ -699,7 +748,7 @@ hit:
     inc ecx
     jmp 4b
 5:  mov [rsp + 16], ecx         # its end
-    mov rdi, [rbx + SW_face]
+    mov rdi, rbx
     lea rsi, [r15 + r12]
     mov edx, ecx
     sub edx, r12d
@@ -709,7 +758,7 @@ hit:
     sub r14d, eax               # past it
     mov r12d, [rsp + 16]
     jmp 2b
-6:  mov rdi, [rbx + SW_face]    # in it: the bytes that fit
+6:  mov rdi, rbx                # in it: the bytes that fit
     lea rsi, [r15 + r12]
     mov edx, [rsp + 16]
     sub edx, r12d
@@ -724,12 +773,12 @@ hit:
     sub esi, ecx
     call utf8_decode
     mov [rsp + 24], edx
-    mov rdi, [rbx + SW_face]
+    mov rdi, rbx
     lea rsi, [r15 + r12]
     mov edx, [rsp + 20]
     call text_width
     mov [rsp + 28], eax         # to the fit
-    mov rdi, [rbx + SW_face]
+    mov rdi, rbx
     lea rsi, [r15 + r12]
     mov edx, [rsp + 20]
     add edx, [rsp + 24]
@@ -744,8 +793,6 @@ hit:
     add [rsp + 20], eax
 61: add r12d, [rsp + 20]
 7:  mov eax, r12d
-    EPILOGUE
-8:  xor eax, eax
     EPILOGUE
 
 # paint(RW*): the selection's band behind the lines (wrap_lines) it covers; a line break inside it as a half
@@ -824,19 +871,237 @@ paint:
     jmp 2b
 9:  EPILOGUE
 
+# ---------------- a diff's or a written file's lines (agentdiff.s) ----------------
+#
+# A place in them is its line << 32 | a byte of the line's text; the block draws its rows through
+# agsel_diff_row (each row in the clip: the band, and the place under the pointer), between agsel_diff_begin
+# and agsel_diff_end (which takes that place for a press or a drag)
+
+# FN agsel_diff_begin(AT*, ub): a call's diff block about to be drawn, its UB bits: a press anchors, a drag
+#   goes on (a child's block selects nothing)
+FN agsel_diff_begin
+    PROLOGUE
+    mov rbx, rdi
+    mov r13d, esi
+    mov dword ptr [rip + diff_on], 0
+    mov dword ptr [rip + diff_want], 0
+    mov qword ptr [rip + diff_hit], -1
+    mov qword ptr [rip + diff_first], -1
+    mov qword ptr [rip + diff_last], -1
+    cmp qword ptr [rbx + AT_up], 0
+    jne 9f
+    call agents_viewed
+    test rax, rax
+    jz 9f
+    mov r14, rax
+    movsxd r12, dword ptr [rbx + AT_row]
+    test r12, r12
+    js 9f
+    cmp r12, [r14 + AS_msgs + VEC_len]
+    jae 9f
+    imul rax, r12, AM_SIZE
+    add rax, [r14 + AS_msgs + VEC_ptr]
+    cmp [rax + AM_x], rbx
+    jne 9f
+    mov dword ptr [rip + diff_on], 1
+    mov [rip + diff_as], r14
+    mov [rip + diff_row], r12
+    test r13d, UB_PRESS
+    jz 1f
+    call agsel_clear
+    mov dword ptr [rip + diff_want], 1
+    mov dword ptr [rip + diff_dbl], 0
+    test r13d, UB_DOUBLE
+    jz 9f
+    mov dword ptr [rip + diff_dbl], 1
+    jmp 9f
+1:  cmp dword ptr [rip + sel_drag], 0
+    je 9f
+    mov rdi, r14
+    mov rsi, r12
+    mov edx, PART_DIFF
+    call is_mine
+    test eax, eax
+    jz 9f
+    test dword ptr [rip + g_mdown], 1 << BTN_LEFT
+    jz 2f
+    mov dword ptr [rip + diff_want], 2
+    jmp 9f
+2:  mov dword ptr [rip + sel_drag], 0
+9:  EPILOGUE
+
+# FN agsel_diff_row(line text, from, end, top, x, line): a row of the block drawn (in the clip), from to end
+#   of its line's text at top, its text at x: the place under the pointer when one is wanted; the selection's
+#   band under its text
+FN agsel_diff_row
+    PROLOGUE 32
+    cmp dword ptr [rip + diff_on], 0
+    je 9f
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov [rsp], ecx              # top
+    mov [rsp + 4], r8d          # x
+    mov eax, r9d
+    shl rax, 32
+    mov [rsp + 8], rax          # the line's place
+    call agrow_code_face
+    mov r14, rax
+    mov eax, [r14 + FACE_lineh]
+    mov [rsp + 16], eax
+    mov rax, [rsp + 8]          # the first row's start, the last row's end
+    or rax, r12
+    cmp qword ptr [rip + diff_first], 0
+    jge 1f
+    mov [rip + diff_first], rax
+    mov ecx, [rsp]
+    mov [rip + diff_top], ecx
+1:  mov rax, [rsp + 8]
+    or rax, r13
+    mov [rip + diff_last], rax
+    cmp dword ptr [rip + diff_want], 0  # the pointer's place: the first row it is not below
+    je 3f
+    cmp qword ptr [rip + diff_hit], 0
+    jge 3f
+    mov eax, [rsp]
+    add eax, [rsp + 16]
+    cmp [rip + g_my], eax
+    jge 3f
+    mov rdi, r14
+    lea rsi, [rbx + r12]
+    mov edx, r13d
+    sub edx, r12d
+    mov ecx, [rip + g_mx]
+    sub ecx, [rsp + 4]
+    call fit_px
+    add eax, r12d
+    or rax, [rsp + 8]
+    mov [rip + diff_hit], rax
+3:  mov rdi, [rip + diff_as]    # the band
+    mov rsi, [rip + diff_row]
+    mov edx, PART_DIFF
+    call is_mine
+    test eax, eax
+    jz 9f
+    mov rax, [rip + sel_a]
+    mov rcx, [rip + sel_b]
+    cmp rax, rcx
+    je 9f
+    jb 4f
+    xchg rax, rcx
+4:  mov [rsp + 24], rcx         # (to)
+    mov rdx, [rsp + 8]
+    or rdx, r12                 # the row's start
+    cmp rcx, rdx
+    jbe 9f                      # it ends before the row
+    mov r15, [rsp + 8]
+    or r15, r13                 # the row's end
+    cmp rax, r15
+    ja 9f                       # it begins after it
+    cmp rax, rdx                # from: in the row, or its start
+    jae 5f
+    mov rax, rdx
+5:  mov rdi, r14
+    lea rsi, [rbx + r12]
+    mov edx, eax
+    sub edx, r12d
+    call seg_px
+    mov [rsp + 20], eax         # x0 (from the text's left)
+    mov rax, [rsp + 24]         # to: in the row, or its end
+    cmp rax, r15
+    jbe 6f
+    mov rax, r15
+6:  mov rdi, r14
+    lea rsi, [rbx + r12]
+    mov edx, eax
+    sub edx, r12d
+    call seg_px
+    cmp [rsp + 24], r15         # past the row's end: half a cell more
+    jbe 7f
+    mov ecx, [r14 + FACE_cellw]
+    shr ecx, 1
+    jnz 61f
+    mov ecx, 1
+61: add eax, ecx
+7:  mov edx, eax
+    sub edx, [rsp + 20]
+    jle 9f
+    mov edi, [rsp + 4]
+    add edi, [rsp + 20]
+    mov esi, [rsp]
+    mov ecx, [rsp + 16]
+    COLOR r8d, T_SELECTION
+    call gfx_fill
+9:  EPILOGUE
+
+# FN agsel_diff_end(AT*): the block drawn: a press takes the place under the pointer as its anchor (a double
+#   click: its line), a drag as its end (above the rows drawn: the first one's start, below them the last
+#   one's end)
+FN agsel_diff_end
+    PROLOGUE
+    cmp dword ptr [rip + diff_on], 0
+    je 9f
+    mov eax, [rip + diff_want]
+    test eax, eax
+    jz 9f
+    mov rbx, [rip + diff_hit]
+    test rbx, rbx
+    jns 1f
+    mov rbx, [rip + diff_last]  # below the rows drawn, or above them
+    mov ecx, [rip + g_my]
+    cmp ecx, [rip + diff_top]
+    jge 1f
+    mov rbx, [rip + diff_first]
+1:  test rbx, rbx
+    js 9f
+    cmp dword ptr [rip + diff_want], 1
+    jne 3f
+    mov rax, [rip + diff_as]    # a press
+    mov [rip + sel_as], rax
+    mov rax, [rip + diff_row]
+    mov [rip + sel_row], rax
+    mov dword ptr [rip + sel_part], PART_DIFF
+    mov [rip + sel_a], rbx
+    mov [rip + sel_b], rbx
+    mov dword ptr [rip + sel_drag], 1
+    mov dword ptr [rip + sel_moved], 0
+    mov dword ptr [rip + g_dirty], 1
+    cmp dword ptr [rip + diff_dbl], 0
+    je 9f
+    mov rax, rbx                # a double click: its line
+    shr rax, 32
+    shl rax, 32
+    mov [rip + sel_a], rax
+    mov rax, rbx
+    shr rax, 32
+    inc rax
+    shl rax, 32
+    mov [rip + sel_b], rax
+    mov dword ptr [rip + sel_drag], 0
+    mov dword ptr [rip + sel_moved], 1
+    jmp 9f
+3:  cmp rbx, [rip + sel_b]      # a drag
+    je 9f
+    mov [rip + sel_b], rbx
+    mov dword ptr [rip + g_dirty], 1
+    cmp rbx, [rip + sel_a]
+    je 9f
+    mov dword ptr [rip + sel_moved], 1
+9:  EPILOGUE
+
 # ---------------- copy ----------------
 
 # FN agsel_copy() -> eax 1 when the selected text went to the clipboard
 FN agsel_copy
     PROLOGUE
-    lea rdi, [rip + cs]
+    lea rdi, [rip + copy_sb]
     call sb_clear
-    lea rdi, [rip + cs]
+    lea rdi, [rip + copy_sb]
     call sel_text
     test eax, eax
     jz 9f
-    mov rdi, [rip + cs + SB_ptr]
-    mov rsi, [rip + cs + SB_len]
+    mov rdi, [rip + copy_sb + SB_ptr]
+    mov rsi, [rip + copy_sb + SB_len]
     xor edx, edx
     call ed_clip_set
     mov eax, 1
@@ -845,9 +1110,9 @@ FN agsel_copy
 # sel_any() -> eax 1 when something is selected (Copy in the menu)
 sel_any:
     PROLOGUE
-    lea rdi, [rip + cs]
+    lea rdi, [rip + copy_sb]
     call sb_clear
-    lea rdi, [rip + cs]
+    lea rdi, [rip + copy_sb]
     call sel_text
     EPILOGUE
 
@@ -925,14 +1190,14 @@ copy_message:
     js 9f
     cmp r12, [rbx + AS_msgs + VEC_len]
     jae 9f
-    lea rdi, [rip + cs]
+    lea rdi, [rip + copy_sb]
     call sb_clear
     mov rdi, rbx
     mov rsi, r12
-    lea rdx, [rip + cs]
+    lea rdx, [rip + copy_sb]
     call message_of
-    mov rdi, [rip + cs + SB_ptr]
-    mov rsi, [rip + cs + SB_len]
+    mov rdi, [rip + copy_sb + SB_ptr]
+    mov rsi, [rip + copy_sb + SB_len]
     xor edx, edx
     call ed_clip_set
 9:  EPILOGUE
@@ -1417,7 +1682,7 @@ copy_response:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
-    lea rdi, [rip + cs]
+    lea rdi, [rip + copy_sb]
     call sb_clear
     imul rax, r12, AM_SIZE
     add rax, [rbx + AS_msgs + VEC_ptr]
@@ -1434,21 +1699,21 @@ copy_response:
     jnz 1b
     cmp qword ptr [r14 + AM_len], 0
     je 1b
-    cmp qword ptr [rip + cs + SB_len], 0
+    cmp qword ptr [rip + copy_sb + SB_len], 0
     je 2f
-    lea rdi, [rip + cs]
+    lea rdi, [rip + copy_sb]
     mov esi, 10
     call sb_push_byte
-    lea rdi, [rip + cs]
+    lea rdi, [rip + copy_sb]
     mov esi, 10
     call sb_push_byte
-2:  lea rdi, [rip + cs]
+2:  lea rdi, [rip + copy_sb]
     mov rsi, [r14 + AM_text]
     mov rdx, [r14 + AM_len]
     call sb_push
     jmp 1b
-5:  mov rdi, [rip + cs + SB_ptr]
-    mov rsi, [rip + cs + SB_len]
+5:  mov rdi, [rip + copy_sb + SB_ptr]
+    mov rsi, [rip + copy_sb + SB_len]
     xor edx, edx
     call ed_clip_set
     lea rdi, [rip + .Lcopied]
@@ -1487,9 +1752,9 @@ FN agsel_resp
 FN agsel_dump
     PROLOGUE
     mov r15, rdi
-    lea rdi, [rip + cs]
+    lea rdi, [rip + copy_sb]
     call sb_clear
-    lea rdi, [rip + cs]
+    lea rdi, [rip + copy_sb]
     call sel_text
     test eax, eax
     jnz 1f
@@ -1519,6 +1784,9 @@ FN agsel_dump
     lea rsi, [rip + .Lp_prompt]
     cmp eax, SELP_PROMPT
     je 2f
+    lea rsi, [rip + .Lp_diff]
+    cmp eax, PART_DIFF
+    je 2f
     lea rsi, [rip + .Lp_meta]
 2:  mov rdi, r15
     call sb_push_cstr
@@ -1531,27 +1799,27 @@ FN agsel_dump
     lea rsi, [rip + .Ld_nopos]
     call sb_push_cstr
     jmp 4f
-3:  mov rax, [rip + sel_a]
+3:  mov r12, [rip + sel_a]
     mov rbx, [rip + sel_b]
-    cmp rax, rbx
+    cmp r12, rbx
     jbe 31f
-    xchg rax, rbx
+    xchg r12, rbx
 31: mov rdi, r15
-    mov rsi, rax
-    call sb_push_u64
+    mov rsi, r12
+    call place_push
     mov rdi, r15
     lea rsi, [rip + .Ld_to]
     call sb_push_cstr
     mov rdi, r15
     mov rsi, rbx
-    call sb_push_u64
+    call place_push
 4:  mov rdi, r15
     lea rsi, [rip + .Ld_text]
     call sb_push_cstr
     xor r12d, r12d              # its text, on one line
-41: cmp r12, [rip + cs + SB_len]
+41: cmp r12, [rip + copy_sb + SB_len]
     jae 44f
-    mov rax, [rip + cs + SB_ptr]
+    mov rax, [rip + copy_sb + SB_ptr]
     movzx esi, byte ptr [rax + r12]
     inc r12
     cmp esi, 10
@@ -1608,6 +1876,26 @@ FN agsel_dump
     inc r12d
     jmp 6b
 9:  EPILOGUE
+
+# place_push(sb, place): a byte, or a diff's place as LINE:BYTE
+place_push:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    cmp dword ptr [rip + sel_part], PART_DIFF
+    jne 1f
+    mov rsi, r12
+    shr rsi, 32
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ':'
+    call sb_push_byte
+    mov esi, r12d
+    mov r12, rsi
+1:  mov rdi, rbx
+    mov rsi, r12
+    call sb_push_u64
+    EPILOGUE
 
 # FN agsel_cmd_select() -> rax 0, -1 a wrong row: agent-select N FROM TO [in|out] (its arguments: ai_arg): row N
 #   (from 0) of the open conversation selected from byte FROM to TO of its plain text (a prompt, a meta line, a
@@ -1706,3 +1994,4 @@ FN agsel_cmd_select
 .Lp_out: .asciz "out"
 .Lp_prompt: .asciz "prompt"
 .Lp_meta: .asciz "meta"
+.Lp_diff: .asciz "diff"

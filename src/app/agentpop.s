@@ -2175,6 +2175,13 @@ FN agentpop_run
     mov r13d, edx
     mov r14, rcx
     mov r15, r8
+    cmp r13d, ACT_RESUME        # phase 6, sessions: "Resume conversation", /resume: the history dropdown
+    jne 0f
+    mov rdi, rbx
+    mov esi, r12d
+    call aghead_resume
+    EPILOGUE
+0:
     cmp r13d, ACT_CLEAR
     je .Lr_new
     cmp r13d, ACT_NEW

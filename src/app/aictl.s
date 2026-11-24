@@ -2899,6 +2899,8 @@ ai_ctl:
     .quad .Lc_mdtab_comment, c_mdtab_comment, .Lc_agent_card_uncomment, c_agent_card_uncomment
     # phase 4 tasks 11 and 12: proposed changes (agentoffer.s, review.s)
     .quad .Lc_print_agent_offer, c_print_agent_offer
+    # phase 6, sessions: the session list (agentlist.s)
+    .quad aglist_n_print, aglist_print, aglist_n_state, aglist_print_state, aglist_n_list, aglist_ctl_entry
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

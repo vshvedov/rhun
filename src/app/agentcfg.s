@@ -2052,6 +2052,7 @@ act_names:                      # ACT_* by value
     .quad .La_send, .La_clear, .La_new, .La_model, .La_modes, .La_thinking, .La_effort, .La_fast
     .quad .La_plan, .La_copy, .La_signin, .La_signout, .La_terminal, .La_settings, .La_help
     .quad .La_unavailable, .La_ultra
+    .quad aghead_a_focusview, aghead_n_resume   # phase 6: ACT_FOCUSVIEW's and ACT_RESUME's (agenthead.s)
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .Lsuffix: .asciz ".agents-"
 .Lempty: .asciz ""

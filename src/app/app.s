@@ -2384,6 +2384,11 @@ FN app_on_paste
     jmp 9f
 5:  cmp dword ptr [rip + g_focus], FOCUS_AGENTS
     jne 51f
+    mov rdi, rbx                # phase 6: the session list's rename or search field (agentlist.s)
+    mov rsi, r12
+    call aglist_paste
+    test eax, eax
+    jnz 9f
     mov rdi, rbx                # a field of the agents panel's card (agentcard.s), cleaned as the box's
     mov rsi, r12
     call agentcard_paste
@@ -2447,8 +2452,14 @@ FN focused_field
     cmp eax, FOCUS_AGENT_INPUT
     je agentext_field
     cmp eax, FOCUS_AGENTS
-    je agentcard_field          # the agents panel's card's field with the keyboard (agentcard.s)
+    je 2f
     xor eax, eax
+    ret
+2:  sub rsp, 8                  # phase 6: the session list's rename or search field (agentlist.s), else
+    call aglist_field           #   the agents panel's card's field with the keyboard (agentcard.s)
+    add rsp, 8
+    test rax, rax
+    jz agentcard_field
     ret
 1:  sub rsp, 8                  # an extension's version control message box (scmpanel.s), else a
     call scmpanel_field         #   view's own field (views group, rview.s)

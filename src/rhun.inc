@@ -3464,7 +3464,8 @@ ENDSTRUCT ACH_SIZE
 .equ ACT_UNAVAILABLE, 15
 .equ ACT_ULTRA, 16
 .equ ACT_FOCUSVIEW, 17          # focus view (agentfold.s, task 9)
-.equ ACT_COUNT, 18
+.equ ACT_RESUME, 18             # phase 6, sessions: "Resume conversation", /resume: the history dropdown
+.equ ACT_COUNT, 19
 STRUCT
 F AGC_kind, 4           # the driver kind (AS_kind)
 F AGC_flags, 4          # AGCF_*
@@ -4833,3 +4834,23 @@ ENDSTRUCT MT_SIZE
 .equ MCP_LATER, 2
 .equ MCPT_IDE, 1        # a token's transport (its top byte): the bridge for terminal claude
 # ---- Claude chat phase 5: end ----
+# ---- phase 6, sessions: the session list's own marks (agentgroups.s, agentlist.s, agenthead.s) ----
+STRUCT
+F SGR_id, 4              # a group of the session list: its id (never 0, never reused in a project)
+F SGR_flags, 4           # SGRF_*
+F SGR_name, 8            # owned cstr
+ENDSTRUCT SGR_SIZE
+.equ SGRF_COLLAPSED, 1
+.equ SF_ARCH, 1                 # a session's marks: archived by hand
+.equ SF_KEPT, 2                 #   unarchived by hand (also one quiet for archive_after_days)
+.equ SF_UNREAD, 4               #   unread
+.equ SF_ALL, 7
+.equ LF_NEEDS, 1                # the status filter: needs input, working, completed (any of them),
+.equ LF_WORKING, 2
+.equ LF_DONE, 4
+.equ LF_OPEN, 8                 #   open, closed (any of them),
+.equ LF_CLOSED, 16
+.equ LF_ACTIVE, 32              #   active (needs input, working or unread)
+.equ SH_UNGROUPED_SHUT, 1       # the sections' state: Ungrouped collapsed, Archived shown open
+.equ SH_ARCHIVED_OPEN, 2
+# ---- end of phase 6, sessions ----

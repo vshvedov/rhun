@@ -3982,8 +3982,16 @@ menu_tbl:
     .quad .Lm_help, .Lm_help_d
     .long APK_ROW, 0
     .quad 0
+    # phase 6, sessions: Resume conversation, /resume, /continue (the history dropdown, agenthead.s)
+    .long APS_CONTEXT, ACT_RESUME
+    .quad aghead_m_resume, aghead_m_resume_d
+    .long APK_ROW, APRF_FILTERONLY
+    .quad 0
 menu_end:
 local_cmds:
+    .quad aghead_n_resume, aghead_d_resume, .Lempty, ACT_RESUME
+    .quad aghead_n_continue, aghead_d_resume, .Lempty, ACT_RESUME
+    # (end of phase 6's block)
     .quad .Ln_clear, .Ld_clear, .Lempty, ACT_CLEAR
     .quad .Ln_model, .Ld_model, .Lempty, ACT_MODEL
     .quad .Ln_plan, .Ld_plan, .Lh_plan, ACT_PLAN

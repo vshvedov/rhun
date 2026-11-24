@@ -157,7 +157,12 @@ FN agents_sources_changed
 relist:
     PROLOGUE
     mov ebx, edi
-    call agents_shutdown
+    test ebx, ebx               # phase 6: another project's marks, or the same ones (agentlist.s)
+    jnz 3f
+    call aglist_project
+    jmp 4f
+3:  call aglist_reset_view
+4:  call agents_shutdown
     mov rdi, [rip + cfg_agent_sources]
     call strlen
     mov rsi, rax
@@ -678,7 +683,14 @@ apply_page:
     cmp dword ptr [r13 + AS_loaded], 0
     jne 62f
     mov rax, [r12 + AS_stamp]
-    mov [r13 + AS_stamp], rax
+    cmp qword ptr [r13 + AS_stamp], 0   # phase 6: a row the panel watched grew: unread (agentlist.s)
+    je 621f
+    cmp rax, [r13 + AS_stamp]
+    je 621f
+    mov rdi, r13
+    call aglist_grew
+    mov rax, [r12 + AS_stamp]
+621: mov [r13 + AS_stamp], rax
 62: mov dword ptr [rsp + 24], 1
     mov rdi, [r12 + AS_title]
     mov rsi, [r13 + AS_index_title]
@@ -818,6 +830,7 @@ apply_page:
 18: # AI: the extensions' rows go in again
     mov qword ptr [rip + ext_listed], 0
     call agents_ext_rows
+    call aglist_touch           # phase 6: a new page (agentlist.s)
     call index_dirty
     EPILOGUE
 
@@ -832,6 +845,8 @@ index_dirty:
 FN agent_session_free
     PROLOGUE
     mov rbx, rdi
+    call aglist_gone            # phase 6: the list, its menus and its rename field forget it (agentlist.s)
+    mov rdi, rbx
     call agent_closed           # a session rhun drives: its program ends, its record goes (agent_drv.s)
     mov rdi, rbx
     call session_clear_msgs
@@ -1130,7 +1145,8 @@ sort_sessions:
     inc rcx
     jmp 5b
 6:  mov [rip + view], rcx
-7:  EPILOGUE
+7:  call aglist_touch           # phase 6: the list's order changed (agentlist.s)
+    EPILOGUE
 
 # ---------- parsing ----------
 
@@ -2824,7 +2840,8 @@ FN agents_poll
     jz 5f
     call sort_sessions
     mov dword ptr [rip + g_dirty], 1
-5:  EPILOGUE
+5:  call aglist_poll            # phase 6: who else holds a conversation; the one open at the last quit
+    EPILOGUE
 
 # agents_poll_prefetch(): remote hosts: the files agents_poll stats, asked for in one request
 agents_poll_prefetch:
@@ -2887,6 +2904,8 @@ poll_session:
     mov r13d, 1
     call time_ms
     mov [r12 + AS_changed], rax
+    mov rdi, r12                # phase 6: grown while not open: unread (agentlist.s)
+    call aglist_grew
     cmp rbx, [rip + view]
     jne 9f
     mov rdi, r12
@@ -3168,6 +3187,8 @@ open_session:
     mov [rip + view], rdi
     mov rax, [rip + sessions + VEC_ptr]
     mov rbx, [rax + rdi*8]
+    mov rdi, rbx                # phase 6: read now, the one a restart opens again (agentlist.s)
+    call aglist_opened
     mov rdi, rbx
     call agentext_opened        # AI (D4): it replaces a new session being written; the box is its
     mov dword ptr [rbx + AS_loaded], 1
@@ -3523,6 +3544,12 @@ FN agents_key
     mov r12d, edi
     mov r13d, esi
     mov r14d, edx
+    call aglist_key             # phase 6: a rename field, the history dropdown, the list's keys (agentlist.s)
+    test eax, eax
+    jnz 5f
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, r14d
     call agentpop_kind          # an open popup of the box's (agentpop.s) takes its keys first
     test eax, eax
     jz 0f
@@ -3716,6 +3743,9 @@ key_list:
     cmp qword ptr [rip + view], 0
     jl 2f
     mov qword ptr [rip + view], -1
+    sub rsp, 8
+    call aglist_closed          # phase 6: no conversation open for a restart
+    add rsp, 8
     jmp 3f
 2:  mov dword ptr [rip + g_focus], FOCUS_EDITOR
 3:  mov dword ptr [rip + g_dirty], 1
@@ -3905,6 +3935,69 @@ FN agents_viewed
     mov rax, [rax + rcx*8]
 1:  ret
 
+# ---- phase 6: what the session list (agentlist.s) reads of the list and asks of it ----
+
+# FN agents_row_at(i) -> rax sessions[i] when the list shows it (row_shown), else 0; rdx how many sessions
+FN agents_row_at
+    mov rdx, [rip + sessions + VEC_len]
+    cmp rdi, rdx
+    jae 1f
+    push rdx
+    push rdi
+    call row_shown
+    pop rdi
+    pop rdx
+    test eax, eax
+    jz 1f
+    mov rax, [rip + sessions + VEC_ptr]
+    mov rax, [rax + rdi*8]
+    ret
+1:  xor eax, eax
+    ret
+
+# FN agents_rows_vec() -> rax the sessions' array, rdx their number (what a list built from them depends on)
+FN agents_rows_vec
+    mov rax, [rip + sessions + VEC_ptr]
+    mov rdx, [rip + sessions + VEC_len]
+    ret
+
+# FN agents_page_full() -> eax 1 when the page holds every session discovery knows, or already asks for them all
+FN agents_page_full
+    mov eax, 1
+    cmp qword ptr [rip + page_limit], 100000
+    jae 1f
+    mov rcx, [rip + page_count]
+    cmp rcx, [rip + total_count]
+    jae 1f
+    xor eax, eax
+1:  ret
+
+# FN agents_page_want(n): the page grows to n rows: a discovery run is asked for (shown as loading)
+FN agents_page_want
+    cmp [rip + page_limit], rdi
+    jae 1f
+    mov [rip + page_limit], rdi
+    jmp agents_scan
+1:  ret
+
+# FN agents_back(): the list again (the header's Back): no conversation open, for a restart neither
+FN agents_back
+    PROLOGUE
+    mov qword ptr [rip + view], -1
+    call agentext_new_leave     # AI (D4): the prompt box's focus goes back to the panel
+    call aglist_closed
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# FN agents_badge(kind, x, y) -> eax its right edge; agents_ext_badge(AS*, x, y); agents_worktree_badge(name,
+#   x, y, max width): the row's badges, as the list draws them
+FN agents_badge
+    jmp agent_badge
+FN agents_ext_badge
+    jmp ext_badge
+FN agents_worktree_badge
+    jmp worktree_badge
+
 # FN agents_scroll_dump(sb): " scroll=N max=N follow=0|1": the open thread as it was drawn last (where it
 #   is scrolled, how far it can be, whether it follows what comes in)
 FN agents_scroll_dump
@@ -3982,6 +4075,8 @@ FN agents_adopt
     call vec_push
     mov [rax], rbx
     mov dword ptr [rip + g_dirty], 1
+    mov rdi, rbx                # phase 6: listed now; one started from a group joins it (agentlist.s)
+    call aglist_adopted
 9:  EPILOGUE
 
 # FN agents_drop(AS*): a session made here that is not wanted (a new conversation left without a prompt)
@@ -7141,6 +7236,7 @@ FN agents_draw
     mov edx, [rsp + 8]
     mov ecx, [rsp + 12]
     call gfx_clip_push
+    call aglist_shield          # phase 6: the pointer over the history dropdown is its own (agentlist.s)
     call agentext_new_active    # AI (D4): a new session of an extension is being written
     test rax, rax
     jz 2f
@@ -7163,7 +7259,13 @@ FN agents_draw
     mov edx, [rsp + 8]
     mov ecx, [rsp + 12]
     call list_draw
-9:  call gfx_clip_pop
+9:  call aglist_unshield        # phase 6: the dropdown over it, when it shows
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 12]
+    call aglist_drop_draw
+    call gfx_clip_pop
     EPILOGUE
 
 list_draw:
@@ -7203,6 +7305,15 @@ list_draw:
     mov ecx, [rsp]
     add ecx, [rip + g_pmt + 4*MI_16]
     call agentext_list_buttons
+    mov edi, eax                # phase 6: the list's Search, Filter and New group left of them (agentlist.s)
+    mov esi, r15d
+    sub esi, r12d
+    sar esi, 1
+    add esi, [rsp + 4]
+    mov edx, r12d
+    mov ecx, [rsp]
+    add ecx, [rip + g_pmt + 4*MI_16]
+    call aglist_tools
     mov [rsp + 16], eax         # the label, where the buttons leave room for it
     lea rdi, [rip + .Lheader]
     call strlen
@@ -7253,261 +7364,14 @@ list_draw:
 11: COLOR r9d, T_MUTED
     call ui_text_c
     jmp .Lld_ret
-2:  mov eax, [rsp + 4]
-    add eax, r15d
-    mov [rsp + 16], eax         # list y
-    mov eax, [rsp + 12]
-    sub eax, r15d
-    sub eax, [rip + g_pmt + 4*MI_40]
-    mov [rsp + 20], eax         # list h
-    mov edi, [rsp]
-    mov esi, [rsp + 16]
+2:  mov edi, [rsp]              # phase 6: the sections and rows (agentlist.s)
+    mov esi, [rsp + 4]
+    add esi, r15d
     mov edx, [rsp + 8]
-    mov ecx, [rsp + 20]
-    call ui_in
-    test eax, eax
-    jz 3f
-    mov eax, [rip + g_scroll_y]
-    add [rip + list_scroll], eax
-3:  PM ebx, MI_48
-    add ebx, [rip + g_pmt + 4*MI_8]      # row h
-    call list_extra
-    add rax, [rip + page_count]
-    imul eax, ebx
-    sub eax, [rsp + 20]
-    jns 31f
-    xor eax, eax
-31: cmp [rip + list_scroll], eax
-    jle 32f
-    mov [rip + list_scroll], eax
-32: cmp dword ptr [rip + list_scroll], 0
-    jge 33f
-    mov dword ptr [rip + list_scroll], 0
-33: mov edi, [rsp]
-    mov esi, [rsp + 16]
-    mov edx, [rsp + 8]
-    mov ecx, [rsp + 20]
-    call gfx_clip_push
-    xor r12d, r12d
-    mov r13d, [rsp + 16]
-    sub r13d, [rip + list_scroll]
-.Lld_row:
-    cmp r12, [rip + sessions + VEC_len]
-    jae .Lld_rows_done
-    mov rdi, r12                # the page's rows, then the sessions rhun drives after it
-    call row_shown
-    test eax, eax
-    jz .Lld_skip
-    mov eax, [rsp + 16]
-    add eax, [rsp + 20]
-    cmp r13d, eax
-    jge .Lld_rows_done
-    mov eax, r13d
-    add eax, ebx
-    cmp eax, [rsp + 16]
-    jl .Lld_next
-    mov rax, [rip + sessions + VEC_ptr]
-    mov r14, [rax + r12*8]
-    lea edi, [r12 + ID_AG_ROW]
-    mov esi, [rsp]
-    mov edx, r13d
-    mov ecx, [rsp + 8]
-    mov r8d, ebx
-    call ui_btn
-    mov [rsp + 24], eax
-    test eax, UB_HOVER
-    jz 4f
-    PM eax, MI_6
-    mov edi, [rsp]
-    add edi, eax
-    mov esi, r13d
-    add esi, [rip + g_pmt + 4*MI_2]
-    mov edx, [rsp + 8]
-    sub edx, eax
-    sub edx, eax
-    mov ecx, ebx
-    sub ecx, [rip + g_pmt + 4*MI_4]
-    PM r8d, MI_RADIUS
-    COLOR r9d, T_HOVER
-    call gfx_round_rect
-4:  # status dot
-    PM ecx, MI_8
-    mov edi, [rsp]
-    add edi, [rip + g_pmt + 4*MI_16]
-    mov esi, r13d
-    add esi, [rip + g_pmt + 4*MI_16]
-    mov edx, ecx
-    mov r8d, ecx
-    shr r8d, 1
-    COLOR r9d, T_BORDER
-    push rdi
-    push rsi
-    mov rdi, r14
-    call is_live
-    pop rsi
-    pop rdi
-    test eax, eax
-    jz 5f
-    COLOR r9d, T_SUCCESS
-5:  mov ecx, edx
-    call gfx_round_rect
-    # title
-    mov r8, [r14 + AS_title]
-    test r8, r8
-    jnz 6f
-    lea r8, [rip + .Luntitled]
-6:  mov [rsp + 32], r8
-    mov rdi, r8
-    call strlen
-    mov r9, rax
-    mov rdi, [rip + ag_fui]
-    mov esi, [rsp]
-    add esi, [rip + g_pmt + 4*MI_32]
-    mov edx, r13d
-    add edx, [rip + g_pmt + 4*MI_6]
-    PM ecx, MI_24
-    mov r8, [rsp + 32]
-    COLOR r10d, T_FG
-    mov r11d, [rsp + 8]
-    sub r11d, [rip + g_pmt + 4*MI_48]
-    push r11
-    push r10
-    call ui_text_v_fit
-    add rsp, 16
-    # meta line: provider badge, worktree badge, then time and activity
-    mov edi, [r14 + AS_kind]
-    mov esi, [rsp]
-    add esi, [rip + g_pmt + 4*MI_32]
-    mov edx, r13d
-    add edx, [rip + g_pmt + 4*MI_28]
-    cmp edi, AS_KIND_EXT
-    jne 61f
-    mov rdi, r14                # an extension's session: its badge (AI, agentext.s)
-    call ext_badge
-    jmp 62f
-61: call agent_badge
-62: mov [rsp + 40], eax
-    mov rdi, [r14 + AS_worktree]
-    test rdi, rdi
-    jz 7f
-    mov esi, eax
-    add esi, [rip + g_pmt + 4*MI_6]
-    mov edx, r13d
-    add edx, [rip + g_pmt + 4*MI_28]
-    mov ecx, [rsp]
-    add ecx, [rsp + 8]
-    sub ecx, esi
-    sub ecx, [rip + g_pmt + 4*MI_16]
-    mov [rsp + 48], esi
-    call worktree_badge
-    mov [rsp + 40], eax
-    # A narrow panel can shorten the badge; hovering it reveals the complete name.
-    mov edi, [rsp + 48]
-    mov esi, r13d
-    add esi, [rip + g_pmt + 4*MI_28]
-    mov edx, eax
-    sub edx, edi
-    PM ecx, MI_20
-    call ui_in
-    test eax, eax
-    jz 7f
-    lea edi, [r12 + ID_AG_ROW]
-    mov esi, [rsp + 48]
-    mov edx, r13d
-    add edx, [rip + g_pmt + 4*MI_48]
-    mov ecx, [rsp + 40]
-    sub ecx, esi
-    mov r8d, UB_HOVER
-    mov r9, [r14 + AS_worktree]
-    call tip_note_text
-7:  mov dword ptr [rsp + 52], 1   # with the model
-71: lea rdi, [rip + tmp]
-    call sb_clear
-    cmp dword ptr [rsp + 52], 0
-    je 72f
-    mov rsi, [r14 + AS_model]
-    test rsi, rsi
-    jz 72f
-    lea rdi, [rip + tmp]
-    lea rsi, [rip + .Ldot]
-    call sb_push_cstr
-    lea rdi, [rip + tmp]
-    mov rsi, [r14 + AS_model]
-    call sb_push_cstr
-72: lea rdi, [rip + tmp]
-    lea rsi, [rip + .Ldot]
-    call sb_push_cstr
-    mov rdi, [r14 + AS_mtime]
-    call rel_time
-    lea rdi, [rip + tmp]
-    lea rsi, [rip + buf]
-    call sb_push_cstr
-    cmp dword ptr [r14 + AS_kind], AS_KIND_EXT
-    je 74f
-    cmp qword ptr [r14 + AS_live], 0
-    je 73f
-74: mov eax, [r14 + AS_state]   # an extension's or a driven session says what it does
-    test eax, eax
-    jz 8f
-    lea rcx, [rip + ext_state_labels]
-    lea rdi, [rip + tmp]
-    mov rsi, [rcx + rax*8]
-    call sb_push_cstr
-    jmp 8f
-73: mov rdi, r14
-    call is_live
-    test eax, eax
-    jz 8f
-    lea rdi, [rip + tmp]
-    lea rsi, [rip + .Llive]
-    call sb_push_cstr
-8:  mov rdi, [rip + ag_fsmall]
-    mov rsi, [rip + tmp + SB_ptr]
-    mov rdx, [rip + tmp + SB_len]
-    call text_width
-    mov ecx, [rsp]
-    add ecx, [rsp + 8]
-    sub ecx, [rsp + 40]
-    sub ecx, [rip + g_pmt + 4*MI_16]
-    cmp eax, ecx
-    jle 81f
-    cmp dword ptr [rsp + 52], 0
-    je 82f
-    cmp qword ptr [r14 + AS_model], 0
-    je 82f
-    mov dword ptr [rsp + 52], 0  # a narrow panel keeps the age rather than the model
-    jmp 71b
-82: cmp qword ptr [r14 + AS_worktree], 0
-    jne .Lld_meta_done          # keep the worktree name visible without partial age text
-81: mov rdi, [rip + ag_fsmall]
-    mov esi, [rsp + 40]
-    mov edx, r13d
-    add edx, [rip + g_pmt + 4*MI_28]
-    PM ecx, MI_20
-    mov r8, [rip + tmp + SB_ptr]
-    mov r9, [rip + tmp + SB_len]
-    COLOR r10d, T_MUTED
-    mov r11d, [rsp]
-    add r11d, [rsp + 8]
-    sub r11d, esi
-    sub r11d, [rip + g_pmt + 4*MI_16]
-    push r11
-    push r10
-    call ui_text_v_fit
-    add rsp, 16
-.Lld_meta_done:
-    test dword ptr [rsp + 24], UB_CLICK
-    jz .Lld_next
-    mov rdi, r12
-    call open_session
-    mov dword ptr [rip + g_focus], FOCUS_AGENTS
-.Lld_next:
-    add r13d, ebx
-.Lld_skip:
-    inc r12
-    jmp .Lld_row
-.Lld_rows_done:
-    call gfx_clip_pop
+    mov ecx, [rsp + 12]
+    sub ecx, r15d
+    sub ecx, [rip + g_pmt + 4*MI_40]
+    call aglist_draw
 .Lld_ret:
     mov edi, [rsp]
     mov esi, [rsp + 4]
@@ -7515,6 +7379,7 @@ list_draw:
     sub esi, [rip + g_pmt + 4*MI_40]
     mov edx, [rsp + 8]
     call page_footer
+    call aglist_after
     EPILOGUE
 
 thread_draw:
@@ -7526,72 +7391,16 @@ thread_draw:
     mov rax, [rip + view]
     mov rcx, [rip + sessions + VEC_ptr]
     mov rbx, [rcx + rax*8]      # session
-    # header: back + title
-    PM r15d, MI_40
-    PM r12d, MI_28
-    mov edi, ID_AG_BACK
-    mov esi, [rsp]
-    add esi, [rip + g_pmt + 4*MI_8]
-    mov edx, r15d
-    sub edx, r12d
-    sar edx, 1
-    add edx, [rsp + 4]
-    mov ecx, r12d
-    mov r8d, r12d
-    mov r9d, IC_BACK
-    call ag_icon_btn
-    test eax, UB_CLICK
-    jz 1f
-    mov qword ptr [rip + view], -1
-    call agentext_new_leave     # AI (D4): the prompt box's focus goes back to the panel
-    mov dword ptr [rip + g_dirty], 1
-    jmp .Ltd_ret
-1:  mov r8, [rbx + AS_title]
-    test r8, r8
-    jnz 2f
-    lea r8, [rip + .Luntitled]
-2:  mov [rsp + 16], r8
-    mov rdi, r8
-    call strlen
-    mov r9, rax
-    mov rdi, [rip + ag_fui]
-    mov esi, [rsp]
-    add esi, [rip + g_pmt + 4*MI_40]
-    mov edx, [rsp + 4]
-    mov ecx, r15d
-    mov r8, [rsp + 16]
-    COLOR r10d, T_FG
-    mov r11d, [rsp + 8]
-    sub r11d, [rip + g_pmt + 4*MI_64]
-    push r11
-    push r10
-    call ui_text_v_fit
-    add rsp, 16
+    # phase 6: the header (agenthead.s): Back, the title (renamed inline), history, new session, the band of
+    # a worktree's session
     mov rdi, rbx
-    call is_live
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    call aghead_draw
     test eax, eax
-    jz 3f
-    PM ecx, MI_8
-    mov edi, [rsp]
-    add edi, [rsp + 8]
-    sub edi, [rip + g_pmt + 4*MI_16]
-    mov esi, r15d
-    sub esi, ecx
-    sar esi, 1
-    add esi, [rsp + 4]
-    mov edx, ecx
-    mov r8d, ecx
-    shr r8d, 1
-    COLOR r9d, T_SUCCESS
-    call gfx_round_rect
-3:  mov edi, [rsp]
-    mov esi, [rsp + 4]
-    add esi, r15d
-    dec esi
-    mov edx, [rsp + 8]
-    PM ecx, MI_1
-    COLOR r8d, T_BORDER
-    call gfx_fill
+    jz .Ltd_ret                 # Back: the list
+    mov r15d, eax
     # message area
     mov eax, [rsp + 4]
     add eax, r15d
@@ -9477,7 +9286,7 @@ FN agents_test_append
 role_names: .quad .Lr0, .Lr1, .Lr2, .Lr3, .Lr4, .Lr5, .Lr6, .Lr7, .Lr8, .Lr9, .Lr10
 ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lheader: .asciz "AGENTS"
-.Lnone: .asciz "No agent sessions for this project yet"
+.Lnone: .asciz "No sessions yet"
 .Loc_missing: .asciz "OpenCode: install the CLI, then refresh"
 .Loc_failed: .asciz "OpenCode: check CLI and data access"
 .Lnoproj: .asciz "Open a folder to see its agent sessions"
@@ -9611,7 +9420,7 @@ th_max: .long 0                 # the open thread's largest scroll, when it was 
 .Lpage_runs: .asciz "runs="
 
 .section .rodata
-.Lloading: .asciz "Loading sessions..."
+.Lloading: .asciz "Loading sessions\342\200\246"
 .Lfailed: .asciz "Could not refresh. Try again."
 .Lload_more: .asciz "Load more"
 .Lrefreshing: .asciz "Loading..."

@@ -42,7 +42,7 @@
 .equ US_PLAIN, 1                # user_said's answers: a plain text of a prompt, a chip (in pchips), else 0
 .equ US_CHIP, 2
 .equ CHIP_PATH_MAX, 4096        # a chip's path (the bundle's AD: at most 4096 characters)
-.equ CMD_NAME_MAX, 200          # a command echo's name
+.equ ECHO_NAME_MAX, 200          # a command echo's name
 
 .data
 .p2align 2
@@ -1419,7 +1419,7 @@ echo_tags:
     call trim_ws
     test rdx, rdx
     jz 8f
-    cmp rdx, CMD_NAME_MAX
+    cmp rdx, ECHO_NAME_MAX
     ja 8f
     cmp byte ptr [rax], '/'     # its name without the "/"
     jne 1f

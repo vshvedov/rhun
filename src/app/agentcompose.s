@@ -35,6 +35,7 @@
 #                                       box keeps the cleaned text and the notice band says why
 #   composer_paste(ptr, len) -> eax 1   a paste into a built-in driver's box: refused past the limit, else its
 #                                       invisible characters removed (the notice says how many)
+#   composer_insert(ptr, len, space) -> eax 1   text at the box's caret, a space after it when asked
 #   composer_paint(TF*, AS* or 0)       TF_paint: the word the driver paints (AL_word), each occurrence
 #   composer_hint(TF*, kind) -> rax cstr or 0   the argument hint for the box's text: it is "/NAME " and NAME
 #                                       a command with one in the driver's record (nothing is read for it)
@@ -613,13 +614,19 @@ FN composer_owner
     test eax, eax
     jz 1f
     test rbx, rbx               # a new conversation left before its first prompt for another new one:
-    jz 3f                       #   it goes, its text with it (that one begins empty)
-    mov edi, [r14 + AS_kind]    # for another conversation: its text for the next new one
+    jnz 11f                     #   it goes, its text with it (that one begins empty)
+    call agatt_drop_box         # (phase 4 task 2: its pack too)
+    jmp 3f
+11: mov edi, [r14 + AS_kind]    # for another conversation: its text for the next new one
     mov rsi, r12
     mov rdx, r13
     call set_new_draft
+    mov edi, [r14 + AS_kind]    # (and its pack)
+    call agatt_park_kind
     jmp 3f
-1:  mov rdi, [r14 + AS_draft]
+1:  mov rdi, r14                # (phase 4 task 2: its pack waits in it with its text)
+    call agatt_park
+    mov rdi, [r14 + AS_draft]
     call mem_free
     mov qword ptr [r14 + AS_draft], 0
     test r13, r13
@@ -631,10 +638,14 @@ FN composer_owner
     jmp 3f
 2:  mov rdi, [rip + own_kind]   # a draft's text (no conversation yet)
     test rdi, rdi
-    jz 3f
+    jz 21f
     mov rsi, r12
     mov rdx, r13
     call set_new_draft
+    mov rdi, [rip + own_kind]   # (phase 4 task 2: and its pack)
+    call agatt_park_kind
+    jmp 3f
+21: call agatt_drop_box         # (nobody keeps the box's text: nor its pack)
 3:  call note_drop
     call hist_reset
     mov qword ptr [rip + restored], 0
@@ -654,7 +665,10 @@ FN composer_owner
     test rdi, rdi
     jz 5f
     call agentext_unsent_back
-5:  xor r12d, r12d              # the new owner's kept text, after what the box holds
+5:  mov rdi, rbx                # phase 4 task 2: the new owner's pack, after what the box holds
+    mov rsi, [rip + own_kind]
+    call agatt_unpark
+    xor r12d, r12d              # the new owner's kept text, after what the box holds
     test rbx, rbx
     jz 6f
     mov r12, [rbx + AS_draft]
@@ -723,6 +737,10 @@ FN composer_adopt
 FN composer_row_gone
     PROLOGUE
     mov rbx, rdi
+    xor esi, esi                # phase 4 task 2: what it kept of the box's pack goes (or waits for the next
+    cmp [rip + own_as], rbx     #   new conversation of its kind, with its text)
+    sete sil
+    call agatt_row_gone
     cmp [rip + note_as], rbx    # its band goes with its record
     jne 1f
     mov qword ptr [rip + note_as], 0
@@ -784,6 +802,31 @@ FN composer_sent
     xor edx, edx
     call ev_suggest
 9:  EPILOGUE
+
+# FN composer_insert(ptr, len, space) -> eax 1: text at the box's caret (its selection replaced), a space after
+#   it when asked (a mention: the menu's, a command's, a folder attached); the box's followers hear of it
+#   (phase 4 task 3)
+FN composer_insert
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    mov r14d, edx
+    call box
+    mov rbx, rax
+    mov rdi, rax
+    mov rsi, r12
+    mov rdx, r13
+    call ta_insert
+    test r14d, r14d
+    jz 1f
+    mov rdi, rbx
+    lea rsi, [rip + .Lspace]
+    mov edx, 1
+    call ta_insert
+1:  call agentext_box_changed
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
 
 # FN composer_changed(): see the top
 FN composer_changed
@@ -1724,6 +1767,7 @@ FN composer_hint_dump
 9:  EPILOGUE
 
 .section .rodata
+.Lspace: .asciz " "
 .Ld_hint: .asciz "hint "
 .Ld_at: .asciz " at "
 .Ld_draft: .asciz "draft="

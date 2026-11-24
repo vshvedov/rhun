@@ -3138,6 +3138,7 @@ F AS_fview, 4           # focus view (agentfold.s): the setting the chunks' own 
 F AS_fask, 4            # the fold a waiting request holds open, + 1 (0 none), as the sums have it
 F AS_ftodo, 4           # the todo row the folds' counts leave out (AS_todo as they follow it), + 1 (0 none)
 F AS_fpad, 4
+F AS_parts, 8           # phase 4 task 2: AP*: the box's pack while the box belongs to another session, or 0
 ENDSTRUCT AS_SIZE
 .equ AG_CLAUDE, 1               # AS_kind of the built-in sources (AS_KIND_EXT 5: an extension's)
 .equ AG_CODEX, 2
@@ -3202,6 +3203,8 @@ STRUCT
 F AH_uuid, 40           # cstr: the uuid it was written with
 F AH_text, 8            # owned
 F AH_len, 8
+F AH_chips, 8           # phase 4 task 2: owned cstr: its row's chips text (agatt_chips), or 0
+F AH_pack, 8            #   AP*, slimmed (agatt_slim): given back with its text when it will not run, or 0
 ENDSTRUCT AH_SIZE
 .equ AH_MAX, 16                 # held messages at most; one more stays in the box (SEND_TOOMANY)
 # AGU: a conversation's context and prompt-cache numbers (ev_usage)
@@ -3347,7 +3350,8 @@ F DRV_kind, 4           # the AS_kind it drives
 F DRV_caps, 4           # DRVC_*
 F DRV_name, 8           # cstr: "Claude Code"
 F DRV_start, 8          # (AL*) -> eax 1 started, 0 failed with AL_report set
-F DRV_send, 8           # (AL*, ptr, len) -> eax 1 written
+F DRV_send, 8           # (AL*, ptr, len, uuid cstr, AP* or 0) -> eax 1 written (phase 4: the message's parts;
+                        #   an extension's session: (AS*, ptr, len) -> SEND_*, no parts)
 F DRV_stop, 8           # (AL*): interrupt the turn
 F DRV_answer, 8         # (AL*, AQ*, n) -> eax 1: option n (from 0) of that request
 F DRV_release, 8        # (AL*): end the process politely (the stop sequence)
@@ -3374,6 +3378,9 @@ F DRV_verbs, 8          # cstr*, 0-ended: its spinner verbs; 0: its sessions hav
 F DRV_tips, 8           # cstr*, 0-ended: the empty conversation's tips, or 0
 F DRV_task, 8           # (AL*, esi AGK_*, rdx id cstr) -> eax 1 asked: stop a task, send a running call to
                         #   the background
+F DRV_words, 8          # phase 4: cstr*: the driver's words for generic places, by DW_*; 0: the generic words
+F DRV_glyph, 4          #   its icon (IC_*), 0 none
+F DRV_pad, 4
 ENDSTRUCT DRV_SIZE
 # AMD: a permission mode (a driver's static table)
 STRUCT
@@ -3411,6 +3418,61 @@ ENDSTRUCT AMD_SIZE
 .equ SEND_EMPTY, 5
 .equ SEND_HELD, 6               # written during a turn or while others are held: shown queued
 .equ SEND_TOOMANY, 7            # AH_MAX are held already: the text stays in the box
+# ---- phase 4 task 2: a message's parts (src/app/agentatt.s): driver-neutral; a driver with DRVC_PARTS writes
+#   them in its own shapes (Claude: content blocks, agent_claude.s) ----
+.equ DRVC_PARTS, 4096           # takes files (MPK_IMAGE, MPK_PDF, MPK_TEXT): the box has "+" and chips
+.equ DRVC_CONTEXT, 8192         # takes the editor's selection and open file (MPK_SELECTION, MPK_OPENFILE)
+.equ DRVC_MENTIONS, 16384       # expands "@path" in the text itself
+.equ DW_UNFOCUS, 0              # DRV_words' indices
+.equ DW_MENTION_REFUSED, 1
+.equ DW_COUNT, 2
+# MP: one part of a message (by value in AP_parts)
+STRUCT
+F MP_kind, 4            # MPK_*
+F MP_flags, 4           # MPF_*
+F MP_name, 8            # owned cstr: what its chip says (a file's name, "Image", a terminal's name)
+F MP_path, 8            # owned cstr: the absolute path it came from, or 0
+F MP_mime, 8            # static cstr ("image/png", ..., "application/pdf", "text/plain"), or 0
+F MP_data, 8            # owned bytes (a NUL after them): a file's bytes as read, a selection's or terminal's text,
+                        #   or 0 (MPK_OPENFILE; a slimmed part that has a path)
+F MP_len, 8             # its bytes (kept when slimmed: what it will be once read again)
+F MP_l0, 4              # MPK_SELECTION: its first and last line, from 1
+F MP_l1, 4
+F MP_thumb, 8           # the thumbnail's id (agentimg.s, task 6), 0 none
+ENDSTRUCT MP_SIZE
+.equ MPK_IMAGE, 1
+.equ MPK_PDF, 2
+.equ MPK_TEXT, 3                # a text file
+.equ MPK_SELECTION, 4
+.equ MPK_OPENFILE, 5
+.equ MPK_TERMINAL, 6
+.equ MPK_PASTE, 7               # a long paste the prompt still holds (task 4; Claude: inline_pastes, finding 43)
+.equ MPF_PASTED, 1              # from the clipboard: no path
+.equ MPF_AUTO, 2                # added at Send by a hook (the selection, the open file, a terminal): never kept
+# AP: a message's parts (mem_alloc'd; one owner at a time: a box, a waiting or held message, nobody once written)
+STRUCT
+F AP_parts, VEC_SIZE    # MP
+F AP_bytes, 8           # the MP_len of its file parts (image, PDF, text), summed
+F AP_flags, 4           # APF_*
+F AP_pad, 4
+ENDSTRUCT AP_SIZE
+.equ APF_SLIM, 1                # a held prompt's: the parts that have a path have no bytes
+.equ AP_MAX_PARTS, 20           # rhun's own limits (the extension has none): a message is one line of at most
+.equ AP_MAX_BYTES, 10485760     #   16 MiB in the connection's queue, echoed back whole
+.equ MP_IMAGE_MAX, 10485760     # finding 39: 10 MiB of file bytes gave a normal turn (the CLI re-encodes)
+.equ MP_PDF_MAX, 10485760
+.equ MP_TEXT_MAX, 262144        # finding 40: a text of 1 MiB was "Prompt is too long": 256 KiB, well under it
+.equ MP_SEL_MAX, 1048576
+.equ ATT_OK, 0                  # agatt_add_*'s answers (agentatt.s makes the words)
+.equ ATT_UNSUPPORTED, 1
+.equ ATT_EMPTY, 2
+.equ ATT_BIG, 3
+.equ ATT_TOTAL, 4
+.equ ATT_FULL, 5
+.equ ATT_READ, 6
+.equ ATT_FOLDER, 7
+.equ ATT_NOTFILE, 8
+.equ ID_AG_CHIP, 0x700000       # the box's chips: + part * 2 (+ 1 its x)
 
 # ---- a driver's lists and the project's choices, per driver kind and project (src/app/agentcfg.s) ----
 STRUCT
@@ -3473,7 +3535,10 @@ ENDSTRUCT ACH_SIZE
 .equ ACT_SKILLS, 23             # Slash commands (/skills, /help)
 .equ ACT_MEMORY, 24             # Memory (/memory)
 .equ ACT_INSTRUCT, 25           # Instructions
-.equ ACT_COUNT, 26
+# phase 4 task 3, attachments (agentatt.s)
+.equ ACT_ATTACH, 26             # Attach file... (the path browser)
+.equ ACT_MENTION, 27            #   Mention file from this project... ("@" at the caret)
+.equ ACT_COUNT, 28
 # the dialog shell (agentdlg.s): a row (DGR), its kinds and flags, a button's flags, a dialog's ops table
 .equ ID_AGDLG, 0x8e00           # the dialog's controls: + DID_* (agentdlg.s), to 0x8fff
 STRUCT

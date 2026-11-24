@@ -21,6 +21,8 @@
 # agent_conn_count() is how many are open (the cap), agent_conn_owns(pid) whether a pid is one of their
 # children (rhun's own programs are no holders of a conversation: agent_holder.s).
 .include "rhun.inc"
+.equ SHRINK_AT, 1 << 20       # phase 4 task 2: a buffer above this gives its memory back once it is
+.equ SHRINK_KEEP, 65536         #   drained (stdin) or holds at most this (stdout)
 
 .equ REAP_FAST_MS, 500          # uproc_wait each tick this long after the end of stdout or a signal
 .equ REAP_STEP_MS, 1000         # then this often
@@ -288,6 +290,33 @@ deliver:
     sub [rbx + CN_rbuf + SB_len], r12
 3:  mov rax, [rbx + CN_rbuf + SB_len]   # the remainder holds no newline
     mov [rbx + CN_scanned], rax
+    lea rdi, [rbx + CN_rbuf]    # phase 4 task 2: after a line of megabytes, the buffer gives its memory back
+    call sb_shrink
+9:  EPILOGUE
+
+# sb_shrink(sb): a buffer whose capacity passed 1 MiB and that holds at most 64 KiB now gives its memory back
+#   (its bytes kept, in a small block)
+sb_shrink:
+    PROLOGUE 32
+    mov rbx, rdi
+    cmp qword ptr [rbx + SB_cap], SHRINK_AT
+    jbe 9f
+    cmp qword ptr [rbx + SB_len], SHRINK_KEEP
+    ja 9f
+    mov r12, [rbx + SB_ptr]
+    mov r13, [rbx + SB_len]
+    xorps xmm0, xmm0
+    movups [rbx], xmm0
+    mov qword ptr [rbx + 16], 0
+    mov rdi, rbx
+    mov esi, SHRINK_KEEP
+    call sb_reserve
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    mov rdi, r12
+    call mem_free
 9:  EPILOGUE
 
 # drain_out(conn) -> eax 0 when more may come (nothing to read now, or CN_DRAIN bytes read), 1 at the
@@ -493,7 +522,11 @@ flush:
     jmp 1b
 3:  mov qword ptr [rbx + CN_wbuf + SB_len], 0
     mov qword ptr [rbx + CN_wpos], 0
-    mov edi, [rbx + CN_fd_in]
+    cmp qword ptr [rbx + CN_wbuf + SB_cap], SHRINK_AT  # phase 4 task 2: drained after a message of
+    jbe 31f                                            #   megabytes: its memory goes back
+    lea rdi, [rbx + CN_wbuf]
+    call sb_free
+31: mov edi, [rbx + CN_fd_in]
     xor esi, esi
     call watch_set_events
     test dword ptr [rbx + CN_flags], CNF_ENDIN

@@ -104,6 +104,7 @@ done
 # debugger: the JSON builder and parser
 check json build/json_test
 check sha1 build/sha1_test
+check base64 build/base64_test   # phase 4 task 2: attachments' encoder
 check images build/image_test $(ls tests/data/images/* | LC_ALL=C sort)
 python3 tests/image-fuzz.py 1 20 || fail=1
 check cpu build/cpu_test
@@ -161,6 +162,7 @@ python3 tests/claude-thread.py || fail=1   # the thread's engine: heights, the v
 python3 tests/claude-bridge.py || fail=1   # claude in rhun's terminal: the bridge, its tools, terminal mode (phase 5)
 python3 tests/claude-sessions.py || fail=1   # the session list and the chat header (phase 6)
 python3 tests/claude-dialogs.py || fail=1   # the dialog shell and the dialogs that show what Claude Code reports (phase 7)
+python3 tests/claude-attach.py || fail=1   # a message's parts: attachments, packs, chips, the + menu (phase 4 tasks 2, 3)
 python3 tests/ext-agents.py || fail=1
 python3 tests/ext-review.py || fail=1
 python3 tests/ext-tools.py || fail=1

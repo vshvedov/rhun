@@ -2415,7 +2415,9 @@ class SeamWordsTest(unittest.TestCase):
              # phase 3's generic files: the rows, their diff, the spinner, time, focus view, tasks, selection
              'agentrows.s', 'agentdiff.s', 'agentspin.s', 'agenttime.s', 'agentfold.s', 'agenttask.s',
              'agentsel.s',
-             'agentoffer.s']    # phase 4 tasks 11 and 12: a request's proposed change
+             'agentoffer.s',    # phase 4 tasks 11 and 12: a request's proposed change
+             # phase 4 task 2: a message's parts, the editor's context
+             'agentatt.s', 'agentctx.s']
     # file -> name -> the functions it may appear in
     ALLOWED = {
         'agent_drv.s': {
@@ -2456,7 +2458,10 @@ class SeamWordsTest(unittest.TestCase):
     # Claude itself, and (phase 3) its tools' and records' names: the rows above the seam never read them
     NAMES = (r'claude|Claude|AG_CLAUDE|Bash|TodoWrite|tool_use|tool_result|parent_tool_use_id|mcp__|ExitPlanMode|'
              r'AskUserQuestion|WebFetch|WebSearch|NotebookEdit|MultiEdit|ToolSearch|content_block|isSidechain|'
-             r'stream_event')
+             r'stream_event|'
+             # phase 4: Claude's tags and keys for a message's parts, the editor's server and hooks
+             r'ide_selection|ide_opened_file|ide_diagnostics|inline_pastes|sdkMcpServers|hook_callback|mcp_message|'
+             r'hookCallbackIds|updatedInput|media_type')
     WORD = re.compile(r'[.\w]*(?:' + NAMES + r')[.\w]*')
     STRING_DEF = re.compile(r'^\s*([.\w]+):\s*\.(?:asciz|ascii|string)\b(.*)$')
     STRING_MORE = re.compile(r'^\s*\.(?:asciz|ascii|string)\b(.*)$')

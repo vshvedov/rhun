@@ -272,6 +272,225 @@ c_agent_type:
     mov rax, -1
     EPILOGUE
 
+# ---- phase 4 task 2: a message's parts (agentatt.s) ----
+
+# agent-attach PATH[|PATH...]: the files attached to the box's message as the path browser attaches them
+#   (agatt_attach_paths); bytes:FILE attaches that file's bytes as a pasted image (no path). Error, with
+#   "this agent takes no attachments", when the box's driver takes none
+c_agent_attach:
+    PROLOGUE
+    call ai_set
+    call agatt_caps
+    test eax, DRVC_PARTS
+    jz 8f
+    call ai_arg_rest
+    mov rbx, rax
+    mov r12, rdx
+    cmp r12, 6
+    jb 2f
+    mov rdi, rbx
+    lea rsi, [rip + .Lw_bytes]
+    mov edx, 6
+    call memeq
+    test eax, eax
+    jz 2f
+    lea rdi, [rbx + 6]          # bytes:FILE
+    lea rsi, [r12 - 6]
+    call mem_dup
+    mov r13, rax
+    mov rdi, rax
+    mov esi, AP_MAX_BYTES + 1
+    call file_read_limited
+    mov r14, rax
+    mov r15, rdx
+    mov rdi, r13
+    call mem_free
+    test r14, r14
+    jz 7f
+    call agatt_box_make
+    mov rdi, rax
+    mov esi, MPK_IMAGE
+    lea rdx, [rip + .Lw_image]
+    xor ecx, ecx
+    mov r8, r14
+    mov r9, r15
+    call agatt_add_bytes
+    mov r12d, eax
+    mov rdi, r14
+    call mem_free
+    call agatt_tidy
+    mov dword ptr [rip + g_dirty], 1
+    test r12d, r12d
+    jnz 7f
+    xor eax, eax
+    EPILOGUE
+2:  mov rdi, rbx                # the paths, "|" between them, as one NUL-separated list
+    mov rsi, r12
+    call mem_dup
+    mov r13, rax
+    xor ecx, ecx
+3:  cmp rcx, r12
+    jae 4f
+    cmp byte ptr [r13 + rcx], '|'
+    jne 31f
+    mov byte ptr [r13 + rcx], 0
+31: inc rcx
+    jmp 3b
+4:  mov rdi, r13
+    lea rsi, [r12 + 1]
+    call agatt_attach_paths
+    mov rdi, r13
+    call mem_free
+    xor eax, eax
+    EPILOGUE
+7:  mov rax, -1
+    EPILOGUE
+8:  call ai_out
+    mov rdi, rax
+    lea rsi, [rip + .Lr_no_parts]
+    call sb_push_cstr
+    mov rax, -1
+    EPILOGUE
+
+# agent-attach-remove N: the box's part N (from 0) goes, as its chip's x does
+c_agent_attach_remove:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov rbx, rax
+    call agatt_box
+    test rax, rax
+    jz 8f
+    mov r12, rax
+    cmp rbx, [r12 + AP_parts + VEC_len]
+    jae 8f
+    mov rdi, r12
+    mov rsi, rbx
+    call agatt_remove
+    call agatt_tidy
+    mov dword ptr [rip + g_dirty], 1
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
+# print-agent-attachments: the box's parts and every pack alive (agatt_dump)
+c_print_agent_attachments:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agatt_dump
+    xor eax, eax
+    EPILOGUE
+
+# print-agent-row-chips N: the chips text of the open conversation's row N (from 0, as print-agent-rows
+#   counts), nothing for a row without chips; a queued row: "q" and its place among the queued (q0)
+c_print_agent_row_chips:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 9f
+    mov rbx, rax
+    call ai_arg
+    test rdx, rdx
+    jz 9f
+    cmp byte ptr [rax], 'q'
+    je 5f
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    cmp rax, [rbx + AS_msgs + VEC_len]
+    jae 9f
+    imul rax, rax, AM_SIZE
+    add rax, [rbx + AS_msgs + VEC_ptr]
+    test dword ptr [rax + AM_flags], AMF_CHIPS
+    jz 9f
+    mov r12, [rax + AM_name]
+    jmp 6f
+5:  lea rdi, [rax + 1]
+    lea rsi, [rdx - 1]
+    call parse_u64
+    mov rdi, rbx
+    mov rsi, rax
+    call agent_queued
+    test rax, rax
+    jz 9f
+    mov r12, r9
+6:  test r12, r12
+    jz 9f
+    call ai_out
+    mov rdi, rax
+    mov rsi, r12
+    call sb_push_cstr
+    call ai_out
+    mov rdi, rax
+    mov esi, 10
+    call sb_push_byte
+9:  xor eax, eax
+    EPILOGUE
+
+# print-agent-bufs: "bufs=N arena=N": the capacities of the open conversation's connection buffers and of the
+#   message writer (cw), and of the JSON arena's newest block: what stays after a big message
+c_print_agent_bufs:
+    PROLOGUE
+    call ai_set
+    xor ebx, ebx
+    call agents_open_driven
+    test rax, rax
+    jz 1f
+    mov rax, [rax + AS_live]
+    test rax, rax
+    jz 1f
+    mov rbx, [rax + AL_cn + CN_rbuf + SB_cap]
+    add rbx, [rax + AL_cn + CN_wbuf + SB_cap]
+1:  add rbx, [rip + claude_cw + SB_cap]
+    call ai_out
+    mov r12, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lw_bufs]
+    call sb_push_cstr
+    mov rdi, r12
+    mov rsi, rbx
+    call sb_push_u64
+    mov rdi, r12
+    lea rsi, [rip + .Lw_arena]
+    call sb_push_cstr
+    call json_arena_cap
+    mov rdi, r12
+    mov rsi, rax
+    call sb_push_u64
+    mov rdi, r12
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    EPILOGUE
+
+# agent-test-caps MASK|off: the UI is told the box's driver has exactly these DRVC_* bits (a driver with parts
+#   but no modes exists in no other way yet); off: the driver's own
+c_agent_test_caps:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov ecx, -1
+    test rdx, rdx
+    jz 1f
+    cmp byte ptr [rax], 'o'
+    je 1f
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov ecx, eax
+1:  mov [rip + g_att_test_caps], ecx
+    inc qword ptr [rip + g_att_gen]
+    mov dword ptr [rip + g_dirty], 1
+    xor eax, eax
+    EPILOGUE
+
 # agent-stop: Stop in the open session
 c_agent_stop:
     PROLOGUE
@@ -2805,6 +3024,18 @@ c_agent_card_uncomment:
 .Lc_agent_new: .asciz "agent-new"
 .Lc_agent_prompt: .asciz "agent-prompt"
 .Lc_agent_stop: .asciz "agent-stop"
+.Lc_agent_attach: .asciz "agent-attach"      # phase 4 task 2
+.Lc_agent_attach_remove: .asciz "agent-attach-remove"
+.Lc_print_agent_attachments: .asciz "print-agent-attachments"
+.Lc_print_agent_row_chips: .asciz "print-agent-row-chips"
+.Lc_print_agent_bufs: .asciz "print-agent-bufs"
+.Lc_agent_test_caps: .asciz "agent-test-caps"
+.Lw_bytes: .asciz "bytes:"
+.Lw_image: .asciz "Image"
+.Lr_no_parts: .asciz "this agent takes no attachments\n"
+.Lw_bufs: .asciz "bufs="
+.Lw_arena: .asciz " arena="
+.Lt_attach: .asciz "attach"
 .Lc_agent_card: .asciz "agent-card"
 .Lc_print_agent_input: .asciz "print-agent-input"
 .Lc_agent_type: .asciz "agent-type"
@@ -2907,6 +3138,11 @@ ai_ctl:
     .quad agentdlg_n_press, agentdlg_c_press, agentdlg_n_filter, agentdlg_c_filter
     .quad agentdlg_n_close, agentdlg_c_close, agentdlg_n_print, agentdlg_c_print
     .quad claude_dlg_n_usage, claude_dlg_c_usage   # print-agent-usage [toggle] (claude_dlg.s)
+    # phase 4 task 2: a message's parts (agentatt.s)
+    .quad .Lc_agent_attach, c_agent_attach, .Lc_agent_attach_remove, c_agent_attach_remove
+    .quad .Lc_print_agent_attachments, c_print_agent_attachments
+    .quad .Lc_print_agent_row_chips, c_print_agent_row_chips, .Lc_print_agent_bufs, c_print_agent_bufs
+    .quad .Lc_agent_test_caps, c_agent_test_caps
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's
@@ -2947,6 +3183,7 @@ timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_co
     .quad .Lt_advance, g_card_advance_ms                            # the question card's move on
     .quad .Lt_settings, g_settings_wait_ms      # the prompts' wait for get_settings (claude_session.s)
     .quad .Lt_spin, g_spin_ms                   # the spinner's tick, 0 held (agentspin.s)
+    .quad .Lt_attach, g_att_wait_ms             # phase 4 task 2: between a file's look and its read
     .quad 0, 0
 .Lt_settings: .asciz "settings"
 .Lt_spin: .asciz "spin"

@@ -1878,6 +1878,7 @@ FN ingest_line
     PROLOGUE 48
     mov rbx, rdi
     mov [rsp], ecx
+    mov [rsp + 40], rdx         # (its length: a line of megabytes trims the arena after, phase 4 task 2)
     mov rdi, rsi
     mov rsi, rdx
     call json_parse
@@ -2589,7 +2590,10 @@ FN ingest_line
     call add_msg
 .Lil_ret:
     mov qword ptr [rbx + AS_now], 0     # the next line's rows have their own time
-    EPILOGUE
+    cmp qword ptr [rsp + 40], 1 << 20   # phase 4 task 2: a line of megabytes (a message's attachments):
+    jbe 1f                              #   the arena gives its big block back
+    call json_trim
+1:  EPILOGUE
 
 # agent_grok_summary(log) -> summary.json beside a Grok Build session's log, parsed (the JSON arena), or 0
 FN agent_grok_summary
@@ -4314,7 +4318,12 @@ queued_sync:
     mov [r13 + AM_len], rdx
     mov [r13 + AM_qid], rcx
     mov dword ptr [r13 + AM_role], R_USER
-    mov dword ptr [r13 + AM_flags], AMF_QUEUED
+    mov [r13 + AM_name], r9     # phase 4 task 2: its chips text (borrowed from the waiting message)
+    mov eax, AMF_QUEUED
+    test r9, r9
+    jz 3f
+    or eax, AMF_CHIPS
+3:  mov [r13 + AM_flags], eax
     mov dword ptr [r13 + AM_w], -1      # measured again
     inc dword ptr [r13 + AM_rev]
     jmp 1b

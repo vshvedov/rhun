@@ -1980,23 +1980,35 @@ FN agentext_cancel
 
 # ---- prompts ----
 
-# FN agentext_send(): the box's text to the session it belongs to, or to a new session: its driver
-#   takes it (agent_send), and the box empties when it went or waits to go
+# FN agentext_send(): the box's text and its pack (agentatt.s) to the session it belongs to, or to a new
+#   session: its driver takes them (agent_send_with), and the box empties when they went or wait to go. Phase 4
+#   task 2 wrote this once for the phase: a driver that takes parts (DRVC_PARTS) gets the box's pack, and a
+#   Send's hooks add to it, in this order: agctx_part (the selection or the open file: agentctx.s) and
+#   agterm_parts (a part per @terminal: mention: agentatt.s); after a prompt that was taken (sent, queued,
+#   held) agctx_sent; one that was not gives the pack back to the box without what the hooks added. A blank
+#   text with a chip sends; a local command leaves the pack in the box. Locals: [rsp] the pack
 FN agentext_send
     PROLOGUE 16
     xor ebx, ebx
+    mov qword ptr [rsp], 0
     lea rdi, [rip + in_tf]
     call tf_text
     mov r12, rax
     mov r13, rdx
-    xor ecx, ecx                # only blanks: nothing to send
+    xor ecx, ecx                # only blanks and no chip: nothing to send
 71: cmp rcx, r13
-    jae 9f
+    jae 72f
     movzx eax, byte ptr [r12 + rcx]
     inc rcx
     cmp eax, ' '
     jbe 71b
-    cmp qword ptr [rip + new_ext], 0
+    jmp 73f
+72: call agatt_box
+    mov rdi, rax
+    call agatt_count
+    test rax, rax
+    jz 9f
+73: cmp qword ptr [rip + new_ext], 0
     je 1f
     xor edi, edi                # a new session of an extension
     mov rsi, r12
@@ -2040,16 +2052,48 @@ FN agentext_send
     call tf_text
     mov r12, rax
     mov r13, rdx
-41: mov rdi, rbx
+41: mov rdi, rbx                # a driver that takes parts: the box's pack, and what the hooks add
+    xor esi, esi
+    call agatt_caps_of
+    test eax, DRVC_PARTS
+    jz 43f
+    call agatt_take
+    test rax, rax
+    jnz 42f
+    call agatt_new              # (the hooks always get a pack: an empty one is freed again)
+42: mov [rsp], rax
+    mov rdi, rbx
+    mov rsi, rax
+    call agctx_part
+    mov rdi, rbx
+    mov rsi, [rsp]
+    mov rdx, r12
+    mov rcx, r13
+    call agterm_parts
+    mov rdi, [rsp]
+    call agatt_count
+    test rax, rax
+    jnz 43f
+    mov rdi, [rsp]
+    call agatt_free
+    mov qword ptr [rsp], 0
+43: mov rdi, rbx
     mov rsi, r12
     mov rdx, r13
-    call agent_send
+    mov rcx, [rsp]
+    call agent_send_with
 5:  cmp eax, SEND_OK
     je 6f
     cmp eax, SEND_QUEUED
     je 6f
     cmp eax, SEND_HELD          # written during a turn, shown queued (SEND_TOOMANY: agent_send's toast)
     je 6f
+    mov r14d, eax               # not taken: the pack goes back to the box, without the hooks' parts
+    mov rdi, [rsp]
+    call agatt_drop_auto
+    mov rdi, [rsp]
+    call agatt_keep
+    mov eax, r14d
     lea rdi, [rip + .Lsend_refused]
     cmp eax, SEND_REFUSED
     je 7f
@@ -2058,7 +2102,11 @@ FN agentext_send
     jne 9f
 7:  call app_toast
     EPILOGUE
-6:  lea rdi, [rip + in_tf]
+6:  test rbx, rbx               # (0: an extension's new session)
+    jz 61f
+    mov rdi, rbx                # what went with it is remembered (agentctx.s)
+    call agctx_sent
+61: lea rdi, [rip + in_tf]
     call tf_clear
     mov rdi, rbx                # (0: an extension's new session)
     call composer_sent
@@ -2515,6 +2563,12 @@ FN agentext_field
 # FN agentext_box() -> TF*: the prompt box
 FN agentext_box
     lea rax, [rip + in_tf]
+    ret
+
+# FN agentext_box_as() -> rax the session the box belongs to (in_as: the one agentext_restore gives text back
+#   to), or 0 (phase 4 task 2: a pack given back goes where the text goes)
+FN agentext_box_as
+    mov rax, [rip + in_as]
     ret
 
 # FN agentext_box_owner() -> rax the session the box writes to now (0: a built-in driver's new conversation

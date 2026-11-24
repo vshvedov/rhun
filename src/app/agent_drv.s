@@ -17,6 +17,12 @@
 #                                             the program is ready (it is started first when it is not
 #                                             running), drawn queued meanwhile; while a turn runs written
 #                                             at once and held (DRVC_QUEUE), else refused
+#   agent_send_with(AS*, ptr, len, AP* or 0) -> eax SEND_*   the same with the message's parts (agentatt.s;
+#                                             a driver with DRVC_PARTS): the pack is the callee's after
+#                                             SEND_OK (freed once written), SEND_HELD (slimmed, kept with the
+#                                             held message) and SEND_QUEUED (kept whole with the waiting
+#                                             prompt), the caller's after any other answer. A waiting or held
+#                                             prompt that is given back gives its pack back (agatt_return)
 #   agent_queued(AS*, i) -> rax ptr, rdx len  its i-th message that has not started (drawn queued), or 0
 #   agent_stop(AS*), agent_answer(AS*, n), agent_typing(AS*) (typing starts the program),
 #   agent_touch(AS*) (more typing: the idle stop waits again), agent_stop_running(AS*) -> eax (Escape:
@@ -375,10 +381,14 @@ live_lists_free:
     xor r12d, r12d
 1:  cmp r12, [rbx + AL_held + VEC_len]
     jae 2f
-    imul rax, r12, AH_SIZE
-    add rax, [rbx + AL_held + VEC_ptr]
-    mov rdi, [rax + AH_text]
+    imul r13, r12, AH_SIZE
+    add r13, [rbx + AL_held + VEC_ptr]
+    mov rdi, [r13 + AH_text]
     call mem_free
+    mov rdi, [r13 + AH_chips]   # phase 4 task 2: its chips and pack go with it
+    call mem_free
+    mov rdi, [r13 + AH_pack]
+    call agatt_free
     inc r12
     jmp 1b
 2:  lea rdi, [rbx + AL_held]
@@ -407,7 +417,7 @@ queue_free:
     jae 2f
     mov rax, [rbx + AL_queue + VEC_ptr]
     mov rdi, [rax + r12*8]
-    call mem_free
+    call q_free
     inc r12
     jmp 1b
 2:  mov qword ptr [rbx + AL_queue + VEC_len], 0
@@ -435,6 +445,11 @@ queue_restore:
     call jsb_add
     mov rdi, [r13 + AH_text]
     call mem_free
+    mov rdi, [r13 + AH_chips]   # phase 4 task 2: its parts go back with its text
+    call mem_free
+    mov rdi, [rbx + AL_as]
+    mov rsi, [r13 + AH_pack]
+    call agatt_return
     mov r15d, 1
     inc r12
     jmp 1b
@@ -454,6 +469,12 @@ queue_restore:
     mov rdi, r13
     mov rsi, rax
     call jsb_add
+    mov rdi, r13                # phase 4 task 2: its parts go back with its text
+    call q_tail
+    mov rsi, [rax + 8]
+    mov qword ptr [rax + 8], 0
+    mov rdi, [rbx + AL_as]
+    call agatt_return
     jmp 4b
 41: mov rdi, rbx
     call queue_free
@@ -562,27 +583,43 @@ FN agent_closed
 #   AL_QUEUE_MAX at most: SEND_FULL). A turn runs, a card is up or others are held: a driver that takes
 #   messages during a turn (DRVC_QUEUE) has it written now and held, drawn queued until it starts
 #   (ev_started; SEND_HELD, AH_MAX at most: SEND_TOOMANY with a toast, the text stays); any other refuses it
-#   (SEND_REFUSED). Locals: [rsp] the uuid (40 bytes)
+#   (SEND_REFUSED). Locals: [rsp] the uuid (40 bytes), [rsp + 48] the pack (agent_send_with)
 FN agent_send
-    PROLOGUE 48
+    xor ecx, ecx
+    jmp agent_send_with
+
+# FN agent_send_with(AS*, ptr, len, AP* or 0) -> eax SEND_*: agent_send with the message's parts (see the top);
+#   a prompt is empty only when its text is blank and it has no part (phase 4 task 2)
+FN agent_send_with
+    PROLOGUE 64
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
+    mov [rsp + 48], rcx
     call agent_drv_of
     mov r14, rax
     mov eax, SEND_FAILED
     test r14, r14
     jz 9f
-    xor ecx, ecx                # only blanks: nothing to send
-1:  mov eax, SEND_EMPTY
-    cmp rcx, r13
-    jae 9f
+    xor ecx, ecx                # only blanks and no part: nothing to send
+1:  cmp rcx, r13
+    jae 11f
     movzx eax, byte ptr [r12 + rcx]
     inc rcx
     cmp eax, ' '
     jbe 1b
-    test dword ptr [r14 + DRV_caps], DRVC_SESSION
+    jmp 12f
+11: mov rdi, [rsp + 48]
+    call agatt_count
+    mov ecx, eax
+    mov eax, SEND_EMPTY
+    test ecx, ecx
+    jz 9f
+12: test dword ptr [r14 + DRV_caps], DRVC_SESSION
     jz 2f
+    mov eax, SEND_REFUSED       # (an extension's session takes no parts: the box keeps them)
+    cmp qword ptr [rsp + 48], 0
+    jne 9f
     mov rdi, rbx                # an extension's: its own send says
     mov rsi, r12
     mov rdx, r13
@@ -635,6 +672,7 @@ FN agent_send
     mov rsi, r12
     mov rdx, r13
     lea rcx, [rsp]
+    mov r8, [rsp + 48]
     mov rax, [r15 + AL_drv]
     call [rax + DRV_send]
     mov ecx, eax
@@ -650,6 +688,7 @@ FN agent_send
     lea rsi, [rsp]
     mov rdx, r12
     mov rcx, r13
+    mov r8, [rsp + 48]          # the pack goes with it, slimmed
     call held_add
     mov eax, SEND_HELD
     jmp .Las_sent
@@ -668,6 +707,7 @@ FN agent_send
     jae 9f
     mov rdi, r12
     mov rsi, r13
+    mov rdx, [rsp + 48]         # the pack waits with it, whole
     call queue_dup
     mov r14, rax
     lea rdi, [r15 + AL_queue]
@@ -699,11 +739,16 @@ FN agent_send
     mov rsi, r12
     mov rdx, r13
     lea rcx, [rsp]
+    mov r8, [rsp + 48]
     mov rax, [r15 + AL_drv]
     call [rax + DRV_send]
     test eax, eax
     jz 7f
     call user_row               # written: its row (a prompt refused or lost stays in the box alone)
+    mov rdi, rbx                # phase 4 task 2: the row's chips, and the pack is done with
+    mov rsi, rax
+    mov rdx, [rsp + 48]
+    call pack_row
     mov eax, SEND_OK
     jmp .Las_sent
 7:  cmp dword ptr [r15 + AL_state], ALS_WORKING
@@ -766,13 +811,16 @@ FN agent_over
     mov rax, rbx
 9:  EPILOGUE
 
-# held_add(AL*, uuid cstr, ptr, len): a message written during a turn joins AL_held (its text copied)
+# held_add(AL*, uuid cstr, ptr, len, AP* or 0): a message written during a turn joins AL_held (its text copied;
+#   its pack, now the entry's, slimmed: its chips kept as text for its row; the pathless bytes of all held
+#   packs at most AP_MAX_BYTES, the oldest's going first)
 held_add:
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
     mov r14, rcx
+    mov [rsp], r8
     lea rdi, [rbx + AL_held]
     mov esi, AH_SIZE
     call vec_push
@@ -785,8 +833,69 @@ held_add:
     call mem_dup
     mov [r15 + AH_text], rax
     mov [r15 + AH_len], r14
+    mov rdi, [rsp]              # phase 4 task 2: its chips, its pack slimmed
+    call agatt_chips_dup
+    mov [r15 + AH_chips], rax
+    mov rdi, [rsp]
+    call agatt_slim
+    mov rax, [rsp]
+    mov [r15 + AH_pack], rax
+    mov rdi, rbx
+    call held_cap
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
+
+# held_cap(AL*): the pathless bytes of the held packs (pasted images) at most AP_MAX_BYTES: past that the
+#   oldest's go (given back, each says it could not be kept)
+held_cap:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d              # the bytes held
+    xor r13d, r13d
+1:  cmp r13, [rbx + AL_held + VEC_len]
+    jae 2f
+    imul rax, r13, AH_SIZE
+    add rax, [rbx + AL_held + VEC_ptr]
+    mov rdi, [rax + AH_pack]
+    call agatt_pathless
+    add r12, rax
+    inc r13
+    jmp 1b
+2:  xor r13d, r13d
+3:  cmp r12, AP_MAX_BYTES
+    jbe 9f
+    cmp r13, [rbx + AL_held + VEC_len]
+    jae 9f
+    imul rax, r13, AH_SIZE
+    add rax, [rbx + AL_held + VEC_ptr]
+    mov rdi, [rax + AH_pack]
+    call agatt_drop_pathless
+    sub r12, rax
+    inc r13
+    jmp 3b
+9:  EPILOGUE
+
+# pack_row(AS*, row index or -1, AP* or 0): a message written with its parts: its row gets their chips, and the
+#   pack, written, is freed
+pack_row:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    test r13, r13
+    jz 9f
+    mov rdi, r13
+    call agatt_chips_dup
+    mov r14, rax
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r14
+    call agatt_row_chips
+    mov rdi, r14
+    call mem_free
+    mov rdi, r13
+    call agatt_free
+9:  EPILOGUE
 
 # held_find(AL*, uuid ptr, len) -> rax the index in AL_held of the message written with that uuid, or -1
 held_find:
@@ -816,15 +925,19 @@ held_find:
 8:  mov rax, -1
     EPILOGUE
 
-# held_take(AL*, i) -> rax its text (now the caller's), rdx its length: message i leaves AL_held, the
-#   order of the others kept
+# held_take(AL*, i) -> rax its text (now the caller's), rdx its length, rcx its chips text (the caller's, or 0),
+#   r8 its pack (the caller's, or 0): message i leaves AL_held, the order of the others kept
 held_take:
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, rdi
     imul r12, rsi, AH_SIZE
     add r12, [rbx + AL_held + VEC_ptr]
     mov r13, [r12 + AH_text]
     mov r14, [r12 + AH_len]
+    mov rax, [r12 + AH_chips]
+    mov [rsp], rax
+    mov rax, [r12 + AH_pack]
+    mov [rsp + 8], rax
     mov rax, [rbx + AL_held + VEC_len]
     dec rax
     mov [rbx + AL_held + VEC_len], rax
@@ -837,15 +950,19 @@ held_take:
     mov dword ptr [rip + g_dirty], 1
     mov rax, r13
     mov rdx, r14
+    mov rcx, [rsp]
+    mov r8, [rsp + 8]
     EPILOGUE
 
-# queue_dup(ptr, len) -> rax a prompt waiting for a start, as AL_queue keeps it: a cstr of the text, and
-#   after its NUL, at the next multiple of 8, a serial of its own (never 0: agent_queued's id for it)
+# queue_dup(ptr, len, AP* or 0) -> rax a prompt waiting for a start, as AL_queue keeps it: a cstr of the text,
+#   and after its NUL, at the next multiple of 8 (q_tail), a serial of its own (never 0: agent_queued's id for
+#   it), then its pack (now the block's, whole) and its chips text (owned, or 0)
 queue_dup:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
-    lea rdi, [rsi + 16]
+    mov r14, rdx
+    lea rdi, [rsi + 32]
     call mem_alloc
     mov r13, rax
     mov rdi, rax
@@ -855,16 +972,47 @@ queue_dup:
     mov byte ptr [r13 + r12], 0
     inc qword ptr [rip + q_serial]
     mov rax, [rip + q_serial]
-    lea rcx, [r12 + 8]
-    and rcx, -8
-    mov [r13 + rcx], rax
+    lea r15, [r12 + 8]
+    and r15, -8
+    add r15, r13
+    mov [r15], rax
+    mov [r15 + 8], r14
+    mov rdi, r14
+    call agatt_chips_dup
+    mov [r15 + 16], rax
     mov rax, r13
     EPILOGUE
 
+# q_tail(block) -> rax where its serial is (its pack at + 8, its chips text at + 16)
+q_tail:
+    push rdi
+    call strlen
+    pop rdi
+    add rax, 8
+    and rax, -8
+    add rax, rdi
+    ret
+
+# q_free(block or 0): a waiting prompt and what it owns
+q_free:
+    PROLOGUE
+    mov rbx, rdi
+    test rbx, rbx
+    jz 9f
+    call q_tail
+    mov r12, rax
+    mov rdi, [r12 + 8]
+    call agatt_free
+    mov rdi, [r12 + 16]
+    call mem_free
+    mov rdi, rbx
+    call mem_free
+9:  EPILOGUE
+
 # FN agent_queued(AS* or 0, i) -> rax ptr, rdx len, rcx which message it is (a held one's: the first 8 bytes
-#   of its uuid; a prompt waiting for a start: its serial, queue_dup) of its i-th message that has not
-#   started (those that wait for a start first, then those held), or rax 0 past the last: what agents.s
-#   draws queued
+#   of its uuid; a prompt waiting for a start: its serial, queue_dup), r8 its pack (AP* or 0, borrowed), r9
+#   its chips text (cstr or 0, borrowed) of its i-th message that has not started (those that wait for a
+#   start first, then those held), or rax 0 past the last: what agents.s draws queued
 FN agent_queued
     PROLOGUE
     xor eax, eax
@@ -890,10 +1038,13 @@ FN agent_queued
 2:  mov r14, rax
     mov rdi, rax
     call strlen
-    mov rdx, rax
-    lea rcx, [rax + 8]          # (its serial, after the NUL at the next multiple of 8: queue_dup)
-    and rcx, -8
-    mov rcx, [r14 + rcx]
+    mov r15, rax
+    mov rdi, r14                # (its serial, after the NUL at the next multiple of 8: queue_dup)
+    call q_tail
+    mov rcx, [rax]
+    mov r8, [rax + 8]
+    mov r9, [rax + 16]
+    mov rdx, r15
     mov rax, r14
     EPILOGUE
 3:  xor eax, eax
@@ -903,6 +1054,8 @@ FN agent_queued
     add rcx, [rbx + AL_held + VEC_ptr]
     mov rax, [rcx + AH_text]
     mov rdx, [rcx + AH_len]
+    mov r8, [rcx + AH_pack]
+    mov r9, [rcx + AH_chips]
     mov rcx, [rcx + AH_uuid]    # the start of its uuid: which message it is (queued_sync)
 9:  EPILOGUE
 
@@ -2018,9 +2171,10 @@ FN ev_note
 #   (DRVC_QUEUE) the others are held, drawn queued until each starts (ev_started), else each is a row as it
 #   goes. They go WORKING: a connection that breaks under a write is a turn that failed, and its close (the
 #   driver's: ev_failed, ev_closed) has put the prompts back in the box and freed them before the write
-#   returns. One the driver refuses goes back in the box, with no row. Locals: [rsp] the uuid (40 bytes)
+#   returns. One the driver refuses goes back in the box, with no row. Locals: [rsp] the uuid (40 bytes),
+#   [rsp + 40] held or not, [rsp + 48] the block's tail (q_tail)
 FN ev_ready
-    PROLOGUE 48
+    PROLOGUE 64
     mov rbx, rdi
     test dword ptr [rbx + AL_flags], ALF_ENDING
     jnz 9f                      # a start given up (start_cancel): it is ending, nothing goes
@@ -2052,7 +2206,10 @@ FN ev_ready
     test dword ptr [rax + DRV_caps], DRVC_QUEUE
     jz 23f
     mov dword ptr [rsp + 40], 1
-23: mov rdi, rbx
+23: mov rdi, r14                # phase 4 task 2: its pack goes with it
+    call q_tail
+    mov r8, [rax + 8]
+    mov rdi, rbx
     mov rsi, r14
     mov rdx, r15
     lea rcx, [rsp]
@@ -2062,23 +2219,34 @@ FN ev_ready
     jne 9f                      # it broke: the queue is gone (ev_failed), the state set
     test eax, eax
     jz 25f                      # refused: it stays in the queue, back in the box below (no row)
+    mov rdi, r14
+    call q_tail
+    mov [rsp + 48], rax
     cmp dword ptr [rsp + 40], 0
     je 22f
     mov rdi, rbx
     lea rsi, [rsp]
     mov rdx, r14
     mov rcx, r15
+    mov r8, [rax + 8]           # (held: the entry's now)
     call held_add
     jmp 24f
 22: mov rdi, rbx
     mov rsi, r14
     mov rdx, r15
     call prompt_row
+    mov rdi, [rbx + AL_as]      # phase 4 task 2: its chips; the pack, written, goes
+    mov rsi, rax
+    mov rax, [rsp + 48]
+    mov rdx, [rax + 8]
+    call pack_row
 24: mov r13d, 1
+    mov rax, [rsp + 48]
+    mov qword ptr [rax + 8], 0
     mov rax, [rbx + AL_queue + VEC_ptr]
     mov qword ptr [rax + r12*8], 0
     mov rdi, r14
-    call mem_free
+    call q_free
 25: inc r12
     jmp 2b
 3:  mov rdi, rbx                # what was refused goes back in the box
@@ -2111,10 +2279,20 @@ FN ev_started
     call held_take
     mov r12, rax
     mov r13, rdx
+    mov r14, rcx                # phase 4 task 2: its chips text and its (slimmed) pack
+    mov r15, r8
     mov rdi, rbx
     mov rsi, r12
     mov rdx, r13
     call prompt_row
+    mov rdi, [rbx + AL_as]      # its row gets its chips; the pack is done with
+    mov rsi, rax
+    mov rdx, r14
+    call agatt_row_chips
+    mov rdi, r14
+    call mem_free
+    mov rdi, r15
+    call agatt_free
     mov rdi, r12
     call mem_free
 9:  EPILOGUE
@@ -2134,6 +2312,12 @@ FN ev_dropped
     call held_take
     mov r12, rax
     mov r13, rdx
+    mov r14, r8                 # phase 4 task 2: its parts go back with its text
+    mov rdi, rcx
+    call mem_free
+    mov rdi, [rbx + AL_as]
+    mov rsi, r14
+    call agatt_return
     lea rdi, [rip + jsb]
     call sb_clear
     lea rdi, [rip + jsb]
@@ -3268,7 +3452,8 @@ FN agent_drv_shutdown
     mov rdi, [rax + rcx*8 - 8]
     call live_end
     jmp 1b
-9:  EPILOGUE
+9:  call agatt_reset            # phase 4 task 2: the box's pack and new conversations' go too
+    EPILOGUE
 
 # FN agent_drv_unlisted(): the provider switches changed (agents_sources_changed): a session rhun drives
 #   whose provider the list does not show any more ([agents] claude off) ends with its program; the others
@@ -3684,6 +3869,8 @@ ext_drv:
     .quad 0                     # DRV_verbs: no spinner line
     .quad 0                     # DRV_tips
     .quad ext_none              # DRV_task: no tasks
+    .quad 0                     # DRV_words: the generic words (phase 4)
+    .long 0, 0                  # DRV_glyph: none
 # the readers of the kinds that have one, by AS_kind: {kind, ingest, text, kids}, then 0 (agent_ingest,
 #   agent_reader; the one place above the drivers that names a kind's reader)
 readers:

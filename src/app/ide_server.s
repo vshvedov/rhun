@@ -11,7 +11,7 @@
 # the CLI connect. A connection must send x-claude-code-ide-authorization with the token of the lock file
 # (compared in constant time) in its upgrade request within 5 s; one client at a time: a newer one closes the
 # older (4001). Frames: masked from the client, text or binary, fragments joined, at most 16 MiB a message
-# (1009 above), ping answered, anything else of the protocol a 1002. At most 256 KiB read per wake-up; a
+# (1009 above), a text message that is not UTF-8 a 1007, ping answered, anything else of the protocol a 1002. At most 256 KiB read per wake-up; a
 # client that does not read is dropped past 64 MiB waiting. Messages are MCP (mcpsrv.s) for edtools.s's
 # server; selection_changed goes 300 ms after the selection last changed (and 500 ms after a client
 # connects), at_mentioned from Claude: Insert @-Mention in Terminal.
@@ -1290,7 +1290,14 @@ frames:
     jne .Lfr_proto              # a new message inside a fragmented one
     test dword ptr [rsp], 0x80
     jz 7f
-    mov rdi, rbx                # whole: handled where it lies
+    cmp dword ptr [rsp + 4], 1  # a text message is UTF-8 (else 1007, RFC 6455 8.1)
+    jne 61f
+    mov rdi, [rsp + 8]
+    mov rsi, r15
+    call text_ok
+    test eax, eax
+    jz .Lfr_badtext
+61: mov rdi, rbx                # whole: handled where it lies
     mov rsi, [rsp + 8]
     mov rdx, r15
     call message
@@ -1313,7 +1320,14 @@ frames:
     call sb_push
     test dword ptr [rsp], 0x80
     jz .Lfr_next
-    mov dword ptr [rbx + IC_mop], 0
+    cmp dword ptr [rbx + IC_mop], 1
+    jne 62f
+    mov rdi, [rbx + IC_msg + SB_ptr]
+    mov rsi, [rbx + IC_msg + SB_len]
+    call text_ok
+    test eax, eax
+    jz .Lfr_badtext
+62: mov dword ptr [rbx + IC_mop], 0
     mov rdi, rbx
     mov rsi, [rbx + IC_msg + SB_ptr]
     mov rdx, [rbx + IC_msg + SB_len]
@@ -1347,6 +1361,11 @@ frames:
     mov esi, 1002
     call close_with
     jmp .Lfr_done
+.Lfr_badtext:
+    mov rdi, rbx
+    mov esi, 1007
+    call close_with
+    jmp .Lfr_done
 .Lfr_big:
     mov rdi, rbx
     mov esi, 1009
@@ -1368,6 +1387,39 @@ frames:
 91: mov qword ptr [rbx + IC_rbuf + SB_len], 0
     mov qword ptr [rbx + IC_roff], 0
 9:  EPILOGUE
+
+# text_ok(ptr, len) -> eax 1 when the bytes are UTF-8 (no bad sequence, overlong form, surrogate or code
+#   point past U+10FFFF)
+text_ok:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d
+1:  cmp r13, r12
+    jae 8f
+    movzx eax, byte ptr [rbx + r13]
+    cmp eax, 0x80
+    jb 2f
+    lea rdi, [rbx + r13]
+    mov rsi, r12
+    sub rsi, r13
+    call utf8_decode
+    cmp edx, 1
+    je 7f                       # (a lead byte decoded alone: a bad sequence)
+    cmp eax, 0xd800
+    jb 3f
+    cmp eax, 0xdfff
+    jbe 7f
+    cmp eax, 0x10ffff
+    ja 7f
+3:  add r13, rdx
+    jmp 1b
+2:  inc r13
+    jmp 1b
+7:  xor eax, eax
+    EPILOGUE
+8:  mov eax, 1
+    EPILOGUE
 
 # message(IC*, ptr, len): one JSON-RPC message: answered now, later, or not at all
 message:
@@ -1541,14 +1593,35 @@ send_frame:
     call send_raw
     EPILOGUE
 
-# queue(IC*, ptr, len): onto its queue, unless that would pass the cap (then it is dropped)
+# queue(IC*, ptr, len): onto its queue, unless that would pass the cap (then it is dropped); what was written
+#   already is moved out first once it is 64 KiB or half the queue (a queue that never drains whole stays within
+#   its cap)
 queue:
     PROLOGUE
     mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
     cmp dword ptr [rbx + IC_state], ICS_DEAD
     je 9f
     cmp dword ptr [rbx + IC_state], ICS_FREE
     je 9f
+    mov rcx, [rbx + IC_woff]
+    test rcx, rcx
+    jz 2f
+    cmp rcx, 65536
+    jae 1f
+    lea rax, [rcx + rcx]
+    cmp rax, [rbx + IC_wq + SB_len]
+    jb 2f
+1:  mov rdi, [rbx + IC_wq + SB_ptr]
+    lea rsi, [rdi + rcx]
+    mov rdx, [rbx + IC_wq + SB_len]
+    sub rdx, rcx
+    mov [rbx + IC_wq + SB_len], rdx
+    mov qword ptr [rbx + IC_woff], 0
+    call memmove
+2:  mov rsi, r12
+    mov rdx, r13
     mov rax, [rbx + IC_wq + SB_len]
     sub rax, [rbx + IC_woff]
     add rax, rdx

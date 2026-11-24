@@ -433,6 +433,15 @@ class FramesTest(BridgeCase):
         c.send_frame(9, b'x', fin=False)
         self.assertEqual(c.close_code()[0], 1002)
 
+    def test_a_text_message_that_is_not_utf8_ends_it_with_1007(self):
+        self.c.send_frame(1, b'{"a":"\xc3("}')
+        self.assertEqual(self.c.close_code()[0], 1007)
+        c = self.client()                 # fragments are checked whole (a character may span two)
+        c.send_frame(1, b'{"a":"\xc3', fin=False)
+        c.send_frame(0, b'\xa9"}')
+        c.send_frame(1, b'{"a":"\xed\xa0\x80"}')       # a surrogate
+        self.assertEqual(c.close_code()[0], 1007)
+
     def test_a_message_over_16_mib_ends_it_with_1009_before_it_is_read(self):
         header = bytes([0x81, 0x80 | 127]) + struct.pack('>Q', 16 * 1024 * 1024 + 1) + b'\0\0\0\0'
         self.c.sock.sendall(header)
@@ -466,7 +475,7 @@ class FramesTest(BridgeCase):
 
     def test_what_is_not_json_is_dropped(self):
         self.c.send_frame(1, b'{not json')
-        self.c.send_frame(1, b'\xff\xfe')
+        self.c.send_frame(2, b'\xff\xfe')                 # (binary: not text, so no 1007)
         self.assertEqual(self.c.call('ping')['result'], {})
 
     def test_a_peer_that_goes_away_mid_frame_leaves_nothing(self):

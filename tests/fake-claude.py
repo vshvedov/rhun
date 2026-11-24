@@ -47,7 +47,9 @@ class Fake:
 
     def __init__(self, home, cwd, *args, env=None, base=None):
         """base: the command line in place of STREAM; args follow it."""
-        environment = {k: v for k, v in os.environ.items() if not k.startswith(('CLAUDE_CONFIG_DIR', 'FAKE_CLAUDE'))}
+        # (p6b: and the variables the fake reads that a Claude Code session running the tests passes on)
+        environment = {k: v for k, v in os.environ.items() if not k.startswith((
+            'CLAUDE_CONFIG_DIR', 'FAKE_CLAUDE', 'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING', 'CLAUDE_CODE_RESUME_'))}
         environment.update(HOME=str(home), **(env or {}))
         self.process = subprocess.Popen([sys.executable, str(FAKE), *(STREAM if base is None else base), *args],
                                         cwd=cwd, env=environment,
@@ -659,7 +661,9 @@ class Scenarios(Base):
         self.assertFalse((self.project / 'pending.txt').exists())
 
     def test_it_exits_when_its_stdout_is_gone(self):
-        environment = {k: v for k, v in os.environ.items() if not k.startswith(('CLAUDE_CONFIG_DIR', 'FAKE_CLAUDE'))}
+        # (p6b: and the variables the fake reads that a Claude Code session running the tests passes on)
+        environment = {k: v for k, v in os.environ.items() if not k.startswith((
+            'CLAUDE_CONFIG_DIR', 'FAKE_CLAUDE', 'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING', 'CLAUDE_CODE_RESUME_'))}
         process = subprocess.Popen([sys.executable, str(FAKE), *STREAM], cwd=self.project,
                                    env=dict(environment, HOME=str(self.home)), stdin=subprocess.PIPE,
                                    stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)

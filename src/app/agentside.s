@@ -2204,8 +2204,14 @@ sq_draw:
     call cslen
     cmp dword ptr [rbx + SQX_state], SQS_CANCELLED
     je 4f
-    lea rsi, [rip + .Ls_empty]
+    push rax                    # (its driver's words: DW_SIDE_EMPTY)
+    push rax
+    mov rdi, [rbx + SQX_as]
+    call agentside_words
+    mov rsi, [rax + 8*DW_SIDE_EMPTY]
     call cslen
+    pop rax
+    pop rax
 4:  mov r8, rsi
     mov r9, rdx
     push rax
@@ -3646,7 +3652,7 @@ FN agside_dump
     call sb_push_cstr
     mov rsi, [r14 + SQX_a]
     test rsi, rsi
-    jz 3f
+    jz 31f
     mov rdi, rbx
     mov esi, ' '
     call sb_push_byte
@@ -3654,6 +3660,17 @@ FN agside_dump
     mov rsi, [r14 + SQX_a]
     mov rdx, [r14 + SQX_alen]
     call esc_push
+    jmp 3f
+31: cmp dword ptr [r14 + SQX_state], SQS_EMPTY   # no answer: the words drawn (its driver's)
+    jne 3f
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, [r14 + SQX_as]
+    call agentside_words
+    mov rsi, [rax + 8*DW_SIDE_EMPTY]
+    mov rdi, rbx
+    call sb_push_cstr
 3:  mov rdi, rbx
     mov esi, 10
     call sb_push_byte
@@ -4209,7 +4226,6 @@ agside_n_print: .asciz "print-agent-side"
 .Lsend: .asciz "Send"
 .Ls_wait: .asciz "\342\234\273 Answering\342\200\246"
 .Ls_cancelled: .asciz "Cancelled."
-.Ls_empty: .asciz "Claude didn't return an answer for this side question."
 .Ls_hint: .asciz "Ask a quick side question without interrupting the main conversation."
 .Ls_none: .asciz "Bookmark a response with the bookmark button under it to keep it here."
 .Ls_pick: .asciz "Click a bookmark to show it here."

@@ -420,6 +420,23 @@ FN agctx_tip
     dec qword ptr [rbx + SB_len]
     EPILOGUE
 
+# FN agentside_words(AS* or 0) -> rax that conversation's driver's words (DRV_words), or the generic ones
+FN agentside_words
+    sub rsp, 8
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    call agent_drv_of
+1:  add rsp, 8
+    test rax, rax
+    jz 3f
+    mov rax, [rax + DRV_words]
+    test rax, rax
+    jz 3f
+    ret
+3:  lea rax, [rip + generic_words]
+    ret
+
 # box_words() -> rax the box's driver's words (DRV_words), or the generic ones
 box_words:
     sub rsp, 8
@@ -1554,7 +1571,8 @@ ph_sb: .zero SB_SIZE
 .Lw_norepo: .asciz "norepo"
 .Lw_off: .asciz "off"
 .Lw_unasked: .asciz "unasked"
+.Lw_side_empty: .asciz "The agent didn't return an answer for this side question."
 .p2align 3
-generic_words: .quad .Lw_unfocus, .Lw_refused, .Lw_seltip
+generic_words: .quad .Lw_unfocus, .Lw_refused, .Lw_seltip, .Lw_side_empty
 why_words: .quad .Lw_exclude, .Lw_git, .Lw_paused, .Lw_nogit, .Lw_failed, .Lw_slow, .Lw_norepo, .Lw_off
     .quad .Lw_unasked, .Ldash

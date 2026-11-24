@@ -96,7 +96,7 @@ class SideQuestionTest(PanelCase):
         self.command('agent-side btw fail now')
         self.until_body('a error Failed to get an answer: side question failed')
         self.command('agent-side btw empty one')
-        self.until_body('a empty')
+        self.until_body("a empty Claude didn't return an answer for this side question.")   # the driver's words
 
     def test_a_turn_ending_leaves_it_and_the_program_ending_fails_it(self):
         self.panel()

@@ -7,6 +7,7 @@
 #     conversation of src's kind titled "TITLE (fork)" holding src's first nrows rows, opened with text in its box,
 #     a new one that never got a prompt (ALF_NEW | ALF_DRAFT, its own id); the driver makes it a fork of src
 #   agfork_menu(items*, AS*, row) -> rax past the items it added: a prompt row's context menu entries (agentsel.s)
+#   agfork_offers(AS*, row) -> eax 1    that row has them (the Message actions button's test)
 #   agfork_box_escape()                 Escape left an empty prompt box (the first of two)
 #   agfork_panel_key(keysym, mods) -> eax 1 taken: a second Escape within 800 ms opens Rewind (agents_key)
 #   agfork_opened(AS*)                  a conversation opened (agents.s open_session)
@@ -121,19 +122,10 @@ FN agfork_menu
     mov r12, rsi
     mov r13, rdx
     mov rdi, r12
-    call fork_driver
-    test rax, rax
+    mov rsi, r13
+    call agfork_offers
+    test eax, eax
     jz 9f
-    test r13, r13
-    js 9f
-    cmp r13, [r12 + AS_msgs + VEC_len]
-    jae 9f
-    imul rax, r13, AM_SIZE
-    add rax, [r12 + AS_msgs + VEC_ptr]
-    cmp dword ptr [rax + AM_role], R_USER
-    jne 9f
-    test dword ptr [rax + AM_flags], AMF_ECHO | AMF_QUEUED
-    jnz 9f
     mov [rip + fm_as], r12
     mov [rip + fm_row], r13
     lea rax, [rip + .Lm_fork]
@@ -150,6 +142,30 @@ FN agfork_menu
     mov [rbx + 40], rax
     add rbx, 48
 9:  mov rax, rbx
+    EPILOGUE
+
+# FN agfork_offers(AS*, row) -> eax 1 when agfork_menu would add its entries for that row (nothing is noted: the
+#   Message actions button asks it per frame, agentsel.s)
+FN agfork_offers
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    xor ebx, ebx
+    call fork_driver
+    test rax, rax
+    jz 9f
+    test r13, r13
+    js 9f
+    cmp r13, [r12 + AS_msgs + VEC_len]
+    jae 9f
+    imul rax, r13, AM_SIZE
+    add rax, [r12 + AS_msgs + VEC_ptr]
+    cmp dword ptr [rax + AM_role], R_USER
+    jne 9f
+    test dword ptr [rax + AM_flags], AMF_ECHO | AMF_QUEUED
+    jnz 9f
+    mov ebx, 1
+9:  mov eax, ebx
     EPILOGUE
 
 # m_fork(), m_rewind(), m_both(): the menu's entries: the driver's ACT_MSGACT for the row

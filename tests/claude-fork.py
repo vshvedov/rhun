@@ -454,6 +454,45 @@ class KeysTest(ForkCase):
         self.until(lambda: self.sid() != sid, 'the fork')
         self.assertEqual(self.box(), 'two')
 
+    def msgact(self):
+        m = re.search(r'^msgact row=(\d+) (-?\d+),(-?\d+),(\d+),(\d+)$', self.command('print-agent-selection'), re.M)
+        return tuple(map(int, m.groups())) if m else None
+
+    def test_message_actions_on_a_hovered_prompt(self):
+        """3.5: the pointer on a prompt shows the Message actions button left of its bubble; it opens a menu of the
+        prompt's Fork and Rewind entries."""
+        self.start()
+        sid = self.say('one', 'two')
+        self.assertIsNone(self.msgact())
+        bx, by = self.bubble(3)
+        self.command('move %d %d' % (bx, by))
+        self.command('wait 50')
+        row, x, y, w, h = self.msgact()
+        self.assertEqual(row, 2)
+        bubble = re.search(r' bubble=(\d+),', self.command('print-agent-row 3'))
+        self.assertLessEqual(x + w, int(bubble.group(1)))
+        self.command('move %d %d' % (x + w // 2, y + h // 2))
+        self.command('wait 50')
+        self.until(lambda: 'Message actions' in self.command('print-tip'), 'its tip')
+        self.command('click %d %d' % (x + w // 2, y + h // 2))
+        self.command('wait 50')
+        menu = self.command('print-menu')
+        self.assertIn('Fork conversation from here', menu)
+        self.assertIn('Rewind code to here', menu)
+        self.assertIn('Fork conversation and rewind code', menu)
+        self.assertNotIn('Copy Message', menu)                     # the right click's menu has that
+        self.command('menu-pick Fork conversation from here')
+        self.until(lambda: self.sid() != sid, 'the fork')
+        self.assertEqual(self.box(), 'two')
+
+    def test_no_message_actions_on_a_reply(self):
+        self.start()
+        self.say('one')
+        place = re.search(r' y=(\d+) ', self.command('print-agent-row 2'))
+        self.command('move 1000 %d' % (int(place.group(1)) + 20))
+        self.command('wait 50')
+        self.assertIsNone(self.msgact())
+
     def test_a_reply_has_no_fork_entries(self):
         self.start()
         self.say('one')

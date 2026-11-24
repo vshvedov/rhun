@@ -23,11 +23,15 @@
 #   agsel_bar_h(AS*, row) -> eax            a reply's Copy response line under it (a reply that ends its turn)
 #   agsel_bar_draw(AS*, row, x, y)          drawn: shown on the pointer's row, the focused row, the last row
 #   agsel_resp(AS*, row) -> eax             Copy response by the row focus (Enter) or agent-row-click
+#   agsel_msg_btn(AS*, row, x, y)           a prompt row's Message actions (UI 3.5, IRe): on the pointer's row
+#                                           and the focused row of a conversation whose driver forks; a click
+#                                           opens the menu of its Fork and Rewind entries under it
 #   agsel_clear(), agsel_dump(sb), agsel_cmd_select() -> rax   print-agent-selection, agent-select
 .include "rhun.inc"
 
 .equ ID_AG_SEL, 0x610000        # + (row & 0xffff): a row's area (phase 3's 0x600000-0x63ffff; 0x620000 is task lines')
 .equ ID_AG_RESP, 0x630000       # + (row & 0xfff): a reply's Copy response
+.equ ID_AG_MSGACT, 0x631000     # + (row & 0xfff): a prompt's Message actions
 .equ LINK_MAX, 4000             # a link target is copied whole up to this (reply_click's limit)
 .equ ERR_CUT, 2000              # an error's OUT is drawn cut at this many characters (agentrows.s)
 .equ KEY_F10, 0xffc7
@@ -90,6 +94,10 @@ resp_rows: .zero 8 * RESP_KEPT  # the Copy response buttons drawn in the frame r
 resp_r: .zero 16 * RESP_KEPT    #   and x, y, w, h (print-agent-selection)
 resp_n: .long 0
 resp_ser: .long 0
+ma_row: .quad 0                 # the Message actions button drawn in the frame ma_ser (0: none): its row + 1, x, y, w, h
+ma_r: .zero 16
+ma_ser: .long 0
+ma_items: .zero 16 * 4          # its menu: the row's Fork and Rewind entries
 diff_on: .long 0                # agsel_diff_*: the block being drawn selects (a top-level call's)
 diff_want: .long 0              #   1 a press, 2 a drag wants the place under the pointer
 diff_dbl: .long 0               #   (a double click: its line)
@@ -1679,6 +1687,75 @@ FN agsel_bar_draw
     call copy_response
 9:  EPILOGUE
 
+# FN agsel_msg_btn(AS*, row, x, y): the Message actions button of a prompt row (agentrows.s, drawing it): shown
+#   on the pointer's row and the focused row when the row has Fork and Rewind entries (agfork_offers); a click
+#   opens a menu of them under the button
+FN agsel_msg_btn
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov [rsp], edx
+    mov [rsp + 4], ecx
+    call agrow_focus
+    cmp rax, r12
+    je 1f
+    cmp [rip + hov_row], r12
+    jne 9f
+    cmp [rip + hov_as], rbx
+    jne 9f
+    mov eax, [rip + hov_ser]
+    cmp eax, [rip + th_serial]
+    jne 9f
+1:  mov rdi, rbx
+    mov rsi, r12
+    call agfork_offers
+    test eax, eax
+    jz 9f
+    lea rax, [r12 + 1]          # noted for print-agent-selection
+    mov [rip + ma_row], rax
+    mov eax, [rip + th_serial]
+    mov [rip + ma_ser], eax
+    mov eax, [rsp]
+    mov [rip + ma_r], eax
+    mov eax, [rsp + 4]
+    mov [rip + ma_r + 4], eax
+    PM eax, MI_20
+    mov [rip + ma_r + 8], eax
+    mov [rip + ma_r + 12], eax
+    mov edi, r12d
+    and edi, 0xfff
+    add edi, ID_AG_MSGACT
+    mov [rsp + 8], edi
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, eax
+    mov r8d, eax
+    mov r9d, IC_MORE
+    call ag_icon_btn
+    mov r13d, eax
+    mov edi, [rsp + 8]          # its tip
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    add edx, [rip + g_pmt + 4*MI_20]
+    PM ecx, MI_20
+    mov r8d, r13d
+    lea r9, [rip + .Lmsg_actions]
+    call tip_note_text
+    test r13d, UB_CLICK
+    jz 9f
+    lea rdi, [rip + ma_items]
+    mov rsi, rbx
+    mov rdx, r12
+    call agfork_menu
+    mov qword ptr [rax], 0
+    mov qword ptr [rax + 8], 0
+    lea rdi, [rip + ma_items]
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    add edx, [rip + g_pmt + 4*MI_20]
+    call ctx_menu_open
+9:  EPILOGUE
+
 # frame(x, y, size): a 1 px T_ACCENT square frame
 frame:
     PROLOGUE 16
@@ -1784,7 +1861,7 @@ FN agsel_resp
 
 # FN agsel_dump(sb): print-agent-selection: "row=N part=md|in|out|prompt|meta from=A|- to=B|- text=T" (T one
 #   line: LF as \n, TAB as \t) or "none"; then "resp row=N X,Y,W,H" when a reply's Copy response was drawn in
-#   the last frame of the conversation
+#   the last frame of the conversation; "msgact row=N X,Y,W,H" for a prompt's Message actions drawn then
 FN agsel_dump
     PROLOGUE
     mov r15, rdi
@@ -1911,7 +1988,36 @@ FN agsel_dump
     call sb_push_byte
     inc r12d
     jmp 6b
-9:  EPILOGUE
+9:  mov eax, [rip + ma_ser]     # the Message actions button drawn in the last frame
+    cmp eax, [rip + th_serial]
+    jne 99f
+    cmp qword ptr [rip + ma_row], 0
+    je 99f
+    mov rdi, r15
+    lea rsi, [rip + .Ld_msgact]
+    call sb_push_cstr
+    mov rdi, r15
+    mov rsi, [rip + ma_row]
+    dec rsi
+    call sb_push_u64
+    xor ebx, ebx
+91: mov rdi, r15
+    mov esi, ' '
+    test ebx, ebx
+    jz 92f
+    mov esi, ','
+92: call sb_push_byte
+    lea rcx, [rip + ma_r]
+    mov esi, [rcx + rbx*4]
+    mov rdi, r15
+    call md_push_int
+    inc ebx
+    cmp ebx, 4
+    jb 91b
+    mov rdi, r15
+    mov esi, 10
+    call sb_push_byte
+99: EPILOGUE
 
 # place_push(sb, place): a byte, or a diff's place as LINE:BYTE
 place_push:
@@ -2014,6 +2120,8 @@ FN agsel_cmd_select
 .Lm_message: .asciz "Copy Message"
 .Lm_link: .asciz "Copy Link"
 .Lcopy_resp: .asciz "Copy response"
+.Lmsg_actions: .asciz "Message actions"
+.Ld_msgact: .asciz "msgact row="
 .Lcopied: .asciz "Copied."
 .Ld_none: .asciz "none\n"
 .Ld_row: .asciz "row="

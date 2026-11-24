@@ -21,7 +21,8 @@
 #   agrow_code_face() -> rax FACE*; agrow_dump(sb, AS*, from, n, content); agrow_fit_dump(sb);
 #   agrow_row_dump(sb, AS*, row)
 #   the prompt (task 8): agrow_prompt_h(AM*, w) -> eax, agrow_prompt_draw(AS*, row or -1, AM*, x, y, w | h << 32),
-#   agrow_prompt_fields(sb, AS*, row, AM*, x, y), agrow_prompt_est(AM*) -> eax, edx, ecx
+#   agrow_prompt_fields(sb, AS*, row, AM*, x, y), agrow_prompt_est(AM*) -> eax, edx, ecx; a prompt row drawn
+#   shows the Message actions button left of its bubble (agsel_msg_btn)
 #   the error block (task 8): agrow_err_h(AS*, w) -> eax, agrow_err_draw(AS*, x, y, w), agrow_err_at(x, y, w),
 #   agrow_err_dump(sb, AS*), agrow_err_click(AS*, n) -> eax
 .include "rhun.inc"
@@ -84,6 +85,8 @@ chip_title: .zero SB_SIZE       # phase 4 task 6: an image chip's title (its tab
 pl_kind: .long 0                # prompt_lay: the chip's kind, its label's place in it, the pictures drawn
 pl_lead: .long 0
 pl_drew: .long 0
+pl_bx: .long 0                  # prompt_lay drawing: the bubble's x and top (the Message actions button)
+pl_by: .long 0
 rw_chips: .long 0               # phase 4 task 7: rw_wrap draws a prompt's mention chips (agents_line_chips)
 lr_mode: .long 0                # tr_lay's: its mode, the unit's slot, the row's left and top
 lr_slot: .long 0
@@ -7135,7 +7138,9 @@ prompt_lay:
     jmp .Lpl_more
 .Lpl_draw:
     mov edi, [rsp + 40]
+    mov [rip + pl_bx], edi
     mov esi, [rsp + 16]
+    mov [rip + pl_by], esi
     mov edx, [rsp + 84]
     mov ecx, r14d
     PM r8d, MI_RADIUS
@@ -7360,7 +7365,22 @@ FN agrow_prompt_draw
     mov dword ptr [rip + lr_mode], LM_MEASURE
     test r12, r12
     js 9f
-    cmp [rip + rf_row], r12
+    test rbx, rbx               # the Message actions button, left of the bubble (agentsel.s)
+    jz 8f
+    test dword ptr [r13 + AM_flags], AMF_ECHO | AMF_QUEUED
+    jnz 8f
+    PM eax, MI_20
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov edx, [rip + pl_bx]
+    sub edx, eax
+    cmp edx, [rsp]
+    jge 7f
+    mov edx, [rsp]
+7:  mov rdi, rbx
+    mov rsi, r12
+    mov ecx, [rip + pl_by]
+    call agsel_msg_btn
+8:  cmp [rip + rf_row], r12
     jne 9f
     mov edi, [rsp]
     sub edi, [rip + g_pmt + 4*MI_4]

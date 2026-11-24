@@ -56,7 +56,7 @@
 
 STRUCT
 F AI_id, 8
-F AI_key, 8             # the bytes' hash (AIK_BYTES), or of the place
+F AI_key, 8             # the bytes' hash (AIK_BYTES), or the place's line's (agents_hash_place; 0 unchecked)
 F AI_src, 8             # owned bytes, or 0 (a place; bytes given up)
 F AI_len, 8             # their length (kept when given up)
 F AI_as, 8              # a place's session
@@ -399,10 +399,12 @@ FN agimg_bytes
 8:  xor eax, eax
     EPILOGUE
 
-# FN agimg_place(AS*, off, len, n) -> rax id or 0: the n-th image of the record on that line of the session's
-#   file (asked again by the same place: the same record)
+# FN agimg_place(AS*, off, len, n, hash) -> rax id or 0: the n-th image of the record on that line of the session's
+#   file (asked again by the same place: the same record); hash (agents_hash_place, 0 none) is the line's: read
+#   again, a line whose hash differs gives no picture (the file was rewritten: another record is there now)
 FN agimg_place
     PROLOGUE
+    mov r15, r8
     xor eax, eax
     test rdi, rdi
     jz 9f
@@ -430,6 +432,8 @@ FN agimg_place
     jne 2f
     cmp [rax + AI_n], r14d
     jne 2f
+    cmp [rax + AI_key], r15
+    jne 2f
     mov rax, [rax + AI_id]
     jmp 9f
 2:  add rax, AI_SIZE
@@ -442,6 +446,7 @@ FN agimg_place
     mov [rax + AI_off], r12
     mov [rax + AI_plen], r13
     mov [rax + AI_n], r14d
+    mov [rax + AI_key], r15
     mov rax, [rax + AI_id]
 9:  EPILOGUE
 
@@ -469,7 +474,7 @@ num:
 3:  ret
 
 # FN agimg_chip(AS* or 0, target ptr, len) -> rax id or 0: a chip's target: "#ID" (a picture attached here),
-#   "@OFF:LEN:N" (the n-th image of the record at that place of the session's file)
+#   "@OFF:LEN:N[:HASH]" (the n-th image of the record at that place of the session's file, the line's hash)
 FN agimg_chip
     PROLOGUE 16
     xor eax, eax
@@ -516,12 +521,27 @@ FN agimg_chip
     call num
     test rax, rax
     js 8f
+    mov [rsp + 8], rax
+    xor r8d, r8d                # ":HASH", the line's (agents_hash_place), when it has one
+    mov rcx, [rsp]
+    cmp rcx, r13
+    je 2f
+    cmp byte ptr [r12 + rcx], ':'
+    jne 8f
+    inc qword ptr [rsp]
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rsp]
+    call num
+    test rax, rax
+    jle 8f
     cmp [rsp], r13
     jne 8f
-    mov rdi, rbx
+    mov r8, rax
+2:  mov rdi, rbx
     mov rsi, r14
     mov rdx, r15
-    mov ecx, eax
+    mov ecx, [rsp + 8]
     call agimg_place
     EPILOGUE
 1:  mov rdi, r12                # #ID
@@ -892,7 +912,17 @@ rec_bytes:
 3:  add rax, rcx
     cmp byte ptr [rax + r8], 10
     jne 7f
+    cmp qword ptr [rbx + AI_key], 0     # the same line as when the place was made (its hash)
+    je 4f
+    mov [rsp + 16], rax
     mov rdi, rax
+    mov rsi, r8
+    call agents_hash_place
+    cmp rax, [rbx + AI_key]
+    jne 7f
+    mov rax, [rsp + 16]
+    mov r8, [rbx + AI_plen]
+4:  mov rdi, rax
     mov rsi, r8
     call json_parse
     test rax, rax

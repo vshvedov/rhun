@@ -25,6 +25,9 @@
 
 .bss
 .p2align 3
+.globl agents_line_hash
+agents_line_hash: .quad 0      # the line being read (AS_line): its hash_line & 0xffffffffffff, 1 at least; 0 none
+.p2align 3
 sessions: .zero VEC_SIZE        # AS*
 pool: .zero VEC_SIZE            # owned sessions, including previously opened pages
 list_scroll: .long 0
@@ -2782,6 +2785,11 @@ FN session_update
     mov [rbx + AS_line], rax
     sub rdx, [rsp]
     mov [rbx + AS_linelen], rdx
+    mov rcx, [rsp]              # its hash: a place made from it is checked when read again (agentimg.s)
+    lea rdi, [r14 + rcx]
+    mov rsi, rdx
+    call agents_hash_place
+    mov [rip + agents_line_hash], rax
     mov rdi, rbx
     mov rcx, [rsp]
     lea rsi, [r14 + rcx]
@@ -2797,6 +2805,7 @@ FN session_update
 3:  # keep the tail
     mov qword ptr [rbx + AS_line], -1   # no line read: a row made now has no place
     mov qword ptr [rbx + AS_linelen], 0
+    mov qword ptr [rip + agents_line_hash], 0
     mov rcx, [rsp]
     mov rdx, r15
     sub rdx, rcx
@@ -7333,6 +7342,18 @@ wr_setup:
     add ecx, [rip + g_pmt + 4*MI_3]
     mov [rdi + WR_lh], ecx
     ret
+
+# FN agents_hash_place(ptr, len) -> rax a line's hash as a place carries it: hash_line's low 48 bits, 1 at least
+#   (agentimg.s checks a line read again by its place against it)
+FN agents_hash_place
+    sub rsp, 8
+    call hash_line
+    add rsp, 8
+    mov rcx, 0xffffffffffff
+    and rax, rcx
+    jnz 1f
+    inc eax
+1:  ret
 
 # agents_draw(x, y, w, h)
 FN agents_draw

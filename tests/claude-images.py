@@ -213,13 +213,37 @@ class ImagesTest(ImagesCase):
         [chip] = self.chips(row)
         kind, label, target = chip.split('\t')
         self.assertEqual((kind, label), ('i', '[Image]'))
-        self.assertRegex(target, r'^@\d+:\d+:0$')
+        self.assertRegex(target, r'^@\d+:\d+:0:\d+$')          # its line's place, its image, the line's hash
         self.until(lambda: ' thumb=1' in self.row_dump(row) or None, 'the reread row drew its picture')
         recs = self.images()['recs']
         self.assertEqual([r['kind'] for r in recs], ['place'], recs)
         self.assertEqual(recs[0]['size'], '300x200')
         self.command(f'agent-image-open {recs[0]["id"]}')
         self.until(lambda: re.search(r' image=300x200', self.command('print-state')), 'the reread picture opens')
+
+    def test_a_place_whose_line_changed_gives_no_picture(self):
+        """A place is the record's line by its offset and length: when the file was rewritten (another record now
+        lies there, as long, between line feeds) the picture is not read from it: none rather than a wrong one."""
+        self.start()
+        self.chat('hello')
+        self.send_image(self.put('a.png', flat_png(300, 200)))
+        sid = self.sid()
+        self.reread()
+        row = self.last_user_row()
+        [chip] = self.chips(row)
+        off, length = map(int, chip.split('\t')[2][1:].split(':')[:2])
+        path = self.work / '.claude/projects' / chat.slug(self.project) / (sid + '.jsonl')
+        data = path.read_bytes()
+        line = data[off:off + length]
+        uuid = re.search(rb'"uuid": ?"([0-9a-f-]{36})"', line).group(1)
+        other = bytes(b'0123456789abcdef'[(b'0123456789abcdef'.index(c) + 1) % 16] if c != ord('-') else c
+                      for c in uuid)
+        path.write_bytes(data[:off] + line.replace(uuid, other) + data[off + length:])
+        recs = self.images()['recs']
+        self.assertEqual([r['kind'] for r in recs], ['place'], recs)
+        self.command(f'agent-image-open {recs[0]["id"]}')
+        time.sleep(0.5)
+        self.assertNotIn(' image=', self.command('print-state'))
 
     def test_thumbs_go_with_their_rows(self):
         self.start()

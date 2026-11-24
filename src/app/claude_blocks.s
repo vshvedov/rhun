@@ -56,6 +56,8 @@
 tm_which: .long -1              # claude_text's part (-1: rows are being made)
 .bss
 .p2align 3
+kid_hash_keep: .quad 0          # agents_line_hash while a child's file is read
+.p2align 3
 cb_as: .quad 0                  # the conversation being read
 cb_at: .quad 0                  # the call a filler fills
 tm_sb: .quad 0                  # claude_text's buffer
@@ -2704,7 +2706,8 @@ place_hash:
 
 # media_chip(AS*, block, type jv): an image block of a prompt is the chip "[Image]" whose target is its place,
 #   "@OFF:LEN:N:HASH" (the record's line in the session's file, its n-th image, the line's hash: agentimg.s reads
-#   the picture again from it when the line read again is the same; "-" without a place), a document its title, else "Document"; any other block nothing
+#   the picture again from it when the line read again is the same; "-" without a place), a document its title,
+#   else "Document"; any other block nothing
 media_chip:
     PROLOGUE
     mov rbx, rdi
@@ -2741,6 +2744,7 @@ media_chip:
     lea rdi, [rip + t3]
     mov esi, [rip + img_n]
     call sb_push_u64
+    call place_hash             # ":HASH": the line's, checked when it is read again
     jmp 12f
 11: lea rdi, [rip + t3]
     mov esi, '-'
@@ -2851,6 +2855,7 @@ tool_pics:
     add esi, [rip + img_n]
     lea rdi, [rip + t3]
     call sb_push_u64
+    call place_hash
     jmp 5f
 3:  mov rdi, r15                # the stream's: decoded and kept
     lea rsi, [rip + .Lk_source]
@@ -3741,6 +3746,8 @@ FN claude_kids
     mov [rsp], rax
     mov rax, [rbx + AS_linelen]
     mov [rsp + 8], rax
+    mov rax, [rip + agents_line_hash]
+    mov [rip + kid_hash_keep], rax
     mov [rip + cb_as], rbx
     mov dword ptr [rip + cb_flags], ING_FILE
     mov dword ptr [rip + tm_which], -1
@@ -3762,6 +3769,12 @@ FN claude_kids
     mov [rbx + AS_linelen], rcx
     lea rdi, [r13 + r15]
     mov rsi, rcx
+    push rsi
+    push rdi
+    call agents_hash_place
+    mov [rip + agents_line_hash], rax
+    pop rdi
+    pop rsi
     call json_parse
     test rax, rax
     jz 6f
@@ -3776,6 +3789,8 @@ FN claude_kids
     mov [rbx + AS_line], rax
     mov rax, [rsp + 8]
     mov [rbx + AS_linelen], rax
+    mov rax, [rip + kid_hash_keep]
+    mov [rip + agents_line_hash], rax
     mov rdi, r13
     call mem_free
     xor r15d, r15d              # the children read: their records are in that file

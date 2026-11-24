@@ -124,8 +124,7 @@ class RewindTest(ForkCase):
         second = self.prompt_lines(sid)[1]['uuid']
         self.command('agent-prompt /undo')
         self.command('agent-dialog-pick 1')
-        self.until(lambda: 'Restore' in self.command('print-agent-dialog') and 'button' in self.command(
-            'print-agent-dialog'), 'the dry run')
+        self.until(lambda: 'text a.txt' in self.body(), 'the dry run')
         self.assertEqual(self.head()['title'], 'Rewind')
         self.assertEqual(self.body(), [
             'item[1] Restore code and conversation\tThe conversation will be forked.\t check',
@@ -154,8 +153,8 @@ class RewindTest(ForkCase):
         self.written()
         self.command('agent-prompt /rewind')
         self.command('agent-dialog-pick 2')
-        self.until(lambda: 'button 1 Restore primary' in self.body(), 'the dialog')
-        self.assertIn('text 1 line will be removed and 0 lines will be added across 1 file:', self.body())
+        self.until(lambda: 'text 1 line will be removed and 0 lines will be added across 1 file:' in self.body(),
+                   'the dry run')
         self.command('agent-dialog-press 2')
         self.assertEqual(self.head()['title'], 'Rewind to\u2026')
         self.assertIn('item[2] write a.txt one\t\tjust now', self.body())
@@ -165,7 +164,7 @@ class RewindTest(ForkCase):
         self.say('hello', 'again')
         self.command('agent-prompt /rewind')
         self.command('agent-dialog-pick 1')
-        self.until(lambda: 'button 1 Restore primary' in self.body(), 'the dialog')
+        self.until(lambda: 'button 1 Restore primary' in self.body() and 'Checking' not in ' '.join(self.body()), 'the dialog')
         self.assertEqual(self.body(), [
             'item[1] Restore conversation\tThe conversation will be forked. The code will be unchanged.\t check',
             'button 1 Restore primary', 'button 2 Never mind'])
@@ -175,7 +174,7 @@ class RewindTest(ForkCase):
         parent = self.prompt_lines(sid)[1]['parentUuid']
         self.command('agent-prompt /rewind')
         self.command('agent-dialog-pick 1')
-        self.until(lambda: 'button 1 Restore primary' in self.body(), 'the dialog')
+        self.until(lambda: 'button 1 Restore primary' in self.body() and 'Checking' not in ' '.join(self.body()), 'the dialog')
         self.command('agent-dialog-press 1')
         self.until(lambda: self.sid() != sid, 'the fork')
         self.assertEqual((self.project / 'a.txt').read_text(), 'one')
@@ -337,6 +336,8 @@ class RestartTest(ForkCase):
         self.command('agent-prompt linger 30')
         self.command('wait-agent working')
         sid = self.sid()
+        self.until(lambda: any(r['message']['content'][0].get('text') == 'linger 30' for r in self.prompt_lines(sid)),
+                   'the prompt in the file')             # (the fake writes it as its turn starts)
         self.quit()
         return sid
 

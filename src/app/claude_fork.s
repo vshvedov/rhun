@@ -2215,13 +2215,16 @@ FN claude_fork_rerun
     mov eax, 1
 1:  ret
 
-# FN claude_fork_record(AL*, record jv): a record while a start re-runs a cut turn: the first one with resume_reason
-#   begins the turn (ev_turn_begin) under the line saying so; the result ends the re-run and takes the
-#   conversation off the list
+# FN claude_fork_record(AL*, record jv) -> eax 1 when it took the record: a record while a start re-runs a cut
+#   turn. The CLI runs it right after initialize, so its records may come before rhun's handshake is over
+#   (STARTING): the first one with resume_reason makes the turn (the line saying so; WORKING once READY, else the
+#   turn counted until the handshake ends); its result ends the turn (taken here while STARTING, where a result
+#   would be a failed start) and takes the conversation off the list
 FN claude_fork_record
-    PROLOGUE 48
+    PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    xor r13d, r13d
     cmp rbx, [rip + claude_rerun_al]
     jne 9f
     mov rdi, r12
@@ -2240,8 +2243,14 @@ FN claude_fork_record
     test eax, eax
     jnz 5f
     cmp qword ptr [rbx + AL_turns], 0
+    je 1f
+    cmp dword ptr [rbx + AL_state], ALS_READY   # the handshake ended meanwhile: the turn works
     jne 9f
-    lea rdi, [rip + .Lr_continuing]
+    mov rdi, rbx
+    mov esi, ALS_WORKING
+    call agent_state_set
+    jmp 9f
+1:  lea rdi, [rip + .Lr_continuing]
     call strlen
     mov rdi, [rbx + AL_as]
     mov esi, R_META
@@ -2249,11 +2258,24 @@ FN claude_fork_record
     mov rcx, rax
     xor r8d, r8d
     call agents_msg_add
+    mov dword ptr [rip + g_dirty], 1
+    cmp dword ptr [rbx + AL_state], ALS_READY
+    jne 2f
     mov rdi, rbx
     call ev_turn_begin
-    EPILOGUE
+    jmp 9f
+2:  mov qword ptr [rbx + AL_turns], 1
+    jmp 9f
 5:  mov qword ptr [rip + claude_rerun_al], 0
-    call cut_load               # (the parse arena is the record's: nothing of it is used after this)
+    cmp dword ptr [rbx + AL_state], ALS_STARTING
+    jne 6f
+    mov rdi, rbx                # still starting: the turn ends here (h_result would fail the start)
+    mov esi, TE_DONE
+    xor edx, edx
+    xor ecx, ecx
+    call ev_turn_end
+    mov r13d, 1
+6:  call cut_load               # (nothing of the record is used after this)
     lea rdi, [rbx + AL_sid]
     call cut_find
     test rax, rax
@@ -2261,7 +2283,8 @@ FN claude_fork_record
     mov rdi, rax
     call cut_drop
     call cut_save
-9:  EPILOGUE
+9:  mov eax, r13d
+    EPILOGUE
 
 # ---------------- headless ----------------
 

@@ -2025,10 +2025,12 @@ cl_line:
     mov rdi, rbx
     mov rsi, r14
     call claude_fork_record
+    test eax, eax                       #   (1: it took the record)
+    jnz 6f
 5:  mov rdi, rbx
     mov rsi, r14
     call [r12 + 8]              # handler(AL*, record)
-    mov rdi, [rsp]              # (a handler may free the live record, never the conversation)
+6:  mov rdi, [rsp]              # (a handler may free the live record, never the conversation)
     xor esi, esi
     call agents_stamp
 8:  cmp r13, TRIM_AT

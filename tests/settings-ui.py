@@ -167,14 +167,14 @@ class SettingsUI(unittest.TestCase):
                 self.configure(section, key, 'original')
                 y = self.compact_row_y(section, key)
                 self.run_editor([f'click 240 {y}', f'key {MOD}+a', 'type ' + value,
-                                 'key Return'], width=480, height=13000)
+                                 'key Return'], width=480, height=14000)
                 self.assertEqual(self.value(section, key), value)
         for (section, key), choices in CHOICES.items():
             for index, value in enumerate(choices):
                 with self.subTest(setting=f'{section}.{key}', value=value):
                     self.configure()
                     y = self.compact_row_y(section, key) + index * 32
-                    self.run_editor([f'click 240 {y}'], width=480, height=13000)
+                    self.run_editor([f'click 240 {y}'], width=480, height=14000)
                     self.assertEqual(self.value(section, key), value)
 
     def test_inventory_requires_cases_for_every_setting(self):

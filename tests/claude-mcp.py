@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""rhun's in-process MCP server for Claude Code's chat and its hooks (phase 4 tasks 9 and 10), against the
+"""rhun's in-process MCP server for Claude Code's chat (phase 4 task 9), against the
 fake CLI (tests/scripts/fake-claude.py), over the control socket. It imports tests/claude-chat.py for its
 cases: every rhun gets its own HOME and XDG folders and an environment without CLAUDE* or ANTHROPIC*
 variables; the fake's config folder is the test's HOME, so nothing here writes the user's own Claude Code
@@ -27,7 +27,7 @@ _spec.loader.exec_module(chat)
 
 EXTS = ROOT / 'tests/ext/exts'
 # the SHA-256 of rhun's note (claude_mcp.s `note`, docs/guide.md prints it whole)
-NOTE_SHA = '01cde6935b01ca8207946e851a791a51b2f9cd27759f7f88296e182a95397983'
+NOTE_SHA = '2fc12b1fda3731ccb2e22b9688c027d089d55ce8d0dd913882f34ff06594c251'
 NOTIFIED = {'mcp_response': {'jsonrpc': '2.0', 'result': {}, 'id': 0}}
 SCHEMA = {'type': 'object', 'properties': {
     'uri': {'type': 'string', 'description': 'file:// URI of the one file to check. Omit to get every file '
@@ -431,7 +431,6 @@ class ToolsTest(McpCase):
         self.command(f'open {self.a}')
         tools = self.tools()
         self.assertEqual((tools['calls'], tools['asked'], tools['lists']), (0, 0, 0))
-
 
 
 if __name__ == '__main__':

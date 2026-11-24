@@ -948,6 +948,20 @@ class ParityTest(ToolCase):
         self.assertEqual(reread[:len(live)], live)                  # then rhun's own notes: unanswered, failed
         self.assertEqual([r[0].split(' ')[0] for r in reread[len(live):]], ['info', 'error'], reread)
 
+    def test_a_hooks_diagnostics_row(self):
+        # phase 4 task 10 (hookedit): the diagnostics row is made live from rhun's own answer to the hook (the
+        # stream carries no record of its context, finding 48) and, read again, from the file's attachment line
+        # after the call's result: the same row in the same place
+        (self.project / 'notes.txt').write_text('alpha\nbravo\n', encoding='utf-8')
+        self.start(self.claude_section('initial_mode = default\n'))
+        self.scenario('hookedit notes.txt', wait='waiting')
+        self.command('agent-test-problem %s 2 1 warning spell code=spell Unknown word: bravo'
+                     % (self.project / 'notes.txt'))
+        self.command('agent-card 1')
+        self.command('wait-agent ready 15000')
+        rows = self.compare('hookedit')
+        self.assertIn('Diagnostics', rows)
+
     def test_typed_rows_without_a_driver(self):
         self.start()
         self.scenario('tools')

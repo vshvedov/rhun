@@ -54,11 +54,12 @@ class ConfigTest(CfgCase):
                                 'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
                                 'claude.use_terminal', 'claude.ide', 'claude.spinner_verbs'])     # phase 5: two
         agents = [line for line in out.splitlines() if line.startswith('agents.')]
-        self.assertEqual(agents[-8:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
-                                      'agents.focus_view', 'agents.archive_after_days',    # (phase 6: the last)
+        self.assertEqual(agents[-9:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
+                                      'agents.focus_view', 'agents.archive_after_days',    # (phase 6)
                                       # phase 4 task 8: the selection chip's two, task 7's mentions
                                       'agents.attach_selection', 'agents.attach_open_file',
-                                      'agents.respect_gitignore'])
+                                      'agents.respect_gitignore',
+                                      'agents.autosave'])      # phase 4 task 10
         self.command('cmd toggle_word_wrap')            # a setting changed: the exit writes the file
         self.quit()
         saved = self.config.read_text(encoding='utf-8')

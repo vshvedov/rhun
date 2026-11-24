@@ -3453,7 +3453,9 @@ SCENARIOS.update({'bigerror': s_bigerror, 'hostilecrash': s_hostilecrash})
 # 1 s after the initialize answer, 0.5 s between its steps), error (unrecorded: after tools/list the fake also
 # asks resources/list and an unknown method, which a server without them answers with JSON-RPC errors);
 # FAKE_CLAUDE_HOOK_DEADLINE=MS (unrecorded: a callback not answered within MS counts as {"continue": true}; 2.1.330
-# sent no deadline_ms and waited); FAKE_CLAUDE_MCP_WAIT_MS (above).
+# sent no deadline_ms and waited); FAKE_CLAUDE_HOOK_CANCEL_MS=MS (task 10, unrecorded: a callback not answered
+# within MS is withdrawn with control_cancel_request, logged {"cancelled": ...}, and counts as {"continue": true});
+# FAKE_CLAUDE_MCP_WAIT_MS (above).
 P4_MEMBERS = ('hooks', 'sdkMcpServers', 'sdkMcpServerManifests', 'appendSystemPrompt', 'systemPromptSnapshot')
 MCP_KNOB = ENV.get('FAKE_CLAUDE_MCP', '')
 P4_SERVERS = {}                     # name -> {state: pending|connected|failed, tools: [...], next: JSON-RPC id, done: Event}
@@ -3717,10 +3719,10 @@ def p4_prompt_line(entry, prompt):
             {'type': 'text', 'text': '[Image: source: %s/%d.%s]' % (folder, n, kind)} for n, kind in images]}})
 
 
-def p4_callbacks(event, tool, tid, tool_input, response=None):
+def p4_callbacks(event, tool, tid, tool_input, response=None, agent=None):
     """48: the matching callbacks of event, sent together, then every answer awaited (FAKE_CLAUDE_HOOK_DEADLINE:
     at most that long each; else as long as it takes, tool_progress every 30 s). The answers in order (None:
-    withdrawn); [] without hooks."""
+    withdrawn); [] without hooks. agent: a subagent's id (its input has agent_id and agent_type, task 10)."""
     sent = []
     for matcher, ids in P4_HOOKS.get(event, []):
         try:
@@ -3732,15 +3734,18 @@ def p4_callbacks(event, tool, tid, tool_input, response=None):
             hook_input = {'session_id': SID, 'transcript_path': TRANSCRIPT, 'cwd': CWD,
                           'scratchpad_dir': '/tmp/claude-%d/%s/%s/scratchpad' % (
                               os.getuid() if hasattr(os, 'getuid') else 0, re.sub(r'[^A-Za-z0-9]', '-', CWD), SID),
-                          'prompt_id': TURN_UUID[0] or SID, 'permission_mode': MODE,
-                          'effort': {'level': current_effort() or 'medium'}, 'hook_event_name': event,
-                          'tool_name': tool, 'tool_input': tool_input}
+                          'prompt_id': TURN_UUID[0] or SID, 'permission_mode': MODE}
+            if agent:                   # task 10: a subagent's call (48: after permission_mode)
+                hook_input.update({'agent_id': agent, 'agent_type': 'general-purpose'})
+            hook_input.update({'effort': {'level': current_effort() or 'medium'}, 'hook_event_name': event,
+                               'tool_name': tool, 'tool_input': tool_input})
             if response is not None:
                 hook_input['tool_response'] = response
             hook_input['tool_use_id'] = tid
             if event == 'PostToolUse':
                 hook_input['duration_ms'] = 4
             rid = str(uuid.uuid4())
+            log(sent={'id': rid, 'subtype': 'hook_callback', 'callback': callback})     # task 10
             with COND:
                 P4_ANSWERS[rid] = None
                 emit({'type': 'control_request', 'request_id': rid, 'request': {
@@ -3748,8 +3753,15 @@ def p4_callbacks(event, tool, tid, tool_input, response=None):
             sent.append((rid, callback))
     answers = []
     deadline = ENV.get('FAKE_CLAUDE_HOOK_DEADLINE')
+    cancel_ms = ENV.get('FAKE_CLAUDE_HOOK_CANCEL_MS')       # task 10 (unrecorded): withdrawn after MS
     for rid, callback in sent:
-        if deadline:
+        if cancel_ms:
+            answer = p4_wait(rid, int(cancel_ms) / 1000, interruptible=True)
+            if answer is None and not CLOSED.is_set():
+                emit({'type': 'control_cancel_request', 'request_id': rid})
+                log(cancelled={'id': rid, 'callback': callback})
+                answer = {'continue': True}
+        elif deadline:
             answer = p4_wait(rid, int(deadline) / 1000, interruptible=True)
             if answer is None and not CLOSED.is_set() and not (INTERRUPT.is_set() and not DEAF.is_set()):
                 answer = {'continue': True}     # past the deadline the call goes on
@@ -3764,7 +3776,8 @@ def p4_callbacks(event, tool, tid, tool_input, response=None):
                     beat += 1
         with COND:
             P4_ANSWERS.pop(rid, None)
-        log(hook={'callback_id': callback, 'event': event, 'tool': tool, 'answer': answer})
+        log(hook=dict({'callback_id': callback, 'event': event, 'tool': tool, 'answer': answer},
+                      **({'agent': agent} if agent else {})))     # agent: task 10
         answers.append(answer)
     return answers
 
@@ -4122,6 +4135,36 @@ def s_edit2(prompt):
 SCENARIOS.update({'editjs': s_editjs, 'writejs': s_writejs, 'editlater': s_editlater, 'editnowrite': s_editnowrite,
                   'edit2': s_edit2})
 # ---- end of tasks 11 and 12 ----
+
+
+# task 10 (unrecorded as one sequence; each callback's shape is 48's): hooksub FILE: the main Edit's PreToolUse
+# callbacks, its can_use_tool (a card: the test changes the problems meanwhile), then a subagent's Edit of the same
+# file (agent_id "sub1") with its PreToolUse and PostToolUse callbacks, then the main Edit's PostToolUse. Nothing is
+# written to the file.
+def s_hooksub(prompt):
+    words = prompt.split()
+    path = p4_path(words[1] if len(words) > 1 else '', 'notes.txt')
+    first = (p4_lf(path) or '').split('\n', 1)[0]
+    edit = {'file_path': path, 'old_string': first, 'new_string': first, 'replace_all': False}
+    mid = message_start()
+    tid = tool_use(mid, 0, 'Edit', dict(edit))
+    message_end('tool_use')
+    p4_callbacks('PreToolUse', 'Edit', tid, edit)
+    answer = ask_request(request_id(), {
+        'subtype': 'can_use_tool', 'tool_name': 'Edit', 'display_name': 'Edit', 'input': edit,
+        'description': os.path.basename(path), 'tool_use_id': tid})
+    if answer is None:
+        p4_withdrawn_call(tid)
+        return
+    sub = 'toolu_sub_' + uuid.uuid4().hex[:12]
+    p4_callbacks('PreToolUse', 'Edit', sub, edit, agent='sub1')
+    p4_callbacks('PostToolUse', 'Edit', sub, edit, {'filePath': path}, agent='sub1')
+    p4_callbacks('PostToolUse', 'Edit', tid, edit, {'filePath': path})
+    tool_result(tid, 'The file %s has been updated successfully.' % path, False)
+    final('edited')
+
+
+SCENARIOS['hooksub'] = s_hooksub
 
 
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already

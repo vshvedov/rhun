@@ -791,8 +791,8 @@ Settings dialogs (claude-chat-p7b, 2026-11-24, CLI 2.1.330). Learned with HOME a
 temporary folder (not signed in: control requests are answered locally without it) and a temporary git
 repository; nothing touched ~/.claude (settings.json had the same SHA-256 before and after).
 
-80. mcp_status answers {mcpServers: [{name, status "connected"|"failed"|"needs-auth"|"pending"|"disabled",
-    config, scope, error?, tools?}]}: [] with none. A server added after the process started is not in it
+80. mcp_status answers {mcpServers: [{name, status, config, scope, error?, tools?}]}: [] with none; seen here
+    only "failed" and "disabled" (connected, needs-auth and pending are the extension's other badges). A server added after the process started is not in it
     (the extension says "It will be available in new sessions."). A failed stdio server (/usr/bin/false)
     and an unreachable HTTP one both showed "failed"; mcp_reconnect of the failed one: error "Connection
     closed". mcp_toggle {serverName, enabled false} wrote projects[cwd].disabledMcpServers ["NAME"] in

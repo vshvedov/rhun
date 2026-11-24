@@ -2470,5 +2470,11 @@ g_commands:
     COMMAND fold_level_1, "Fold Level 1", cmd_fold_level_1, ""
     COMMAND fold_level_2, "Fold Level 2", cmd_fold_level_2, ""
     COMMAND fold_level_3, "Fold Level 3", cmd_fold_level_3, ""
+    # Claude chat phase 5: terminal claude and terminal mode (claudeterm.s); agents_open and agents_focus_input
+    #   are phase 4's names (tasks 13 and 8 build their chat side)
+    COMMAND agents_open, "Agents: Open", cmd_agents_open, ""
+    COMMAND agents_focus_input, "Agents: Focus or Unfocus the Message Box", cmd_agents_focus_input, "ctrl+Escape"
+    COMMAND claude_open_terminal, "Claude: Open in Terminal", cmd_claude_open_terminal, ""
+    COMMAND claude_mention_terminal, "Claude: Insert @-Mention in Terminal", cmd_claude_mention_terminal, "ctrl+alt+k"
     .quad 0, 0, 0, 0
 

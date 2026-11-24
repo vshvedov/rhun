@@ -4747,11 +4747,11 @@ ENDSTRUCT RVO_SIZE
 .equ OFFER_REJECT, 2
 .equ OFFER_CLOSED, 3
 STRUCT
-F TX_old, 8             # an offer's text before and after (copied)
-F TX_oldlen, 8
-F TX_new, 8
-F TX_newlen, 8
-ENDSTRUCT TX_SIZE
+F OT_old, 8             # an offer's text before and after (copied; phase 4's plan calls it TX, a name wstx.s has)
+F OT_oldlen, 8
+F OT_new, 8
+F OT_newlen, 8
+ENDSTRUCT OT_SIZE
 # an MCP server (mcpsrv.s): a static table of tools, shared by every transport
 STRUCT
 F MS_name, 8            # cstr: serverInfo.name

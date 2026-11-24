@@ -202,6 +202,16 @@ term_metrics:
 9:  pop rbx
     ret
 
+# ---- Claude chat phase 5 ----
+# FN term_env_ide(cstr or 0): every terminal's program gets this "NAME=value" (the bridge for terminal claude's
+#   CLAUDE_CODE_SSE_PORT, ide_server.s), or nothing more: the shells' environment is made again for the next one
+FN term_env_ide
+    mov [rip + env_extras + 24], rdi
+    mov rdi, [rip + env]
+    mov qword ptr [rip + env], 0
+    jmp mem_free
+# ---- end ----
+
 # term_spawn() -> 1 if a shell started
 FN term_spawn
     PROLOGUE 48
@@ -5422,8 +5432,13 @@ rep_cell: .long -1
 .Lm_paste: .asciz "Paste"
 .Lm_clear: .asciz "Clear"
 .Lm_kill: .asciz "Kill Terminal"
+# Claude chat phase 5: the fourth entry is CLAUDE_CODE_SSE_PORT=N while the bridge for terminal claude
+#   listens (ide_server.s, term_env_ide), else 0
+.data
 .p2align 3
-env_extras: .quad .Lenv_term, .Lenv_color, .Lenv_prog, 0
+env_extras: .quad .Lenv_term, .Lenv_color, .Lenv_prog, 0, 0
+.section .rodata
+.p2align 3
 term_menu:
     .quad .Lm_copy, cmd_term_copy, .Lm_paste, cmd_term_paste, .Lm_clear, cmd_clear_terminal
     .quad .Lm_kill, cmd_kill_terminal, 0, 0

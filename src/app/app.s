@@ -2941,6 +2941,7 @@ timeout_fns:
     .quad ce_timeout              # custom editors: requests waiting for their program
     .quad newext_timeout          # New Extension: quick input events to take (newext.s)
     .quad submitext_timeout       # and Submit to Index's (submitext.s)
+    .quad ide_timeout             # Claude chat phase 5: the bridge for terminal claude (ide_server.s)
     .quad 0
 .text
 
@@ -2970,6 +2971,7 @@ FN app_tick
     call agent_conn_tick        # agents: connections to their programs (agent_conn.s)
     call agent_drv_tick         # agents: sessions rhun drives: starts that waited (agent_drv.s)
     call term_tick
+    call ide_tick               # Claude chat phase 5: the bridge for terminal claude (ide_server.s)
     call problems_tick          # documents opened since get their problems' marks
     call termproto_tick         # extensions' terminal output
     call git_tick

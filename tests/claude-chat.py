@@ -174,13 +174,15 @@ class SettingsTest(ChatCase):
         rows = [line for line in out.splitlines() if line.startswith('claude.')]
         self.assertEqual(rows, ['claude.chat', 'claude.executable', 'claude.wrapper', 'claude.initial_mode',
                                 'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
+                                'claude.use_terminal', 'claude.ide',     # phase 5
                                 'claude.spinner_verbs', 'claude.env.FOO=(set)', 'claude.env.ANSWER_2=(set)'])
         self.command('cmd toggle_word_wrap')         # a setting changed: the exit writes the file
         self.quit()
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(section(saved, 'claude'), [
             'chat = false', f'executable = {FAKE}', f'wrapper = {PYTHON}', 'initial_mode = plan',
-            'allow_bypass_permissions = false', 'prompt_suggestions = true', 'spinner_verbs = append',
+            'allow_bypass_permissions = false', 'prompt_suggestions = true', 'use_terminal = false', 'ide = true',
+            'spinner_verbs = append',
             'env.FOO = very-secret-value', 'env.ANSWER_2 = forty two'])
         self.assertIn('idle_stop_minutes = 15', section(saved, 'agents'))
 
@@ -216,7 +218,8 @@ class SettingsTest(ChatCase):
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(section(saved, 'claude'), [
             'chat = true', 'executable =', 'wrapper =', 'initial_mode = default', 'allow_bypass_permissions = false',
-            'prompt_suggestions = true', 'spinner_verbs = append', 'env.OK = fine'])
+            'prompt_suggestions = true', 'use_terminal = false', 'ide = true', 'spinner_verbs = append',
+            'env.OK = fine'])
         self.assertIn('idle_stop_minutes = 240', section(saved, 'agents'))
 
     def test_the_cli_default_mode_is_written_empty(self):
@@ -427,6 +430,8 @@ class SeamTest(ChatCase):
 
 
 MOD = 'cmd' if sys.platform == 'darwin' else 'ctrl'
+# the box's placeholder once nothing else is to be said (UI 1.2 (e), phase 5)
+FOCUS_HINT = ('\u2318 Esc' if sys.platform == 'darwin' else 'ctrl esc') + ' to focus or unfocus Claude'
 ROLES = ('user', 'agent', 'tool', 'result', 'error', 'info', 'thinking', 'meta', 'compact', 'unknown')
 PINNED = ['--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json',
           '--include-partial-messages', '--permission-prompt-tool=stdio', '--replay-user-messages',
@@ -1239,14 +1244,14 @@ class BoxLayoutTest(DrivenCase):
         self.assertEqual(self.placeholder(), 'placeholder=Start a conversation')
         self.command('agent-prompt hello')
         self.command('wait-agent ready')
-        self.assertEqual(self.placeholder(), 'placeholder=Message Claude Code')
+        self.assertEqual(self.placeholder(), 'placeholder=' + FOCUS_HINT)
         self.config.write_text(self.BASE + self.claude_section('prompt_suggestions = false\n') +
                                '[ui]\nagents_width = 240\n'
                                '[agents]\nfont_size = 30\n', encoding='utf-8')
-        self.until(lambda: self.placeholder() != 'placeholder=Message Claude Code', 'the reload', 10)
+        self.until(lambda: self.placeholder() != 'placeholder=' + FOCUS_HINT, 'the reload', 10)
         text = self.placeholder()[len('placeholder='):]
         self.assertTrue(text.endswith('\u2026'), text)  # cut at a character, an ellipsis after it
-        self.assertTrue('Message Claude Code'.startswith(text[:-1]) and len(text) > 1, text)
+        self.assertTrue(FOCUS_HINT.startswith(text[:-1]) and len(text) > 1, text)
 
     def test_the_box_keeps_its_room_at_every_size_and_width(self):
         self.start()

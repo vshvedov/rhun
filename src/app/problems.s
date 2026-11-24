@@ -37,6 +37,19 @@ doc_tmp: .zero 4096
 
 .text
 
+# ---- Claude chat phase 5: the store read by the bridge's getDiagnostics (edtools.s) ----
+# FN problems_count() -> rax how many problems the store holds
+FN problems_count
+    mov rax, [rip + probs + VEC_len]
+    ret
+
+# FN problems_at(i) -> rax the i-th problem (PR*, in the order they came; valid until the store changes)
+FN problems_at
+    imul rax, rdi, PR_SIZE
+    add rax, [rip + probs + VEC_ptr]
+    ret
+# ---- end ----
+
 # problems_source(key, label) -> PS*
 FN problems_source
     PROLOGUE

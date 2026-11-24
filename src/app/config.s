@@ -120,6 +120,10 @@ ts_seen: .long 1                        # cfg_agents_timestamps as the last read
 .globl cfg_agents_focus_view
 cfg_agents_focus_view: .long 0          # [agents] focus_view: runs of tool calls and thinking fold into a line
 fv_seen: .long 0                        # cfg_agents_focus_view as the last read left it
+# Claude chat phase 5: the bridge for terminal claude (ide_server.s) and terminal mode (claudeterm.s)
+.globl cfg_claude_ide, cfg_claude_use_terminal
+cfg_claude_ide: .long 1                 # [claude] ide: claude in rhun's terminal connects to rhun
+cfg_claude_use_terminal: .long 0        # [claude] use_terminal: Claude: Open starts claude in a terminal
 .p2align 3
 cfg_theme: .quad cfg_def_theme
 cfg_dark_theme: .quad cfg_def_theme
@@ -1039,6 +1043,9 @@ g_settings:
     SETTING .Ls_claude, initial_mode, ST_CHOICE, cfg_claude_initial_mode, 0, 5, 1, 0, "Permission mode", "The mode a conversation starts in.", g_claude_mode_opts
     SETTING .Ls_claude, allow_bypass_permissions, ST_BOOL, cfg_claude_allow_bypass, 0, 1, 1, 0, "Allow bypass permissions", "Offer Bypass permissions in the mode picker. Claude then runs commands without asking for approval."
     SETTING .Ls_claude, prompt_suggestions, ST_BOOL, cfg_claude_prompt_suggestions, 0, 1, 1, 0, "Prompt suggestions", "Claude suggests your next prompt after a reply. Tab takes it."
+    # Claude chat phase 5: the bridge for terminal claude and terminal mode
+    SETTING .Ls_claude, use_terminal, ST_BOOL, cfg_claude_use_terminal, 0, 1, 1, 0, "Use the terminal", "Claude: Open and Ctrl+Esc start claude in a new terminal instead of the chat."
+    SETTING .Ls_claude, ide, ST_BOOL, cfg_claude_ide, 0, 1, 1, 0, "Connect claude in the terminal", "claude started in rhun's terminal connects to rhun: it sees your selection, and its edits open as diffs to accept or reject."
     # the last [claude] row: the env pairs and the spinner_verb lines follow it (config_save, settings_dump)
     SETTING .Ls_claude, spinner_verbs, ST_CHOICE, cfg_claude_spinner_verbs, 0, 1, 1, 0, "Spinner verbs", "How the spinner_verb lines of the config file are used.", .Lspin_opts
     SETTING .Ls_terminal, shell, ST_STR, cfg_term_shell, 0, 0, 0, 0, "Shell", "Program the terminal runs. Empty uses $SHELL."

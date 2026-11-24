@@ -2917,7 +2917,7 @@ button:
 
 # ---------------- offers: rhun's own proposals for an owner ----------------
 
-# FN review_offer(RVO*, ctx, label cstr, path cstr or 0, TX*, show) -> rax the offer's id, or 0. One file:
+# FN review_offer(RVO*, ctx, label cstr, path cstr or 0, OT*, show) -> rax the offer's id, or 0. One file:
 #   its text before and after (copied, at most RVP_TEXT_MAX each). Its tab never takes the keys: with show
 #   1 it becomes the active tab unless a document has the keys (then, and with show 0, it opens behind the
 #   active tab); the keyboard stays where it was.
@@ -2929,10 +2929,10 @@ FN review_offer
     mov [rsp + 24], rcx
     mov [rsp + 32], r8
     mov [rsp + 40], r9d
-    mov rax, [r8 + TX_oldlen]
+    mov rax, [r8 + OT_oldlen]
     cmp rax, RVP_TEXT_MAX
     ja 8f
-    mov rax, [r8 + TX_newlen]
+    mov rax, [r8 + OT_newlen]
     cmp rax, RVP_TEXT_MAX
     ja 8f
     mov edi, RVP_SIZE
@@ -2971,13 +2971,13 @@ FN review_offer
     call dup_cstr
 2:  mov [r12 + RVF_name], rax
     mov rbx, [rsp + 32]
-    mov rdi, [rbx + TX_old]
-    mov rsi, [rbx + TX_oldlen]
+    mov rdi, [rbx + OT_old]
+    mov rsi, [rbx + OT_oldlen]
     call text_dup
     mov [r12 + RVF_old], rax
     mov [r12 + RVF_oldlen], rdx
-    mov rdi, [rbx + TX_new]
-    mov rsi, [rbx + TX_newlen]
+    mov rdi, [rbx + OT_new]
+    mov rsi, [rbx + OT_newlen]
     call text_dup
     mov [r12 + RVF_new], rax
     mov [r12 + RVF_newlen], rdx

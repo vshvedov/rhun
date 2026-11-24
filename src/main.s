@@ -191,6 +191,7 @@ FN main
     call remote_shutdown        # remote hosts: the askpass socket
     call ws_journal_cleanup     # wsedit: nothing can undo this session's workspace edits now
     call agents_shutdown
+    call ide_shutdown           # Claude chat phase 5: the bridge's lock file goes (ide_server.s)
     call ai_shutdown
     call session_remember_project
     call session_save

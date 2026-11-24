@@ -51,7 +51,7 @@ class ConfigTest(CfgCase):
         rows = [line for line in out.splitlines() if line.startswith('claude.')]
         self.assertEqual(rows, ['claude.chat', 'claude.executable', 'claude.wrapper', 'claude.initial_mode',
                                 'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
-                                'claude.spinner_verbs'])
+                                'claude.use_terminal', 'claude.ide', 'claude.spinner_verbs'])     # phase 5: two
         agents = [line for line in out.splitlines() if line.startswith('agents.')]
         self.assertEqual(agents[-4:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
                                       'agents.focus_view'])
@@ -60,7 +60,7 @@ class ConfigTest(CfgCase):
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(chat.section(saved, 'claude')[3:], [
             'initial_mode =', 'allow_bypass_permissions = false', 'prompt_suggestions = true',
-            'spinner_verbs = append'])
+            'use_terminal = false', 'ide = true', 'spinner_verbs = append'])
         self.assertEqual(chat.section(saved, 'agents')[-4:], [
             'ctrl_enter_sends = false', 'scroll_on_send = true', 'timestamps = true', 'focus_view = false'])
         # changed, they are written back as they are; the env pairs still follow the last [claude] row
@@ -71,7 +71,7 @@ class ConfigTest(CfgCase):
                            'focus_view = true\n')
         out = self.command('print-settings')
         rows = [line for line in out.splitlines() if line.startswith('claude.')]
-        self.assertEqual(rows[-5:], ['claude.prompt_suggestions', 'claude.spinner_verbs',
+        self.assertEqual(rows[-5:], ['claude.ide', 'claude.spinner_verbs',
                                      'claude.env.FOO=(set)', 'claude.spinner_verb=Zooming',
                                      'claude.spinner_verb=Whooshing'])
         self.command('cmd toggle_word_wrap')
@@ -79,7 +79,8 @@ class ConfigTest(CfgCase):
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(chat.section(saved, 'claude'), [
             'chat = true', f'executable = {chat.FAKE}', f'wrapper = {chat.PYTHON}', 'initial_mode = acceptEdits',
-            'allow_bypass_permissions = true', 'prompt_suggestions = false', 'spinner_verbs = replace',
+            'allow_bypass_permissions = true', 'prompt_suggestions = false', 'use_terminal = false', 'ide = true',
+            'spinner_verbs = replace',
             'env.FOO = bar', 'spinner_verb = Zooming', 'spinner_verb = Whooshing'])
         self.assertEqual(chat.section(saved, 'agents')[-4:], ['ctrl_enter_sends = true', 'scroll_on_send = false',
                                                               'timestamps = false', 'focus_view = true'])
@@ -1103,7 +1104,7 @@ class ComposerTest(MenuCase):
         self.command('agent-type x')                    # (the draft's conversation: sent from this window)
         self.command('wait-agent ready')
         self.command('key BackSpace')
-        self.assertEqual(self.placeholder(), 'Message Claude Code')
+        self.assertEqual(self.placeholder(), chat.FOCUS_HINT)
 
     def test_tab_takes_the_suggestion(self):
         self.start()
@@ -1123,7 +1124,7 @@ class ComposerTest(MenuCase):
         self.chat('hello')
         self.command('wait 300')
         self.assertIn(' suggest=0', self.command('print-agent-live'))
-        self.assertEqual(self.placeholder(), 'Message Claude Code')
+        self.assertEqual(self.placeholder(), chat.FOCUS_HINT)
         self.command('key Tab')
         self.assertEqual(self.text(), '')
 

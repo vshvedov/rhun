@@ -38,7 +38,7 @@ BOOLS = {
                'semantic_highlighting'),
     'files': 'trim_trailing_whitespace final_newline format_on_save restore_session restore_project',
     'agents': 'claude codex grok opencode ctrl_enter_sends scroll_on_send timestamps focus_view',
-    'claude': 'chat allow_bypass_permissions prompt_suggestions',
+    'claude': 'chat allow_bypass_permissions prompt_suggestions use_terminal ide',   # phase 5: the last two
     'git': 'enabled', 'updates': 'check',
     'testing': 'gutter',
     'debug': 'show_on_start keys_in_terminal',

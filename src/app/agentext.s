@@ -4283,7 +4283,12 @@ FN agentext_prompts_gone
 .Lnew_failed: .asciz "The new conversation could not be started."
 .Lph_reply: .asciz "Reply to the agent (Enter sends, Shift+Enter a new line)"
 .Lph_new: .asciz "Start a conversation"
-.Lph_claude: .asciz "Message Claude Code"
+# Claude chat phase 5: the extension's placeholder (e) once Ctrl+Esc (Cmd+Esc) exists (claudeterm.s)
+.ifdef MACOS
+.Lph_claude: .asciz "\xe2\x8c\x98 Esc to focus or unfocus Claude"
+.else
+.Lph_claude: .asciz "ctrl esc to focus or unfocus Claude"
+.endif
 .Ld_placeholder: .asciz "placeholder="
 .Lb_send: .asciz "Send"
 .Lrestore_gap: .asciz "\n\n"

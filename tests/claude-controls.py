@@ -2446,6 +2446,7 @@ class SeamWordsTest(unittest.TestCase):
             'claude_ingest': {'readers'},
             'claude_text': {'readers'},
             'claude_kids': {'readers'},
+            'claude_image': {'readers'},    # phase 4 task 6: the reader's fifth function
             'cfg_claude_chat': {'agent_drv_for_kind'},
             'cfg_claude_wrapper': {'failed_notice'},
             'cfg_agents_claude': {'agent_drv_unlisted'},

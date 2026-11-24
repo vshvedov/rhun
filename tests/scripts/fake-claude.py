@@ -4125,6 +4125,78 @@ DISCARDED = [False]                 # FAKE_CLAUDE_DISCARD_HELD: one held message
 QUIET = set()                       # FAKE_CLAUDE_NO_LIFECYCLE=local: the uuids of the CLI's own commands
 
 
+# ---- p7c (claude-chat-p7c: tests/claude-panels.py): the side question, Claude in Chrome, Remote Control ----
+def side_question(rid, request):
+    """side_question {question, history?} (RECORDED, README finding 100: question a string, history an array of
+    {question, response} strings, the answer {response, synthetic: false}, a control_request_progress {status
+    started} before it). The answer is "side: QUESTION" (" (N before)" with a history of N) after
+    FAKE_CLAUDE_SIDE_MS (default 100; unrecorded timing). Unrecorded knobs by the question's first word: "fail"
+    answers an error ("side question failed"), "empty" answers {response: null, synthetic: true} (the binary's
+    no_response case), "slow" waits 3 s, "never" never answers. Logged {"side": {question, history}}."""
+    question = request.get('question') if isinstance(request.get('question'), str) else ''
+    history = request.get('history')
+    log(side={'question': question, 'history': history})
+    if not isinstance(history, list) or any(not isinstance(h, dict) or not isinstance(h.get('question'), str)
+                                            or not isinstance(h.get('response'), str) for h in history):
+        if history is not None:     # the CLI's own words for a history it cannot read (finding 100)
+            respond_error(rid, "undefined is not an object (evaluating 'q.response.endsWith')")
+            return
+    emit({'type': 'system', 'subtype': 'control_request_progress', 'request_id': rid, 'status': 'started',
+          'uuid': str(uuid.uuid4()), 'session_id': SID})
+    word = (question.split() or [''])[0]
+    if word == 'never':
+        return
+    delay = 3.0 if word == 'slow' else int(ENV.get('FAKE_CLAUDE_SIDE_MS', '100')) / 1000
+
+    def answer():
+        if word == 'fail':
+            respond_error(rid, 'side question failed')
+        elif word == 'empty':
+            respond(rid, {'response': None, 'synthetic': True})
+        else:
+            after = ' (%d before)' % len(history) if history else ''
+            respond(rid, {'response': 'side: ' + question + after, 'synthetic': False})
+    threading.Timer(delay, answer).start()
+
+
+def chrome_dialog(rid, request):
+    """get_chrome_dialog (RECORDED, README finding 101, on an account with the extension not installed).
+    FAKE_CLAUDE_CHROME (unrecorded): "installed" says installed, "connected" installed and connected, "denied"
+    allowed false."""
+    kind = ENV.get('FAKE_CLAUDE_CHROME', '')
+    respond(rid, {'allowed': kind != 'denied', 'subscriber': True, 'wsl': False,
+                  'installed': kind in ('installed', 'connected'), 'connected': kind == 'connected',
+                  'enabled_by_default': True, 'at_startup': True,
+                  'urls': {'install': 'https://claude.ai/chrome', 'reconnect': 'https://clau.de/chrome/reconnect',
+                           'permissions': 'https://clau.de/chrome/permissions'}})
+
+
+def remote_control(rid, request):
+    """remote_control {enabled} (UNRECORDED: enabling it publishes the session to the account; the shapes are
+    the CLI binary's: the answer, then system/bridge_state {state, detail, bridge_epoch}). Enabled: an empty
+    success, then after 50 ms bridge_state connected. FAKE_CLAUDE_REMOTE: "fail" answers an error ("Remote
+    Control is not available for this account"), "bridgefail" a success and then bridge_state failed with the
+    detail "Could not reach claude.ai". Logged {"remote": enabled}."""
+    enabled = request.get('enabled') is True
+    log(remote=enabled)
+    kind = ENV.get('FAKE_CLAUDE_REMOTE', '')
+    if enabled and kind == 'fail':
+        respond_error(rid, 'Remote Control is not available for this account')
+        return
+    respond(rid, {'bridge_session_id': 'cse_fake'} if enabled else {})
+    if enabled:
+        def later():
+            state = {'state': 'failed', 'detail': 'Could not reach claude.ai', 'failure_kind': 'terminal'} \
+                if kind == 'bridgefail' else {'state': 'connected'}
+            emit(dict({'type': 'system', 'subtype': 'bridge_state'}, **state, bridge_epoch=1,
+                      uuid=str(uuid.uuid4()), session_id=SID))
+        threading.Timer(0.05, later).start()
+
+
+P7C_REQUESTS = {'side_question': side_question, 'get_chrome_dialog': chrome_dialog, 'remote_control': remote_control}
+# ---- end p7c ----
+
+
 def handle(message):
     global MODE
     kind = message.get('type')
@@ -4231,6 +4303,8 @@ def handle(message):
             to_background(rid, request.get('tool_use_id'))
         elif sub == 'mcp_status':           # phase 4 (44, 51): the SDK servers
             respond(rid, {'mcpServers': p4_status()})
+        elif sub in P7C_REQUESTS:           # p7c: the side question, Chrome, Remote Control
+            P7C_REQUESTS[sub](rid, request)
         else:
             respond_error(rid, 'Unsupported control request subtype: %s' % sub)
     elif kind == 'control_response':

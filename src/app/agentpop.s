@@ -776,6 +776,14 @@ build_menu:
     cmp dword ptr [r13 + ACM_act], ACT_COPY     # the driver's own that have no other target: listed
     je 1f
     cmp dword ptr [r13 + ACM_act], ACT_PLAN
+    je 1f
+    cmp dword ptr [r13 + ACM_act], ACT_BTW      # p7c: /btw, /tasks, /remote-control, /chrome (not /bookmarks:
+    je 1f                                       #   a shortcut of the extension's, not listed)
+    cmp dword ptr [r13 + ACM_act], ACT_TASKS
+    je 1f
+    cmp dword ptr [r13 + ACM_act], ACT_REMOTE
+    je 1f
+    cmp dword ptr [r13 + ACM_act], ACT_CHROME
     jne .Lbm_cmd
 1:  lea rdi, [rip + .Lslash]
     mov rsi, [r13 + ACM_name]
@@ -2212,6 +2220,14 @@ FN agentpop_run
     je .Lr_noconv
     cmp r13d, ACT_FOCUSVIEW     # focus view: the panel's setting, whatever the driver (agentfold.s)
     je .Lr_focus
+    cmp r13d, ACT_BTW           # p7c: the side panels and the agent map are the panel's (agentside.s)
+    je .Lr_side
+    cmp r13d, ACT_BOOKMARKS
+    je .Lr_side
+    cmp r13d, ACT_TASKS
+    je .Lr_side
+    cmp r13d, ACT_BASHES
+    je .Lr_side
     test rbx, rbx
     jnz 1f
     cmp r13d, ACT_THINKING      # a draft's switches: the project's choices, no conversation made
@@ -2275,6 +2291,13 @@ FN agentpop_run
     EPILOGUE
 .Lr_mention:
     call agatt_add_context
+    EPILOGUE
+.Lr_side:                      # p7c (agentside.s)
+    mov rdi, rbx
+    mov esi, r13d
+    mov rdx, r14
+    mov rcx, r15
+    call agside_run
     EPILOGUE
 .Lr_models:
     mov edi, APP_MODELS

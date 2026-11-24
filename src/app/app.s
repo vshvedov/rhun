@@ -2384,10 +2384,9 @@ FN app_on_paste
     jmp 9f
 5:  cmp dword ptr [rip + g_focus], FOCUS_AGENTS
     jne 51f
-    mov rdi, rbx                # the panel's dialog's field, else the session list's, else its card's
-                                #   (agentdlg.s, agentlist.s, agentcard.s)
-    mov rsi, r12
-    call agentdlg_paste
+    mov rdi, rbx                # the side question's field (p7c: agentside.s), else the panel's dialog's
+    mov rsi, r12                #   field, else the session list's, else its card's (agentdlg.s,
+    call agside_paste           #   agentlist.s, agentcard.s)
     jmp 9f
 51: mov rdi, rbx                # an extension's version control message box (scmpanel.s)
     mov rsi, r12
@@ -2448,7 +2447,7 @@ FN focused_field
     cmp eax, FOCUS_AGENT_INPUT
     je agentext_field
     cmp eax, FOCUS_AGENTS
-    je agentdlg_field           # the panel's dialog's field, else the session list's, else its card's
+    je agside_field             # the side question's field, else the dialog's, the session list's or the card's
     xor eax, eax
     ret
 1:  sub rsp, 8                  # an extension's version control message box (scmpanel.s), else a

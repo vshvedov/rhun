@@ -3563,6 +3563,12 @@ FN agents_key
     call agentdlg_key           # a dialog over the panel takes its keys before anything (agentdlg.s)
     test eax, eax
     jnz 5f
+    mov edi, r12d               # p7c: then a side panel with the keyboard (agentside.s)
+    mov esi, r13d
+    mov edx, r14d
+    call agside_key
+    test eax, eax
+    jnz 5f
     mov edi, r12d
     mov esi, r13d
     mov edx, r14d
@@ -7299,11 +7305,15 @@ FN agents_draw
     jmp 9f
 2:  cmp qword ptr [rip + view], 0
     jl 1f
-    mov edi, [rsp]
-    mov esi, [rsp + 4]
-    mov edx, [rsp + 8]
-    mov ecx, [rsp + 12]
+    lea rdi, [rsp]              # p7c: a side panel beside the conversation or above it (agentside.s)
+    lea rsi, [rsp + 16]
+    call agside_split
+    mov edi, [rsp + 16]
+    mov esi, [rsp + 20]
+    mov edx, [rsp + 24]
+    mov ecx, [rsp + 28]
     call thread_draw
+    call agside_draw
     jmp 9f
 1:  mov edi, [rsp]
     mov esi, [rsp + 4]
@@ -8267,7 +8277,17 @@ draw_msg:
     call stamp_draw
     add eax, [rip + g_pmt + 4*MI_8]
     mov [rsp + 100], eax
-21: # the model of the replies from here on, where it changed
+21: mov rdi, rbx                # p7c: a reply's bookmark button, left of its time (agentside.s)
+    mov esi, r15d
+    mov edx, r15d
+    add edx, [r14 + 32]
+    sub edx, [rsp + 100]
+    mov ecx, r12d
+    add ecx, [rip + g_pmt + 4*MI_4]
+    mov r8d, r13d
+    call agbook_btn
+    add [rsp + 100], eax
+    # the model of the replies from here on, where it changed
     cmp dword ptr [rbx + AM_role], R_ASSIST
     jne 3f
     mov rdi, [rbx + AM_name]

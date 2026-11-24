@@ -574,7 +574,8 @@ class MenuTest(MenuCase):
         self.assertIn(('Slash Commands', '/plan', 'Turn on plan mode or view the plan', '[open|<description>]', '-'),
                       rows)
         slash = [r[1] for r in rows if r[0] == 'Slash Commands']
-        self.assertEqual(slash, ['/compact', '/context', '/usage', '/plan', '/copy'])
+        self.assertEqual(slash, ['/compact', '/context', '/usage', '/plan', '/copy',
+                                 '/btw', '/tasks', '/remote-control', '/chrome'])    # p7c's (claude-panels.py)
         self.assertNotIn('/clear', slash)                            # a target of its own: not listed twice
         self.assertIn('foot v2.1.330', self.menu())
         self.assertEqual([r for r in self.records() if r.get('stdin') and '"/' in r['stdin']], [])

@@ -3182,6 +3182,12 @@ ai_ctl:
     .quad .Lc_print_agent_row_chips, c_print_agent_row_chips, .Lc_print_agent_bufs, c_print_agent_bufs
     .quad .Lc_agent_test_caps, c_agent_test_caps
     .quad .Lc_print_agent_attachments_fit, c_print_agent_attachments_fit   # task 3
+    # p7c, the side panels and Remote Control (agentside.s, claude_side.s): agent-side btw [Q] | bookmarks |
+    #   close, agent-bookmark N, agent-side-pick N | show | remove, agent-side-size B S, print-agent-side
+    #   [fit], print-agent-remote
+    .quad agside_n_open, agside_c_open, agside_n_bookmark, agside_c_bookmark
+    .quad agside_n_pick, agside_c_pick, agside_n_size, agside_c_size
+    .quad agside_n_print, agside_c_print, claude_side_n_print, claude_side_c_print
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

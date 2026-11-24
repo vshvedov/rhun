@@ -274,6 +274,8 @@ FN agent_state_set
     jne 9f
 2:  mov rdi, rbx                # a dialog waiting for its process fails, one shown for it closes (agentdlg.s)
     call agentdlg_ended
+    mov rdi, rbx                # p7c: a side question waiting for it fails (agentside.s)
+    call agside_ended
     mov rdi, rbx
     mov rax, [rbx + AL_drv]
     call [rax + DRV_ended]
@@ -287,6 +289,8 @@ live_free:
     call agentpop_gone
     mov rdi, rbx                # a dialog's wait on it ends (agentdlg.s)
     call agentdlg_gone
+    mov rdi, rbx                # p7c: and a side question's (agentside.s)
+    call agside_gone
     lea rdi, [rbx + AL_cn]
     call conn_close
     mov rdi, rbx
@@ -569,6 +573,8 @@ FN agent_closed
     call agentext_row_gone
     mov rdi, rbx                # a dialog opened for it closes (agentdlg.s)
     call agentdlg_gone
+    mov rdi, rbx                # p7c: its side questions are cancelled, its agent map closes (agentside.s)
+    call agside_gone
     mov r12, [rbx + AS_live]
     test r12, r12
     jz 9f
@@ -1576,6 +1582,10 @@ own_card:
     call agentext_card
     EPILOGUE
 
+# FN agent_own_card(AL*, kind, prompt ptr, len, opts cstr*, n): own_card for a driver (p7c: the hand-off)
+FN agent_own_card
+    jmp own_card
+
 # own_drop(AL*): rhun's own card goes (from the screen when it shows), unanswered
 own_drop:
     PROLOGUE
@@ -1603,6 +1613,17 @@ own_answer:
     mov rbx, rdi
     mov r12d, esi
     mov r13, rdx
+    cmp r12d, AQK_HANDOFF       # p7c: the hand-off card is the driver's (DRV_action ACT_HANDANS)
+    jne 0f
+    call own_drop
+    mov rdi, rbx
+    mov esi, ACT_HANDANS
+    mov rdx, r13
+    xor ecx, ecx
+    mov rax, [rbx + AL_drv]
+    call [rax + DRV_action]
+    EPILOGUE
+0:
     cmp r12d, AQK_SIGNIN
     je .Loa_signin
     cmp r12d, AQK_FAILED
@@ -1844,7 +1865,8 @@ idle_base:
     jne 1f
     cmp qword ptr [rdi + AL_turns], 0
     jne 1f
-    inc eax
+    call agside_busy            # p7c: no side question waits for it (agentside.s; a leaf: eax, rcx, rdx)
+    xor eax, 1
 1:  ret
 
 # release(AL*): rhun ends its program politely (the stop sequence); the end is no failure (ALF_ENDING)
@@ -2217,6 +2239,8 @@ FN ev_ready
     jnz 9f                      # a start given up (start_cancel): it is ending, nothing goes
     mov rdi, rbx                # a dialog that waited for the process asks it now (agentdlg.s)
     call agentdlg_ready
+    mov rdi, rbx                # p7c: side questions that waited for it go (agentside.s)
+    call agside_ready
     mov esi, ALS_READY
     cmp qword ptr [rbx + AL_queue + VEC_len], 0
     je 1f
@@ -3540,6 +3564,7 @@ FN agent_drv_shutdown
     PROLOGUE
     call agentpop_close         # a popup reads those records: it closes first (agentpop.s)
     call agentcfg_flush         # each driver's lists and choices to their project's file (agentcfg.s)
+    call agside_flush           # p7c: the bookmarks and side questions to theirs (agentside.s)
     call claude_auth_end        # the sign-in question, if it runs
     mov dword ptr [rip + trust_answered], 0     # another project is asked again
 1:  mov rcx, [rip + lives + VEC_len]

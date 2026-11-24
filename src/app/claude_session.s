@@ -2673,6 +2673,8 @@ shows_fast:
 #   ACT_SETTINGS (Settings at Claude Code's rows), ACT_HELP (the extension's help docs, open_help in
 #   extension.js @3355805, asked before they open); anything else 0
 FN claude_action
+    cmp esi, ACT_BTW            # p7c: the side panels', Chrome's, Remote Control's, the hand-off's
+    jae claude_side_action      #   (claude_side.s)
     PROLOGUE
     mov rbx, rdi
     mov r12d, esi
@@ -4051,6 +4053,15 @@ menu_tbl:
     .quad aghead_m_resume, aghead_m_resume_d
     .long APK_ROW, APRF_FILTERONLY
     .quad 0
+    # p7c (claude_side.s, agentside.s): Bookmarks, Claude in Chrome
+    .long APS_CONTEXT, ACT_BOOKMARKS
+    .quad .Lm_bookmarks, .Lm_bookmarks_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CUSTOMIZE, ACT_CHROME
+    .quad .Lm_chrome, .Lm_chrome_d
+    .long APK_ROW, 0
+    .quad 0
 menu_end:
 local_cmds:
     .quad aghead_n_resume, aghead_d_resume, .Lempty, ACT_RESUME
@@ -4070,7 +4081,34 @@ local_cmds:
     .quad .Ln_memory, .Ld_memory, .Lempty, ACT_MEMORY
     .quad .Ln_usage, .Ld_usage, .Lempty, ACT_USAGE
     .quad .Ln_context, .Ld_context, .Lempty, ACT_CONTEXT
+    # p7c (agentside.s, agentmap.s, claude_side.s): the side panels, the agent map, Remote Control, Chrome, the
+    #   hand-off to the terminal
+    .quad .Ln_btw, .Ld_btw, .Lh_btw, ACT_BTW
+    .quad .Ln_tasks, .Ld_tasks, .Lempty, ACT_TASKS
+    .quad .Ln_bashes, .Ld_tasks, .Lempty, ACT_BASHES
+    .quad .Ln_bookmarks, .Lm_bookmarks_d, .Lempty, ACT_BOOKMARKS
+    .quad .Ln_remote, .Ld_remote, .Lempty, ACT_REMOTE
+    .quad .Ln_rc, .Ld_remote, .Lempty, ACT_RC
+    .quad .Ln_chrome, .Lm_chrome_d, .Lempty, ACT_CHROME
+    .quad .Ln_agents, .Ld_agents, .Lempty, ACT_HANDOFF
     .quad 0, 0, 0, 0
+.Ln_btw: .asciz "btw"
+.Ld_btw: .asciz "Ask a quick side question without interrupting the main conversation"
+.Lh_btw: .asciz "[question]"
+.Ln_tasks: .asciz "tasks"
+.Ln_bashes: .asciz "bashes"
+.Ld_tasks: .asciz "View and manage everything running in the background"
+.Ln_bookmarks: .asciz "bookmarks"
+.Lm_bookmarks: .asciz "Bookmarks"
+.Lm_bookmarks_d: .asciz "Show your bookmarked responses beside the conversation"
+.Ln_remote: .asciz "remote-control"
+.Ln_rc: .asciz "rc"
+.Ld_remote: .asciz "View and control this session from claude.ai/code"
+.Ln_chrome: .asciz "chrome"
+.Lm_chrome: .asciz "Claude in Chrome"
+.Lm_chrome_d: .asciz "Open Claude in Chrome settings"
+.Ln_agents: .asciz "agents"
+.Ld_agents: .asciz "Manage agent configurations (in the terminal)"
 .Lempty: .asciz ""
 .Ln_clear: .asciz "clear"
 .Ld_clear: .asciz "Start a new conversation"

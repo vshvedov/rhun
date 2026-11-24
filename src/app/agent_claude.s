@@ -1745,7 +1745,18 @@ cl_terminal:
 2:  lea rdi, [rip + psb]
     mov edx, 1
     call sh_word
-    test r12d, r12d
+    mov rsi, [rip + claude_term_extra]  # p7c: the hand-off's command after the program (claude_side.s)
+    test rsi, rsi
+    jz 21f
+    mov [rip + cl_extra_tmp], rsi
+    lea rdi, [rip + psb]
+    mov esi, ' '
+    call sb_push_byte
+    lea rdi, [rip + psb]
+    mov rsi, [rip + cl_extra_tmp]
+    xor edx, edx
+    call sh_word
+21: test r12d, r12d
     jz 3f
     lea rsi, [rip + .Lw_login]
     cmp r12d, 2                 # 2: its sign-out
@@ -2389,6 +2400,9 @@ h_system:
     mov rsi, r12                #   (claude_blocks.s)
     mov edx, ING_LIVE
     call claude_ingest
+    mov rdi, rbx                # p7c: Remote Control's bridge_state (claude_side.s)
+    mov rsi, r12
+    call claude_side_system
     mov rdi, r12
     lea rsi, [rip + .Lk_subtype]
     call json_get
@@ -3741,7 +3755,15 @@ h_response:
     mov rdi, rbx
     mov rsi, rax
     call out_take
-    cmp eax, OA_TASK_STOP       # task 11: stop_task, background_tasks
+    cmp eax, OA_SIDE_FIRST      # p7c: the side question, Chrome, Remote Control (claude_side.s)
+    jb 31f
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, eax
+    mov rcx, r15
+    call claude_side_answer
+    jmp 9f
+31: cmp eax, OA_TASK_STOP       # task 11: stop_task, background_tasks
     jb 32f
     cmp eax, OA_TASK_BG
     ja 32f
@@ -4162,6 +4184,38 @@ task_answer:
     lea rdi, [rip + .Ltask_bg_ended]
 8:  call app_toast
 9:  EPILOGUE
+
+# ---- phase 7 part 3 (claude-chat-p7c): claude_side.s's control requests ----
+# FN claude_side_req(AL*, act OA_SIDE_*, subtype cstr, fill fn or 0) -> eax 1 written, edx its number: a
+#   control request {"subtype": S, ...} whose members fill(cw) writes; its answer goes to claude_side_answer
+FN claude_side_req
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rdx
+    mov r14, rcx
+    mov rax, [rbx + AL_next]
+    mov [rsp], rax
+    mov rdi, rbx
+    mov esi, r12d
+    call req_begin
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, r13
+    call jw_cstr
+    test r14, r14
+    jz 1f
+    lea rdi, [rip + cw]
+    call r14
+1:  mov rdi, rbx
+    call req_end
+    mov rdx, [rsp]
+    EPILOGUE
+.bss
+cl_extra_tmp: .quad 0
+.text
 
 .section .rodata
 .p2align 3

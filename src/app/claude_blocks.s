@@ -1213,12 +1213,42 @@ task_note:
     jz 7f
     mov rdi, rbx
     mov rsi, rax
-    xor ecx, ecx
-    call meta_row
+    call meta_once
 7:  mov eax, 1
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
+
+# meta_once(AS*, ptr, len): a task's end as a meta line, unless the conversation's last row is that line
+#   already: live, the stream's task_notification made it (claude_task) and the replayed <task-notification>
+#   string comes after it (task_note); the file has the string only
+meta_once:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rcx, [rbx + AS_msgs + VEC_len]
+    test rcx, rcx
+    jz 1f
+    dec rcx
+    imul rax, rcx, AM_SIZE
+    add rax, [rbx + AS_msgs + VEC_ptr]
+    cmp dword ptr [rax + AM_role], R_META
+    jne 1f
+    cmp [rax + AM_len], r13
+    jne 1f
+    mov rdi, [rax + AM_text]
+    mov rsi, r12
+    mov rdx, r13
+    call memeq
+    test eax, eax
+    jnz 9f
+1:  mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    xor ecx, ecx
+    call meta_row
+9:  EPILOGUE
 
 # meta_row(AS*, ptr, len, AMF_* flags): a grey line (R_META)
 meta_row:
@@ -3155,12 +3185,9 @@ FN claude_task
     call jstr
     test rdx, rdx
     jz 8f
-    mov rdi, rbx
-    mov esi, R_META
-    mov rcx, rdx
-    mov rdx, rax
-    xor r8d, r8d
-    call agents_row_add
+    mov rdi, rbx                # (once: the replayed <task-notification> may have made it, task_note)
+    mov rsi, rax
+    call meta_once
 8:  mov rdi, rbx
     mov rsi, r14
     call agtask_touch

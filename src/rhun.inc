@@ -3631,19 +3631,23 @@ ENDSTRUCT CD_SIZE
 .equ CDW_TAB_REJECT, 2
 .equ CDW_TAB_CLOSED, 3
 .equ CDW_REVERTED, 4
-# RVO: an offer's owner (static): done(ctx, OFFER_*, text ptr, len, edited) -> eax 1 taken, 0 again later;
-#   locked(ctx) -> eax ms its card's lock still lasts (0: decisions may be taken)
+# RVO: an offer's owner (static; review.s review_offer): the permission card (agentoffer.s), the bridge
+#   (edtools.s)
 STRUCT
-F RVO_done, 8
-F RVO_locked, 8
+F RVO_done, 8           # fn(rdi ctx, esi OFFER_*, rdx text ptr, rcx len, r8d edited) -> eax 1 taken, 0 again
+                        #   later; called from review_tick (or at once for the owner's review_offer_reject)
+F RVO_locked, 8         # fn(rdi ctx) -> eax ms no decision may be taken yet (a card's lock), 0 none; or 0
+F RVO_name, 8           # cstr or 0: the owner, as the Review tab's title names it
+F RVO_flags, 8          # RVOF_*
 ENDSTRUCT RVO_SIZE
-# TX: two texts, before and after (review_offer copies them)
+.equ RVOF_DECIDED_ENDS, 1       # the last change decided one at a time decides the offer (no final Accept)
+# OT: an offer's two texts, before and after (review_offer copies them; not TX: wstx.s's transactions)
 STRUCT
-F TX_old, 8
-F TX_oldlen, 8
-F TX_new, 8
-F TX_newlen, 8
-ENDSTRUCT TX_SIZE
+F OT_old, 8
+F OT_oldlen, 8
+F OT_new, 8
+F OT_newlen, 8
+ENDSTRUCT OT_SIZE
 # ---- end of tasks 11 and 12 ----
 .equ CARD_ADVANCE_MS, 300       # the question card: a single choice moves to the next question after this
 .equ CDQ_OPTS_MAX, 16           # the question card: options a question may have (more: not shown)
@@ -4768,21 +4772,7 @@ ENDSTRUCT VI_SIZE
 .equ VTM_CARET, 2
 .equ VT_LINE_MAX, 256           # inlays on one line
 # ---- Claude chat phase 5, the bridge for terminal claude (ide_server.s, mcpsrv.s, edtools.s): begin ----
-# an offer's owner (review.s review_offer; the interface of phase 4's task 11)
-STRUCT
-F RVO_done, 8           # fn(rdi ctx, esi OFFER_*, rdx text ptr, rcx len, r8d edited): called once
-F RVO_locked, 8         # fn(rdi ctx) -> eax 1 while no decision may be taken yet, or 0 (none)
-F RVO_name, 8           # cstr: the owner, as the Review tab's title names it
-ENDSTRUCT RVO_SIZE
-.equ OFFER_ACCEPT, 1
-.equ OFFER_REJECT, 2
-.equ OFFER_CLOSED, 3
-STRUCT
-F OT_old, 8             # an offer's text before and after (copied; phase 4's plan calls it TX, a name wstx.s has)
-F OT_oldlen, 8
-F OT_new, 8
-F OT_newlen, 8
-ENDSTRUCT OT_SIZE
+# an offer for the bridge: RVO, OT and OFFER_* are with phase 4's (review.s review_offer)
 # an MCP server (mcpsrv.s): a static table of tools, shared by every transport
 STRUCT
 F MS_name, 8            # cstr: serverInfo.name

@@ -15,7 +15,7 @@
 # Nothing here knows a driver: the path and the two texts come from it (ev_offer), the label is the driver's
 # name and the file's name.
 #
-#   agoffer_open(AS*, AQ*, path cstr, TX*, flags OFF_*) -> eax 1 offered (or offered already)
+#   agoffer_open(AS*, AQ*, path cstr, OT*, flags OFF_*) -> eax 1 offered (or offered already)
 #   agoffer_drop(AQ*)                          aq_free: its offer closes, nothing is sent
 #   agoffer_text(AQ*) -> rax ptr, rdx len, ecx edited, r8d reverted    the proposed text as it stands (rax 0:
 #                                              none)
@@ -30,7 +30,7 @@ lsb: .zero SB_SIZE              # a label
 
 .section .rodata
 .p2align 3
-offer_ops: .quad offer_done, offer_locked_ms
+offer_ops: .quad offer_done, offer_locked_ms, 0, 0   # RVO: no name (the label has the driver's)
 .Lcolon: .asciz ": "
 .Lnoread: .asciz " (file not read)"
 .Lpartial: .asciz " (edited text only)"
@@ -38,7 +38,7 @@ offer_ops: .quad offer_done, offer_locked_ms
 
 .text
 
-# FN agoffer_open(AS*, AQ*, path cstr, TX*, flags OFF_*) -> eax 1 when the request's change is offered (or was
+# FN agoffer_open(AS*, AQ*, path cstr, OT*, flags OFF_*) -> eax 1 when the request's change is offered (or was
 #   already: a card shown again keeps its offer); 0 when there is nothing to show
 FN agoffer_open
     PROLOGUE

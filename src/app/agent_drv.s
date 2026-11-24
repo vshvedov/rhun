@@ -2420,7 +2420,7 @@ FN ev_offer
     mov rax, [rbp + 16]
     mov [rsp + 24], rax
     mov rdi, [rbx + AL_as]
-    lea rcx, [rsp]              # TX: old, oldlen, new, newlen
+    lea rcx, [rsp]              # OT: old, oldlen, new, newlen
     mov r8d, [rbp + 24]
     call agoffer_open
     EPILOGUE

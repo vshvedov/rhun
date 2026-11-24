@@ -5,10 +5,9 @@
 # change goes through ws_apply as one undo step, unsaved. A file that changed since it was proposed
 # can only be rejected. The proposer hears what became of each file.
 #
-# An offer (review_offer) is a proposal of one file made by rhun itself (RVP_ext 0) for an owner (RVO): the
-# bridge for terminal claude's openDiff (ide_server.s, edtools.s). Deciding it applies nothing: the owner's
-# RVO_done hears once whether the text was accepted (the text before with the accepted changes) or rejected,
-# or that the tab closed. Its tab opens without taking the keys.
+# An offer (review_offer, the section "offers" below) is a proposal of one file made by rhun itself
+# (RVP_ext 0) for an owner (RVO): an agent's edit waiting on its permission card (agentoffer.s) or terminal
+# claude's openDiff (the bridge, edtools.s). Deciding it applies nothing: its owner hears the outcome once.
 .include "rhun.inc"
 
 .equ RVP_PENDING_MAX, 8          # proposals of one extension not decided yet
@@ -1536,15 +1535,26 @@ build_doc:
     lea rdi, [rip + line]
     lea rsi, [rip + .Ldot]
     call sb_push_cstr
-    cmp dword ptr [rbx + RVP_offer], 0  # an offer has no extension: what is decided so far instead
-    je 0f
-    mov rdi, rbx
+    cmp dword ptr [rbx + RVP_offer], 0  # an offer has no extension: its owner's name when it has one, and
+    je 0f                               #   what is decided so far
+    mov rax, [rbx + RVP_owner]
+    test rax, rax
+    jz 2f
+    mov rsi, [rax + RVO_name]
+    test rsi, rsi
+    jz 2f
+    lea rdi, [rip + line]
+    call sb_push_cstr
+    lea rdi, [rip + line]
+    lea rsi, [rip + .Ldot]
+    call sb_push_cstr
+2:  mov rdi, rbx
     call offer_title
     jmp 1f
 0:  mov rdi, [rbx + RVP_ext]
     call agentext_title
     mov rsi, rax
-3:  lea rdi, [rip + line]
+    lea rdi, [rip + line]
     call sb_push_cstr
     lea rdi, [rip + line]
     lea rsi, [rip + .Ldot]
@@ -2046,8 +2056,6 @@ accept_hunks:
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
-    cmp qword ptr [rbx + RVP_owner], 0
-    jne .Lah_mark               # an offer: nothing is applied, the chosen hunks are only marked
     # what the file should be
     lea rdi, [rip + scratch]
     call sb_clear
@@ -2212,7 +2220,6 @@ accept_hunks:
     call ws_apply
     test eax, eax
     jz .Lah_stale
-.Lah_mark:
     xor ecx, ecx
 16: cmp rcx, [r12 + RVF_hunks + VEC_len]
     jae 9f
@@ -2437,12 +2444,7 @@ check_done:
     test rax, rax
     jnz 9f
     mov dword ptr [rbx + RVP_done], 1
-    cmp qword ptr [rbx + RVP_owner], 0
-    je 10f
-    mov rdi, rbx                # an offer: its owner hears it, once
-    call offer_done
-    jmp 9f
-10: mov rdi, [rbx + RVP_ext]
+    mov rdi, [rbx + RVP_ext]
     call ai_ext
     dec dword ptr [rax + AX_proposals]
     jns 1f
@@ -2994,268 +2996,6 @@ button:
     mov edx, r15d
     EPILOGUE
 
-# ---------------- offers: rhun's own proposals for an owner ----------------
-
-# FN review_offer(RVO*, ctx, label cstr, path cstr or 0, OT*, show) -> rax the offer's id, or 0. One file:
-#   its text before and after (copied, at most RVP_TEXT_MAX each). Its tab never takes the keys: with show
-#   1 it becomes the active tab unless a document has the keys (then, and with show 0, it opens behind the
-#   active tab); the keyboard stays where it was.
-FN review_offer
-    PROLOGUE 64
-    mov [rsp], rdi
-    mov [rsp + 8], rsi
-    mov [rsp + 16], rdx
-    mov [rsp + 24], rcx
-    mov [rsp + 32], r8
-    mov [rsp + 40], r9d
-    mov rax, [r8 + OT_oldlen]
-    cmp rax, RVP_TEXT_MAX
-    ja 8f
-    mov rax, [r8 + OT_newlen]
-    cmp rax, RVP_TEXT_MAX
-    ja 8f
-    mov edi, RVP_SIZE
-    call mem_alloc
-    mov r15, rax
-    mov rdi, rax
-    xor esi, esi
-    mov edx, RVP_SIZE
-    call memset
-    mov rax, [rsp]
-    mov [r15 + RVP_owner], rax
-    mov rax, [rsp + 8]
-    mov [r15 + RVP_ctx], rax
-    mov rdi, [rsp + 16]
-    call strlen
-    mov rsi, rax
-    mov rdi, [rsp + 16]
-    call clean_label
-    mov [r15 + RVP_label], rax
-    # its one file
-    lea rdi, [rip + .Lrf_tmp]
-    mov ecx, RVF_SIZE
-    xor eax, eax
-    rep stosb
-    lea r12, [rip + .Lrf_tmp]
-    mov qword ptr [r12 + RVF_index], 1
-    mov rdi, [rsp + 24]
-    test rdi, rdi
-    jz 1f
-    call dup_cstr
-    mov [r12 + RVF_path], rax
-    mov rdi, [rsp + 24]
-    call path_basename_c
-    jmp 2f
-1:  mov rdi, [r15 + RVP_label]
-    call dup_cstr
-2:  mov [r12 + RVF_name], rax
-    mov rbx, [rsp + 32]
-    mov rdi, [rbx + OT_old]
-    mov rsi, [rbx + OT_oldlen]
-    call text_dup
-    mov [r12 + RVF_old], rax
-    mov [r12 + RVF_oldlen], rdx
-    mov rdi, [rbx + OT_new]
-    mov rsi, [rbx + OT_newlen]
-    call text_dup
-    mov [r12 + RVF_new], rax
-    mov [r12 + RVF_newlen], rdx
-    mov rdi, r12
-    call file_diff
-    lea rdi, [r15 + RVP_files]
-    mov esi, RVF_SIZE
-    call vec_push
-    mov rdi, rax
-    lea rsi, [rip + .Lrf_tmp]
-    mov edx, RVF_SIZE
-    call memcpy
-    inc qword ptr [rip + next_id]
-    mov rax, [rip + next_id]
-    mov [r15 + RVP_id], rax
-    lea rdi, [rip + proposals]
-    mov esi, 8
-    call vec_push
-    mov [rax], r15
-    # its tab, without the keys
-    mov eax, [rip + g_focus]
-    mov [rsp + 44], eax
-    mov rax, [rip + g_tab_cur]
-    mov [rsp + 48], rax
-    mov rdi, r15
-    call open_tab
-    cmp dword ptr [rsp + 40], 0
-    je 3f
-    cmp dword ptr [rsp + 44], FOCUS_EDITOR
-    jne 4f
-3:  mov rdi, [rsp + 48]         # behind: the tab that was active is again
-    test rdi, rdi
-    js 4f
-    call app_activate_tab
-4:  mov eax, [rsp + 44]
-    mov [rip + g_focus], eax
-    mov dword ptr [rip + g_dirty], 1
-    mov rax, [r15 + RVP_id]
-    EPILOGUE
-8:  xor eax, eax
-    EPILOGUE
-
-# text_dup(ptr, len) -> rax an owned copy with a NUL after it, rdx len
-text_dup:
-    PROLOGUE
-    mov rbx, rdi
-    mov r12, rsi
-    lea rdi, [rsi + 1]
-    call mem_alloc
-    mov r13, rax
-    mov rdi, rax
-    mov rsi, rbx
-    mov rdx, r12
-    call memcpy
-    mov byte ptr [r13 + r12], 0
-    mov rax, r13
-    mov rdx, r12
-    EPILOGUE
-
-# offer_done(RV*): every change of an offer is decided, or its tab closed: the owner hears it once (unless
-#   it was closed by its owner: RVP_gone)
-offer_done:
-    PROLOGUE
-    mov rbx, rdi
-    cmp dword ptr [rbx + RVP_gone], 0
-    jne 9f
-    mov dword ptr [rbx + RVP_gone], 1
-    mov rax, [rbx + RVP_files + VEC_ptr]
-    mov r12, rax                # its one file
-    mov r13d, OFFER_CLOSED
-    cmp dword ptr [rbx + RVP_closing], 0
-    jne 2f
-    mov r13d, OFFER_REJECT
-    mov eax, [r12 + RVF_state]
-    cmp eax, RVS_ACCEPTED
-    je 1f
-    cmp eax, RVS_PARTIAL
-    jne 2f
-1:  mov r13d, OFFER_ACCEPT
-    cmp qword ptr [r12 + RVF_hunks + VEC_len], 0
-    je 11f
-    lea rdi, [rip + scratch]    # the text before with the accepted changes
-    call sb_clear
-    mov rdi, r12
-    xor esi, esi
-    call build_text
-    mov rdx, [rip + scratch + SB_ptr]
-    mov rcx, [rip + scratch + SB_len]
-    jmp 3f
-11: mov rdx, [r12 + RVF_new]    # nothing to decide: the proposed text
-    mov rcx, [r12 + RVF_newlen]
-    jmp 3f
-2:  xor edx, edx
-    xor ecx, ecx
-3:  mov rax, [rbx + RVP_owner]
-    mov rdi, [rbx + RVP_ctx]
-    mov esi, r13d
-    xor r8d, r8d
-    call [rax + RVO_done]
-9:  EPILOGUE
-
-# FN review_offer_accept(id) -> eax 1 when it was an offer still undecided: every change accepted
-FN review_offer_accept
-    PROLOGUE
-    call find_proposal
-    test rax, rax
-    jz 8f
-    cmp qword ptr [rax + RVP_owner], 0
-    je 8f
-    cmp dword ptr [rax + RVP_done], 0
-    jne 8f
-    mov rdi, rax
-    mov rsi, -1
-    mov rdx, -1
-    mov ecx, 1
-    call review_decide
-    mov eax, 1
-    EPILOGUE
-8:  xor eax, eax
-    EPILOGUE
-
-# FN review_offer_reject(id) -> eax 1 when it was an offer still undecided: every change rejected
-FN review_offer_reject
-    PROLOGUE
-    call find_proposal
-    test rax, rax
-    jz 8f
-    cmp qword ptr [rax + RVP_owner], 0
-    je 8f
-    cmp dword ptr [rax + RVP_done], 0
-    jne 8f
-    mov rdi, rax
-    mov rsi, -1
-    mov rdx, -1
-    xor ecx, ecx
-    call review_decide
-    mov eax, 1
-    EPILOGUE
-8:  xor eax, eax
-    EPILOGUE
-
-# FN review_offer_close(id): its tab closes and its owner hears nothing more
-FN review_offer_close
-    PROLOGUE
-    call find_proposal
-    test rax, rax
-    jz 9f
-    cmp qword ptr [rax + RVP_owner], 0
-    je 9f
-    mov dword ptr [rax + RVP_gone], 1
-    mov rdi, rax
-    call close_proposal
-9:  EPILOGUE
-
-# FN review_offer_by_label(RVO*, label cstr) -> rax the id of that owner's open offer with this label
-#   (as it was given, cleaned), or 0
-FN review_offer_by_label
-    PROLOGUE
-    mov r12, rdi
-    mov r13, rsi
-    xor ebx, ebx
-1:  cmp rbx, [rip + proposals + VEC_len]
-    jae 8f
-    mov rax, [rip + proposals + VEC_ptr]
-    mov r14, [rax + rbx*8]
-    inc rbx
-    cmp [r14 + RVP_owner], r12
-    jne 1b
-    mov rdi, [r14 + RVP_label]
-    mov rsi, r13
-    call strcmp_eq
-    test eax, eax
-    jz 1b
-    mov rax, [r14 + RVP_id]
-    EPILOGUE
-8:  xor eax, eax
-    EPILOGUE
-
-# FN review_offers_close(RVO*) -> eax how many of that owner's offers closed (their owner hears nothing)
-FN review_offers_close
-    PROLOGUE
-    mov r12, rdi
-    xor r13d, r13d
-1:  xor ebx, ebx
-2:  cmp rbx, [rip + proposals + VEC_len]
-    jae 9f
-    mov rax, [rip + proposals + VEC_ptr]
-    mov r14, [rax + rbx*8]
-    inc rbx
-    cmp [r14 + RVP_owner], r12
-    jne 2b
-    inc r13d
-    mov dword ptr [r14 + RVP_gone], 1
-    mov rdi, r14
-    call close_proposal         # it leaves the list: start again
-    jmp 1b
-9:  mov eax, r13d
-    EPILOGUE
-
 # ---------------- tests ----------------
 
 # FN review_dump(sb): per proposal "proposal=ID label=LABEL done=0|1", per file "proposal=ID file=I
@@ -3442,20 +3182,22 @@ FN review_current
 
 # ---------------- offers (phase 4 tasks 11 and 12) ----------------
 #
-# An offer is a proposal of rhun's own for an owner (an agent's request to edit one file, agentoffer.s): the
-# same tab, drawing and keys as an extension's proposal, but nothing is ever applied. Its outcome (accepted
-# with the text as it stands, rejected, the tab closed, everything taken out) goes to the owner (RVO_done)
-# from review_tick, after the frame, never from inside a drawing or a tab's closing; a close waits out the
-# card's lock (RVO_locked), every other decision is refused while it lasts. Once decided the tab stays, read
-# only, until the owner closes it (review_offer_close); the owner withdrawing it first is never told
-# anything. Its tab never takes the keyboard (offer_tab).
+# An offer is a proposal of rhun's own for an owner: an agent's request to edit one file (agentoffer.s), or
+# terminal claude's openDiff (the bridge, edtools.s). The same tab, drawing and keys as an extension's
+# proposal, but nothing is ever applied. Its outcome (accepted with the text as it stands, rejected, the tab
+# closed, everything taken out) goes to the owner (RVO_done) from review_tick, after the frame, never from
+# inside a drawing or a tab's closing; a close waits out the owner's lock (RVO_locked: a card's half second),
+# every other decision is refused while it lasts. Only the owner's own review_offer_reject is told at once.
+# Once decided the tab stays, read only, until the owner closes it (review_offer_close); the owner
+# withdrawing it first is never told anything. Its tab never takes the keyboard (offer_tab).
 #
-#   review_offer(RVO*, ctx, label, path or 0, TX*, show) -> rax id or 0
-#   review_offer_close(id); review_offers_close() -> eax n; review_offer_show(id)
+#   review_offer(RVO*, ctx, label, path or 0, OT*, show) -> rax id or 0
+#   review_offer_reject(id) -> eax 1; review_offer_close(id); review_offers_close(RVO*) -> eax n
+#   review_offer_by_label(RVO*, label) -> rax id or 0; review_offer_show(id)
 #   review_offer_text(id) -> rax ptr, rdx len, ecx edited, r8d reverted; review_offer_before(id) -> rax, rdx
 #   review_offer_dump(id, sb); review_tick(); review_timeout() -> eax ms or -1
 
-# FN review_offer(RVO*, ctx, label cstr, path cstr or 0, TX*, show) -> rax its id, or 0 when there is nothing
+# FN review_offer(RVO*, ctx, label cstr, path cstr or 0, OT*, show) -> rax its id, or 0 when there is nothing
 #   to show (the two texts equal, or one over 4 MB). Its tab becomes the active one with show while the
 #   keyboard is not in the editor, and the keyboard stays where it was; otherwise it waits behind the active tab
 FN review_offer
@@ -3467,15 +3209,15 @@ FN review_offer
     mov rbx, r8
     mov [rsp + 32], r9d
     xor eax, eax
-    cmp qword ptr [rbx + TX_oldlen], RVP_TEXT_MAX
+    cmp qword ptr [rbx + OT_oldlen], RVP_TEXT_MAX
     ja 9f
-    cmp qword ptr [rbx + TX_newlen], RVP_TEXT_MAX
+    cmp qword ptr [rbx + OT_newlen], RVP_TEXT_MAX
     ja 9f
-    mov rcx, [rbx + TX_oldlen]
-    cmp rcx, [rbx + TX_newlen]
+    mov rcx, [rbx + OT_oldlen]
+    cmp rcx, [rbx + OT_newlen]
     jne 1f
-    mov rdi, [rbx + TX_old]
-    mov rsi, [rbx + TX_new]
+    mov rdi, [rbx + OT_old]
+    mov rsi, [rbx + OT_new]
     mov rdx, rcx
     call memeq
     test eax, eax
@@ -3496,11 +3238,11 @@ FN review_offer
     mov rsi, rax
     call clean_label
     mov [r15 + RVP_label], rax
-    mov rdi, [rbx + TX_new]
-    mov rsi, [rbx + TX_newlen]
+    mov rdi, [rbx + OT_new]
+    mov rsi, [rbx + OT_newlen]
     call ai_dup
     mov [r15 + RVP_orig], rax
-    mov rax, [rbx + TX_newlen]
+    mov rax, [rbx + OT_newlen]
     mov [r15 + RVP_origlen], rax
     # its one file
     lea rdi, [rip + .Lrf_tmp]
@@ -3520,17 +3262,17 @@ FN review_offer
 2:  mov rdi, [r15 + RVP_label]
     call dup_cstr
 3:  mov [r12 + RVF_name], rax
-    mov rdi, [rbx + TX_old]
-    mov rsi, [rbx + TX_oldlen]
+    mov rdi, [rbx + OT_old]
+    mov rsi, [rbx + OT_oldlen]
     call ai_dup
     mov [r12 + RVF_old], rax
-    mov rax, [rbx + TX_oldlen]
+    mov rax, [rbx + OT_oldlen]
     mov [r12 + RVF_oldlen], rax
-    mov rdi, [rbx + TX_new]
-    mov rsi, [rbx + TX_newlen]
+    mov rdi, [rbx + OT_new]
+    mov rsi, [rbx + OT_newlen]
     call ai_dup
     mov [r12 + RVF_new], rax
-    mov rax, [rbx + TX_newlen]
+    mov rax, [rbx + OT_newlen]
     mov [r12 + RVF_newlen], rax
     mov rdi, r12
     call file_diff
@@ -3591,8 +3333,17 @@ offer_tab:
     mov r13, rax
     mov [r12 + DOC_diff], rax
     mov [r13 + DV_review], rbx
-    mov rdi, [rbx + RVP_label]
-    call dup_cstr
+    lea rdi, [rip + line]       # named as every Review tab is (open_tab)
+    call sb_clear
+    lea rdi, [rip + line]
+    lea rsi, [rip + .Ltab_prefix]
+    call sb_push_cstr
+    lea rdi, [rip + line]
+    mov rsi, [rbx + RVP_label]
+    call sb_push_cstr
+    mov rdi, [rip + line + SB_ptr]
+    mov rsi, [rip + line + SB_len]
+    call ai_dup
     mov [r13 + DV_name], rax
     mov [r12 + DOC_name], rax
     mov [rbx + RVP_doc], r12
@@ -3642,18 +3393,23 @@ offer_tab:
 8:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
-# offer_locked(RV*) -> eax ms its owner's lock still lasts, 0 none
+# offer_locked(RV*) -> eax ms its owner's lock still lasts, 0 none (an owner without RVO_locked has none)
 offer_locked:
     mov rax, [rdi + RVP_owner]
     test rax, rax
     jz 1f
+    mov rax, [rax + RVO_locked]
+    test rax, rax
+    jz 1f
     mov rdi, [rdi + RVP_ctx]
-    jmp [rax + RVO_locked]
+    jmp rax
 1:  xor eax, eax
     ret
 
 # offer_decide(RV*, file, hunk, accept): the user's choice in an offer's tab: nothing while the card's lock
-#   lasts (and nothing kept for later); the file or everything: the offer is decided (offer_finish)
+#   lasts (and nothing kept for later); the file or everything: the offer is decided (offer_finish). A change
+#   decided: for an owner with RVOF_DECIDED_ENDS the last one decides the offer (accepted while a change is
+#   left, every one rejected: rejected); for the others a toast says what is left to do
 offer_decide:
     PROLOGUE
     mov rbx, rdi
@@ -3696,9 +3452,25 @@ offer_decide:
     call offer_retext
     mov rdi, rbx                # its edit, when open, shows the text too
     call scratch_put
-3:  mov rdi, rbx
-    call offer_all_toast
+3:  mov rax, [rbx + RVP_owner]
+    test rax, rax
+    jz 4f
+    test dword ptr [rax + RVO_flags], RVOF_DECIDED_ENDS
+    jz 4f
+    mov r12, [rbx + RVP_files + VEC_ptr]
+    mov rdi, r12
+    call hunks_pending
+    test rax, rax
+    jnz 5f
+    xor esi, esi                # every change decided: the offer is
+    cmp qword ptr [r12 + RVF_hunks + VEC_len], 0
+    setne sil
     mov rdi, rbx
+    call offer_finish
+    jmp 9f
+4:  mov rdi, rbx
+    call offer_all_toast
+5:  mov rdi, rbx
     call build_doc
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
@@ -3864,9 +3636,10 @@ FN review_offer_close
     call close_proposal
 9:  EPILOGUE
 
-# FN review_offers_close() -> eax how many offers were closed (their owners are not told)
+# FN review_offers_close(RVO*) -> eax how many of that owner's offers were closed (it is not told)
 FN review_offers_close
     PROLOGUE
+    mov r13, rdi
     xor r12d, r12d
 1:  xor ecx, ecx
 2:  cmp rcx, [rip + proposals + VEC_len]
@@ -3876,11 +3649,65 @@ FN review_offers_close
     inc rcx
     cmp dword ptr [rax + RVP_offer], 0
     je 2b
+    cmp [rax + RVP_owner], r13
+    jne 2b
     mov rdi, [rax + RVP_id]
-    call review_offer_close
+    call review_offer_close     # its owner is 0 now: not seen again
     inc r12d
     jmp 1b
 9:  mov eax, r12d
+    EPILOGUE
+
+# FN review_offer_reject(id) -> eax 1 when it was an offer still undecided: rejected by its owner, who is told
+#   at once (not from review_tick: the owner's own act, outside any drawing)
+FN review_offer_reject
+    PROLOGUE
+    call offer_by_id
+    test rax, rax
+    jz 8f
+    cmp qword ptr [rax + RVP_owner], 0
+    je 8f
+    mov rbx, rax
+    cmp dword ptr [rax + RVP_done], 0
+    jne 7f
+    mov rdi, rax
+    xor esi, esi
+    call offer_finish
+    mov rdi, rbx
+    call offer_tell
+    mov eax, 1
+    EPILOGUE
+7:  cmp dword ptr [rbx + RVP_pend], 0   # decided, its outcome not told yet: told now, as it is
+    je 8f
+    mov rdi, rbx
+    call offer_tell
+8:  xor eax, eax
+    EPILOGUE
+
+# FN review_offer_by_label(RVO*, label cstr) -> rax the id of that owner's offer with this label (as it was
+#   given, cleaned), decided or not, or 0
+FN review_offer_by_label
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    xor ebx, ebx
+1:  cmp rbx, [rip + proposals + VEC_len]
+    jae 8f
+    mov rax, [rip + proposals + VEC_ptr]
+    mov r14, [rax + rbx*8]
+    inc rbx
+    cmp dword ptr [r14 + RVP_offer], 0
+    je 1b
+    cmp [r14 + RVP_owner], r12
+    jne 1b
+    mov rdi, [r14 + RVP_label]
+    mov rsi, r13
+    call strcmp_eq
+    test eax, eax
+    jz 1b
+    mov rax, [r14 + RVP_id]
+    EPILOGUE
+8:  xor eax, eax
     EPILOGUE
 
 # FN review_offer_show(id): its tab becomes the active one after the frame (review_tick); the keyboard stays
@@ -4100,7 +3927,21 @@ FN review_tick
     call offer_locked
     test eax, eax
     jnz 2b                      # a close waits for the card's lock to end
-4:  mov r14, [rbx + RVP_id]
+4:  mov rdi, rbx
+    call offer_tell
+    test eax, eax
+    jz 8f                       # not taken: again in a later pass
+    xor r12d, r12d              # the list may have changed: from its start
+    jmp 2b
+8:  EPILOGUE
+
+# offer_tell(RV*) -> eax 1 when its owner took its outcome (RVP_pend), 0 when it is to be told again later. Its
+#   tab gone, it goes too
+offer_tell:
+    PROLOGUE
+    mov rbx, rdi
+    mov r13, [rbx + RVP_owner]
+    mov r14, [rbx + RVP_id]
     mov r15d, [rbx + RVP_pend]
     mov dword ptr [rbx + RVP_pend], 0
     mov rdi, rbx
@@ -4118,15 +3959,15 @@ FN review_tick
     jz 7f
     test ebx, ebx
     jnz 5f
-    mov [rax + RVP_pend], r15d  # not taken: again in a later pass
-    jmp 8f
+    mov [rax + RVP_pend], r15d  # not taken
+    xor eax, eax
+    EPILOGUE
 5:  cmp qword ptr [rax + RVP_doc], 0
     jne 7f
     mov rdi, rax                # its tab is gone: so is it
     call forget
-7:  xor r12d, r12d              # the list may have changed: from its start
-    jmp 2b
-8:  EPILOGUE
+7:  mov eax, 1
+    EPILOGUE
 
 # FN review_timeout() -> eax ms until review_tick has something to do, or -1
 FN review_timeout
@@ -4755,7 +4596,6 @@ FN review_scratch_save
 .Lchanged_toast: .asciz "The file changed since it was proposed: not applied"
 .Ld_proposal: .asciz "proposal="
 .Ld_label: .asciz " label="
-.Ld_offer: .asciz " offer=1"
 .Ld_done: .asciz " done="
 .Ld_offer: .asciz " offer=1"
 .Ld_file: .asciz " file="

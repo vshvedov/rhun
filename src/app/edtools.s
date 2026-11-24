@@ -58,7 +58,7 @@ tools:
     .quad .Lt_close_all, .Ld_close_all, .Ls_close_all
     .long 0, 0
     .quad 0, t_close_all
-rvo: .quad offer_done, 0, .Ls_owner
+rvo: .quad offer_done, 0, .Ls_owner, RVOF_DECIDED_ENDS   # RVO: no lock; the last change decided ends it
 
 .text
 
@@ -235,8 +235,9 @@ t_open_diff:
     mov eax, MCP_ERROR
     EPILOGUE
 
-# offer_done(token, OFFER_*, text ptr, len, edited): the user decided: FILE_SAVED and the text, or
-#   DIFF_REJECTED and the tab's name
+# offer_done(token, OFFER_*, text ptr, len, edited) -> eax 1 (taken): the user decided: accepted (with the text
+#   as it stands, the text before too: OFFER_REVERTED): FILE_SAVED and the text; otherwise DIFF_REJECTED and
+#   the tab's name
 offer_done:
     PROLOGUE 16
     mov r12, rdi
@@ -257,8 +258,10 @@ offer_done:
     lea rdi, [rip + dout]
     call jw_arr
     cmp r13d, OFFER_ACCEPT
+    je 21f
+    cmp r13d, OFFER_REVERTED
     jne 3f
-    lea rsi, [rip + .Lv_saved]
+21: lea rsi, [rip + .Lv_saved]
     mov edx, .Lv_saved_end - .Lv_saved
     call text_item
     mov rsi, r14
@@ -283,7 +286,8 @@ offer_done:
     lea rsi, [rip + dout]
     mov edx, MTF_RAW
     call mcp_later_done
-9:  EPILOGUE
+9:  mov eax, 1
+    EPILOGUE
 
 # text_item(ptr, len): dout gets {"type":"text","text":T}
 text_item:

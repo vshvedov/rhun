@@ -26,7 +26,7 @@
 .equ ID_PAL_ROW, 0x200000         # + row: a range of its own, as results run to MAXFILES
 .equ ID_PAL_FIELD, 0x3fff
 .equ MAXFILES, 200000
-.equ KEYS_CACHE_N, 512            # built-in commands whose shortcut labels are kept (g_commands has 258)
+.equ KEYS_CACHE_N, 512            # built-in commands whose shortcut labels are kept (g_commands has 264 with the chat's lines merged)
 .equ GREP_MAX, 5000             # results
 .equ GREP_FILE_MAX, 8 << 20     # bytes per file
 .equ GREP_TOTAL_MAX, 256 << 20

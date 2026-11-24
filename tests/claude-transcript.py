@@ -1950,16 +1950,16 @@ class UserRowTest(TaskEightCase):
         self.command('agent-new claude')
         self.command('agent-prompt hello')
         self.command('wait-agent ready 15000')
-        self.command('agent-prompt /context')
+        self.command('agent-prompt /cost')       # (not /context or /status: phase 7 made them rhun's dialogs)
         rows = self.kinds()
-        self.assertEqual(rows[2], ('user', 'echo', '/context'), rows)
+        self.assertEqual(rows[2], ('user', 'echo', '/cost'), rows)
         self.command('wait-agent ready 15000')
-        self.command('agent-prompt /status')                    # answered by the CLI, not in its list (22)
+        self.command('agent-prompt /fast')                      # answered by the CLI, not in its list
         self.command('wait-agent ready 15000')
         self.command('agent-prompt /usr/bin holds what?')       # no command's name: a prompt
         self.command('wait-agent ready 15000')
         rows = self.kinds()
-        self.assertIn(('user', 'echo', '/status'), rows)
+        self.assertIn(('user', 'echo', '/fast'), rows)
         self.assertIn(('user', '-', '/usr/bin holds what?'), rows)
 
 
@@ -2015,13 +2015,13 @@ class SpecialRowTest(TaskEightCase):
     def test_one_line_output_is_a_pill_and_several_are_markdown(self):
         self.start()
         self.scenario('hello')
-        for command in ('/compact', '/context', '/status'):
+        for command in ('/compact', '/cost', '/fast'):  # (/context and /status are phase 7's dialogs)
             self.command('agent-prompt ' + command)
             self.command('wait-agent ready 15000')
         live = self.kinds()
         self.assertIn(('info', 'pill', 'Compacted'), live)
-        self.assertIn(('agent', '-', '## Context Usage'), live)
-        self.assertIn(('info', 'pill', "/status isn't available in this environment."), live)
+        self.assertIn(('agent', '-', 'You are currently using your subscription to power your Clau'), live)
+        self.assertIn(('info', 'pill', 'Fast mode ON'), live)
         self.assertIn('pill Compacted', self.command('print-agents'))
         self.reread()
         self.assertEqual(self.kinds(), live)

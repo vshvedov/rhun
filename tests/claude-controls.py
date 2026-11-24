@@ -54,23 +54,25 @@ class ConfigTest(CfgCase):
                                 'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
                                 'claude.use_terminal', 'claude.ide', 'claude.spinner_verbs'])     # phase 5: two
         agents = [line for line in out.splitlines() if line.startswith('agents.')]
-        self.assertEqual(agents[-9:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
-                                      'agents.focus_view', 'agents.archive_after_days',    # (phase 6)
-                                      # phase 4 task 8: the selection chip's two, task 7's mentions
-                                      'agents.attach_selection', 'agents.attach_open_file',
-                                      'agents.respect_gitignore',
-                                      'agents.autosave'])      # phase 4 task 10
+        self.assertEqual(agents[-10:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
+                                       'agents.focus_view', 'agents.archive_after_days',    # (phase 6)
+                                       # phase 4 task 8: the selection chip's two, task 7's mentions
+                                       'agents.attach_selection', 'agents.attach_open_file',
+                                       'agents.respect_gitignore',
+                                       'agents.autosave',           # phase 4 task 10
+                                       'agents.location'])          # phase 4 task 13: the last
         self.command('cmd toggle_word_wrap')            # a setting changed: the exit writes the file
         self.quit()
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(chat.section(saved, 'claude')[3:], [
             'initial_mode =', 'allow_bypass_permissions = false', 'prompt_suggestions = true',
             'use_terminal = false', 'ide = true', 'spinner_verbs = append'])
-        self.assertEqual(chat.section(saved, 'agents')[-9:], [
+        self.assertEqual(chat.section(saved, 'agents')[-10:], [
             'ctrl_enter_sends = false', 'scroll_on_send = true', 'timestamps = true', 'focus_view = false',
             'archive_after_days = 14',
             'attach_selection = true', 'attach_open_file = true', 'respect_gitignore = true',
-            'autosave = true'])                         # phase 4 task 10
+            'autosave = true',                          # phase 4 task 10
+            'location = panel'])                        # (phase 4 task 13: location last)
         # changed, they are written back as they are; the env pairs still follow the last [claude] row
         claude = self.claude_section('initial_mode = acceptEdits\nallow_bypass_permissions = true\n'
                                      'prompt_suggestions = false\nspinner_verb = Zooming\nspinner_verbs = replace\n'
@@ -90,10 +92,10 @@ class ConfigTest(CfgCase):
             'allow_bypass_permissions = true', 'prompt_suggestions = false', 'use_terminal = false', 'ide = true',
             'spinner_verbs = replace',
             'env.FOO = bar', 'spinner_verb = Zooming', 'spinner_verb = Whooshing'])
-        self.assertEqual(chat.section(saved, 'agents')[-9:-4], ['ctrl_enter_sends = true', 'scroll_on_send = false',
-                                                                'timestamps = false', 'focus_view = true',
-                                                                'archive_after_days = 14'])
-        self.assertEqual(chat.section(saved, 'agents')[-1:], ['autosave = false'])   # phase 4 task 10
+        self.assertEqual(chat.section(saved, 'agents')[-10:-5], ['ctrl_enter_sends = true', 'scroll_on_send = false',
+                                                                 'timestamps = false', 'focus_view = true',
+                                                                 'archive_after_days = 14'])
+        self.assertEqual(chat.section(saved, 'agents')[-2:], ['autosave = false', 'location = panel'])
 
     def mode_passed(self, extra):
         self.start(self.claude_section(extra))

@@ -2490,5 +2490,6 @@ g_commands:
     COMMAND agents_open_tab, "Agents: Open in New Tab", agtab_cmd_open_tab, "ctrl+shift+Escape"
     COMMAND agents_open_panel, "Agents: Open in Side Panel", agtab_cmd_open_panel, ""
     COMMAND agents_new_conversation, "Agents: New Conversation", agtab_cmd_new, ""
+    COMMAND agents_open_window, "Agents: Open in New Window", agtab_cmd_open_window, ""
     .quad 0, 0, 0, 0
 

@@ -526,6 +526,39 @@ rhun's terminal prompt (press Enter there), and the card becomes "Terminal opene
 continue** ends the conversation's Claude Code so that the next message starts it again with what you
 changed; **Continue without refreshing** leaves it running.
 
+### A conversation in an editor tab
+
+**Agents: Open in New Tab** (Ctrl+Shift+Esc, Cmd+Shift+Esc on macOS) moves the conversation the panel
+shows into an editor tab, with its draft and the place it was scrolled to; with none open it starts a
+new conversation in a tab. The tab shows the same conversation view as the panel, in a column at most
+800 pixels wide, without the Back button. One conversation shows at a time: while a conversation tab is
+the active tab it has the view and the panel shows the list. Switching to another tab gives the view
+back to the panel; switching back to the conversation tab takes it again. Opening another conversation
+from the panel's list while a conversation tab is active moves the view to the panel, and the tab says
+"This conversation is shown when its tab has the view. Click to show it here."; a click there brings it
+back. Opening a conversation that has a tab brings that tab forward. **Agents: Open in Side Panel**
+closes the active conversation tab and shows its conversation in the panel. Closing a tab closes only
+the tab: the conversation's program keeps running until it is idle.
+
+A tab is labelled with the conversation's title, cut at 24 characters. A yellow dot before the label
+means the conversation waits for you (a permission, a question, a plan); a dot in Claude's colour
+means a turn ended while the tab was not shown. Conversation tabs are part of the session (they come
+back when the project opens, without starting anything) and of **Reopen Closed Tab**.
+
+**Agents: Open** goes where `[agents] location` says: `panel` (the default) shows the panel with the
+keys in it, `tab` brings the last conversation tab forward or starts a new conversation in one. The
+setting follows your last **Open in New Tab** or **Open in Side Panel**. **Agents: New Conversation**
+starts one in the conversation tab that has the view, otherwise where `location` says. The status bar
+shows "Claude Code" at the right while the chat is on; a click runs **Agents: Open**, and a yellow dot
+on it means a conversation waits for you. **Agents: Open in New Window** opens the project in another
+rhun window with the conversation shown here.
+
+A link `rhun://claude/open?session=ID&prompt=TEXT` (both parts optional) opens that conversation of the
+project, or a new one when the id is not one of its conversations, where `location` says, and puts the
+prompt in its box without sending it. A conversation that is already shown keeps what is in its box:
+"Session is already open. Your prompt was not applied — enter it manually." Such a link in a reply, a
+tool's output or a card does nothing when clicked.
+
 ### Open somewhere else
 
 Before continuing a conversation, rhun looks in Claude Code's records of its running sessions for

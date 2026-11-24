@@ -896,9 +896,11 @@ pty_shutdown:
 # win_new_window(folder) -> 1 when started: rhun.exe opens the folder in a window of its own. Not
 # through proc_spawn, whose job object would close it with this one.
 FN win_new_window
-    PROLOGUE 8464
-    # locals: startup 96..199, process info 208..231, this program 240..8431, argv 8440..8463
+    PROLOGUE 8480
+    # locals: startup 96..199, process info 208..231, this program 240..8431, argv 8440..8471 (a link, or 0,
+    #   after the folder: phase 4 task 13), the link 8472
     mov [rsp + 8432], rdi
+    mov [rsp + 8472], rsi
     xor ecx, ecx
     lea rdx, [rsp + 240]
     mov r8d, 4096
@@ -920,7 +922,9 @@ FN win_new_window
     mov [rsp + 8440], rax
     mov rax, [rsp + 8432]
     mov [rsp + 8448], rax
-    mov qword ptr [rsp + 8456], 0
+    mov rax, [rsp + 8472]
+    mov [rsp + 8456], rax
+    mov qword ptr [rsp + 8464], 0
     lea rdi, [rsp + 8440]
     call win_commandline
     mov r12, rax

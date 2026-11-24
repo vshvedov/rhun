@@ -274,7 +274,10 @@ set_project:
 # icon of its own) and this one keeps its project. It runs this program with the same environment,
 # in a session of its own as a copy started from a terminal is, and is reaped when it quits.
 # RHUN_NEW_WINDOW names another program to run (tests); without it a headless rhun starts none.
+# app_new_window_link(folder, link or 0) passes a link after the folder (phase 4 task 13: a conversation).
 FN app_new_window
+    xor esi, esi
+FN app_new_window_link
 .ifdef WINDOWS
     PROLOGUE
     cmp dword ptr [rip + g_headless], 0
@@ -288,6 +291,7 @@ FN app_new_window
 .else
     PROLOGUE 32
     mov rbx, rdi
+    mov r14, rsi
     lea rdi, [rip + .Lenv_new_window]
     call getenv
     test rax, rax
@@ -343,7 +347,8 @@ FN app_new_window
     lea rax, [rip + nw_exe]
     mov [rsp], rax
     mov [rsp + 8], rbx
-    mov qword ptr [rsp + 16], 0
+    mov [rsp + 16], r14         # the link, or the end
+    mov qword ptr [rsp + 24], 0
     lea rdi, [rsp]
     mov rsi, [rip + g_envp]
     xor edx, edx
@@ -7064,6 +7069,10 @@ FN app_open_path
     PROLOGUE 16
     mov rbx, rdi
     call links_open_path        # resources group: a rhun://ext/ link goes to its extension (links.s)
+    test eax, eax
+    jnz 9f
+    mov rdi, rbx                # phase 4 task 13: rhun://NAME/open, an agent's conversation (agenttab.s)
+    call agtab_link
     test eax, eax
     jnz 9f
     mov rdi, rbx

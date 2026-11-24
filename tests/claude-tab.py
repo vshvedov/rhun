@@ -332,6 +332,105 @@ class SessionTest(TabCase):
         self.assertEqual([r.split(' ', 1)[1] for r in self.thread()], ['hello', 'ok: hello'])
 
 
+class LinkTest(TabCase):
+    def back(self):
+        self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+
+    def test_the_link_opens_a_conversation_and_fills_the_box_without_sending(self):
+        self.start()
+        self.chat('hello')
+        sid = self.sid()
+        self.back()
+        self.assertEqual(self.thread(), [])
+        sent = len(self.stdin())
+        self.command(f'open rhun://claude/open?session={sid}&prompt=fix%20the+bug%21')
+        self.assertEqual([r.split(' ', 1)[1] for r in self.thread()], ['hello', 'ok: hello'])
+        self.assertTrue(self.command('print-agent-input').startswith('input=fix the bug! focus=1 '))
+        self.assertEqual(self.tabs()[0], [])        # [agents] location = panel
+        time.sleep(0.3)
+        self.assertEqual(len(self.stdin()), sent)    # nothing sent
+
+    def test_the_link_opens_in_a_tab_by_location(self):
+        self.start(extra='[agents]\nlocation = tab\n')
+        self.chat('hello')
+        sid = self.sid()
+        self.back()
+        self.command(f'open rhun://claude/open?prompt=more&session={sid}')
+        tabs, _, _ = self.tabs()
+        self.assertEqual([(t['file'], t['host']) for t in tabs], [(sid + '.jsonl', '1')])
+        self.assertTrue(self.command('print-agent-input').startswith('input=more '))
+
+    def test_the_link_with_an_unknown_id_is_a_new_conversation(self):
+        self.start()
+        self.command('open rhun://claude/open?session=0b8d6f2e-1111-4222-8333-444455556666&prompt=hi')
+        # (an id waits for discovery's list, then the link applies)
+        self.until(lambda: self.command('print-agent-input').startswith('input=hi focus=1 new=claude '),
+                   self.command('print-agent-input'))
+        self.assertEqual(self.starts(), [])
+
+    def test_the_link_to_a_shown_conversation_keeps_its_box(self):
+        self.start()
+        self.chat('hello')
+        sid = self.sid()
+        self.command('agent-type mine')
+        self.command(f'open rhun://claude/open?session={sid}&prompt=theirs')
+        self.assertTrue(self.command('print-agent-input').startswith('input=mine '))
+        self.assertIn('Session is already open. Your prompt was not applied \u2014 enter it manually.',
+                      self.command('print-toast'))
+
+    def test_another_name_is_not_an_agents_link(self):
+        self.start()
+        self.command('open rhun://nobody/open?prompt=hi')
+        self.assertTrue(self.command('print-agent-input').startswith('input= '))
+
+    def test_a_link_in_a_reply_does_nothing(self):
+        """The fake answers "ok: " and the prompt: a reply whose link is rhun://claude/open. A click on it in
+        the tab opens nothing and fills no box; the same link from outside does (so the test can fail)."""
+        self.start()
+        self.chat('[x](rhun://claude/open?prompt=hi)')
+        self.command('cmd agents_open_tab')
+        self.command('cmd agents_open_tab')          # (a second tab, a draft: so a link that worked would show)
+        self.command('cmd prev_tab')
+        shot = self.work / 'reply.ppm'
+        self.command(f'shot {shot}')
+        x, y = self.link_at(shot)
+        self.command(f'click {x} {y}')
+        self.command(f'click {x} {y}')
+        time.sleep(0.2)
+        self.assertEqual(len(self.tabs()[0]), 2)
+        self.assertTrue(self.command('print-agent-input').startswith('input= '))
+        self.assertNotIn('toast=Session', self.command('print-toast'))
+        self.command('open rhun://claude/open?prompt=hi')
+        self.assertTrue(self.command('print-agent-input').startswith('input=hi '))
+
+    def link_at(self, shot):
+        """The first pixel of the reply's link (the accent's blue) in the conversation's column."""
+        parts = shot.read_bytes().split(b'\n', 3)
+        w, h = map(int, parts[1].split())
+        px = parts[3]
+        for y in range(240, 330):
+            for x in range(60, 400):
+                r, g, b = px[(y * w + x) * 3:(y * w + x) * 3 + 3]
+                if b > 180 and b > r + 50 and g > 100:
+                    return x + 1, y + 1
+        self.fail('no link drawn')
+
+
+class WindowTest(TabCase):
+    def test_open_in_new_window(self):
+        log = self.work / 'new-window.log'
+        script = self.work / 'new-window.sh'
+        script.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > {log}\n', encoding='utf-8')
+        script.chmod(0o755)
+        self.start(env={'RHUN_NEW_WINDOW': str(script)})
+        self.chat('hello')
+        sid = self.sid()
+        self.command('cmd agents_open_window')
+        self.until(lambda: log.exists() and log.read_text().strip(), 'the new window started')
+        self.assertEqual(log.read_text().splitlines(), [str(self.project), f'rhun://claude/open?session={sid}'])
+        self.assertIn('state=ready pid=1', self.live())      # nothing closed here
+
+
 class IdleTest(TabCase):
     def passes(self, seconds=3):
         def count():

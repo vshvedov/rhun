@@ -69,6 +69,11 @@ at_busy: .long 0                   # agtab is opening a conversation itself (agt
 at_seq: .long 0
 at_pend_close: .quad 0             # a record whose tab closes after the frame (its Close link), 0 none
 at_restore_active: .quad 0         # session_restore: the conversation tab that was active
+at_lk_pending: .long 0             # a link waits to be applied (agtab_link)
+at_lk_kind: .long 0                #   its agent's kind
+at_lk_has_prompt: .long 0
+at_lk_id: .zero 80                 #   the conversation it names, or empty
+at_lk_prompt: .zero SB_SIZE        #   the prompt for its box
 at_sb: .zero SB_SIZE
 at_tipbuf: .zero 160
 
@@ -298,6 +303,7 @@ at_keys_in:
 FN agtab_sync
     PROLOGUE
     call agtab_after            # a Close link clicked in the last frame
+    call at_link_apply          # a link that waited for the list
     call at_cur_rec
     mov rbx, rax
     cmp rbx, [rip + at_last_active]
@@ -1220,6 +1226,419 @@ FN agents_status_item
     mov eax, [rsp]
     EPILOGUE
 
+# ---- links: rhun://NAME/open?session=ID&prompt=TEXT (NAME an agent's word: config's names) ----
+
+# FN agtab_link(cstr) -> eax 1 when it was an agent's open link (handled): the conversation ID (else a new one)
+#   opens where [agents] location says, the prompt fills its box and is not sent (its @terminal: names are
+#   blocked: agterm_block); a conversation shown already keeps its box. An ID is looked up once discovery has
+#   listed the project's conversations (a window the link just started)
+FN agtab_link
+    PROLOGUE
+    mov rbx, rdi
+    xor r15d, r15d
+    xor ecx, ecx                # "rhun://", the scheme in any case
+1:  movzx eax, byte ptr [rbx + rcx]
+    test eax, eax
+    jz 9f
+    cmp ecx, 4
+    jae 2f
+    or eax, 0x20
+2:  lea rdx, [rip + .Lrhun]
+    cmp al, [rdx + rcx]
+    jne 9f
+    inc ecx
+    cmp ecx, 7
+    jb 1b
+    lea r12, [rbx + 7]          # NAME
+    xor ecx, ecx
+3:  movzx eax, byte ptr [r12 + rcx]
+    test eax, eax
+    jz 9f
+    cmp eax, '/'
+    je 4f
+    inc rcx
+    jmp 3b
+4:  test rcx, rcx
+    jz 9f
+    mov r13, rcx
+    mov rdi, r12
+    mov rsi, rcx
+    call agent_kind_named
+    test eax, eax
+    jz 9f                       # not an agent's: the other routes
+    mov r14d, eax
+    lea r12, [r12 + r13 + 1]    # "open", then the end, "?" or "/?"
+    mov rdi, r12
+    call strlen
+    mov rdi, r12
+    mov rsi, rax
+    lea rdx, [rip + .Lopen]
+    mov ecx, 4
+    call str_starts
+    test eax, eax
+    jz 9f
+    add r12, 4
+    cmp byte ptr [r12], '/'
+    jne 5f
+    inc r12
+5:  movzx eax, byte ptr [r12]
+    test eax, eax
+    jz 6f
+    cmp eax, '?'
+    jne 9f
+    inc r12
+6:  mov [rip + at_lk_kind], r14d
+    mov byte ptr [rip + at_lk_id], 0
+    lea rdi, [rip + at_lk_prompt]
+    call sb_clear
+    # the query's pairs
+7:  cmp byte ptr [r12], 0
+    je 8f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_session]
+    call at_pair
+    test rax, rax
+    jz 71f
+    mov r12, rax
+    lea rdi, [rip + at_sb]      # (decoded, then checked and kept)
+    call sb_clear
+    mov rdi, r12
+    lea rsi, [rip + at_sb]
+    call at_decode
+    mov r12, rax
+    call at_take_id
+    jmp 7b
+71: mov rdi, r12
+    lea rsi, [rip + .Lk_prompt]
+    call at_pair
+    test rax, rax
+    jz 72f
+    mov r12, rax
+    lea rdi, [rip + at_lk_prompt]
+    call sb_clear
+    mov rdi, r12
+    lea rsi, [rip + at_lk_prompt]
+    call at_decode
+    mov r12, rax
+    mov dword ptr [rip + at_lk_has_prompt], 1
+    jmp 7b
+72: movzx eax, byte ptr [r12]   # another pair: passed over
+    test eax, eax
+    jz 8f
+    inc r12
+    cmp eax, '&'
+    jne 72b
+    jmp 7b
+8:  cmp dword ptr [rip + at_lk_has_prompt], 0
+    jne 81f
+    lea rdi, [rip + at_lk_prompt]
+    call sb_clear
+81: mov dword ptr [rip + at_lk_has_prompt], 0
+    mov dword ptr [rip + at_lk_pending], 1
+    call at_link_apply
+    mov r15d, 1
+9:  mov eax, r15d
+    EPILOGUE
+
+# at_pair(ptr, key cstr) -> rax after "KEY=" when the pair at ptr has that key, else 0
+at_pair:
+    xor ecx, ecx
+1:  movzx eax, byte ptr [rsi + rcx]
+    test eax, eax
+    jz 2f
+    cmp al, [rdi + rcx]
+    jne 8f
+    inc rcx
+    jmp 1b
+2:  cmp byte ptr [rdi + rcx], '='
+    jne 8f
+    lea rax, [rdi + rcx + 1]
+    ret
+8:  xor eax, eax
+    ret
+
+# at_decode(ptr, sb) -> rax after the value (past its "&"): the value percent-decoded ("+" a space) into sb
+at_decode:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+1:  movzx eax, byte ptr [rbx]
+    test eax, eax
+    jz 9f
+    inc rbx
+    cmp eax, '&'
+    je 9f
+    cmp eax, '+'
+    jne 2f
+    mov eax, ' '
+    jmp 5f
+2:  cmp eax, '%'
+    jne 5f
+    movzx edi, byte ptr [rbx]
+    call at_hex
+    test eax, eax
+    js 4f
+    mov r13d, eax
+    movzx edi, byte ptr [rbx + 1]
+    call at_hex
+    test eax, eax
+    js 4f
+    shl r13d, 4
+    or eax, r13d
+    add rbx, 2
+    jmp 5f
+4:  mov eax, '%'
+5:  mov rdi, r12
+    mov esi, eax
+    call sb_push_byte
+    jmp 1b
+9:  mov rax, rbx
+    EPILOGUE
+
+# at_hex(char) -> eax its value, -1 not a hex digit
+at_hex:
+    mov eax, edi
+    sub eax, '0'
+    cmp eax, 10
+    jb 1f
+    mov eax, edi
+    or eax, 0x20
+    sub eax, 'a'
+    cmp eax, 6
+    jae 8f
+    add eax, 10
+1:  ret
+8:  mov eax, -1
+    ret
+
+# at_take_id(): the decoded value in at_sb is the id when it is 1 to 64 letters, digits, "-" or "_"
+at_take_id:
+    mov rsi, [rip + at_sb + SB_ptr]
+    mov rcx, [rip + at_sb + SB_len]
+    test rcx, rcx
+    jz 8f
+    cmp rcx, 64
+    ja 8f
+    xor edx, edx
+1:  cmp rdx, rcx
+    jae 3f
+    movzx eax, byte ptr [rsi + rdx]
+    inc rdx
+    cmp eax, '-'
+    je 1b
+    cmp eax, '_'
+    je 1b
+    lea r8d, [rax - '0']
+    cmp r8d, 10
+    jb 1b
+    or eax, 0x20
+    sub eax, 'a'
+    cmp eax, 26
+    jb 1b
+    jmp 8f
+3:  lea rdi, [rip + at_lk_id]
+    xor edx, edx
+4:  mov al, [rsi + rdx]
+    mov [rdi + rdx], al
+    inc rdx
+    cmp rdx, rcx
+    jb 4b
+    mov byte ptr [rdi + rdx], 0
+    ret
+8:  mov byte ptr [rip + at_lk_id], 0
+    ret
+
+# at_by_id(id cstr) -> rax the listed conversation whose file's name, less its extension, is the id; 0 none
+at_by_id:
+    PROLOGUE
+    mov r12, rdi
+    call strlen
+    mov r13, rax
+    call agents_rows_vec
+    mov r14, rax
+    mov r15, rdx
+    xor ebx, ebx
+1:  cmp rbx, r15
+    jae 8f
+    mov rax, [r14 + rbx*8]
+    inc rbx
+    mov rdi, [rax + AS_path]
+    test rdi, rdi
+    jz 1b
+    push rax
+    push rax
+    call at_base
+    mov rdi, rax
+    mov rsi, rdx
+    pop rax
+    pop rax
+    cmp rsi, r13
+    jne 1b
+    push rax
+    push rax
+    mov rdx, r12
+    mov rcx, r13
+    call str_starts
+    mov ecx, eax
+    pop rax
+    pop rax
+    test ecx, ecx
+    jz 1b
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# at_base(path cstr) -> rax its file's name, rdx its length less the extension
+at_base:
+    mov rax, rdi
+    mov rcx, rdi
+1:  movzx edx, byte ptr [rcx]
+    test edx, edx
+    jz 2f
+    inc rcx
+    cmp edx, '/'
+    jne 1b
+    mov rax, rcx
+    jmp 1b
+2:  mov rdx, rcx                # the end; back to the last "."
+3:  cmp rdx, rax
+    jbe 4f
+    dec rdx
+    cmp byte ptr [rdx], '.'
+    jne 3b
+    sub rdx, rax
+    ret
+4:  sub rcx, rax
+    mov rdx, rcx
+    ret
+
+# at_link_apply(): a link waiting: applied once the list is there when it names a conversation
+at_link_apply:
+    PROLOGUE
+    cmp dword ptr [rip + at_lk_pending], 0
+    je 9f
+    cmp byte ptr [rip + at_lk_id], 0
+    je 1f
+    call agents_loading
+    test eax, eax
+    jnz 9f
+1:  mov dword ptr [rip + at_lk_pending], 0
+    xor ebx, ebx
+    cmp byte ptr [rip + at_lk_id], 0
+    je 2f
+    lea rdi, [rip + at_lk_id]
+    call at_by_id
+    mov rbx, rax
+2:  test rbx, rbx
+    jz 4f
+    call agents_viewed          # shown already: it keeps its box
+    cmp rax, rbx
+    jne 3f
+    mov rdi, rbx
+    call at_find_as
+    test rax, rax
+    jz 21f
+    mov rdi, rax
+    call at_rec_tab
+    test rax, rax
+    js 21f
+    mov rdi, rax
+    call app_activate_tab
+    call agtab_sync
+    jmp 22f
+21: call cmd_focus_agents
+22: lea rdi, [rip + .Lt_shown]
+    call app_toast
+    jmp 9f
+3:  cmp dword ptr [rip + cfg_agents_location], 0
+    je 31f
+    mov rdi, rbx
+    mov esi, [rbx + AS_kind]
+    call agtab_open
+    jmp 6f
+31: call at_release             # (the panel's: a tab's view comes back to it)
+    call cmd_focus_agents
+    mov rdi, rbx
+    call agents_open_as
+    jmp 6f
+4:  cmp dword ptr [rip + cfg_agents_location], 0
+    je 41f
+    xor edi, edi
+    mov esi, [rip + at_lk_kind]
+    call agtab_open
+    jmp 6f
+41: call at_release
+    call cmd_focus_agents
+    mov edi, [rip + at_lk_kind]
+    call agentext_new_kind
+6:  mov rdx, [rip + at_lk_prompt + SB_len]  # the prompt in its box, not sent
+    test rdx, rdx
+    jz 7f
+    call agentext_box
+    mov rdi, rax
+    mov rsi, [rip + at_lk_prompt + SB_ptr]
+    mov rdx, [rip + at_lk_prompt + SB_len]
+    call tf_set
+    mov rdi, [rip + at_lk_prompt + SB_ptr]
+    mov rsi, [rip + at_lk_prompt + SB_len]
+    call agterm_block
+    call agentext_box_changed
+7:  call at_keys_in
+9:  EPILOGUE
+
+# FN agtab_cmd_open_window(): "Agents: Open in New Window": another rhun on the project, given the link to the
+#   conversation the view shows (none: a new conversation)
+FN agtab_cmd_open_window
+    PROLOGUE
+    mov r12, [rip + g_project]
+    test r12, r12
+    jz 8f
+    call agents_viewed
+    mov rbx, rax
+    call at_default_kind
+    test rbx, rbx
+    jz 1f
+    mov eax, [rbx + AS_kind]
+1:  mov edi, eax
+    call agent_kind_name
+    mov r13, rax
+    lea rdi, [rip + at_sb]
+    call sb_clear
+    lea rdi, [rip + at_sb]
+    lea rsi, [rip + .Lrhun]
+    call sb_push_cstr
+    lea rdi, [rip + at_sb]
+    mov rsi, r13
+    call sb_push_cstr
+    lea rdi, [rip + at_sb]
+    lea rsi, [rip + .Lslash_open]
+    call sb_push_cstr
+    test rbx, rbx
+    jz 2f
+    mov rdi, [rbx + AS_path]
+    test rdi, rdi
+    jz 2f
+    call at_base
+    mov r14, rax
+    mov r15, rdx
+    lea rdi, [rip + at_sb]
+    lea rsi, [rip + .Lq_session]
+    call sb_push_cstr
+    lea rdi, [rip + at_sb]
+    mov rsi, r14
+    mov rdx, r15
+    call sb_push
+2:  lea rdi, [rip + at_sb]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, r12
+    mov rsi, [rip + at_sb + SB_ptr]
+    call app_new_window_link
+    EPILOGUE
+8:  lea rdi, [rip + .Lt_noproject]
+    call app_toast
+    EPILOGUE
+
 # ---- the session file and Reopen Closed Tab: a tab as "KIND<TAB>FILE" ----
 
 # FN agtab_line(TAB*) -> rax "KIND<TAB>FILE" (owned) for a conversation tab whose conversation has a file, else 0
@@ -1572,6 +1991,14 @@ FN agtab_c_print
 agtab_n_print: .asciz "print-agent-tabs"
 agtab_loc_opts: .asciz "panel", "Side panel", "tab", "Editor tab", ""
 .Lt_full: .asciz "Close a conversation tab first."
+.Lt_shown: .asciz "Session is already open. Your prompt was not applied — enter it manually."
+.Lt_noproject: .asciz "Open a folder first."
+.Lrhun: .asciz "rhun://"
+.Lopen: .asciz "open"
+.Lslash_open: .asciz "/open"
+.Lq_session: .asciz "?session="
+.Lk_session: .asciz "session"
+.Lk_prompt: .asciz "prompt"
 .Lt_untitled: .asciz "Conversation"
 .Lt_gone: .asciz "This conversation is no longer in the list."
 .Lt_loading: .asciz "Loading..."

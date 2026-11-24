@@ -18,9 +18,11 @@ ENUMS = {
     'INV_': ['src/rhun.inc'],
     'PK_': ['src/rhun.inc'],   # query kinds: index query.s's pk_table
     'QO_': ['src/rhun.inc'],   # query askers: index qo_reply, qo_part, qo_trunc
+    'ACT_': ['src/rhun.inc'],  # a command's action: index act_names (agentcfg.s); lines merged in parallel
+    'OA_': ['src/app/agent_claude.s'],   # what an answer Claude's driver waits for is for
 }
 # names that share a prefix but belong to another enumeration
-SEPARATE = {'PM_RECENT', 'PK_COUNT'}  # app.s's project-menu row; the number of query kinds
+SEPARATE = {'PM_RECENT', 'PK_COUNT', 'ACT_COUNT'}  # app.s's project-menu row; the number of query kinds, of actions
 
 def values(prefix, globs, extra=None):
     seen = {}
@@ -56,13 +58,33 @@ def check(extra_for=None):
                 bad.append(f'{prefix}* value {val} shared by ' + ', '.join(names))
     return bad
 
+def act_names():
+    """ACT_* is 0..ACT_COUNT-1 without a gap, and agentcfg.s's act_names has one name per value."""
+    vals = sorted(v for v, _, _ in values('ACT_', ['src/rhun.inc']))
+    count = None
+    for line in (ROOT / 'src/rhun.inc').read_text().splitlines():
+        m = re.match(r'^\s*\.equ\s+ACT_COUNT\s*,\s*(\d+)', line)
+        if m:
+            count = int(m.group(1))
+    bad = []
+    if vals != list(range(count)):
+        bad.append(f'ACT_* values {vals} are not 0 to ACT_COUNT - 1 ({count - 1})')
+    text = (ROOT / 'src/app/agentcfg.s').read_text()
+    block = text[text.index('act_names:'):]
+    block = block[:block.index('fast_names:')]
+    names = sum(len([w for w in line.split('#')[0].replace('.quad', '').split(',') if w.strip()])
+                for line in block.splitlines()[1:] if '.quad' in line)
+    if names != count:
+        bad.append(f'act_names (agentcfg.s) has {names} names for ACT_COUNT {count}')
+    return bad
+
 if __name__ == '__main__':
     if '--negative-control' in sys.argv:
         bad = check(('negative-control', '.equ PM_TEST_COLLIDES, 12'))
         if not bad:
             print('FAIL negative control: a planted PM_ collision went unnoticed')
             sys.exit(1)
-    bad = check()
+    bad = check() + act_names()
     for b in bad:
         print('FAIL ' + b)
     if bad:

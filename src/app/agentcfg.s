@@ -2055,6 +2055,7 @@ act_names:                      # ACT_* by value
     .quad aghead_a_focusview, aghead_n_resume   # 17, 18: ACT_FOCUSVIEW's and ACT_RESUME's (agenthead.s)
     # phase 7 (claude_dlg.s; claude-chat-p7): the dialogs' commands, ACT_STATUS (19) to ACT_INSTRUCT (25)
     .quad .La_status, .La_usage, .La_context, .La_ostyle, .La_skills, .La_memory, .La_instruct
+    .quad .La_attach, .La_mention   # 26, 27: phase 4 task 3's (agentatt.s)
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .Lsuffix: .asciz ".agents-"
 .Lempty: .asciz ""
@@ -2119,6 +2120,8 @@ fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .La_unavailable: .asciz "unavailable"
 .La_ultra: .asciz "ultra"
 .La_status: .asciz "status"
+.La_attach: .asciz "attach"
+.La_mention: .asciz "mention"
 .La_usage: .asciz "usage"
 .La_context: .asciz "context"
 .La_ostyle: .asciz "output-style"

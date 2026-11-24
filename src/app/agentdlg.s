@@ -840,7 +840,9 @@ focusable:
     cmp ecx, DGK_TOGGLE
     je 2f
     cmp ecx, DGK_LINK
-    jne 1f
+    je 2f
+    cmp ecx, DGK_FIELD          # claude-chat-p7b: the form rows (agentdlg2.s)
+    jb 1f
 2:  mov eax, 1
 1:  ret
 
@@ -1219,6 +1221,8 @@ row_h:
     mov r14, [rip + ag_fsmall]
     mov r14d, [r14 + FACE_lineh]    # its small line
     mov eax, [rbx + DGR_kind]
+    cmp eax, DGK_FIELD          # claude-chat-p7b: the form rows (agentdlg2.s)
+    jae .Lrh_form
     cmp eax, DGK_HEAD
     je .Lrh_head
     cmp eax, DGK_PAIR
@@ -1320,6 +1324,11 @@ row_h:
 .Lrh_link:
     lea eax, [r14 + 0]
     add eax, [rip + g_pmt + 4*MI_8]
+    EPILOGUE
+.Lrh_form:
+    mov rdi, rbx
+    mov esi, r12d
+    call agentdlg2_row_h
     EPILOGUE
 
 # pair_split() -> eax the value's x from the rows' left (0: stacked under its label), pair_vw its width
@@ -1754,6 +1763,8 @@ draw_body:
 
 # draw_row(DR*, y, x, w, focus index or -1) -> eax 1 when an act ran (the rows may be gone)
 draw_row:
+    cmp dword ptr [rdi + DGR_kind], DGK_FIELD   # claude-chat-p7b: the form rows (agentdlg2.s)
+    jae agentdlg2_draw_row
     PROLOGUE 48
     mov rbx, rdi
     mov [rsp], esi              # y (its top, below its gap)
@@ -2637,7 +2648,14 @@ FN agentdlg_key
     xor edx, edx
     call do_act
     jmp .Lk_yes
-1:  test r14d, MOD_CTRL | MOD_ALT | MOD_SUPER
+1:  mov edi, ebx                # claude-chat-p7b: a form row that has the focus takes its keys first
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    call agentdlg2_key
+    test eax, eax
+    jnz .Lk_yes
+    test r14d, MOD_CTRL | MOD_ALT | MOD_SUPER
     jnz .Lk_field
     cmp r12d, KEY_TAB
     jne 2f
@@ -2890,7 +2908,11 @@ FN agentdlg_field
     jne 1f
     lea rax, [rip + dg_tf]
     ret
-1:  xor eax, eax
+1:  push rbx                    # claude-chat-p7b: a form field that has the focus (agentdlg2.s)
+    call focused_entry
+    mov edi, eax
+    call agentdlg2_field
+    pop rbx
     ret
 
 # FN agentdlg_paste(ptr, len): a paste while the panel has the keys: the dialog's field (one line), else
@@ -2901,6 +2923,13 @@ FN agentdlg_paste
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    call focused_entry          # claude-chat-p7b: into a form field (agentdlg2.s)
+    mov edi, eax
+    mov rsi, rbx
+    mov rdx, r12
+    call agentdlg2_paste
+    test eax, eax
+    jnz 9f
     call agentdlg_field
     test rax, rax
     jz 9f
@@ -2934,6 +2963,67 @@ under_paste:
     mov rsi, r12
     call agentcard_paste
 9:  EPILOGUE
+
+# ---- claude-chat-p7b: what agentdlg2.s (the form rows) uses of the shell; nothing here changes it ----
+
+# FN agentdlg_x_focus() -> eax the focus index (-1 none), edx its entry (type << 24 | index, 0 none), ecx 1
+#   while the panel has the keys
+FN agentdlg_x_focus
+    call focused_entry
+    mov edx, eax
+    mov eax, [rip + dg_focus]
+    xor ecx, ecx
+    cmp dword ptr [rip + g_focus], FOCUS_AGENTS
+    sete cl
+    ret
+
+# FN agentdlg_x_set_focus(index): the focus on that focusable (from 0), the panel takes the keys
+FN agentdlg_x_set_focus
+    mov [rip + dg_focus], edi
+    call keep_fkey
+    mov dword ptr [rip + g_focus], FOCUS_AGENTS
+    mov dword ptr [rip + g_dirty], 1
+    ret
+
+# FN agentdlg_x_move(dir): the focus one on (Tab), revealed
+FN agentdlg_x_move
+    jmp move
+
+# FN agentdlg_x_act(act, arg, DR* or 0): a row's act, as a click does it
+FN agentdlg_x_act
+    jmp do_act
+
+# FN agentdlg_x_row(i) -> rax the i-th row (DR*)
+FN agentdlg_x_row
+    jmp row_at
+
+# FN agentdlg_x_touch(): the rows changed (laid out again)
+FN agentdlg_x_touch
+    inc qword ptr [rip + dg_rev]
+    mov dword ptr [rip + g_dirty], 1
+    ret
+
+# FN agentdlg_x_lines(face, ptr, len, w) -> eax lines wrapped; agentdlg_x_wrap(face, x, y, w, ptr, len,
+#   [argb]) -> eax lines drawn; agentdlg_x_fit(face, x, top, ptr, len, argb, [maxw]) one line cut;
+#   agentdlg_x_ring(x, y, w, h) the focus ring; agentdlg_x_field_h() -> eax a one-line field's height
+FN agentdlg_x_lines
+    jmp lines_of
+FN agentdlg_x_wrap
+    jmp draw_wrap
+FN agentdlg_x_fit
+    jmp fit_text_s
+FN agentdlg_x_ring
+    jmp ring
+FN agentdlg_x_field_h
+    push rbx
+    mov rax, [rip + ag_fui]
+    mov [rip + dg_tf + TF_face], rax
+    lea rdi, [rip + dg_tf]
+    call ta_line_h_of
+    PM ecx, MI_12
+    add eax, ecx
+    pop rbx
+    ret
 
 # ---- headless ----
 
@@ -3204,6 +3294,8 @@ push_num:
 
 # dump_row(sb, DR*): " T1\tT2\tT3" as its kind shows them, its flags, a line feed
 dump_row:
+    cmp dword ptr [rsi + DGR_kind], DGK_FIELD   # claude-chat-p7b: the form rows (agentdlg2.s)
+    jae agentdlg2_dump_row
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
@@ -3853,6 +3945,7 @@ test_ops: .quad test_act, 0
 state_names: .quad .Ls_loading, .Ls_ready, .Ls_error
 kind_names: .quad .Ldash, .Lk_head, .Lk_pair, .Lk_text, .Lk_bar, .Lk_item, .Lk_toggle, .Lk_cols, .Lk_link
     .quad .Lk_gap
+    .quad agentdlg2_n_field, agentdlg2_n_option, agentdlg2_n_tabs  # claude-chat-p7b (agentdlg2.s)
 fit_sizes: .long 8, 13, 32
 .p2align 3
 dlg_names:                      # agent-dialog's names and their commands

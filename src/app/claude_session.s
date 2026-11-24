@@ -2694,6 +2694,13 @@ FN claude_action
     call claude_dlg_open
     test eax, eax
     jnz .Lca_yes
+    mov rdi, rbx                # claude-chat-p7b: a configuration dialog's command (claude_dlg2.s)
+    mov esi, r12d
+    mov rdx, r13
+    mov rcx, r14
+    call claude_dlg2_open
+    test eax, eax
+    jnz .Lca_yes
     cmp r12d, ACT_EFFORT        # the effort row: a step, a round, or a level's id (a draft's: AL* 0)
     je 10f
     test rbx, rbx
@@ -4027,6 +4034,27 @@ menu_tbl:
     .quad .Lm_ostyle, .Lm_ostyle_d
     .long APK_ROW, 0
     .quad 0
+    # claude-chat-p7b: the dialogs that change Claude Code's configuration (claude_dlg2.s)
+    .long APS_CUSTOMIZE, ACT_MCP
+    .quad .Lm2_mcp, .Lm2_mcp_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CUSTOMIZE, ACT_HOOKS
+    .quad .Lm2_hooks, .Lm2_hooks_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CUSTOMIZE, ACT_PERMS
+    .quad .Lm2_perms, .Lm2_perms_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CUSTOMIZE, ACT_SANDBOX
+    .quad .Lm2_sandbox, .Lm2_sandbox_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CUSTOMIZE, ACT_PLUGINS
+    .quad .Lm2_plugins, .Lm2_plugins_d
+    .long APK_ROW, 0
+    .quad 0
     .long APS_CUSTOMIZE, ACT_TERMINAL
     .quad .Lm_term, .Lm_term_d
     .long APK_ROW, 0
@@ -4094,6 +4122,15 @@ local_cmds:
     .quad .Ln_rc, .Ld_remote, .Lempty, ACT_RC
     .quad .Ln_chrome, .Lm_chrome_d, .Lempty, ACT_CHROME
     .quad .Ln_agents, .Ld_agents, .Lempty, ACT_HANDOFF
+    # claude-chat-p7b: the configuration dialogs' commands (ext-webview-ui.md 1.25; claude_dlg2.s)
+    .quad .Ln2_mcp, .Lm2_mcp_d2, .Lh2_mcp, ACT_MCP
+    .quad .Ln2_hooks, .Lm2_hooks_d, .Lempty, ACT_HOOKS
+    .quad .Ln2_perms, .Lm2_perms_d, .Lempty, ACT_PERMS
+    .quad .Ln2_tools, .Lm2_perms_d, .Lempty, ACT_PERMS
+    .quad .Ln2_sandbox, .Lm2_sandbox_d, .Lh2_sandbox, ACT_SANDBOX
+    .quad .Ln2_plugin, .Lm2_plugins_d, .Lempty, ACT_PLUGINS
+    .quad .Ln2_plugins, .Lm2_plugins_d, .Lempty, ACT_PLUGINS
+    .quad .Ln2_market, .Lm2_plugins_d, .Lempty, ACT_PLUGINS
     .quad 0, 0, 0, 0
 .Ln_btw: .asciz "btw"
 .Ld_btw: .asciz "Ask a quick side question without interrupting the main conversation"
@@ -4112,6 +4149,28 @@ local_cmds:
 .Lm_chrome_d: .asciz "Open Claude in Chrome settings"
 .Ln_agents: .asciz "agents"
 .Ld_agents: .asciz "Manage agent configurations (in the terminal)"
+# claude-chat-p7b: the configuration dialogs' words (ext-webview-ui.md 1.24, 1.25)
+.Lm2_mcp: .asciz "MCP servers"
+.Lm2_mcp_d: .asciz "Configure Model Context Protocol servers"
+.Lm2_mcp_d2: .asciz "Manage MCP servers"
+.Lh2_mcp: .asciz "[reconnect|enable|disable [<server>|all]]"
+.Lm2_hooks: .asciz "Hooks"
+.Lm2_hooks_d: .asciz "View and edit hooks"
+.Lm2_perms: .asciz "Permissions"
+.Lm2_perms_d: .asciz "View and edit permission rules"
+.Lm2_sandbox: .asciz "Sandbox"
+.Lm2_sandbox_d: .asciz "View and change how commands are sandboxed"
+.Lh2_sandbox: .asciz "[exclude <pattern>]"
+.Lm2_plugins: .asciz "Manage plugins"
+.Lm2_plugins_d: .asciz "Install, enable, or disable plugins"
+.Ln2_mcp: .asciz "mcp"
+.Ln2_hooks: .asciz "hooks"
+.Ln2_perms: .asciz "permissions"
+.Ln2_tools: .asciz "allowed-tools"
+.Ln2_sandbox: .asciz "sandbox"
+.Ln2_plugin: .asciz "plugin"
+.Ln2_plugins: .asciz "plugins"
+.Ln2_market: .asciz "marketplace"
 .Lempty: .asciz ""
 .Ln_clear: .asciz "clear"
 .Ld_clear: .asciz "Start a new conversation"

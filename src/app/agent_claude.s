@@ -56,6 +56,7 @@
 .equ OA_TASK_STOP, 12           # task 11: stop_task (an error answer: a toast)
 .equ OA_TASK_BG, 13             # task 11: background_tasks (task_answer)
 .equ OA_DIALOG, 14              # phase 7: a dialog's request (claude_dlg.s: claude_dlg_answer)
+.equ OA_DIALOG2, 15             # claude-chat-p7b: a configuration dialog's request (claude_dlg2.s)
 .equ QUESTION_OPTS, 16          # a question's card shows its first 16 options
 .equ AUTH_MS, 10000             # the sign-in question's answer is waited for this long
 .equ AUTH_MAX, 65536            # bytes of its answer kept
@@ -1639,6 +1640,7 @@ FN claude_auth_tick
     PROLOGUE
     call claude_settings_tick
     call claude_hooks_tick      # phase 4 task 10: hook answers that are due
+    call claude_dlg2_tick       # claude-chat-p7b: a configuration dialog's re-read (claude_dlg2.s)
     cmp dword ptr [rip + au_state], AU_ASKING
     jne 9f
     call time_ms
@@ -1678,7 +1680,16 @@ FN claude_auth_timeout
     cmp eax, ebx
     jbe 8f
 7:  mov eax, ebx
-8:  EPILOGUE
+8:  mov ebx, eax                # claude-chat-p7b: a configuration dialog's re-read (claude_dlg2.s)
+    call claude_dlg2_timeout
+    test ebx, ebx
+    js 81f
+    test eax, eax
+    js 82f
+    cmp eax, ebx
+    jbe 81f
+82: mov eax, ebx
+81: EPILOGUE
 
 # FN claude_auth_end(): the status question, if one runs, ends (its watch, its pipe, its process); its
 #   profile is asked again next time (au_done sets an answer after)
@@ -3546,6 +3557,47 @@ FN claude_dlg_cw
 FN claude_dlg_end
     jmp req_end
 
+# ---- claude-chat-p7b: the configuration dialogs' requests (claude_dlg2.s) ----
+
+# FN claude_dlg2_begin(AL*, subtype cstr) -> rax the request's number: {"type":"control_request",
+#   "request_id":"rN","request":{"subtype":S begun (its answer goes to claude_dlg2_answer); FN claude_dlg2_cw()
+#   -> rax the writer it is in (more members: jw_*); FN claude_dlg2_end(AL*) -> eax 1 written
+FN claude_dlg2_begin
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov esi, OA_DIALOG2
+    call req_begin
+    mov r13, [rbx + AL_next]
+    dec r13
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, r12
+    call jw_cstr
+    mov rax, r13
+    EPILOGUE
+FN claude_dlg2_cw
+    lea rax, [rip + cw]
+    ret
+FN claude_dlg2_end
+    jmp req_end
+
+# FN claude_dlg2_env(AL*) -> rax envp the conversation's program gets (start_env; mem_free it), 0 none
+FN claude_dlg2_env
+    jmp start_env
+
+# FN claude_dlg2_cwd(AL*) -> rax the folder its program runs in (the conversation's checkout, else the
+#   project; 0 none)
+FN claude_dlg2_cwd
+    mov rax, [rdi + AL_as]
+    mov rax, [rax + AS_cwd]
+    test rax, rax
+    jnz 1f
+    mov rax, [rip + g_project]
+1:  ret
+
 # reply_begin(AL*, AQ*): {"type":"control_response","response":{"subtype":"success","request_id":ID,
 #   "response":{  (the answer's members follow; reply_end closes it)
 reply_begin:
@@ -3865,7 +3917,14 @@ h_response:
     mov rcx, r15
     call claude_side_answer
     jmp 9f
-31: cmp eax, OA_TASK_STOP       # task 11: stop_task, background_tasks
+31: cmp eax, OA_DIALOG2         # claude-chat-p7b: a configuration dialog's (claude_dlg2.s)
+    jne 36f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r15
+    call claude_dlg2_answer
+    jmp 9f
+36: cmp eax, OA_TASK_STOP       # task 11: stop_task, background_tasks
     jb 32f
     cmp eax, OA_TASK_BG
     ja 32f

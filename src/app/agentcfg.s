@@ -2056,7 +2056,9 @@ act_names:                      # ACT_* by value
     # phase 7 (claude_dlg.s; claude-chat-p7): the dialogs' commands, ACT_STATUS (19) to ACT_INSTRUCT (25)
     .quad .La_status, .La_usage, .La_context, .La_ostyle, .La_skills, .La_memory, .La_instruct
     .quad .La_attach, .La_mention   # 26, 27: phase 4 task 3's (agentatt.s)
-    # p7c (agentside.s, agentmap.s, claude_side.s): ACT_BTW (28) to ACT_RC (37)
+    # claude-chat-p7b (claude_dlg2.s): the configuration dialogs, ACT_MCP (28) to ACT_PLUGINS (32)
+    .quad .La_mcp, .La_hooks, .La_perms, .La_sandbox, .La_plugins
+    # p7c (agentside.s, agentmap.s, claude_side.s): ACT_BTW (33) to ACT_RC (42)
     .quad .La_btw, .La_bookmarks, .La_tasks, .La_remote, .La_chrome, .La_sideq, .La_handoff, .La_handans
     .quad .La_bashes, .La_rc
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
@@ -2141,6 +2143,11 @@ fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .La_skills: .asciz "skills"
 .La_memory: .asciz "memory"
 .La_instruct: .asciz "instructions"
+.La_mcp: .asciz "mcp"                  # claude-chat-p7b
+.La_hooks: .asciz "hooks"
+.La_perms: .asciz "permissions"
+.La_sandbox: .asciz "sandbox"
+.La_plugins: .asciz "plugins"
 .Lfs_off: .asciz "off"
 .Lfs_on: .asciz "on"
 .Lfs_cooldown: .asciz "cooldown"

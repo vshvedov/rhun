@@ -3579,17 +3579,24 @@ ENDSTRUCT ACH_SIZE
 # phase 4 task 3, attachments (agentatt.s)
 .equ ACT_ATTACH, 26             # Attach file... (the path browser)
 .equ ACT_MENTION, 27            #   Mention file from this project... ("@" at the caret)
+# phase 7, the dialogs that change Claude Code's configuration (claude-chat-p7b: claude_dlg2.s and the files
+#   beside it)
+.equ ACT_MCP, 28                # MCP servers (/mcp)
+.equ ACT_HOOKS, 29              # Hooks (/hooks)
+.equ ACT_PERMS, 30              # Permissions (/permissions, /allowed-tools)
+.equ ACT_SANDBOX, 31            # Sandbox (/sandbox, /sandbox exclude PATTERN)
+.equ ACT_PLUGINS, 32            # Manage plugins (/plugin, /plugins, /marketplace)
 # phase 7 part 3 (claude-chat-p7c: agentside.s, agentmap.s, claude_side.s): the side panels, the agent map,
 #   Remote Control, Claude in Chrome, the hand-off to the terminal. They stay the last acts: claude_action
 #   passes every act from ACT_BTW to claude_side_action
-.equ ACT_BTW, 28                # /btw [QUESTION]: the side question (generic: agentside.s through agentpop_run)
-.equ ACT_BOOKMARKS, 29          # /bookmarks, the menu's Bookmarks: the bookmarks panel (generic)
-.equ ACT_TASKS, 30              # /tasks, /bashes: the agent map (generic: agentmap.s)
-.equ ACT_REMOTE, 31             # /remote-control, /rc: Remote Control of the conversation's program (DRV_action)
-.equ ACT_CHROME, 32             # /chrome, the menu's Claude in Chrome: its dialog (DRV_action)
-.equ ACT_SIDEQ, 33              # DRV_action(AL*, ACT_SIDEQ, question ptr, len) -> eax its request + 1, 0 not sent
-.equ ACT_HANDOFF, 34            # a command for the terminal's Claude Code (/agents): the hand-off card (DRV_action)
-.equ ACT_HANDANS, 35            # DRV_action(AL*, ACT_HANDANS, n): the hand-off card's option n (own_answer)
+.equ ACT_BTW, 33                # /btw [QUESTION]: the side question (generic: agentside.s through agentpop_run)
+.equ ACT_BOOKMARKS, 34          # /bookmarks, the menu's Bookmarks: the bookmarks panel (generic)
+.equ ACT_TASKS, 35              # /tasks, /bashes: the agent map (generic: agentmap.s)
+.equ ACT_REMOTE, 36             # /remote-control, /rc: Remote Control of the conversation's program (DRV_action)
+.equ ACT_CHROME, 37             # /chrome, the menu's Claude in Chrome: its dialog (DRV_action)
+.equ ACT_SIDEQ, 38              # DRV_action(AL*, ACT_SIDEQ, question ptr, len) -> eax its request + 1, 0 not sent
+.equ ACT_HANDOFF, 39            # a command for the terminal's Claude Code (/agents): the hand-off card (DRV_action)
+.equ ACT_HANDANS, 40            # DRV_action(AL*, ACT_HANDANS, n): the hand-off card's option n (own_answer)
 .equ ID_AGSIDE, 0x9600          # the side panels' controls: + SID_* (agentside.s), to 0x97ff
 .equ AQK_HANDOFF, 9             # rhun's own card: Continue in Terminal (own_answer -> DRV_action ACT_HANDANS)
 .equ OA_SIDE_FIRST, 40          # agent_claude.s's answers from here are claude_side.s's (claude_side_answer)
@@ -3597,9 +3604,9 @@ ENDSTRUCT ACH_SIZE
 .equ OA_SIDE_CHROME, 41         #   get_chrome_dialog
 .equ OA_SIDE_REMOTE, 42         #   remote_control {enabled: true}
 .equ OA_SIDE_REMOTE_OFF, 43     #   remote_control {enabled: false}
-.equ ACT_BASHES, 36             # /bashes: /tasks under another name (not listed in the menu)
-.equ ACT_RC, 37                 # /rc: /remote-control under another name (not listed)
-.equ ACT_COUNT, 38
+.equ ACT_BASHES, 41             # /bashes: /tasks under another name (not listed in the menu)
+.equ ACT_RC, 42                 # /rc: /remote-control under another name (not listed)
+.equ ACT_COUNT, 43
 # the dialog shell (agentdlg.s): a row (DGR), its kinds and flags, a button's flags, a dialog's ops table
 .equ ID_AGDLG, 0x8e00           # the dialog's controls: + DID_* (agentdlg.s), to 0x8fff
 STRUCT
@@ -3635,6 +3642,17 @@ ENDSTRUCT DGR_SIZE
 .equ DGF_SWATCH, 64             # COLS: DGR_val is an ARGB square before t1
 .equ DGF_SMALL, 128             # TEXT: the small face
 .equ DGF_STATE, 256             # ITEM: t3 is a pill (DGR_act2)
+# claude-chat-p7b (agentdlg2.s): the form rows. FIELD: t1 its label, t2 its placeholder, t3 a hint under it
+#   (DGF_ERROR: an error), DGR_val its TF (the dialog's, kept across rebuilds), DGR_act what Enter does in a
+#   one-line field (0: the focus moves on); OPTION: a choice of a group (t1, t2 a description under it,
+#   DGF_ON the one chosen); TABS: t1 the tabs' labels joined by tabs, DGR_val the one shown, DGR_act gets the
+#   tab picked as its arg
+.equ DGK_FIELD, 10
+.equ DGK_OPTION, 11
+.equ DGK_TABS, 12
+.equ DGF_MULTI, 512             # FIELD: lines (Enter is a new line)
+.equ DGF_SECRET, 1024           # FIELD: drawn and dumped as bullets (a password-like value)
+.equ DGF_SECRETV, 2048          # FIELD: lines of NAME=value or Name: value; the dump hides each value
 .equ DBF_PRIMARY, 1
 .equ DBF_NUM, 2                 # the footer's buttons are numbered; digits press them
 .equ DGO_act, 0                 # a dialog's ops: (act, arg, DR* or 0)

@@ -65,7 +65,7 @@
 .equ SID_REMOVE, 8
 .equ SID_REPLY, 0x80            #   + (row & 0x7f): a reply's bookmark button
 .equ SID_ROW, 0x100             #   + i: a bookmark's row (i < 0x100)
-.equ ID_SIDE_MD, 0x740000       # + slot << 12: the links of a Markdown text in the panel (slot < 16)
+.equ ID_SIDE_MD, 0x750000       # + slot << 12: the links of a Markdown text in the panel (slot < 16)
 .equ SQ_KEEP, 10
 .equ SQ_MAX, 20                 # a conversation's exchanges at most (waiting ones are never dropped)
 .equ Q_MAX, 4096

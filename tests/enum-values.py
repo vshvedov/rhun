@@ -82,13 +82,31 @@ def act_names():
         bad.append(f'act_names (agentcfg.s) has {names} names for ACT_COUNT {count}')
     return bad
 
+def id_bases():
+    """The agents' files' ui id bases (`.equ ID_X, 0x..000`, ranges a ui_btn id is added to) share no value with
+    another name's anywhere in src/app: two panels' parts drawn in one frame would take each other's hover and
+    press (ID_AGL and ID_SIDE_MD were both 0x740000)."""
+    pat = re.compile(r'^\s*\.equ\s+(ID_[A-Z0-9_]+)\s*,\s*(0x[0-9a-fA-F]+)\b')
+    by_val = {}
+    for f in sorted(ROOT.glob('src/app/*.s')):
+        mine = re.match(r'(agent|ag[a-z]|claude)', f.name) is not None
+        for line in f.read_text(errors='replace').splitlines():
+            m = pat.match(line)
+            if m and int(m.group(2), 16) >= 0x10000 and int(m.group(2), 16) & 0xfff == 0:
+                by_val.setdefault(int(m.group(2), 16), set()).add((m.group(1), f.name, mine))
+    bad = []
+    for val, names in sorted(by_val.items()):
+        if len({n for n, _, _ in names}) > 1 and any(m for _, _, m in names):
+            bad.append('ui id base %#x shared by ' % val + ', '.join(sorted('%s (%s)' % (n, f) for n, f, _ in names)))
+    return bad
+
 if __name__ == '__main__':
     if '--negative-control' in sys.argv:
         bad = check(('negative-control', '.equ PM_TEST_COLLIDES, 12'))
         if not bad:
             print('FAIL negative control: a planted PM_ collision went unnoticed')
             sys.exit(1)
-    bad = check() + act_names()
+    bad = check() + act_names() + id_bases()
     for b in bad:
         print('FAIL ' + b)
     if bad:

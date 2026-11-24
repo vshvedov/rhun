@@ -40,6 +40,7 @@ pend_link: .quad 0              # a link clicked in a reply, followed after the 
 pend_cwd: .quad 0               # and the checkout it was in (owned), or 0
 pend_who: .quad 0               # a web link's: who asks to open it (links_ask_open), or 0
 lk_buf: .zero 4096              # follow_file: the link's path
+ff_frag: .quad 0                # follow_file: a heading's fragment in lk_buf (task 10), 0 none
 last_poll: .quad 0
 label_due: .quad 0              # unix second when a label shown changes ("now" turns "1m ago", a live dot goes out)
 last_scan: .quad 0
@@ -1595,6 +1596,12 @@ row_init:
     mov rdi, rbx
     mov rsi, r12
     call hx_dirty
+    test r12, r12               # task 10: the row before it may end its turn no more (its Copy response line)
+    jz 32f
+    mov rdi, rbx
+    lea rsi, [r12 - 1]
+    call bar_touch
+32:
     cmp qword ptr [rip + add_x], 0
     jne 9f
     mov rdi, rbx
@@ -3660,6 +3667,13 @@ th_keys:
     jae 8f
     mov rcx, [rip + sessions + VEC_ptr]
     mov rbx, [rcx + rax*8]
+    mov rdi, rbx                # task 10: copy, select all, the context menu (agentsel.s)
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    call agsel_key
+    test eax, eax
+    jnz 7f
     mov eax, r14d
     and eax, MOD_CTRL | MOD_SUPER
     jz 1f
@@ -4836,6 +4850,9 @@ FN agents_rows_cut
 1:  mov rdi, rbx                # the calls of the rows that go leave the table first
     mov rsi, r12
     call agrow_cut
+    mov rdi, rbx                # task 10: and a selection, a right press in them (agentsel.s)
+    mov rsi, r12
+    call agsel_cut
     mov r13, r12
 2:  cmp r13, [rbx + AS_msgs + VEC_len]
     jae 3f
@@ -4860,6 +4877,11 @@ FN agents_rows_cut
 5:  mov rdi, rbx                # the folds (agentfold.s: one cut in its middle counts its rows again)
     mov rsi, r12
     call agfold_cut
+    test r12, r12               # task 10: the new last row may end its turn now (its Copy response line)
+    jz 7f
+    mov rdi, rbx
+    lea rsi, [r12 - 1]
+    call bar_touch
 7:  movsxd rax, dword ptr [rbx + AS_todo]
     cmp rax, r12
     jl 71f
@@ -5373,6 +5395,10 @@ row_parts:
 1:  mov rdi, rbx                # a day pill, a prompt's time line ([agents] timestamps)
     call row_above
     add r14d, eax
+    mov rdi, r12                # task 10: a reply's Copy response line (agentsel.s)
+    mov rsi, r13
+    call agsel_bar_h
+    add r14d, eax
     mov edx, [rbx + AM_nl]
     inc edx
     cmp edx, EST_CAP
@@ -5610,6 +5636,10 @@ row_measure:
     mov r15d, eax
     mov rdi, r14                # and above it its day pill, a prompt's time line
     call row_above
+    add r15d, eax
+    mov rdi, rbx                # task 10: under a reply its Copy response line (agentsel.s)
+    mov rsi, r12
+    call agsel_bar_h
     add eax, r15d
     EPILOGUE
 5:  mov rdi, rbx
@@ -7778,6 +7808,7 @@ thread_draw:
 .Ltd_ret:
     call reply_follow           # a link clicked in a reply, now that nothing drawn is in use
     call agrow_follow           # and a typed row's click or key (agentrows.s)
+    call agsel_follow           # task 10: a right press's context menu (agentsel.s)
     EPILOGUE
 
 # empty_draw(AS*, frame*): an empty conversation (UI 3.25: mMt, gMt): its agent's badge and one of its driver's
@@ -8104,6 +8135,16 @@ draw_msg:
     mov [rbx + AM_dser], eax
     test dword ptr [rbx + AM_flags], AMF_QUEUED
     jnz 0f                      # a queued row: not one of the conversation's (qrows)
+    mov rdi, rbx                # task 10: the row's area: a press, a right press, the pointer (agentsel.s)
+    call am_index
+    mov rsi, rax
+    mov rdi, [rip + th_as]
+    mov edx, [r14]
+    mov ecx, r12d
+    mov r8d, [r14 + 8]
+    sub r8d, [rip + g_pmt + 4*MI_12]
+    mov r9d, r13d
+    call agsel_row
     cmp qword ptr [rbx + AM_x], 0
     jne .Ldm_typed
     mov eax, [rbx + AM_role]
@@ -8315,13 +8356,24 @@ draw_msg:
     EPILOGUE
 .Ldm_md:
     # a reply: its Markdown under the label, the part in view (as tall as msg_height measured it); a failed
-    #   one's text in T_ERROR (UI 3.33, failedReply)
+    #   one's text in T_ERROR (UI 3.33, failedReply). Task 10: its text selects (agentsel.s), a link's click
+    #   knows where its document is in the row, and a reply that ends its turn has its Copy response line
+    #   under it. Frame: [rsp] its index, [8] that line's height, [12] the top drawn, [16] the height drawn,
+    #   [20] the scroll
     xor esi, esi
     test dword ptr [rbx + AM_flags], AMF_FAILED
     jz 1f
     mov esi, T_ERROR
 1:  mov rdi, [rbx + AM_doc]
     call md_set_tint
+    mov rdi, rbx
+    call am_index
+    mov [rsp], rax
+    mov rdi, [rip + th_as]
+    mov rsi, rax
+    call agsel_bar_h
+    mov [rsp + 8], eax
+    sub r13d, eax
     mov eax, r12d
     add eax, [rip + g_pmt + 4*MI_28]
     mov ecx, r13d
@@ -8337,19 +8389,17 @@ draw_msg:
     jle .Ldm_md_done
     mov r9d, edx
     sub r9d, eax                # what is above the view
-    # its links' ids: a range per row, by its index
-    mov rcx, [rip + th_as]
-    mov rax, rbx
-    sub rax, [rcx + AS_msgs + VEC_ptr]
-    push rdx
-    push r8
-    push r9
-    xor edx, edx
-    mov ecx, AM_SIZE
-    div rcx
-    pop r9
-    pop r8
-    pop rdx
+    mov [rsp + 12], edx
+    mov [rsp + 16], r8d
+    mov [rsp + 20], r9d
+    mov rdi, [rip + th_as]      # its text selected by the pointer
+    mov rsi, [rsp]
+    mov rdx, [rbx + AM_doc]
+    mov ecx, r15d
+    mov r8d, [rsp + 12]
+    mov r9d, [rsp + 20]
+    call agsel_md
+    mov eax, [rsp]              # its links' ids: a range per row, by its index
     and eax, 255
     shl eax, 12
     add eax, ID_AG_MD
@@ -8357,16 +8407,30 @@ draw_msg:
     push rax
     mov rdi, [rbx + AM_doc]
     mov esi, r15d
+    mov edx, [rsp + 16 + 12]
     mov ecx, [r14 + 32]
+    mov r8d, [rsp + 16 + 16]
+    mov r9d, [rsp + 16 + 20]
     call md_draw
     add rsp, 16
     test eax, eax
     js .Ldm_md_done
     mov rdi, rbx
     mov esi, eax
+    mov edx, r12d               # (its document's top in the row: under its day pill, time line and label)
+    add edx, [rip + g_pmt + 4*MI_28]
+    sub edx, [rbx + AM_dy]
     call reply_click
 .Ldm_md_done:
-    EPILOGUE
+    cmp dword ptr [rsp + 8], 0  # its Copy response line
+    je 97f
+    mov rdi, [rip + th_as]
+    mov rsi, [rsp]
+    mov edx, r15d
+    mov ecx, r12d
+    add ecx, r13d
+    call agsel_bar_draw
+97: EPILOGUE
 .Ldm_tool:
     PM ecx, MI_16
     mov edi, IC_TERMINAL
@@ -8522,19 +8586,24 @@ draw_msg:
     call wrap
     EPILOGUE
 
-# reply_click(msg, link): a link of a reply was clicked. A code block's Copy at once; an http or https
-#   link asks before it opens (links_ask_open, after the frame, named by the conversation's driver);
-#   other schemes as the Markdown preview follows them (nowhere); rhun:// links, files and file: URIs
-#   after the frame (reply_follow), as opening one may change what is drawn
+# reply_click(msg, link, top): a link of a reply's (or open thinking's) Markdown was clicked; top: where its
+#   document begins in the row. Task 10: a code block's Copy at once, with the toast "Copied."; a target that
+#   begins with # (a footnote's number, a heading of the same text) brings that place of the row to the top
+#   of the thread (md_anchor); a target with a control, bidi or invisible character is followed nowhere (the
+#   question must show what opens); an http or https link asks before it opens (links_ask_open, after the
+#   frame, named by the conversation's driver); rhun:// links, files and file: URIs after the frame
+#   (reply_follow), as opening one may change what is drawn; any other scheme, or a web link that is no
+#   proper URL: nothing (never md_open_link, which opens http without asking)
 reply_click:
     PROLOGUE
     mov rbx, rdi
     mov r12d, esi
+    mov r15d, edx
     mov rdi, [rbx + AM_doc]
     mov esi, r12d
     call md_is_copy
     test eax, eax
-    jnz 5f
+    jnz .Lrc_copy
     mov rdi, [rbx + AM_doc]
     mov esi, r12d
     call md_link
@@ -8544,6 +8613,13 @@ reply_click:
     ja 9f
     mov r13, rax
     mov r14, rdx
+    cmp byte ptr [r13], '#'
+    je .Lrc_anchor
+    mov rdi, r13
+    mov rsi, r14
+    call link_ok
+    test eax, eax
+    jz 9f
     mov rdi, r13
     mov rsi, r14
     call link_scheme
@@ -8554,7 +8630,7 @@ reply_click:
     mov rsi, r14
     call links_url_ok
     test eax, eax
-    jz 5f
+    jz 9f
     lea rax, [rip + .Lthis_reply]
     mov [rip + pend_who], rax
     mov rdi, [rip + th_as]
@@ -8586,10 +8662,153 @@ reply_click:
     mov [rip + pend_cwd], rax
 4:  mov dword ptr [rip + g_dirty], 1
     jmp 9f
-5:  mov rdi, [rbx + AM_doc]
+.Lrc_anchor:                    # a place in its own text: that place at the thread's top
+    mov rdi, [rbx + AM_doc]
+    mov rsi, r13
+    mov rdx, r14
+    call md_anchor
+    test eax, eax
+    js 9f
+    add eax, r15d
+    mov r13d, eax
+    mov rdi, rbx
+    call am_index
+    mov dword ptr [rip + th_follow], 0
+    mov [rip + th_arow], eax
+    mov [rip + th_aoff], r13d
+    mov dword ptr [rip + th_aabove], -1
+    mov rax, [rip + th_as]
+    mov [rip + th_aas], rax
+    mov dword ptr [rip + g_dirty], 1
+    jmp 9f
+.Lrc_copy:                      # a code block's Copy: its code (without the line feed its layout ends in)
+    mov rdi, [rbx + AM_doc]
     mov esi, r12d
-    call md_open_link
+    call md_link
+    test rdx, rdx
+    jz 1f
+    cmp byte ptr [rax + rdx - 1], 10
+    jne 1f
+    dec rdx
+1:  mov rdi, rax
+    mov rsi, rdx
+    xor edx, edx
+    call ed_clip_set
+    lea rdi, [rip + .Lcopied]
+    call app_toast
 9:  EPILOGUE
+
+# FN agents_link_click(AM*, link, top): a link of open thinking's Markdown clicked (agentrows.s), followed as a
+#   reply's is (reply_click; top: where its document begins in the row)
+FN agents_link_click
+    jmp reply_click
+
+# am_index(AM*) -> rax its index in the conversation drawn (th_as)
+am_index:
+    mov rax, rdi
+    mov rcx, [rip + th_as]
+    sub rax, [rcx + AS_msgs + VEC_ptr]
+    xor edx, edx
+    mov ecx, AM_SIZE
+    div rcx
+    ret
+
+# bar_touch(AS*, row): the row before a row that came or went: when it is a reply (past calls without a row,
+#   ATF_HIDDEN, 8 at most), whether it ends its turn may have changed, so its height (its Copy response line,
+#   agentsel.s) is measured again; its Markdown is not parsed again
+bar_touch:
+    mov ecx, 8
+1:  cmp rsi, [rdi + AS_msgs + VEC_len]
+    jae 9f
+    imul rax, rsi, AM_SIZE
+    add rax, [rdi + AS_msgs + VEC_ptr]
+    cmp dword ptr [rax + AM_role], R_ASSIST
+    je 2f
+    mov rdx, [rax + AM_x]
+    test rdx, rdx
+    jz 9f
+    test dword ptr [rdx + AT_flags], ATF_HIDDEN
+    jz 9f
+    dec rsi
+    js 9f
+    dec ecx
+    jnz 1b
+    ret
+2:  mov dword ptr [rax + AM_w], -1
+    or dword ptr [rax + AM_flags], AMF_EST
+    mov dword ptr [rip + g_dirty], 1
+    jmp hx_dirty
+9:  ret
+
+# link_ok(ptr, len) -> eax 1 when a link's target has no character that could make what is shown differ from
+#   what opens: C0 and C1 controls, DEL, the bidi controls and marks (U+200E, U+200F, U+202A-202E, U+2066-2069,
+#   U+061C), zero-width characters (U+200B-200D, U+2060, U+FEFF)
+link_ok:
+    xor ecx, ecx
+1:  cmp rcx, rsi
+    jae 8f
+    movzx eax, byte ptr [rdi + rcx]
+    cmp eax, 0x20
+    jb 9f
+    cmp eax, 0x7f
+    je 9f
+    cmp eax, 0xc2               # C1: C2 80-9F
+    jne 2f
+    lea rdx, [rcx + 1]
+    cmp rdx, rsi
+    jae 7f
+    movzx edx, byte ptr [rdi + rcx + 1]
+    cmp edx, 0x9f
+    jbe 9f
+    jmp 7f
+2:  cmp eax, 0xd8               # U+061C: D8 9C
+    jne 3f
+    lea rdx, [rcx + 1]
+    cmp rdx, rsi
+    jae 7f
+    cmp byte ptr [rdi + rcx + 1], 0x9c
+    je 9f
+    jmp 7f
+3:  cmp eax, 0xef               # U+FEFF: EF BB BF
+    jne 4f
+    lea rdx, [rcx + 2]
+    cmp rdx, rsi
+    jae 7f
+    cmp word ptr [rdi + rcx + 1], 0xbfbb
+    je 9f
+    jmp 7f
+4:  cmp eax, 0xe2
+    jne 7f
+    lea rdx, [rcx + 2]
+    cmp rdx, rsi
+    jae 7f
+    movzx edx, byte ptr [rdi + rcx + 1]
+    movzx r8d, byte ptr [rdi + rcx + 2]
+    cmp edx, 0x80
+    jne 5f
+    cmp r8d, 0x8b               # U+200B-200F
+    jb 7f
+    cmp r8d, 0x8f
+    jbe 9f
+    cmp r8d, 0xaa               # U+202A-202E
+    jb 7f
+    cmp r8d, 0xae
+    jbe 9f
+    jmp 7f
+5:  cmp edx, 0x81
+    jne 7f
+    cmp r8d, 0xa0               # U+2060
+    je 9f
+    cmp r8d, 0xa6               # U+2066-2069
+    jb 7f
+    cmp r8d, 0xa9
+    jbe 9f
+7:  inc rcx
+    jmp 1b
+8:  mov eax, 1
+    ret
+9:  xor eax, eax
+    ret
 
 # link_scheme(ptr, len) -> eax 0 none (a path), 1 rhun://, 2 another scheme, 3 file: (any case): letters,
 #   digits, + . - from a letter, two at least, then ':' and something not a digit (PATH:12 is a path)
@@ -8724,6 +8943,7 @@ follow_file:
     PROLOGUE 32
     mov rbx, rdi
     mov r12, rsi
+    mov qword ptr [rip + ff_frag], 0
     mov rdi, rbx
     call strlen
     mov rsi, rax
@@ -8781,7 +9001,7 @@ follow_file:
     lea rax, [rip + lk_buf]
     sub rdi, rax
     mov r15, rdi                # its length
-    # "#L12" or "#L12-L20", any other fragment left out
+    # "#L12" or "#L12-L20"; any other fragment a heading of a Markdown file (task 10: ff_heading)
     lea rdi, [rip + lk_buf]
     xor ecx, ecx
 4:  cmp rcx, r15
@@ -8792,14 +9012,21 @@ follow_file:
     jmp 4b
 41: mov r15, rcx
     mov byte ptr [rdi + rcx], 0
+    lea rax, [rdi + rcx + 1]    # (after the path's end in lk_buf: decoding the path only shortens it)
+    mov [rsp + 16], rax
     cmp byte ptr [rdi + rcx + 1], 'L'
-    jne .Lff_open
+    jne 42f
     lea rdi, [rdi + rcx + 2]
     mov esi, 12
     call parse_u64
     test rdx, rdx
-    jz .Lff_open
+    jz 42f
     mov r13d, eax
+    jmp .Lff_open
+42: mov rax, [rsp + 16]
+    cmp byte ptr [rax], 0
+    je .Lff_open
+    mov [rip + ff_frag], rax
     jmp .Lff_open
 5:  # ":12", ":12-20" or ":12:5" at the end
     mov rcx, r15
@@ -8896,8 +9123,83 @@ follow_file:
     mov rdi, [rip + tmp + SB_ptr]
     call app_toast
     EPILOGUE
-9:  mov dword ptr [rip + g_dirty], 1
+9:  mov rdi, [rip + ff_frag]   # a Markdown file's heading: the caret on its line (task 10)
+    test rdi, rdi
+    jz 91f
+    mov qword ptr [rip + ff_frag], 0
+    call ff_heading
+91: mov dword ptr [rip + g_dirty], 1
     EPILOGUE
+
+# ff_heading(fragment cstr): the file just opened (g_doc), when it is a Markdown file (.md, .markdown): the caret
+#   on the line of the heading whose slug is the fragment (markdown.s's rule, md_anchor); nothing else
+ff_heading:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rip + g_doc]
+    test r12, r12
+    jz 9f
+    lea rdi, [rip + lk_buf]     # (the path opened, decoded)
+    call strlen
+    lea rdi, [rip + lk_buf]
+    mov rsi, rax
+    call md_name
+    test eax, eax
+    jz 9f
+    mov rdi, r12
+    call doc_len
+    mov r13, rax
+    mov rdi, r12
+    call doc_contiguous
+    mov rdi, rax
+    mov rsi, r13
+    call md_new
+    mov r14, rax
+    mov rdi, r14
+    mov esi, 2000
+    call md_layout
+    mov rdi, rbx
+    call strlen
+    mov rdi, r14
+    mov rsi, rbx
+    mov rdx, rax
+    call md_anchor
+    test eax, eax
+    js 8f
+    mov rdi, r14
+    mov esi, eax
+    call md_y_line
+    test eax, eax
+    js 8f
+    lea edi, [rax + 1]
+    mov esi, 1
+    call app_goto_line
+8:  mov rdi, r14
+    call md_free
+9:  EPILOGUE
+
+# md_name(ptr, len) -> eax 1 when the name ends in .md or .markdown (any case)
+md_name:
+    xor eax, eax
+    cmp rsi, 3
+    jb 9f
+    mov ecx, [rdi + rsi - 3]
+    and ecx, 0xffffff
+    or ecx, 0x202000
+    cmp ecx, 0x646d2e           # ".md"
+    je 8f
+    cmp rsi, 9
+    jb 9f
+    mov rcx, [rdi + rsi - 8]
+    mov rdx, 0x2020202020202020
+    or rcx, rdx
+    mov rdx, 0x6e776f646b72616d # "markdown"
+    cmp rcx, rdx
+    jne 9f
+    cmp byte ptr [rdi + rsi - 9], '.'
+    jne 9f
+8:  mov eax, 1
+9:  ret
 
 # lk_decode(src cstr) -> rax the length of src %XX-decoded into lk_buf (it may be lk_buf: decoding only
 #   shortens), -1 when it is too long or holds %00. A % without two hex digits after it stays
@@ -9318,6 +9620,7 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .p2align 3
 .Lst_names: .quad .Lst_time, .Lst_tip, .Lst_day
 .Lthis_reply: .asciz "This reply"
+.Lcopied: .asciz "Copied."
 .Lempty_thread: .asciz "Nothing here yet"
 .Lloading_thread: .asciz "Loading..."
 .Lclaude_name: .asciz "Claude"

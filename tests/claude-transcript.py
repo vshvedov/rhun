@@ -2351,7 +2351,459 @@ class ThreadLookTest(TaskEightCase):
             first = e['first']
             if first != '-' and int(first) >= 0:
                 head = self.drawn(int(first))[0]
-                self.assertGreaterEqual(int(head['y']), 0, (h, head))
+                # (a row may begin above the window, clipped: the last reply is taller with its Copy response
+                #   line, task 10; it must reach into it)
+                self.assertGreater(int(head['y']) + int(head['height']), 0, (h, head))
+
+
+# ---- phase 3 task 10: selection, copy, links and a reply's actions ----
+
+REPLY10 = 'Alpha bravo charlie delta echo foxtrot.'
+
+
+class SelectCase(TaskEightCase):
+    """A conversation of the test rows (agent-test-row, agent-test-tool), read through print-agent-row (a row's
+    y, a prompt's left and tw: the rows' text left and width), print-agent-selection and the clipboard (pasted
+    into a new editor tab)."""
+
+    def rows10(self, *rows):
+        """A Codex conversation (no driver) with these rows after the fixture's: ('user', T), ('agent', T),
+        ('meta', T) or ('tool', LINE); their indices."""
+        self.codex()
+        out = []
+        for kind, text in rows:
+            if kind == 'tool':
+                self.tool(text)
+            else:
+                self.command('agent-test-row %s %s' % (kind, text))
+            out.append(self.base + len(out))
+        self.command('key End')
+        self.command('print-frames')
+        return out
+
+    def head(self, n):
+        return self.drawn(n)[0]
+
+    def left(self, prompt_row):
+        """The rows' text left and width (a prompt's left= and tw=)."""
+        h = self.head(prompt_row)
+        return int(h['left']), int(h['tw'])
+
+    def doc_y(self, n):
+        """A reply's first line's middle: its row's top, the label line (MI_28), half a line."""
+        return int(self.head(n)['y']) + mi(28, 13) + 8
+
+    def drag(self, a, b, double=False):
+        self.command('move %d %d' % a)
+        self.command('print-frames')
+        self.command('down')
+        self.command('print-frames')
+        self.command('move %d %d' % b)
+        self.command('print-frames')
+        self.command('move %d %d' % b)
+        self.command('print-frames')
+        self.command('up')
+        self.command('print-frames')
+
+    def selection(self):
+        lines = self.command('print-agent-selection').splitlines()
+        if lines[0] == 'none':
+            return None
+        head, _, text = lines[0].partition(' text=')
+        out = dict(w.split('=', 1) for w in head.split(' '))
+        out['text'] = text.replace('\\n', '\n').replace('\\t', '\t')
+        return out
+
+    def clip(self):
+        """The clipboard, pasted into a new tab (the panel's keys again after)."""
+        self.command('key ' + chat.MOD + '+n')
+        self.command('key ' + chat.MOD + '+v')
+        text = self.command('print-doc')
+        self.command('cmd focus_agents')
+        return text[:-len('\n<eod>\n')] if text.endswith('\n<eod>\n') else text
+
+    def menu(self):
+        return [l for l in self.command('print-menu').splitlines()]
+
+
+class SelectTest(SelectCase):
+    """Text is selected inside one row (open point 2) and copied as it is shown (UI 3.8, 3.9, 7.5)."""
+
+    def test_drag_selects_in_a_reply_and_copies(self):
+        u, a = self.rows10(('user', 'first prompt here'), ('agent', REPLY10))
+        x, tw = self.left(u)
+        y = self.doc_y(a)
+        self.drag((x + 1, y), (x + tw - 2, y))
+        sel = self.selection()
+        self.assertEqual((sel['row'], sel['part']), (str(a), 'md'), sel)
+        self.assertEqual(sel['text'], REPLY10)
+        self.drag((x + 1, y), (x + 60, y))                  # a shorter drag: a part of it, from its start
+        sel = self.selection()
+        self.assertTrue(REPLY10.startswith(sel['text']) and 0 < len(sel['text']) < len(REPLY10), sel)
+        self.command('key ' + chat.MOD + '+c')
+        self.assertEqual(self.clip(), sel['text'])
+
+    def test_drag_selects_in_out_and_in_a_prompt(self):
+        out = '\\n'.join('out line %d' % i for i in range(8))
+        u, t = self.rows10(('user', 'first prompt here'), ('tool', 'c1 name=Bash second=ls in=ls -la out=%s state=ok' % out))
+        x, y, w, h, _ = self.buttons(t)[3]                  # OUT: long, so a button that opens its tab
+        tabs = self.command('print-state')
+        lh = h // 3
+        self.drag((x + 1, y + 2), (x + w - 1, y + lh + 2))
+        sel = self.selection()
+        self.assertEqual((sel['row'], sel['part']), (str(t), 'out'), sel)
+        self.assertTrue(sel['text'].startswith('out line 0\nout line 1'), sel)
+        self.assertEqual(self.command('print-state'), tabs)  # the release opened nothing
+        self.command('key ' + chat.MOD + '+c')
+        self.assertEqual(self.clip(), sel['text'])
+        self.command('wait 700')                            # (not a double click)
+        self.command('click %d %d' % (x + 4, y + 4))         # a click still opens it
+        self.assertIn('out line 7', self.command('print-doc'))
+        self.command('cmd focus_agents')
+        bx, by, bw, bh = rect(self.head(u)['bubble'])       # the prompt: inside its bubble
+        self.drag((bx + mi(10, 13) + 1, by + bh // 2), (bx + bw - 2, by + bh // 2))
+        sel = self.selection()
+        self.assertEqual((sel['row'], sel['part'], sel['text']), (str(u), 'prompt', 'first prompt here'), sel)
+
+    def test_double_click_takes_a_word(self):
+        u, m = self.rows10(('user', 'first prompt here'), ('meta', 'a meta line'))
+        bx, by, bw, bh = rect(self.head(u)['bubble'])
+        for _ in range(2):
+            self.command('click %d %d' % (bx + bw - mi(10, 13) - 4, by + bh // 2))
+        sel = self.selection()
+        self.assertEqual((sel['part'], sel['text']), ('prompt', 'here'), sel)
+
+    def test_a_drag_stays_in_its_row(self):
+        u, a, b = self.rows10(('user', 'first prompt here'), ('agent', REPLY10), ('agent', 'Second reply words'))
+        x, tw = self.left(u)
+        self.drag((x + 1, self.doc_y(a)), (x + tw // 2, self.doc_y(b)))
+        sel = self.selection()
+        self.assertEqual(sel['row'], str(a), sel)
+        self.assertTrue(REPLY10.startswith(sel['text']) and len(sel['text']) > 5, sel)   # (its own words only)
+        self.drag((x + tw - 2, self.doc_y(b)), (x + 2, 10))  # up past the thread: to the row's start
+        sel = self.selection()
+        self.assertEqual((sel['row'], sel['text']), (str(b), 'Second reply words'), sel)
+
+    def test_select_all_is_the_rows(self):
+        u, a, m = self.rows10(('user', 'first prompt here'), ('agent', REPLY10), ('meta', 'a meta line'))
+        self.command('move %d %d' % (self.left(u)[0] + 5, int(self.head(m)['y']) + 6))
+        self.command('print-frames')
+        self.command('key ' + chat.MOD + '+a')               # the row under the pointer
+        sel = self.selection()
+        self.assertEqual((sel['row'], sel['part'], sel['text']), (str(m), 'meta', 'a meta line'), sel)
+        x, tw = self.left(u)
+        self.drag((x + 1, self.doc_y(a)), (x + 30, self.doc_y(a)))
+        self.command('key ' + chat.MOD + '+a')               # the row with the selection
+        sel = self.selection()
+        self.assertEqual((sel['row'], sel['text']), (str(a), REPLY10), sel)
+        self.command('key ' + chat.MOD + '+c')
+        self.assertEqual(self.clip(), REPLY10)
+
+    def test_copy_message_of_each_kind(self):
+        md = 'Some **bold** and `code`.'
+        out = '\\n'.join('o%d' % i for i in range(6))
+        u, a, t = self.rows10(('user', 'first prompt here'), ('agent', md),
+                              ('tool', 'c1 name=Bash second=make in=make all out=%s state=ok' % out))
+        x, tw = self.left(u)
+        bx, by, bw, bh = rect(self.head(u)['bubble'])
+        cases = [((bx + bw // 2, by + bh // 2), 'first prompt here'),
+                 ((x + 5, self.doc_y(a)), md),                # a reply: its Markdown source
+                 ((self.buttons(t)[3][0] + 5, self.buttons(t)[3][1] + 5),
+                  'Bash make\n\nmake all\n\n' + out.replace('\\n', '\n'))]
+        for where, want in cases:
+            self.command('click %d %d right' % where)
+            self.assertEqual(self.menu(), ['Copy Message'], where)
+            self.command('menu-pick Copy Message')
+            self.assertEqual(self.clip(), want)
+        self.drag((x + 1, self.doc_y(a)), (x + 40, self.doc_y(a)))
+        self.command('click %d %d right' % (x + 5, self.doc_y(a)))
+        self.assertEqual(self.menu(), ['Copy', 'Copy Message'])   # with a selection: Copy
+        sel = self.selection()
+        self.command('menu-pick Copy')
+        self.assertEqual(self.clip(), sel['text'])
+
+    def test_copy_message_reads_the_whole_output(self):
+        whole = 'the whole text ' * 200
+        self.open_seeded([call('t1', 'Bash', {'command': 'ls -la', 'description': 'List'}), result('t1', whole)])
+        t, = [c['row'] for c in self.calls()]
+        _, parts = self.row_line(t)
+        self.assertIn(' kept=600 ', [p for p in parts if p.startswith('out ')][0])     # a preview is kept
+        self.command('agent-select %d 0 5 out' % t)
+        self.assertEqual(self.selection()['text'], 'the w')
+        self.command('key End')
+        self.command('print-frames')
+        x, y, w, h, _ = self.buttons(t)[3]
+        self.command('click %d %d right' % (x + 5, y + 5))
+        self.command('menu-pick Copy Message')
+        self.assertEqual(self.clip(), 'Bash List\n\nls -la\n\n' + whole)     # its name and second text
+
+    def test_copy_response_joins_the_turns_replies(self):
+        u, a1, t, a2, u2, a3 = self.rows10(('user', 'first prompt here'), ('agent', 'one'),
+                                           ('tool', 'c1 name=Bash second=ls state=ok'), ('agent', 'two'),
+                                           ('user', 'again'), ('agent', 'three'))
+        heights = {n: int(self.head(n)['height']) for n in (a1, a2, a3)}
+        self.assertEqual(heights[a2] - heights[a1], mi(28, 13))     # a reply that ends its turn: its line
+        self.assertEqual(heights[a3], heights[a2])
+        self.assertEqual([r for r, _ in self.resps()], [a3])        # the last reply: always shown
+        x, tw = self.left(u)
+        self.command('move %d %d' % (x + 5, self.doc_y(a1)))        # a reply that does not end its turn: none
+        self.command('print-frames')
+        self.assertEqual([r for r, _ in self.resps()], [a3])
+        self.command('move %d %d' % (x + 5, self.doc_y(a2)))        # another: on the pointer's row
+        self.command('print-frames')
+        (row, (rx, ry, rw, rh)), _ = self.resps()
+        self.assertEqual(row, a2)
+        self.command('move %d %d' % (rx + rw // 2, ry + rh // 2))
+        self.command('print-frames')
+        self.command('wait 900')
+        self.assertEqual(self.command('print-tip').strip(), 'tip=Copy response')
+        self.command('click %d %d' % (rx + rw // 2, ry + rh // 2))
+        self.assertIn('Copied.', self.command('print-toast'))
+        self.assertEqual(self.clip(), 'one\n\ntwo')
+        self.command('agent-row-click %d resp' % (a3 + 1))          # (as the row focus's Enter does)
+        self.assertEqual(self.clip(), 'three')
+        self.command('agent-test-row agent four')                   # a reply after it: its line goes
+        self.command('print-frames')
+        self.assertEqual(int(self.head(a3)['height']), heights[a1])
+
+    def resps(self):
+        """The Copy response buttons the last frame drew: (row, (x, y, w, h))."""
+        out = []
+        for line in self.command('print-agent-selection').splitlines():
+            if line.startswith('resp '):
+                words = line.split(' ')
+                out.append((int(words[1].split('=')[1]), rect(words[2])))
+        return out
+
+    def test_no_copy_response_while_the_turn_runs(self):
+        self.start()
+        self.chat('slow', wait='working')
+        self.command('print-frames')
+        self.assertEqual(self.resps(), [])
+        self.command('wait-agent ready 15000')
+        self.command('print-frames')
+        resps = self.resps()
+        self.assertEqual(len(resps), 1, resps)
+        rows = self.rows_of()
+        self.assertIn(' agent ', rows[resps[0][0]][0])
+
+    def test_a_press_on_a_link_is_not_a_selection(self):
+        u, a = self.rows10(('user', 'first prompt here'), ('agent', '[go](https://e.com/x) and more words here'))
+        x, tw = self.left(u)
+        lx, ly = self.links(a)['go']
+        self.drag((lx, ly), (x + tw - 2, ly))
+        self.assertIsNone(self.selection())
+        self.drag((x + tw - 2, ly), (lx, ly))               # (from the words, over the link: a selection)
+        self.assertIsNotNone(self.selection())
+
+    def links(self, n):
+        where = {}
+        for line in self.drawn(n)[1]:
+            m = re.match(r'link (.*) -> (.*) at (-?\d+) (-?\d+)$', line)
+            if m:
+                where[m.group(1)] = (int(m.group(3)), int(m.group(4)))
+        return where
+
+    def test_selection_survives_a_streaming_row_below(self):
+        u, a = self.rows10(('user', 'first prompt here'), ('agent', REPLY10))
+        x, tw = self.left(u)
+        self.drag((x + 1, self.doc_y(a)), (x + 50, self.doc_y(a)))
+        sel = self.selection()
+        for i in range(3):
+            self.tool('s%d name=Bash second=more out=line %d state=ok' % (i, i))
+            self.command('agent-test-row agent more %d' % i)
+            self.command('print-frames')
+        self.assertEqual(self.selection(), sel)
+
+    def test_selection_goes_with_a_resync(self):
+        u, a, m = self.rows10(('user', 'first prompt here'), ('agent', REPLY10), ('meta', 'a meta line'))
+        self.command('agent-select %d 0 4' % m)
+        self.assertEqual(self.selection()['text'], 'a me')
+        self.command('agent-test-truncate %d' % m)           # its row goes
+        self.assertIsNone(self.selection())
+        self.stop()
+        self.start()
+        self.chat('hello')
+        self.command('print-frames')
+        n = len(self.rows_of()) - 1
+        self.command('agent-select %d 0 1' % n)
+        self.assertIsNotNone(self.selection())
+        self.reread_driven()
+        self.assertIsNone(self.selection())
+
+    def reread_driven(self):
+        self.command('agent-release')
+        self.command('wait-agent off')
+        self.until_gone()
+        self.command('print-frames')
+
+    def test_a_hidden_row_is_never_copied(self):
+        u, t, t2 = self.rows10(('user', 'first prompt here'),
+                               ('tool', 'c1 name=Bash second=a in=echo one state=ok ready=1 done=1'),
+                               ('tool', 'c2 name=Bash second=b in=echo two state=ok ready=1 done=1'))
+        self.command('agent-select %d 0 4' % t)
+        self.assertEqual(self.selection()['text'], 'echo')
+        self.command('cmd agents_toggle_focus_view')          # the two calls fold into a closed line
+        self.command('print-frames')
+        self.assertIsNone(self.selection())
+        self.command('cmd agents_toggle_focus_view')
+
+    def test_the_menu_by_keys(self):
+        u, a = self.rows10(('user', 'first prompt here'), ('agent', REPLY10))
+        self.command('cmd agents_focus_last')
+        self.command('key shift+F10')
+        self.assertEqual(self.menu(), ['Copy Message *'])
+        self.command('key Return')
+        self.assertEqual(self.menu(), ['none'])
+        self.assertEqual(self.clip(), REPLY10)
+        self.command('agent-select %d 0 5' % u)
+        self.command('key Menu')
+        self.assertEqual(self.menu(), ['Copy *', 'Copy Message'])
+        self.command('key Down')
+        self.assertEqual(self.menu(), ['Copy', 'Copy Message *'])
+        self.command('key Escape')
+        self.assertEqual(self.menu(), ['none'])
+
+
+class LinkTest(SelectCase):
+    """A reply's links: files at their line (eight forms and a heading), web links asked first, Copy Link, a
+    footnote's number, a code block's Copy (UI 3.8)."""
+
+    def reply_links(self, text):
+        self.rows10(('user', 'where?'), ('agent', text.replace('\n', '\\n')))
+        return self.base + 1
+
+    def links(self, n):
+        return SelectTest.links(self, n)
+
+    def test_every_file_link_form(self):
+        (self.project / 'a.txt').write_text(''.join('line %d\n' % i for i in range(1, 30)), encoding='utf-8')
+        forms = [('plain', 'a.txt', 1), ('line', 'a.txt:7', 7), ('range', 'a.txt:8-10', 8), ('col', 'a.txt:9:3', 9),
+                 ('hash', 'a.txt#L11', 11), ('hashrange', 'a.txt#L12-L14', 12),
+                 ('uri', 'file://%s:13' % (self.project / 'a.txt').as_posix(), 13),
+                 ('abs', '%s#L6' % (self.project / 'a.txt').as_posix(), 6)]
+        a = self.reply_links(' '.join('[%s](%s)' % (n, t) for n, t, _ in forms))
+        where = self.links(a)
+        self.assertEqual(len(where), len(forms), where)
+        for name, _, line in forms:
+            self.command('click %d %d' % where[name])
+            self.command('wait 50')
+            state = self.command('print-state')
+            self.assertIn(' active=a.txt line=%d ' % line, state, name)
+            self.command('cmd focus_agents')
+
+    def test_heading_link(self):
+        (self.project / 'notes.md').write_text('# Notes\n\ntext\n\n## Set up\n\nmore\n\n## Set up\n\nlast\n',
+                                               encoding='utf-8')
+        (self.project / 'plain.txt').write_text('a\nb\n', encoding='utf-8')
+        a = self.reply_links('[first](notes.md#set-up) [second](notes.md#set-up-1) [none](notes.md#nothing) '
+                             '[txt](plain.txt#set-up)')
+        where = self.links(a)
+        for name, path, line in (('none', 'notes.md', 1), ('first', 'notes.md', 5), ('second', 'notes.md', 9),
+                                 ('txt', 'plain.txt', 1)):
+            self.command('click %d %d' % where[name])
+            self.command('wait 50')
+            self.assertIn(' active=%s line=%d ' % (path, line), self.command('print-state'), name)
+            self.command('cmd focus_agents')
+
+    def test_copy_link_menu(self):
+        a = self.reply_links('see [the docs](https://example.com/a?b=1#c) now')
+        lx, ly = self.links(a)['the docs']
+        self.command('click %d %d right' % (lx, ly))
+        self.assertEqual(self.menu(), ['Copy Message', 'Copy Link'])
+        self.command('menu-pick Copy Link')
+        self.assertEqual(self.clip(), 'https://example.com/a?b=1#c')
+        self.tool('w name=Fetch second=example.com link=https://example.com/page state=ok')
+        t = self.base + 2
+        self.command('print-frames')
+        x, y, w, h, _ = self.buttons(t)[1]
+        self.command('click %d %d right' % (x + w // 2, y + h // 2))
+        self.assertEqual(self.menu(), ['Copy Message', 'Copy Link'])
+        self.command('menu-pick Copy Link')
+        self.assertEqual(self.clip(), 'https://example.com/page')
+
+    def test_web_link_still_asks(self):
+        a = self.reply_links('[ok](https://example.com/x) [spaced](<http://evil.example/a b>) '
+                             '[bidi](https://exa\u200bmple.com/a) [user](https://good.example:pw@evil.example/)')
+        where = self.links(a)
+        self.command('click %d %d' % where['ok'])
+        self.assertEqual(self.command('print-palette').splitlines()[0],
+                         'choose=This reply wants to open example.com in your browser: https://example.com/x')
+        self.command('key Escape')
+        for name in ('spaced', 'bidi'):                     # no proper URL, or one that hides what it is: nothing
+            if name not in where:
+                continue
+            self.command('click %d %d' % where[name])
+            self.assertFalse(self.command('print-palette').startswith('choose='), name)
+        self.command('click %d %d' % where['user'])         # the host it opens is the one asked about
+        self.assertTrue(self.command('print-palette').splitlines()[0].startswith(
+            'choose=This reply wants to open evil.example in your browser: '), self.command('print-palette'))
+        self.command('key Escape')
+
+    def test_code_copy_toast(self):
+        a = self.reply_links('Run this:\n\n```sh\nmake test\n```\n\nthen [go](https://e.com/x).')
+        u = self.base
+        x, tw = self.left(u)
+        _, ly = self.links(a)['go']
+        for y in range(self.doc_y(a), ly, 3):               # the Copy at the code block's top right
+            self.command('click %d %d' % (x + tw - 14, y))
+            if 'Copied.' in self.command('print-toast'):
+                break
+        else:
+            self.fail('no Copy')
+        self.assertEqual(self.clip(), 'make test')
+
+    def test_footnote_number_scrolls_the_thread(self):
+        text = 'A claim.[^1]\n\n' + '\n\n'.join('Paragraph %d of words.' % i for i in range(60)) + '\n\n[^1]: The note.'
+        u, a = self.rows10(('user', 'q'), ('agent', text.replace('\n', '\\n')))
+        for i in range(30):                                 # rows after it: the note's place can be the top
+            self.command('agent-test-row agent after %d\\n\\nand more\\n\\nand more' % i)
+        self.command('print-frames')
+        e = self.engine()
+        top = int(e['first'])
+        self.command('key Home')
+        for _ in range(40):                                  # the reply's top in view
+            hd = self.head(a)
+            if hd['y'] != '-1':
+                break
+            self.command('key PageDown')
+        x, tw = self.left(u)
+        where = [l for l in self.drawn(a)[1] if '#^' in l]
+        self.assertTrue(where, self.drawn(a))
+        m = re.search(r' at (-?\d+) (-?\d+)$', where[0])
+        self.command('click %s %s' % m.groups())
+        self.assertNotIn('No such file', self.command('print-toast'))
+        e = self.engine()
+        row, off = e['anchor'].split('+')
+        self.assertEqual(int(row), a)
+        self.assertGreater(int(off), 300)
+
+    def test_a_link_in_open_thinking_is_followed(self):
+        (self.project / 'a.txt').write_text('x\ny\nz\n', encoding='utf-8')
+        u, t = self.rows10(('user', 'q'), ('thinking', 'Look at [the file](a.txt:2) first.'))
+        self.command('key ctrl+o')
+        self.command('print-frames')
+        where = SelectTest.links(self, t)
+        self.assertIn('the file', where, self.drawn(t))
+        self.command('click %d %d' % where['the file'])
+        self.command('wait 50')
+        self.assertIn(' active=a.txt line=2 ', self.command('print-state'))
+
+    def test_a_blocked_image_is_not_reached_by_keys(self):
+        self.codex()
+        plan = 'A plan.\n\n![shot](https://img.example/a.png)\n\nSee [the site](https://ok.example/).\n'
+        self.tool('p name=ExitPlanMode in=%s flags=256 state=ok' % plan.replace('\n', '\\n'))
+        self.command('agent-row-click %d in' % (self.base + 1))
+        self.command('agent-focus editor')
+        self.command('key Tab')
+        self.command('key Return')
+        palette = self.command('print-palette').splitlines()
+        self.assertTrue(palette and 'ok.example' in palette[0], palette)
+        self.command('key Escape')
+        self.command('key Tab')                             # round again: the site's link, never the image's
+        self.command('key Return')
+        palette = self.command('print-palette').splitlines()
+        self.assertTrue(palette and 'ok.example' in palette[0], palette)
 
 
 

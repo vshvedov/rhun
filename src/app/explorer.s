@@ -34,6 +34,7 @@ menu_y: .long 0
 menu_press: .long 0             # the presses of the frame that opened the menu
 .p2align 3
 menu_list: .quad 0
+menu_kidx: .long 0              # phase 3 task 10: the item the keys are on (ctx_menu_keys), -1: the mouse alone (set at each open)
 root_multi: .long 0             # resources group: the root's children are the workspace folders
 .globl g_explorer_dir, g_explorer_target, g_exp_reveal
 g_exp_reveal: .long 0             # reveal the active file on the next draw
@@ -1644,8 +1645,11 @@ FN explorer_menu_draw
     call ui_btn
     mov [rsp + 16], eax
     test eax, UB_HOVER
-    jz 4f
-    M eax, MI_6
+    jnz 32f
+    mov eax, [rsp + 12]         # (task 10: or the item the keys are on)
+    cmp eax, [rip + menu_kidx]
+    jne 4f
+32: M eax, MI_6
     mov edi, [rsp]
     add edi, eax
     mov esi, [rsp + 8]
@@ -1847,7 +1851,105 @@ FN ctx_menu_open
     mov [rip + menu_press], eax
     mov dword ptr [rip + menu_open], 1
     mov dword ptr [rip + g_menu_keys], 0
+    mov dword ptr [rip + menu_kidx], -1
     mov dword ptr [rip + g_dirty], 1
+    ret
+
+# FN ctx_menu_keys(): the open menu takes the keys (task 10: one opened by Shift+F10 or the Menu key): its first
+#   item is the keys', Up and Down move, Home and End, Enter or Space runs it (ctx_menu_key), Escape closes
+FN ctx_menu_keys
+    cmp dword ptr [rip + menu_open], 0
+    je 9f
+    mov dword ptr [rip + menu_kidx], -1
+    mov edi, 1
+    jmp menu_step
+9:  ret
+
+# FN ctx_menu_key(keysym) -> eax 1 taken: an open menu that takes the keys (ctx_menu_keys): Up, Down, Home, End
+#   move among its items (lines are passed over), Enter, the keypad's Enter and Space run the item
+FN ctx_menu_key
+    xor eax, eax
+    cmp dword ptr [rip + menu_open], 0
+    je 9f
+    cmp dword ptr [rip + menu_kidx], 0
+    jl 9f
+    cmp edi, KEY_DOWN
+    jne 1f
+    mov edi, 1
+    jmp menu_step
+1:  cmp edi, KEY_UP
+    jne 2f
+    mov edi, -1
+    jmp menu_step
+2:  cmp edi, KEY_HOME
+    jne 3f
+    mov dword ptr [rip + menu_kidx], -1
+    mov edi, 1
+    jmp menu_step
+3:  cmp edi, KEY_END
+    jne 4f
+    mov dword ptr [rip + menu_kidx], 0x7fff
+    mov edi, -1
+    jmp menu_step
+4:  cmp edi, KEY_RETURN
+    je 5f
+    cmp edi, KEY_KP_ENTER
+    je 5f
+    cmp edi, ' '
+    jne 9f
+5:  push rbx
+    mov ecx, [rip + menu_kidx]
+    mov rbx, [rip + menu_list]
+    mov dword ptr [rip + menu_open], 0
+    mov dword ptr [rip + g_dirty], 1
+    mov [rip + g_menu_index], ecx
+    shl ecx, 4
+    mov rax, [rbx + rcx + 8]
+    test rax, rax
+    jz 6f
+    mov dword ptr [rip + g_menu_cmd], 1
+    call rax
+    mov dword ptr [rip + g_menu_cmd], 0
+6:  pop rbx
+    mov eax, 1
+9:  ret
+
+# menu_step(dir 1 or -1) -> eax 1: the keys' item moves to the next item with a handler that way (from before
+#   the first, or after the last, when it is on none); at an end it stays
+menu_step:
+    mov rdx, [rip + menu_list]
+    xor ecx, ecx                # the items
+1:  mov eax, ecx
+    shl eax, 4
+    cmp qword ptr [rdx + rax], 0
+    je 2f
+    inc ecx
+    jmp 1b
+2:  mov eax, [rip + menu_kidx]
+    test eax, eax
+    js 3f
+    cmp eax, ecx
+    jl 4f
+3:  mov eax, -1                 # on none: from an end
+    test edi, edi
+    jg 4f
+    mov eax, ecx
+4:  add eax, edi
+    js 8f
+    cmp eax, ecx
+    jge 8f
+    mov r9d, eax
+    shl r9d, 4
+    cmp qword ptr [rdx + r9 + 8], 0
+    je 4b                       # a line
+    mov [rip + menu_kidx], eax
+    jmp 9f
+8:  mov eax, [rip + menu_kidx]  # none further: it stays where it was, if that is an item
+    cmp eax, ecx
+    jl 9f
+    mov dword ptr [rip + menu_kidx], -1
+9:  mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
     ret
 
 FN ctx_menu_close
@@ -1897,7 +1999,8 @@ FN menu_pick
 8:  xor eax, eax
     EPILOGUE
 
-# menu_print(sb): the open menu's labels, a line each ("-" for a separating line), or "none"
+# menu_print(sb): the open menu's labels, a line each ("-" for a separating line; " *" after the item the keys
+#   are on: ctx_menu_keys), or "none"
 FN menu_print
     PROLOGUE
     mov rbx, rdi
@@ -1924,7 +2027,12 @@ FN menu_print
     mov rdi, rbx
     mov rsi, rax
     call sb_push_cstr
-4:  mov rdi, rbx
+4:  cmp r14d, [rip + menu_kidx] # task 10: the item the keys are on, " *"
+    jne 41f
+    mov rdi, rbx
+    lea rsi, [rip + .Lp_keyed]
+    call sb_push_cstr
+41: mov rdi, rbx
     mov esi, 10
     call sb_push_byte
     add r12, 16
@@ -1934,6 +2042,7 @@ FN menu_print
 
 .section .rodata
 .Lm_remove_folder: .asciz "Remove Folder from Workspace"
+.Lp_keyed: .asciz " *"
 .Lempty_name: .asciz ""
 .Lheader: .asciz "EXPLORER"
 .ifdef MACOS

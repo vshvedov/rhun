@@ -78,7 +78,9 @@ FN links_url_ok
 9:  mov eax, 1
     EPILOGUE
 
-# FN links_host(url cstr, buf, cap): the URL's host (after "://", up to "/", "?", "#" or ":")
+# FN links_host(url cstr, buf, cap): the URL's host: after "://", in the authority (up to "/", "?", "#" or "\\"),
+#   after its last "@" (a user and password are not the host: "https://good.example:x@evil.example/" opens
+#   evil.example, phase 3 task 10), up to a ":" (the port; inside "[...]" an IPv6 address keeps its own)
 FN links_host
     mov rax, rdi
 1:  cmp byte ptr [rax], 0
@@ -94,22 +96,45 @@ FN links_host
 2:  inc rax
     jmp 1b
 3:  mov rax, rdi
-4:  dec rdx
+4:  mov r9, rax                 # the authority's end, and its last "@"
+    mov r10, rax
+41: movzx r8d, byte ptr [r9]
+    test r8d, r8d
+    jz 43f
+    cmp r8d, '/'
+    je 43f
+    cmp r8d, '?'
+    je 43f
+    cmp r8d, '#'
+    je 43f
+    cmp r8d, '\\'
+    je 43f
+    cmp r8d, '@'
+    jne 42f
+    lea r10, [r9 + 1]
+42: inc r9
+    jmp 41b
+43: mov rax, r10
+    dec rdx
     xor ecx, ecx
+    xor r11d, r11d              # inside "[...]"
 5:  cmp rcx, rdx
     jae 6f
+    lea r8, [rax + rcx]
+    cmp r8, r9
+    jae 6f
     movzx r8d, byte ptr [rax + rcx]
-    test r8d, r8d
+    cmp r8d, '['
+    jne 51f
+    mov r11d, 1
+51: cmp r8d, ']'
+    jne 52f
+    xor r11d, r11d
+52: cmp r8d, ':'
+    jne 53f
+    test r11d, r11d
     jz 6f
-    cmp r8d, '/'
-    je 6f
-    cmp r8d, '?'
-    je 6f
-    cmp r8d, '#'
-    je 6f
-    cmp r8d, ':'
-    je 6f
-    mov [rsi + rcx], r8b
+53: mov [rsi + rcx], r8b
     inc rcx
     jmp 5b
 6:  mov byte ptr [rsi + rcx], 0

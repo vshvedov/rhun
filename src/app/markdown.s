@@ -288,6 +288,9 @@ cur_sized: .long 0              # the document laid out, drawn or pointed at has
 .p2align 3
 sz_tab: .zero 8 * MDF_COUNT     # its faces by MDF_*: sz_faces' or the interface's (sized_faces)
 in_link: .long -1
+keep_sel: .long 0               # md_layout: the selection before the items were made again (task 10)
+.p2align 3
+keep_n: .quad 0                 #   and how many there were
 
 .text
 
@@ -895,6 +898,53 @@ FN md_link_at
     jmp 1b
 8:  mov eax, -1
     ret
+
+# FN md_link_step(m, link or -1, dir 1 or -1) -> eax the next link the keys reach that way, round from the end
+#   to the start, -1 when none: a link with words laid out (or a code block's Copy). An image's source, shown or
+#   blocked as a chip, is no stop (phase 3 task 10: Tab then Enter must not open a blocked image's URL)
+FN md_link_step
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov r14, [rbx + MD_links + VEC_len]
+    test r14, r14
+    jz 8f
+    mov r15d, r14d              # tries
+    mov eax, r12d
+    test eax, eax
+    jns 1f
+    mov eax, -1                 # none yet: from before the first, or after the last
+    test r13d, r13d
+    jg 1f
+    mov eax, r14d
+1:  add eax, r13d
+    jns 2f
+    lea eax, [r14 - 1]
+2:  cmp eax, r14d
+    jl 3f
+    xor eax, eax
+3:  mov r12d, eax
+    xor ecx, ecx                # an item of its words, or its Copy
+4:  cmp rcx, [rbx + MD_items + VEC_len]
+    jae 6f
+    imul rdx, rcx, MDI_SIZE
+    add rdx, [rbx + MD_items + VEC_ptr]
+    inc rcx
+    cmp [rdx + MDI_link], r12d
+    jne 4b
+    cmp dword ptr [rdx + MDI_kind], MDK_TEXT
+    je 7f
+    cmp dword ptr [rdx + MDI_kind], MDK_COPY
+    je 7f
+    jmp 4b
+6:  mov eax, r12d
+    dec r15d
+    jnz 1b
+8:  mov eax, -1
+    EPILOGUE
+7:  mov eax, r12d
+    EPILOGUE
 
 # md_line_y(m, line from 0) -> eax the top of the block holding that source line (the last block
 #   starting at or before it, footnotes' definitions left out: they are moved to the end), 0 for none
@@ -5249,6 +5299,10 @@ FN md_layout
 1:  mov [rbx + MD_width], esi
     mov eax, [rip + g_face_gen]
     mov [rbx + MD_gen], eax
+    mov eax, [rbx + MD_sel]     # (task 10: kept when the same items come again, below)
+    mov [rip + keep_sel], eax
+    mov rax, [rbx + MD_items + VEC_len]
+    mov [rip + keep_n], rax
     mov dword ptr [rbx + MD_sel], 0     # the items change: no selection
     mov dword ptr [rbx + MD_drag], 0
     mov qword ptr [rbx + MD_items + VEC_len], 0
@@ -5450,6 +5504,13 @@ FN md_layout
 .Lml_done:
     mov eax, [rip + lay_y]
     mov [rbx + MD_height], eax
+    cmp dword ptr [rip + keep_sel], 0   # phase 3 task 10: a selection stays when the document is laid out
+    je 9f                               #   again into as many items (the same words, wrapped anew: a
+    mov rax, [rip + keep_n]             #   row measured again, a face made again, the width)
+    cmp rax, [rbx + MD_items + VEC_len]
+    jne 9f
+    mov dword ptr [rbx + MD_sel], 1
+9:  mov eax, [rbx + MD_height]
     EPILOGUE
 
 # marker_items(block): its list item's marker left of it: a dot, "N." or a task's box

@@ -2517,7 +2517,11 @@ FN app_on_key
     jz 10f
     call extbar_close
     jmp 9f
-10: # focused components get the first chance
+10: mov edi, r12d               # a menu opened by the keys takes its keys (task 10: explorer.s)
+    call ctx_menu_key
+    test eax, eax
+    jnz 9f
+    # focused components get the first chance
     mov eax, [rip + g_focus]
     cmp eax, FOCUS_QUICK        # an extension's quick input (quick.s)
     jne 12f

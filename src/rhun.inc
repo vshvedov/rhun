@@ -3034,6 +3034,11 @@ ENDSTRUCT AT_SIZE
 .equ PART_COLLAPSE, 14          #   and its "Collapse" line
 .equ PART_CHIP, 16              # + n, n < 16
 .equ PART_ERR, 32               # + n, n < 8
+# phase 3 task 10 (agentsel.s): what holds a selection, a reply's Copy response (free parts of a unit's ids)
+.equ SELP_MD, 0                 # the row's Markdown (its document holds it); else PART_IN, PART_OUT or:
+.equ SELP_PROMPT, 60            #   a prompt's text
+.equ SELP_META, 61              #   a meta line's
+.equ PART_RESP, 62              # has_action's part of a reply that ends its turn: Copy response
 .equ ING_FILE, 0                # the reader's flags (agent_ingest): a line of the file
 .equ ING_LIVE, 1                # the stream's record: the driver made the reply text rows and the user's
                                 #   own prompts itself

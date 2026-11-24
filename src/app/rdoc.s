@@ -478,19 +478,17 @@ FN mdview_key
     test eax, eax
     jz 7f
     mov r15d, eax
-    mov rdi, r13
+    mov rdi, r13                # (task 10: only the links the keys may reach: an image's is none)
     call md_focus
-    mov ecx, r15d
+    mov esi, eax
+    mov edx, 1
     test r14d, MOD_SHIFT
-    jnz 161f
-    inc eax
-    cmp eax, ecx
-    jl 162f
-    xor eax, eax
-    jmp 162f
-161:dec eax
-    jns 162f
-    lea eax, [rcx - 1]
+    jz 161f
+    mov edx, -1
+161:mov rdi, r13
+    call md_link_step
+    test eax, eax
+    js 7f
 162:mov r15d, eax
     mov rdi, r13
     mov esi, eax

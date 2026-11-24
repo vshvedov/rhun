@@ -1374,7 +1374,12 @@ rw_wrap:
     mov [rsp + 8], r12
     mov [rsp + 16], r12
 .Lrw_emit2:
-    mov rdi, [rbx + RW_out]
+    cmp qword ptr [rip + agsel_lines], 0    # task 10: a selection wants the line's start and end (agentsel.s)
+    je 85f
+    mov rdi, r13
+    mov rsi, [rsp + 8]
+    call agsel_line_add
+85: mov rdi, [rbx + RW_out]
     test rdi, rdi
     jz 8f
     mov rsi, [rbx + RW_text]
@@ -1446,6 +1451,10 @@ rw_wrap:
     mov r15d, 1
 1:  mov eax, r15d
     EPILOGUE
+
+# FN agrow_wrap(RW*) -> eax lines: rw_wrap for agentsel.s (task 10: a selection's lines, wrapped as drawn)
+FN agrow_wrap
+    jmp rw_wrap
 
 # row_of(AS*, row) -> rax AM*
 row_of:
@@ -1910,7 +1919,28 @@ line_lay:
     mov [rsp + RW_top], eax
     mov eax, [rip + g_cv + CV_cy1]
     mov [rsp + RW_bot], eax
+    cmp dword ptr [rsp + RW_draw], 0    # task 10: a meta line (not a notice) is selected by the pointer,
+    je 3f                              #   banded under its text (agentsel.s): its height first
+    mov rax, [rsp + RW_SIZE + 8]
+    cmp dword ptr [rax + AM_role], R_META
+    jne 3f
+    test dword ptr [rax + AM_flags], AMF_NOTICE
+    jnz 3f
+    mov dword ptr [rsp + RW_draw], 0
     lea rdi, [rsp]
+    call rw_wrap
+    imul eax, [rsp + RW_lh]
+    mov [rsp + RW_SIZE + 24], eax
+    mov dword ptr [rsp + RW_draw], 1
+    mov edi, SELP_META
+    call part_id
+    mov ecx, eax
+    lea rdi, [rsp]
+    mov rsi, r12
+    mov edx, SELP_META
+    mov r8d, [rsp + RW_SIZE + 24]
+    call agsel_plain
+3:  lea rdi, [rsp]
     call rw_wrap
     imul eax, [rsp + RW_lh]
     mov [rsp + RW_SIZE + 20], eax
@@ -2225,6 +2255,13 @@ think_lay:
     mov [rsp + 36], r8d
     sub edx, eax
     mov [rsp + 40], edx
+    mov rdi, rbx                # task 10: its text is selected by the pointer (agentsel.s)
+    mov rsi, r12
+    mov rdx, r15
+    mov ecx, [rsp]
+    mov r8d, [rsp + 32]
+    mov r9d, [rsp + 40]
+    call agsel_md
     mov eax, r12d               # its links' ids: the range a reply of its index would have
     and eax, 255
     shl eax, 12
@@ -2237,8 +2274,15 @@ think_lay:
     mov ecx, [rsp + 16 + 8]
     mov r8d, [rsp + 16 + 36]
     mov r9d, [rsp + 16 + 40]
-    call md_draw                # (a link in thinking is not followed)
+    call md_draw
     add rsp, 16
+    test eax, eax               # task 10: a link in it followed as a reply's is (agents.s)
+    js 7f
+    mov rdi, r14
+    mov esi, eax
+    mov edx, r13d
+    sub edx, [rsp + 4]
+    call agents_link_click
 7:  add r13d, [rsp + 28]
 8:  add r13d, [rip + g_pmt + 4*MI_4]
     mov eax, r13d
@@ -2433,8 +2477,18 @@ lay_btn:
     mov r8d, r13d
     lea r9, [rip + .Ltip_full]
     call tip_note_text
-4:  test r13d, UB_CLICK
+4:  test r13d, UB_RPRESS        # task 10: a right press on the header's link: Copy Link (agentsel.s); the
+    jz 43f                      #   release of a drag that selected text in it is no click
+    cmp ebx, PART_LINK
+    jne 43f
+    mov rax, [rip + lr_at]
+    mov rdi, [rax + AT_link]
+    call agsel_rlink
+43: test r13d, UB_CLICK
     jz 5f
+    call agsel_moved
+    test eax, eax
+    jnz 5f
     mov rdi, [rip + lr_row]
     mov rsi, [rip + lr_at]
     mov edx, ebx
@@ -2673,7 +2727,31 @@ section:
     mov [rsp + RW_top], eax
     mov eax, [rip + g_cv + CV_cy1]
     mov [rsp + RW_bot], eax
+    mov edi, [rsp + RW_SIZE]    # task 10: IN and OUT are selected by the pointer, banded under the text
+    cmp edi, PART_IN            #   (agentsel.s): a row's own call's, not a child's
+    je 31f
+    cmp edi, PART_OUT
+    jne 32f
+31: call agents_viewed
+    test rax, rax
+    jz 32f
+    mov rdi, rax
+    mov rsi, [rip + lr_row]
+    cmp rsi, [rdi + AS_msgs + VEC_len]
+    jae 32f
+    call row_of
+    mov rcx, [rip + lr_at]
+    cmp [rax + AM_x], rcx
+    jne 32f
+    mov edi, [rsp + RW_SIZE]
+    call part_id
+    mov ecx, eax
     lea rdi, [rsp]
+    mov rsi, [rip + lr_row]
+    mov edx, [rsp + RW_SIZE]
+    mov r8d, r13d
+    call agsel_plain
+32: lea rdi, [rsp]
     call rw_wrap
     call gfx_clip_pop
     cmp r12d, r13d
@@ -5077,8 +5155,12 @@ FN agrow_key
     mov rsi, r13
     call has_action
     test eax, eax
-    jz 8f
-    cmp eax, PART_MORE
+    jnz 612f
+    mov rdi, rbx                # task 10: a reply that ends its turn (Focus Last Message reaches one, Up and
+    mov rsi, r13                #   Down do not stop there): its Copy response (agentsel.s)
+    call agsel_resp
+    jmp 8f
+612: cmp eax, PART_MORE
     je 610f
     cmp eax, PART_FOLD          # a fold's line: it opens or closes (agentfold.s)
     jne .Lk_enter_act
@@ -5181,7 +5263,13 @@ FN agrow_click
     xor eax, eax
     cmp r12, [rbx + AS_msgs + VEC_len]
     jae 9f
-    test r13d, r13d
+    cmp r13d, PART_RESP         # task 10: a reply's Copy response (agentsel.s)
+    jne 0f
+    mov rdi, rbx
+    mov rsi, r12
+    call agsel_resp
+    EPILOGUE
+0:  test r13d, r13d
     jnz 1f
     mov rdi, rbx
     mov rsi, r12
@@ -7010,6 +7098,15 @@ prompt_lay:
     div dword ptr [rsp + 20]
     add eax, 1
     mov [rdi + RW_max], eax
+    mov edi, SELP_PROMPT        # task 10: its text is selected by the pointer, banded under it (agentsel.s)
+    call part_id
+    mov ecx, eax
+    lea rdi, [rsp + 96]
+    mov rsi, r12
+    mov edx, SELP_PROMPT
+    mov r8d, [rsp + 44]
+    call agsel_plain
+    lea rdi, [rsp + 96]
     call rw_wrap
     cmp dword ptr [rsp + 48], 0 # cut: a fade over its last pixels
     je 4f

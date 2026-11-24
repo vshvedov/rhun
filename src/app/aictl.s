@@ -2193,6 +2193,32 @@ tk_nums: .quad .Ltk_bg, .Ltk_uses, .Ltk_tokens, .Ltk_age, .Ltk_seen, 0
 tk_akn: .long AKN_BG, AKN_USES, AKN_TOKENS
 .text
 
+# ---- phase 3 task 10: selection (agentsel.s) ----
+
+# agent-select N FROM TO [in|out]: row N (from 0) of the open conversation selected from byte FROM to TO of its
+#   plain text (a prompt, a meta line, a call's IN or OUT), or all of a Markdown row's
+c_agent_select:
+    PROLOGUE
+    call ai_set
+    call agsel_cmd_select
+    EPILOGUE
+
+# print-agent-selection: "row=N part=P from=A to=B text=T" or "none"; "resp row=N X,Y,W,H" (agsel_dump)
+c_print_agent_selection:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agsel_dump
+    xor eax, eax
+    EPILOGUE
+
+.section .rodata
+.Lc_agent_select: .asciz "agent-select"
+.Lc_print_agent_selection: .asciz "print-agent-selection"
+.Lp_resp: .asciz "resp"
+.text
+
 .bss
 .p2align 3
 tt_rest: .quad 0                # agent-test-tool: its keys and values, where each key's value starts
@@ -2262,9 +2288,11 @@ tt_atv: .long -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, ATV_SE
 state_words: .quad .Ls_running, .Ls_ok, .Ls_failed, .Ls_denied, .Ls_stopped, 0
 todo_words: .quad .Lt_pending, .Lt_active, .Lk_done, 0
 part_words: .quad .Lp_link, .Lp_in, .Lp_out, .Lp_pre, .Lp_diff, .Lp_note, .Lp_toggle, .Lp_copy, .Lp_kids
-    .quad .Lp_more, .Lp_stop, .Lp_bg, 0
+    .quad .Lp_more, .Lp_stop, .Lp_bg
+    .quad .Lp_resp, 0                                   # task 10: a reply's Copy response
 part_nums: .long PART_LINK, PART_IN, PART_OUT, PART_PRE, PART_DIFF, PART_NOTE, PART_TOGGLE, PART_COPY
     .long PART_KIDS, PART_MORE, PART_STOP, PART_BG
+    .long PART_RESP                                     # task 10
 .text
 
 # box_kind() -> eax the built-in driver kind the box belongs to: the open conversation's, else the new
@@ -3114,6 +3142,7 @@ ai_ctl:
     .quad .Lc_agent_task_hold, c_agent_task_hold, .Lc_agent_kid_click, c_agent_kid_click
     .quad .Lc_agent_test_task, c_agent_test_task, .Lc_agent_task_click, c_agent_task_click
     .quad .Lc_agent_task_ask, c_agent_task_ask
+    .quad .Lc_agent_select, c_agent_select, .Lc_print_agent_selection, c_print_agent_selection   # task 10
     .quad .Lc_print_agents_metrics, c_print_agents_metrics, .Lc_print_agents_box, c_print_agents_box
     .quad .Lc_print_agent_placeholder, c_print_agent_placeholder, .Lc_print_sh_quote, c_print_sh_quote
     .quad .Lc_print_holder, c_print_holder

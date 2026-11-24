@@ -255,6 +255,29 @@ class DockerHost(chat.DrivenCase):
         self.assertEqual(len(starts), 2, starts)
         self.assertIn('--resume=s1', starts[1]['argv'])
 
+    def gone_on_host(self, seconds=15):
+        deadline = time.monotonic() + seconds
+        while self.streaming():
+            self.assertLess(time.monotonic(), deadline, self.streaming())
+            time.sleep(0.2)
+
+    def test_idle_stop_and_the_kill_sequence_on_the_host(self):
+        self.start('env.FAKE_CLAUDE_LINGER_MS = 60000\n')
+        self.open_listed()
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready 30000')
+        self.assertEqual(len(self.streaming()), 1)
+        self.command('agent-timing idle=300')       # its input ends; it exits there by itself
+        self.command('wait-agent off 5000')
+        self.gone_on_host()
+        self.assertIn('user hello', self.thread())  # read again from the host's file
+        self.command('agent-timing idle=0 eof=300 term=300 kill=300')
+        self.command('agent-prompt mute')           # closes its output, ignores SIGTERM: SIGKILL to its group
+        self.command('wait-agent failed 15000')
+        self.gone_on_host()
+        self.until(lambda: not [w for w in self.command('print-uproc').split()[1:] if w[0].isdigit()],
+                   'reaped', 15)
+
     def test_a_send_while_the_host_is_gone(self):
         self.start()
         self.open_listed()
@@ -288,7 +311,8 @@ class LocalHost(chat.DrivenCase):
         self.command('wait-agent ready 20000')
         sid = self.sid()
         self.assertTrue((self.work / '.claude/projects' / chat.slug(self.project) / (sid + '.jsonl')).exists())
-        self.quit()
+        self.client.sendall(b'quit\n')
+        self.assertEqual(self.process.wait(timeout=15), 0)
         self.assertNotIn(b'RHUN_REMOTE_STRICT', self.process.stderr.read())
 
 

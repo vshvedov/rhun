@@ -138,9 +138,8 @@ While rhun talks to Claude Code, the rows come from the process. When the proces
 conversation is read again from Claude Code's own file, so the panel shows what the file holds. A
 running process keeps the program, wrapper and environment it was started with; changed settings
 apply to the next start, except Claude Code's folder (see below), which a conversation keeps. In a
-[remote window](#remote-hosts) Claude Code's conversations are listed and read, the header has no
-**+ Claude Code**, and where the box would be a line says "Chat is not available in remote windows
-yet".
+[remote window](#remote-hosts) Claude Code runs on the host (see [In a remote
+window](#in-a-remote-window)).
 
 | Key | Action |
 | --- | --- |
@@ -424,7 +423,8 @@ another Claude Code that has it open, such as one in a terminal or in another rh
 up to 10 seconds for that one to let go, looking again every second, then asks: "This conversation
 is still open somewhere else." **Open here anyway** continues it in rhun too. **Continue in a copy**
 makes a new conversation from it, "Copy of TITLE", sends your prompt there and leaves the original
-alone. **Cancel** puts your prompt back into the box. rhun does not check on Windows.
+alone. **Cancel** puts your prompt back into the box. rhun does not check on Windows, except in a
+remote window, whose host it checks.
 
 ### The list of conversations
 
@@ -527,6 +527,28 @@ folder? Claude Code would then use the project's own settings, hooks and servers
 the folder, as **Trust Folder for Git** does, and starts Claude Code with all its settings;
 **Continue without** starts it with your user settings only. The window remembers the answer until
 another folder is opened.
+
+### In a remote window
+
+In a [remote window](#remote-hosts) the chat works as it does here, with Claude Code running on the
+host: rhun starts the host's `claude` through its remote agent, in the project's folder there and with
+the host's login environment, and talks to it over the window's connection. The conversations listed
+are the host's (its `~/.claude`, or the `CLAUDE_CONFIG_DIR` its login shell sets), and so are the
+records of **Open somewhere else** and the files the rows read; file links, tool rows and diffs
+name the host's files and open them from there. Claude Code must be installed and signed in on the
+host: rhun looks for `claude` on the host's PATH, then where its installers put it (`~/.local/bin`,
+`~/.claude/local`, `/usr/local/bin`, `~/.npm-global/bin`, `~/.bun/bin`); a **Claude Code program** or
+**Wrapper** set in Settings is a path or name on the host, with `~/` its home. When it is missing the
+error row says "Claude Code was not found on HOST. Install it there, or set its path on that machine
+in Settings > Claude Code."; when it is not signed in the card says "Claude Code is not signed in on
+HOST.", and **Sign In** runs `claude auth login` in rhun's terminal, which is on the host too. The
+`env.` lines of `[claude]` go to the host's process. A prompt sent while the connection is down gets
+"Not connected to HOST. Reconnect, then send again." If the connection goes while Claude Code works,
+the turn ends with "The connection to HOST was lost." and the prompts that were still waiting go
+back into the box; Claude Code on the host ends once the window is back, the conversation is read
+again from the host's file then, and the next prompt continues it. Claude Code started in a terminal
+of a remote window does not connect to rhun, and files from this machine's clipboard cannot be
+attached there.
 
 ### Settings for the chat
 

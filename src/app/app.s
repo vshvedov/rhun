@@ -1432,7 +1432,11 @@ FN app_tab_label
     jne 5f
     mov rdi, [rcx + TAB_flags]
     jmp mdtab_label
-5:  ret
+5:  cmp qword ptr [rcx + TAB_kind], TAB_AGENT    # phase 4 task 13: a conversation tab (agenttab.s)
+    jne 6f
+    mov rdi, [rcx + TAB_flags]
+    jmp agtab_label
+6:  ret
 
 # app_detect_lang(doc)
 FN app_detect_lang
@@ -1499,7 +1503,15 @@ FN app_close_tab_now
     call mdtab_tab_closed       # plan review: its owner hears it, its prompt and document go (mdtab.s)
     pop rax
     pop rax
-71: mov rbx, [rax + TAB_doc]
+71: cmp qword ptr [rax + TAB_kind], TAB_AGENT
+    jne 72f
+    push rax
+    push rax
+    mov rdi, [rax + TAB_flags]
+    call agtab_tab_closed       # phase 4 task 13: the view goes back to the panel (agenttab.s)
+    pop rax
+    pop rax
+72: mov rbx, [rax + TAB_doc]
     test rbx, rbx
     jz 1f
     mov rdi, rbx
@@ -3135,7 +3147,7 @@ FN app_render
     mov ecx, [rsp + 24]
     call splitter_hit
     mov [rip + split_r_bits], eax
-32:
+32: call agtab_sync              # phase 4 task 13: the active conversation tab takes the view (agenttab.s)
     # sidebar
     cmp dword ptr [rip + g_show_side], 0
     je 4f
@@ -3582,13 +3594,22 @@ FN center_draw
     call find_draw
     EPILOGUE
 15: cmp qword ptr [rax + TAB_kind], TAB_MDDOC    # plan review: a Markdown tab of rhun's own (mdtab.s)
-    jne 2f
+    jne 16f
     mov rdi, [rip + g_tab_cur]
     mov esi, [rip + g_editor_rect]
     mov edx, [rip + g_editor_rect + 4]
     mov ecx, [rip + g_editor_rect + 8]
     mov r8d, [rip + g_editor_rect + 12]
     call mdtab_draw
+    EPILOGUE
+16: cmp qword ptr [rax + TAB_kind], TAB_AGENT    # phase 4 task 13: a conversation tab (agenttab.s)
+    jne 2f
+    mov rdi, [rip + g_tab_cur]
+    mov esi, [rip + g_editor_rect]
+    mov edx, [rip + g_editor_rect + 4]
+    mov ecx, [rip + g_editor_rect + 8]
+    mov r8d, [rip + g_editor_rect + 12]
+    call agtab_draw
     EPILOGUE
 2:  mov rbx, [rip + g_doc]
     mov rdi, rbx
@@ -4467,6 +4488,7 @@ tab_new_last:
 # tab_width(i) -> eax: its name, and room for the button after it
 tab_width:
     PROLOGUE
+    mov r12, rdi
     call app_tab_label
     mov rbx, rax
     mov rdi, rax
@@ -4477,6 +4499,12 @@ tab_width:
     call text_width
     add eax, [rip + g_mt + 4*MI_40]
     add eax, [rip + g_mt + 4*MI_12]
+    mov r13d, eax
+    mov rdi, r12                # phase 4 task 13: a conversation tab's dot (agenttab.s)
+    call tab_at
+    mov rdi, rax
+    call agtab_dot_w
+    add eax, r13d
     EPILOGUE
 
 # tab_draw(i, x, y, w, h, lifted) -> eax 1 when the strip changed under it (the tab closed or was
@@ -4627,9 +4655,19 @@ tab_draw:
     cmp rbx, [rip + g_tab_cur]
     jne 88f
     COLOR r9d, T_FG
-88: lea rdi, [rip + g_face_ui]
+88: mov [rsp + 40], r9d
+    mov rdi, r15                # phase 4 task 13: a conversation tab's dot before its label (agenttab.s)
     mov esi, [rsp]
     add esi, [rip + g_mt + 4*MI_16]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 12]
+    call agtab_tab_dot
+    mov [rsp + 36], eax
+    mov r9d, [rsp + 40]
+    lea rdi, [rip + g_face_ui]
+    mov esi, [rsp]
+    add esi, [rip + g_mt + 4*MI_16]
+    add esi, [rsp + 36]
     mov edx, [rsp + 4]
     mov ecx, [rsp + 12]
     mov r8, r13
@@ -5029,6 +5067,10 @@ FN statusbar_draw
     mov esi, [rsp + 4]
     mov edx, [rsp + 12]
     call notify_status_draw     # progress (notify.s), left of the updater's item
+    mov edi, eax
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 12]
+    call agents_status_item     # phase 4 task 13: the agents' item (agenttab.s)
     mov edi, eax
     mov esi, [rsp + 4]
     mov edx, [rsp + 12]

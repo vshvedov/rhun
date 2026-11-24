@@ -127,6 +127,27 @@ FN agent_drv_for_kind
     lea rax, [rip + claude_drv]    # (a remote window's program runs on its host: agent_conn.s)
 1:  ret
 
+# FN agent_drv_default() -> eax the first built-in kind whose driver is available and starts conversations, 0
+#   none (phase 4 task 13: the status item, a new conversation of no kind)
+FN agent_drv_default
+    push rbx
+    mov ebx, 1
+1:  cmp ebx, 4
+    ja 8f
+    mov edi, ebx
+    call agent_drv_for_kind
+    inc ebx
+    test rax, rax
+    jz 1b
+    test dword ptr [rax + DRV_caps], DRVC_NEW
+    jz 1b
+    lea eax, [rbx - 1]
+    pop rbx
+    ret
+8:  xor eax, eax
+    pop rbx
+    ret
+
 # FN agent_drv_of(AS*) -> rax the driver that can talk for this session now, or 0
 FN agent_drv_of
     xor eax, eax
@@ -2072,6 +2093,8 @@ FN agent_new
     mov r13, rax
     mov rdi, r13
     call agents_adopt
+    mov rdi, r13                # phase 4 task 13: a draft a tab hosts is this conversation now (agenttab.s)
+    call agtab_new_made
     mov rdi, r13
     call agents_open_as
     mov rdi, r13
@@ -3072,7 +3095,9 @@ FN ev_turn_end
     mov rcx, rax
     xor r8d, r8d
     call agents_msg_add
-2:  mov rdi, [rbx + AL_as]      # the turn's calls still waiting for a result are stopped (agentrows.s)
+2:  mov rdi, [rbx + AL_as]      # phase 4 task 13: a tab no focused view shows marks it unseen (agenttab.s)
+    call agtab_turn_end
+    mov rdi, [rbx + AL_as]      # the turn's calls still waiting for a result are stopped (agentrows.s)
     call agrow_stop
     and dword ptr [rbx + AL_flags], ~ALF_STOP_ASKED
     mov qword ptr [rbx + AL_row], -1

@@ -20,7 +20,7 @@
 FN cmd_agents_open
     cmp dword ptr [rip + cfg_claude_use_terminal], 0
     jne cmd_claude_open_terminal
-    jmp cmd_focus_agents
+    jmp agtab_cmd_open          # phase 4 task 13: where [agents] location says (agenttab.s)
 
 # FN cmd_agents_focus_input()
 FN cmd_agents_focus_input

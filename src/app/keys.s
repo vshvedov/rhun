@@ -2486,5 +2486,9 @@ g_commands:
     COMMAND agents_open, "Agents: Open", cmd_agents_open, ""
     COMMAND claude_open_terminal, "Claude: Open in Terminal", cmd_claude_open_terminal, ""
     COMMAND claude_mention_terminal, "Claude: Insert @-Mention in Terminal", cmd_claude_mention_terminal, "ctrl+alt+k"
+    # phase 4 task 13: conversation tabs (agenttab.s)
+    COMMAND agents_open_tab, "Agents: Open in New Tab", agtab_cmd_open_tab, "ctrl+shift+Escape"
+    COMMAND agents_open_panel, "Agents: Open in Side Panel", agtab_cmd_open_panel, ""
+    COMMAND agents_new_conversation, "Agents: New Conversation", agtab_cmd_new, ""
     .quad 0, 0, 0, 0
 

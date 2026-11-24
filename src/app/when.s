@@ -1797,7 +1797,7 @@ FN ctx_tab_kind_name
     je 9f
     xor eax, eax
     dec rdi
-    cmp rdi, TAB_MDDOC - 1          # plan review: TAB_MDDOC (mdtab.s) is "markdown"
+    cmp rdi, TAB_AGENT - 1          # plan review: TAB_MDDOC (mdtab.s) is "markdown"; task 13: TAB_AGENT "agent"
     ja 9f
     lea rax, [rip + tab_kind_names]
     mov rax, [rax + rdi*8]
@@ -2377,6 +2377,7 @@ ctx_defaults:
     .long -1, 0
 .p2align 3
 tab_kind_names: .quad .Lv_doc, .Lv_settings, .Lv_image, .Lv_git, .Lv_extensions, .Lv_view, .Lv_markdown
+    .quad .Lv_agent                 # phase 4 task 13: TAB_AGENT
 vim_names: .quad .Lv_normal, .Lv_insert, .Lv_visual, .Lv_vline
 prov_fields: .quad EXT_pv_complete, EXT_pv_signature, EXT_pv_definition, EXT_pv_references
     .quad EXT_pv_symbols, EXT_pv_actions, EXT_pv_rename, EXT_pv_format
@@ -2416,6 +2417,7 @@ prov_names: .quad .Lp_complete, .Lp_signature, .Lp_definition, .Lp_references, .
 .Lv_view: .asciz "view"
 .Lv_notebook: .asciz "notebook"
 .Lv_markdown: .asciz "markdown"
+.Lv_agent: .asciz "agent"
 .Lv_normal: .asciz "normal"
 .Lv_insert: .asciz "insert"
 .Lv_visual: .asciz "visual"

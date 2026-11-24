@@ -3895,6 +3895,7 @@ ENDSTRUCT OT_SIZE
 .equ PAINT_CHIP, 2              # TF_paint: a mention, a tinted box behind its bytes
 .equ APP_MENTION, 4             # agentpop.s: the mention menu (typed "@token")
 .equ TAB_MDDOC, 7
+.equ TAB_AGENT, 8                # phase 4 task 13: a conversation tab (src/app/agenttab.s)
 .equ ID_MDTAB, 0x6c3000         # + 0xfff: its links, Comment, scrollbar
 .equ PROMPT_MD_COMMENT, 110
 STRUCT

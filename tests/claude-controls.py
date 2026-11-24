@@ -2437,7 +2437,8 @@ class SeamWordsTest(unittest.TestCase):
              # phase 4 task 7: mentions and the project's file list
              'agentmention.s', 'filelist.s',
              # phase 4 tasks 9, 10: the MCP core and the editor's tools, shared by the bridge and the chat
-             'edtools.s', 'mcpsrv.s']
+             'edtools.s', 'mcpsrv.s',
+             'agenttab.s']      # phase 4 task 13: conversation tabs, the status item
     # file -> name -> the functions it may appear in
     ALLOWED = {
         'agent_drv.s': {

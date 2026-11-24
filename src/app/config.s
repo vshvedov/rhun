@@ -118,6 +118,8 @@ cfg_agents_timestamps: .long 1          # [agents] timestamps: prompts and repli
 cfg_claude_spinner_verbs: .long 0       # [claude] spinner_verbs: 0 the spinner_verb lines are added, 1 they replace
 ts_seen: .long 1                        # cfg_agents_timestamps as the last read left it (a reload that changes it)
 .globl cfg_agents_focus_view
+.globl cfg_agents_location                  # phase 4 task 13
+cfg_agents_location: .long 0            # [agents] location: 0 the side panel, 1 an editor tab
 cfg_agents_focus_view: .long 0          # [agents] focus_view: runs of tool calls and thinking fold into a line
 fv_seen: .long 0                        # cfg_agents_focus_view as the last read left it
 # Claude chat phase 4 task 10
@@ -1051,6 +1053,8 @@ g_settings:
     SETTING .Ls_agents, respect_gitignore, ST_BOOL, cfg_agents_respect_gitignore, 0, 1, 1, 0, "Leave out ignored files", "Files that .gitignore ignores are not offered by @ and their selected text is never sent."
     # Claude chat phase 4 task 10
     SETTING .Ls_agents, autosave, ST_BOOL, cfg_agents_autosave, 0, 1, 1, 0, "Save files before the agent reads or edits them", "An open file with unsaved changes is saved, as Ctrl+S saves it, before the agent reads or edits it."
+    # phase 4 task 13: where Agents: Open and new conversations go (agenttab.s)
+    SETTING .Ls_agents, location, ST_CHOICE, cfg_agents_location, 0, 1, 1, 0, "Open conversations in", "Where Agents: Open and new conversations show. Follows your last Open in New Tab or Open in Side Panel.", agtab_loc_opts
     # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
     SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
     SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."

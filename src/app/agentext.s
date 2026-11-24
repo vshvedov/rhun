@@ -4014,6 +4014,9 @@ FN agentext_new_draw
     mov [rsp + 12], ecx
     PM r12d, MI_28
     PM r15d, MI_40
+    call agents_in_tab          # task 13: no Back in a conversation tab
+    test eax, eax
+    jnz 1f
     mov edi, ID_AI_CARD + 35
     mov esi, [rsp]
     add esi, [rip + g_pmt + 4*MI_8]

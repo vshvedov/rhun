@@ -94,6 +94,8 @@ walk_m: .zero 8 * WALK_KEEP     #   and a bit per row of each
 walk_k: .long 0                 # chunks noted
 walk_x: .long 0                 # rows asked past WALK_KEEP chunks (counted, not told apart)
 lay_off: .long 0                # th_layout: the pixels of lay_row above the area's top
+tv_in_tab: .long 0              # task 13: the view is drawn in a conversation tab (agents_draw_tab)
+tv_in_panel: .long 0            #   or in the panel (agents_draw): an opening from there leaves a tab's view
 .p2align 3
 err_r: .zero 16                 # where the last frame drew the error block, its sticky prompt and its jump
 sticky_r: .zero 16              #   button (x, y, w, h; w 0: none)
@@ -3213,6 +3215,14 @@ FN agents_runs_dump
 # open_session(i)
 open_session:
     PROLOGUE
+    mov rbx, rdi                # task 13: a conversation a tab shows opens there (agenttab.s)
+    mov rax, [rip + sessions + VEC_ptr]
+    mov rdi, [rax + rbx*8]
+    mov esi, [rip + tv_in_panel]
+    call agtab_opening
+    test eax, eax
+    jnz 9f
+    mov rdi, rbx
     mov [rip + view], rdi
     mov rax, [rip + sessions + VEC_ptr]
     mov rbx, [rax + rdi*8]
@@ -3236,7 +3246,7 @@ open_session:
     call agrow_focus_set
     call agrow_think_reset      # its thinking rows closed
     mov dword ptr [rip + g_dirty], 1
-    EPILOGUE
+9:  EPILOGUE
 
 FN cmd_focus_agents
     mov dword ptr [rip + cfg_agents], 1
@@ -3565,7 +3575,12 @@ dump_line:
 FN agents_open
     cmp rdi, [rip + sessions + VEC_len]
     jae 1f
-    jmp open_session
+    push rbx                    # task 13: as a click in the panel's list (a tab's view goes to the panel)
+    mov ebx, [rip + tv_in_panel]
+    mov dword ptr [rip + tv_in_panel], 1
+    call open_session
+    mov [rip + tv_in_panel], ebx
+    pop rbx
 1:  ret
 
 FN agents_key
@@ -3794,6 +3809,11 @@ FN agents_focus_last
 key_list:
     cmp edi, KEY_ESCAPE
     jne 1f
+    sub rsp, 8                  # task 13: in a conversation tab Escape goes no further (no list there)
+    call agtab_hosting
+    add rsp, 8
+    test eax, eax
+    jnz 3f
     cmp qword ptr [rip + view], 0
     jl 2f
     mov qword ptr [rip + view], -1
@@ -7305,6 +7325,94 @@ wr_setup:
 
 # agents_draw(x, y, w, h)
 FN agents_draw
+    mov dword ptr [rip + tv_in_tab], 0
+    jmp draw_view
+
+# ---- phase 4 task 13: the view in a conversation tab (agenttab.s) ----
+# FN agents_draw_tab(x, y, w, h): the panel's view drawn in a conversation tab: its conversation or a new
+#   draft, never the list (the tab hosts the one view; the panel then shows its list)
+FN agents_draw_tab
+    mov dword ptr [rip + tv_in_tab], 1
+    jmp draw_view
+
+# FN agents_in_tab() -> eax 1 while the view is being drawn in a tab (the header has no Back there)
+FN agents_in_tab
+    mov eax, [rip + tv_in_tab]
+    ret
+
+# FN agents_index_of(AS*) -> rax its index in the list's sessions, -1 none
+FN agents_index_of
+    xor eax, eax
+1:  cmp rax, [rip + sessions + VEC_len]
+    jae 2f
+    mov rcx, [rip + sessions + VEC_ptr]
+    cmp [rcx + rax*8], rdi
+    je 3f
+    inc rax
+    jmp 1b
+2:  mov rax, -1
+3:  ret
+
+# FN agents_by_path(cstr) -> rax the session of the list or the pool whose file is that path, or 0
+FN agents_by_path
+    PROLOGUE
+    mov r12, rdi
+    lea r13, [rip + sessions]
+1:  xor ebx, ebx
+2:  cmp rbx, [r13 + VEC_len]
+    jae 4f
+    mov rax, [r13 + VEC_ptr]
+    mov r14, [rax + rbx*8]
+    inc rbx
+    mov rdi, [r14 + AS_path]
+    test rdi, rdi
+    jz 2b
+    mov rsi, r12
+    call strcmp_eq
+    test eax, eax
+    jz 2b
+    mov rax, r14
+    EPILOGUE
+4:  lea rax, [rip + pool]
+    cmp r13, rax
+    je 5f
+    mov r13, rax
+    jmp 1b
+5:  xor eax, eax
+    EPILOGUE
+
+# FN agents_loading() -> eax 1 while discovery runs for the list
+FN agents_loading
+    jmp index_loading
+
+# FN agents_anchor_get(buf 16): the open thread's place (following, the anchor row, its offset, its pill)
+FN agents_anchor_get
+    mov eax, [rip + th_follow]
+    mov [rdi], eax
+    mov eax, [rip + th_arow]
+    mov [rdi + 4], eax
+    mov eax, [rip + th_aoff]
+    mov [rdi + 8], eax
+    mov eax, [rip + th_aabove]
+    mov [rdi + 12], eax
+    ret
+
+# FN agents_anchor_set(buf 16, AS*): that place again, for the open conversation (just opened)
+FN agents_anchor_set
+    mov eax, [rdi]
+    mov [rip + th_follow], eax
+    mov eax, [rdi + 4]
+    mov [rip + th_arow], eax
+    mov eax, [rdi + 8]
+    mov [rip + th_aoff], eax
+    mov eax, [rdi + 12]
+    mov [rip + th_aabove], eax
+    mov [rip + th_aas], rsi
+    mov dword ptr [rip + g_dirty], 1
+    ret
+# ---- end of task 13 ----
+
+draw_view:
     PROLOGUE 64
     mov [rsp], edi
     mov [rsp + 4], esi
@@ -7327,7 +7435,19 @@ FN agents_draw
     mov edx, [rsp + 8]
     mov ecx, [rsp + 12]
     call gfx_clip_push
-    call agentdlg_shield        # a dialog over the panel (agentdlg.s): what is under it takes no pointer
+    cmp dword ptr [rip + tv_in_tab], 0      # task 13: a tab hosts the view: the panel shows its list alone
+    jne 3f
+    mov dword ptr [rip + tv_in_panel], 1
+    call agtab_hosting
+    test eax, eax
+    jz 3f
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 12]
+    call list_draw
+    jmp 91f
+3:  call agentdlg_shield        # a dialog over the panel (agentdlg.s): what is under it takes no pointer
     call aglist_shield          # phase 6: the pointer over the history dropdown is its own (agentlist.s)
     call agentext_new_active    # AI (D4): a new session of an extension is being written
     test rax, rax
@@ -7355,7 +7475,9 @@ FN agents_draw
     mov ecx, [rsp + 28]
     call agpaste_area
     jmp 9f
-1:  mov edi, [rsp]
+1:  cmp dword ptr [rip + tv_in_tab], 0  # (task 13: a tab draws no list)
+    jne 9f
+    mov edi, [rsp]
     mov esi, [rsp + 4]
     mov edx, [rsp + 8]
     mov ecx, [rsp + 12]
@@ -7371,7 +7493,9 @@ FN agents_draw
     mov edx, [rsp + 8]
     mov ecx, [rsp + 12]
     call agentdlg_draw
-    call gfx_clip_pop
+91: call gfx_clip_pop
+    mov dword ptr [rip + tv_in_tab], 0
+    mov dword ptr [rip + tv_in_panel], 0
     EPILOGUE
 
 list_draw:

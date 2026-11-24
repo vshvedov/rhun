@@ -55,7 +55,10 @@ FN aghead_draw
     sar eax, 1
     add eax, [rsp + 4]
     mov [rsp + 12], eax
-    # Back
+    # Back (task 13: not in a conversation tab, which has no list)
+    call agents_in_tab
+    test eax, eax
+    jnz 1f
     mov edi, ID_AGH + IDH_BACK
     mov esi, [rsp]
     add esi, [rip + g_pmt + 4*MI_8]
@@ -127,8 +130,13 @@ FN aghead_draw
     mov rdi, rbx
     call aghead_history
 3:  # the title: a button, or the rename field
-    mov eax, [rsp]
-    add eax, [rip + g_pmt + 4*MI_40]
+    call agents_in_tab          # (task 13: from the left edge in a tab, which has no Back)
+    mov ecx, [rip + g_pmt + 4*MI_40]
+    test eax, eax
+    jz 31f
+    mov ecx, [rip + g_pmt + 4*MI_8]
+31: mov eax, [rsp]
+    add eax, ecx
     mov [rsp + 20], eax         # its x
     mov ecx, [rsp + 16]
     sub ecx, eax

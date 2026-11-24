@@ -534,6 +534,31 @@ class MentionTest(MentionCase):
         self.assertTrue(terms[0]['text'].startswith(f'<terminal name="{name}">\n'))
         self.assertLessEqual(terms[0]['text'].count('\n'), 102)
 
+    def test_a_links_terminal_mention_is_blocked(self):
+        """A rhun://NAME/open link's prompt fills the box: its @terminal: names send nothing of the terminal (the
+        link's sender chose them, not the user) until the user picks that terminal from the menu."""
+        self.start(extra='[terminal]\nshell = /bin/sh\n')
+        self.chat('hello')
+        self.command('cmd new_terminal')
+        self.command('type echo marker-$((40+2))')
+        self.command('key Return')
+        self.command('wait-term marker-42')
+        name = re.search(r' title=(\S+)', self.command('print-terminals')).group(1)
+        sid = self.sid()
+        self.command('cmd focus_agents')
+        self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')     # (a shown conversation keeps its box)
+        self.command(f'open rhun://claude/open?session={sid}&prompt=look%20@terminal:{name}')
+        self.assertTrue(self.command('print-agent-input').startswith(f'input=look @terminal:{name} '),
+                        self.command('print-agent-input'))
+        self.command('agent-focus box')
+        self.command('key Return')
+        self.ready()
+        self.assertEqual([b['type'] for b in self.blocks()], ['text'])
+        self.assertNotIn('marker-42', repr(self.blocks()))
+        self.command(f'agent-prompt again @terminal:{name}')     # the user's own mention goes
+        self.ready()
+        self.assertIn('marker-42', repr(self.blocks()))
+
     def test_an_unknown_terminal_adds_nothing(self):
         self.start()
         self.chat('hello')

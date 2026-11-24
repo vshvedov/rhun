@@ -2438,6 +2438,9 @@ ENDSTRUCT CRF_SIZE
     CTXKEY CTX_VIEWING_PROPOSED, "viewingProposedChange", ck_viewing_proposed
     # phase 4 task 8: the agents panel's prompt box has the keys
     CTXKEY CTX_AGENTS_INPUT_FOCUS, "agentsInputFocus", ck_agents_input_focus
+    # p8: the extension's other when-clause keys (agentcmd.s)
+    CTXKEY CTX_CLAUDE_FOCUS, "claudeFocus", ck_claude_focus
+    CTXKEY CTX_CLAUDE_USE_TERMINAL, "claudeUseTerminal", ck_claude_use_terminal
 .endm
 # when.s expands the list as records: FN, the name, padding to 8 bytes
 .macro CTXKEY sym, name, fn

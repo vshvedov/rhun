@@ -2491,5 +2491,14 @@ g_commands:
     COMMAND agents_open_panel, "Agents: Open in Side Panel", agtab_cmd_open_panel, ""
     COMMAND agents_new_conversation, "Agents: New Conversation", agtab_cmd_new, ""
     COMMAND agents_open_window, "Agents: Open in New Window", agtab_cmd_open_window, ""
+    # p8 (agentcmd.s): the extension's other commands (docs/guide.md maps all of them)
+    COMMAND agents_blur, "Agents: Return to the Editor", cmd_agents_blur, ""
+    COMMAND agents_sign_in, "Agents: Sign In", cmd_agents_sign_in, ""
+    COMMAND agents_sign_out, "Agents: Sign Out", cmd_agents_sign_out, ""
+    COMMAND agents_install_plugin, "Agents: Install Plugin", cmd_agents_install_plugin, ""
+    COMMAND agents_mark_unread, "Agents: Mark Conversation as Unread", cmd_agents_mark_unread, ""
+    COMMAND agents_rename, "Agents: Rename Conversation", cmd_agents_rename, ""
+    COMMAND agents_add_to_group, "Agents: Add Conversation to Group", cmd_agents_add_to_group, ""
+    COMMAND agents_show_logs, "Agents: Show Logs", cmd_agents_show_logs, ""
     .quad 0, 0, 0, 0
 

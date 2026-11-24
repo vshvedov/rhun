@@ -275,7 +275,11 @@ FN agent_state_set
     PROLOGUE
     mov rbx, rdi
     mov r12d, esi
-    mov [rbx + AL_state], esi
+    cmp [rbx + AL_state], esi   # p8: a change is a line of the agents' log (agentcmd.s)
+    je 0f
+    call aglog_state
+    mov esi, r12d
+0:  mov [rbx + AL_state], esi
     lea rax, [rip + ags_of]
     mov eax, [rax + r12*4]
     mov rcx, [rbx + AL_as]
@@ -3967,8 +3971,8 @@ ext_held:
 #   agent_src_name(AS*) -> rax cstr or 0    the source's own name (its row's label and badge); 0: the kind's
 #   agent_src_word(AS*) -> rax cstr         its kind in the dumps: the kind's word, "ext" for another source
 #   agent_src_key(AS*, sb) -> eax 1 written its key in rhun's state file (agentgroups.s): "x:" and the
-#                                           source's id; KIND ":" and its file (a Claude Code file's id: its
-#                                           name without ".jsonl", the same in every worktree's folder); 0
+#                                           source's id; KIND ":" and its file (for a kind whose reader names
+#                                           its suffix, the file's name without it); 0
 #                                           none yet (a new conversation before its file is named)
 #   agent_src_loading(AS*) -> eax 1         while its source fetches its messages
 #   agent_src_icon(AS*, x, y, size)         its source's icon
@@ -4097,22 +4101,31 @@ FN agent_src_key
     mov rdi, r12
     call strlen
     mov r13, rax
-    cmp dword ptr [rbx + AS_kind], AG_CLAUDE
-    jne 3f
-    mov rdi, r12                # Claude Code: the conversation's id, its file's name without ".jsonl"
-    mov rsi, r13                # (the same in every worktree's folder)
+    mov edi, [rbx + AS_kind]    # a kind whose reader names the id's suffix: the conversation's id, its file's
+    mov esi, 4                  #   name without it (the same in every worktree's folder)
+    call agent_reader
+    test rax, rax
+    jz 3f
+    mov r15, rax
+    mov rdi, r12
+    mov rsi, r13
     call path_basename
     mov r12, rax
     mov r13, rdx
-    cmp r13, 6
+    mov rdi, r15
+    call strlen
+    cmp r13, rax
     jb 3f
-    lea rdi, [r12 + r13 - 6]
-    lea rsi, [rip + .Ljsonl]
-    mov edx, 6
+    mov [rsp], rax
+    mov rdi, r12
+    add rdi, r13
+    sub rdi, rax
+    mov rsi, r15
+    mov rdx, rax
     call memeq
     test eax, eax
     jz 3f
-    sub r13, 6
+    sub r13, [rsp]
 3:  mov rdi, r14
     mov rsi, r12
     mov rdx, r13
@@ -4234,7 +4247,8 @@ FN agent_ingest
     ret
 
 # FN agent_reader(kind, n) -> rax the kind's n-th reader function (0 ingest, 1 a part's whole text, 2 a
-#   call's children, 3 an image's bytes: phase 4 task 6) or 0
+#   call's children, 3 an image's bytes: phase 4 task 6; 4 the suffix its file's name has after the
+#   conversation's id, a cstr: p8) or 0
 FN agent_reader
     lea rax, [rip + readers]
 1:  mov rcx, [rax]
@@ -4242,9 +4256,9 @@ FN agent_reader
     jz 8f
     cmp ecx, edi
     je 2f
-    add rax, 40
+    add rax, 48
     jmp 1b
-2:  cmp esi, 3
+2:  cmp esi, 4
     ja 8f
     mov rax, [rax + 8 + rsi*8]
     ret
@@ -4279,10 +4293,10 @@ ext_drv:
     .long 0, 0                  # DRV_glyph: none
     .long SRCF_PUSHED | SRCF_STATE | SRCF_OWN, 0    # p8: DRV_src: its extension sends its rows and messages
     .quad agentext_open, ext_src_name, ext_key, ext_loading, ext_rows, ext_icon
-# the readers of the kinds that have one, by AS_kind: {kind, ingest, text, kids, image}, then 0 (agent_ingest,
+# the readers of the kinds that have one, by AS_kind: {kind, ingest, text, kids, image, suffix}, then 0 (agent_ingest,
 #   agent_reader; the one place above the drivers that names a kind's reader)
 readers:
-    .quad AG_CLAUDE, claude_ingest, claude_text, claude_kids, claude_image
+    .quad AG_CLAUDE, claude_ingest, claude_text, claude_kids, claude_image, .Ljsonl_z    # (p8: the id's suffix)
     .quad 0
 kind_names: .quad .Lk_claude, .Lk_codex, .Lk_grok, .Lk_opencode
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
@@ -4312,7 +4326,7 @@ opts_failed: .quad .Lo_terminal
 .Lcopy_failed: .asciz "The copy could not be made."
 .Lext_name: .asciz "extension"
 .Lw_ext: .asciz "ext"            # p8: a session of no built-in kind in the dumps
-.Ljsonl: .ascii ".jsonl"
+.Ljsonl_z: .asciz ".jsonl"
 .Lx_key: .asciz "x:"
 .Lk_claude: .asciz "claude"
 .Lk_codex: .asciz "codex"

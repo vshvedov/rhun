@@ -1307,6 +1307,8 @@ cl_auth:
     PROLOGUE
     mov rbx, rdi
     mov r12d, esi
+    cmp dword ptr [rip + cfg_claude_disable_login_prompt], 0  # p8: [claude] disable_login_prompt: no question,
+    jne .Lau_in                                                #   the program says when it is not signed in
     call live_dir
     test rax, rax
     jz .Lau_in
@@ -1805,7 +1807,10 @@ cl_terminal:
     cmp r12d, 2                 # 2: its sign-out
     jne 31f
     lea rsi, [rip + .Lw_logout]
-31: lea rdi, [rip + psb]
+31: cmp r12d, 3                 # p8: 3: its plugins (Agents: Install Plugin)
+    jne 32f
+    lea rsi, [rip + .Lw_plugin]
+32: lea rdi, [rip + psb]
     call sb_push_cstr
 3:  mov rdi, [rip + psb + SB_ptr]
     mov rsi, [rip + psb + SB_len]
@@ -4489,6 +4494,7 @@ cl_flags:
 .Lw_projects: .ascii "projects"
 .Lw_login: .asciz " auth login"
 .Lw_logout: .asciz " auth logout"
+.Lw_plugin: .asciz " /plugin"           # p8
 .Lsh_plain: .asciz "/._-+~:,@"
 # PowerShell, Windows' terminal shell: "," would make an array and "@" splat; "~" and "+" are kept out too
 .Lsh_plain_ps: .asciz "/._-:\\"

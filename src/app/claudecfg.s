@@ -64,6 +64,13 @@
 .equ VERB_LINES, 64             # [claude] spinner_verb lines kept
 .equ VERB_MAX, 40               # bytes of one
 .equ BUILTIN_MAX, 128           # the built-in verbs counted at most
+.ifdef WINDOWS                  # p8: a Python environment's path separator and PATH list separator
+.equ PY_SEP, 92                 # \\
+.equ PY_LIST, 59                # ;
+.else
+.equ PY_SEP, 47                 # /
+.equ PY_LIST, 58                # :
+.endif
 
 .bss
 .p2align 3
@@ -83,6 +90,9 @@ dir_pin: .quad 0                # claude_dir_pin's folder, or 0
 pin_pair: .zero SB_SIZE         # claude_env_dir's "CLAUDE_CONFIG_DIR=..."
 pin_forced: .zero 8 * 8         # forced's entries (p6b: and a re-run's two), then pin_pair's text, 0
 rpath: .zero 4096 + 16          # a resolved working directory
+py_sb: .zero SB_SIZE            # p8: a Python environment's folder and its program
+py_out: .zero SB_SIZE           #   its two pairs being made
+py_strs: .quad 0                #   the two pairs as the last list holds them (owned)
 
 .text
 
@@ -405,7 +415,7 @@ name_len:
 pairs_list:
     PROLOGUE
     mov rbx, [rip + pairs + VEC_len]
-    lea rdi, [rbx*8 + 8]
+    lea rdi, [rbx*8 + 24]       # p8: room for the Python environment's two
     call mem_alloc
     mov r12, rax
     mov rdi, rax
@@ -413,8 +423,125 @@ pairs_list:
     lea rdx, [rbx*8]
     call memcpy
     mov qword ptr [r12 + rbx*8], 0
+    mov rdi, r12                # p8: [claude] python_env
+    lea rsi, [r12 + rbx*8]
+    call py_pairs
     mov rax, r12
     EPILOGUE
+
+# ---- p8: [claude] python_env (ext-host-ide.md 8.2): a .venv or venv folder of a trusted project (one with
+#   bin/python, Scripts\python.exe on Windows) goes first on claude's PATH, with VIRTUAL_ENV set; a pair of
+#   the user's that names PATH or VIRTUAL_ENV wins; not in a remote window (the host's folders) ----
+
+# py_pairs(list, end slot): "VIRTUAL_ENV=…" and "PATH=…" written at the end slot (then 0) when they apply
+py_pairs:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    cmp dword ptr [rip + cfg_claude_python_env], 0
+    je 9f
+    cmp dword ptr [rip + g_remote], 0
+    jne 9f
+    cmp qword ptr [rip + g_project], 0
+    je 9f
+    xor edi, edi
+    call wfold_flags
+    test eax, WS_TRUSTED
+    jz 9f
+1:  mov rdi, [rbx]              # the user's own PATH or VIRTUAL_ENV pair wins
+    test rdi, rdi
+    jz 2f
+    add rbx, 8
+    lea rsi, [rip + .Lpy_path]
+    mov edx, 5
+    call memeq
+    test eax, eax
+    jnz 9f
+    mov rdi, [rbx - 8]
+    lea rsi, [rip + .Lpy_venv]
+    mov edx, 12
+    call memeq
+    test eax, eax
+    jnz 9f
+    jmp 1b
+2:  lea r13, [rip + .Lpy_names]
+3:  cmp byte ptr [r13], 0
+    je 9f
+    lea rdi, [rip + py_sb]      # the folder
+    call sb_clear
+    lea rdi, [rip + py_sb]
+    mov rsi, [rip + g_project]
+    call sb_push_cstr
+    lea rdi, [rip + py_sb]
+    mov esi, PY_SEP
+    call sb_push_byte
+    lea rdi, [rip + py_sb]
+    mov rsi, r13
+    call sb_push_cstr
+    mov r14, [rip + py_sb + SB_len]
+    lea rdi, [rip + py_sb]      # its program
+    lea rsi, [rip + .Lpy_prog]
+    call sb_push_cstr
+    lea rdi, [rip + py_sb]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + py_sb + SB_ptr]
+    xor esi, esi                # F_OK
+    call vfs_access
+    test rax, rax
+    jz 4f
+    mov rdi, r13
+    call strlen
+    lea r13, [r13 + rax + 1]
+    jmp 3b
+4:  lea rdi, [rip + py_out]     # VIRTUAL_ENV=FOLDER
+    call sb_clear
+    lea rdi, [rip + py_out]
+    lea rsi, [rip + .Lpy_venv]
+    call sb_push_cstr
+    lea rdi, [rip + py_out]
+    mov rsi, [rip + py_sb + SB_ptr]
+    mov rdx, r14
+    call sb_push
+    lea rdi, [rip + py_out]
+    xor esi, esi
+    call sb_push_byte
+    mov r15, [rip + py_out + SB_len]
+    lea rdi, [rip + py_out]     # PATH=FOLDER/bin:LOGIN PATH
+    lea rsi, [rip + .Lpy_path]
+    call sb_push_cstr
+    lea rdi, [rip + py_out]
+    mov rsi, [rip + py_sb + SB_ptr]
+    mov rdx, r14
+    call sb_push
+    lea rdi, [rip + py_out]
+    lea rsi, [rip + .Lpy_bin]
+    call sb_push_cstr
+    call uproc_login_path
+    test rax, rax
+    jz 5f
+    mov r13, rax
+    lea rdi, [rip + py_out]
+    mov esi, PY_LIST
+    call sb_push_byte
+    lea rdi, [rip + py_out]
+    mov rsi, r13
+    call sb_push_cstr
+5:  lea rdi, [rip + py_out]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + py_strs]    # the block the last list used goes (its arrays were made and freed)
+    call mem_free
+    mov rdi, [rip + py_out + SB_ptr]
+    mov rsi, [rip + py_out + SB_len]
+    call mem_dup
+    mov [rip + py_strs], rax
+    mov [r12], rax
+    add rax, r15
+    mov [r12 + 8], rax
+    mov qword ptr [r12 + 16], 0
+9:  EPILOGUE
+# ---- end p8 ----
 
 # config_dir_pair() -> rax the "CLAUDE_CONFIG_DIR=..." pair when its value is an absolute path, or 0
 config_dir_pair:
@@ -1347,3 +1474,15 @@ host_places:
 .Lmanual: .asciz "manual"
 .Ldefault: .asciz "default"
 .Lnone: .asciz "none\n"
+# p8: [claude] python_env's words
+.Lpy_names: .asciz ".venv", "venv"      # p8: the Python environment's folders, in this order
+    .byte 0
+.Lpy_path: .asciz "PATH="
+.Lpy_venv: .asciz "VIRTUAL_ENV="
+.ifdef WINDOWS
+.Lpy_prog: .asciz "\\Scripts\\python.exe"
+.Lpy_bin: .asciz "\\Scripts"
+.else
+.Lpy_prog: .asciz "/bin/python"
+.Lpy_bin: .asciz "/bin"
+.endif

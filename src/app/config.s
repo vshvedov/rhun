@@ -136,6 +136,10 @@ cfg_claude_use_terminal: .long 0        # [claude] use_terminal: Claude: Open st
 cfg_agents_attach_selection: .long 1    # [agents] attach_selection: the editor's selection goes with a message
 cfg_agents_attach_open_file: .long 1    # [agents] attach_open_file: else the open file's name does
 cfg_agents_respect_gitignore: .long 1   # [agents] respect_gitignore: mentions and the chip leave out ignored files
+# p8: the extension's [claude] settings not built by another line (agent_claude.s, claudecfg.s)
+.globl cfg_claude_disable_login_prompt, cfg_claude_python_env
+cfg_claude_disable_login_prompt: .long 0    # [claude] disable_login_prompt: no sign-in check before a start
+cfg_claude_python_env: .long 1          # [claude] python_env: the project's .venv or venv on claude's PATH
 .p2align 3
 cfg_theme: .quad cfg_def_theme
 cfg_dark_theme: .quad cfg_def_theme
@@ -1068,6 +1072,9 @@ g_settings:
     # Claude chat phase 5: the bridge for terminal claude and terminal mode
     SETTING .Ls_claude, use_terminal, ST_BOOL, cfg_claude_use_terminal, 0, 1, 1, 0, "Use the terminal", "Claude: Open and Ctrl+Esc start claude in a new terminal instead of the chat."
     SETTING .Ls_claude, ide, ST_BOOL, cfg_claude_ide, 0, 1, 1, 0, "Connect claude in the terminal", "claude started in rhun's terminal connects to rhun: it sees your selection, and its edits open as diffs to accept or reject."
+    # p8: the rest of the extension's settings
+    SETTING .Ls_claude, disable_login_prompt, ST_BOOL, cfg_claude_disable_login_prompt, 0, 1, 1, 0, "No sign-in check", "Start claude without asking it first whether it is signed in: for an API key or a cloud provider set in its environment."
+    SETTING .Ls_claude, python_env, ST_BOOL, cfg_claude_python_env, 0, 1, 1, 0, "Use the project's Python environment", "A .venv or venv folder in a trusted project goes first on claude's PATH, with VIRTUAL_ENV set."
     # the last [claude] row: the env pairs and the spinner_verb lines follow it (config_save, settings_dump)
     SETTING .Ls_claude, spinner_verbs, ST_CHOICE, cfg_claude_spinner_verbs, 0, 1, 1, 0, "Spinner verbs", "How the spinner_verb lines of the config file are used.", .Lspin_opts
     SETTING .Ls_terminal, shell, ST_STR, cfg_term_shell, 0, 0, 0, 0, "Shell", "Program the terminal runs. Empty uses $SHELL."

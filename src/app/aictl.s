@@ -3260,6 +3260,7 @@ c_agent_card_uncomment:
 .Lc_agent_release: .asciz "agent-release"
 .Lc_wait_agent: .asciz "wait-agent"
 .Lc_print_agent_live: .asciz "print-agent-live"
+.Lc_p8_log: .asciz "print-agents-log"           # p8
 .Lc_agent_timing: .asciz "agent-timing"
 .Lw_timeout: .asciz "timeout state="
 .Ls_off: .asciz "off"
@@ -3381,6 +3382,7 @@ ai_ctl:
     .quad agtab_n_print, agtab_c_print     # phase 4 task 13: print-agent-tabs (agenttab.s)
     # p6b (claude_fork.s): print-agent-fork
     .quad claude_fork_n_print, claude_fork_c_print, agfork_n_msg, agfork_c_msg   # agent-msg-action ROW WORD
+    .quad .Lc_p8_log, agcmd_print_log     # p8 (agentcmd.s): print-agents-log
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

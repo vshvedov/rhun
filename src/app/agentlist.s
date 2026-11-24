@@ -3348,6 +3348,50 @@ m_addto:                        # a second menu: the groups
     call after_frame
     EPILOGUE
 
+# FN aglist_group_menu(AS*): p8's Agents: Add Conversation to Group: a menu at the pointer of the groups and
+#   New group (made, named "New group", the conversation in it), as the extension's quick pick
+FN aglist_group_menu
+    PROLOGUE
+    mov [rip + menu_as], rdi
+    mov dword ptr [rip + menu_multi], 0
+    lea rax, [rip + lv_panel]
+    mov [rip + menu_lv], rax
+    call lab_reset
+    call agst_groups
+    mov rbx, rax
+    xor r12d, r12d
+1:  cmp r12, [rbx + VEC_len]
+    jae 2f
+    cmp r12d, MENU_MAX - 2
+    jae 2f
+    imul rax, r12, SGR_SIZE
+    add rax, [rbx + VEC_ptr]
+    mov rdi, [rax + SGR_name]
+    lea rsi, [rip + m_addto_pick]
+    call item
+    inc r12
+    jmp 1b
+2:  test r12, r12
+    jz 3f
+    call line
+3:  lea rdi, [rip + .Lm_newgroup_one]
+    lea rsi, [rip + m_newgroup_one]
+    call item
+    call menu_at_pointer
+    call after_frame
+    EPILOGUE
+
+m_newgroup_one:
+    PROLOGUE
+    lea rdi, [rip + .Lnew_group]
+    mov esi, 9
+    call agst_group_new
+    test rax, rax
+    jz 9f
+    mov edi, [rax + SGR_id]
+    call put_targets
+9:  EPILOGUE
+
 m_addto_pick:
     PROLOGUE
     call agst_groups
@@ -4514,6 +4558,7 @@ ctl_words:
     .quad .Lc_grew, c_grew, .Lc_reopen, c_reopen
     .quad 0, 0
 .Lc_search: .asciz "search"
+.Lm_newgroup_one: .asciz "New group\xe2\x80\xa6"   # p8
 .Lc_drop_search: .asciz "drop-search"
 .Lc_open: .asciz "open"
 .Lc_select: .asciz "select"

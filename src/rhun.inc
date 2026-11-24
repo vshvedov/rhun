@@ -4736,3 +4736,43 @@ ENDSTRUCT VI_SIZE
 .equ VTM_RIGHT, 1
 .equ VTM_CARET, 2
 .equ VT_LINE_MAX, 256           # inlays on one line
+# ---- Claude chat phase 5, the bridge for terminal claude (ide_server.s, mcpsrv.s, edtools.s): begin ----
+# an offer's owner (review.s review_offer; the interface of phase 4's task 11)
+STRUCT
+F RVO_done, 8           # fn(rdi ctx, esi OFFER_*, rdx text ptr, rcx len, r8d edited): called once
+F RVO_locked, 8         # fn(rdi ctx) -> eax 1 while no decision may be taken yet, or 0 (none)
+F RVO_name, 8           # cstr: the owner, as the Review tab's title names it
+ENDSTRUCT RVO_SIZE
+.equ OFFER_ACCEPT, 1
+.equ OFFER_REJECT, 2
+.equ OFFER_CLOSED, 3
+STRUCT
+F TX_old, 8             # an offer's text before and after (copied)
+F TX_oldlen, 8
+F TX_new, 8
+F TX_newlen, 8
+ENDSTRUCT TX_SIZE
+# an MCP server (mcpsrv.s): a static table of tools, shared by every transport
+STRUCT
+F MS_name, 8            # cstr: serverInfo.name
+F MS_version, 8         # cstr: serverInfo.version
+F MS_tools, 8           # MT*
+F MS_ntools, 8
+ENDSTRUCT MS_SIZE
+STRUCT
+F MT_name, 8            # cstr
+F MT_desc, 8            # cstr or 0
+F MT_schema, 8          # cstr: its inputSchema as JSON text
+F MT_flags, 4           # MTF_*
+F MT_pad, 4
+F MT_title, 8           # cstr or 0: annotations.title
+F MT_fn, 8              # fn(rdi args jv or 0, rsi sb out, rdx token) -> eax MCP_OK, MCP_ERROR (out: the
+                        #   message) or MCP_LATER (the tool calls mcp_later_done(token, sb, flags) once)
+ENDSTRUCT MT_SIZE
+.equ MTF_READONLY, 1    # annotations.readOnlyHint
+.equ MTF_RAW, 2         # out holds the result's content array as JSON, not a text
+.equ MCP_OK, 0
+.equ MCP_ERROR, 1
+.equ MCP_LATER, 2
+.equ MCPT_IDE, 1        # a token's transport (its top byte): the bridge for terminal claude
+# ---- Claude chat phase 5: end ----

@@ -3003,6 +3003,13 @@ FN agentdlg_x_nrows
     mov rax, [rip + dg_rows + VEC_len]
 1:  ret
 
+# FN agentdlg_x_filter(placeholder cstr or 0): agentdlg_filter only when the placeholder changes (a rebuild
+#   keeps the focus where it was)
+FN agentdlg_x_filter
+    cmp rdi, [rip + dg_ph]
+    jne agentdlg_filter
+    ret
+
 # FN agentdlg_x_touch(): the rows changed (laid out again)
 FN agentdlg_x_touch
     inc qword ptr [rip + dg_rev]

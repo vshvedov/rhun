@@ -1818,6 +1818,11 @@ mcp_build:
     PROLOGUE
     call agentdlg_begin
     mov rax, [rip + c2_page]
+    cmp rax, MP_LIST
+    je 1f
+    xor edi, edi                # a server's page, the form: no filter
+    call agentdlg_x_filter
+1:  mov rax, [rip + c2_page]
     cmp rax, MP_ADD
     je .Lmb_add
     lea rdi, [rip + c2_doc]
@@ -1852,7 +1857,7 @@ mcp_build:
     call c2_text
     jmp 6f
 2:  lea rdi, [rip + .Lm_filter]
-    call agentdlg_filter
+    call agentdlg_x_filter
     lea r12, [rip + scope_order]    # the groups in the extension's order, then the others
     xor r13d, r13d
 3:  cmp r13d, SCOPES_N

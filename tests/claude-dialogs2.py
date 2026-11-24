@@ -149,8 +149,8 @@ class McpTest(Case):
                           'button 4 Remove'])
         self.pick('View tools (2)')
         body = self.body()
-        self.assertIn('item[3] echo\t\tread-only', body)
-        self.assertIn('item[4] wipe\t\tdestructive', body)
+        self.assertIn('item[2] echo\t\tread-only', body)
+        self.assertIn('item[3] wipe\t\tdestructive', body)
         self.press('Disable')
         self.until_line('text Disabled tokens')
         self.assertEqual(self.control('mcp_toggle'), [{'subtype': 'mcp_toggle', 'serverName': 'tokens',
@@ -205,7 +205,7 @@ class McpTest(Case):
                          ['button 1 Authenticate primary', 'button 2 Disable', 'button 3 Remove'])
         self.press('Authenticate')
         body = self.until_line('text Completing authentication in browser…')
-        self.assertIn('link[3] Re-open authentication page', body)
+        self.assertIn('link[2] Re-open authentication page', body)
         self.assertEqual(self.command('print-palette').splitlines()[0],       # asked, not opened
                          'choose=Claude Code wants to open auth.example.invalid in your browser: '
                          'https://auth.example.invalid/authorize?state=s1')

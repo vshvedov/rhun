@@ -885,7 +885,13 @@ uninstallable:
 plg_build:
     PROLOGUE 48
     call agentdlg_begin
-    mov rax, [rip + c2_page]
+    cmp qword ptr [rip + c2_page], PG_LIST
+    jne 1f
+    cmp qword ptr [rip + g_tab], 0
+    je 2f
+1:  xor edi, edi                # the filter is the Plugins tab's alone
+    call agentdlg_x_filter
+2:  mov rax, [rip + c2_page]
     cmp rax, PG_LIST
     je .Lpb_list
     cmp rax, PG_PLUGIN
@@ -978,7 +984,7 @@ plg_build:
     call c2_text
     EPILOGUE
 3:  lea rdi, [rip + .Lg_search]
-    call agentdlg_filter
+    call agentdlg_x_filter
     test r12d, r12d
     jz 5f
     lea rdi, [rip + .Lg_installed]
@@ -1903,7 +1909,7 @@ open_install:
     call c2_notes_clear
     mov qword ptr [rip + c2_page], PG_INSTALL
     xor edi, edi
-    call agentdlg_filter
+    call agentdlg_x_filter
     xor edi, edi
     call agentdlg_focus
 9:  EPILOGUE
@@ -1999,7 +2005,7 @@ plg_act:
     mov [rip + g_tab], r13
     call c2_notes_clear
     xor edi, edi
-    call agentdlg_filter
+    call agentdlg_x_filter
     xor edi, edi
     call agentdlg_focus
     jmp 8f
@@ -2016,7 +2022,7 @@ plg_act:
     call c2_notes_clear
     mov qword ptr [rip + c2_page], PG_PLUGIN
     xor edi, edi
-    call agentdlg_filter
+    call agentdlg_x_filter
     xor edi, edi
     call agentdlg_focus
     jmp 8f

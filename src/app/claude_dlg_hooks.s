@@ -357,7 +357,11 @@ hooks_build:
     jnz 1f
     call c2_msgs
     EPILOGUE
-1:  mov rax, [rip + c2_page]
+1:  cmp qword ptr [rip + c2_page], HP_EVENT
+    je 11f
+    xor edi, edi                # only the events' page has a filter
+    call agentdlg_x_filter
+11: mov rax, [rip + c2_page]
     cmp rax, HP_EDIT
     je .Lhb_edit
     cmp rax, HP_EVENT
@@ -563,7 +567,7 @@ hooks_build:
     mov edi, HA_BACK            # the events of the catalog: pick one
     call agentdlg_back
     lea rdi, [rip + .Lh_filter_events]
-    call agentdlg_filter
+    call agentdlg_x_filter
     mov rdi, rbx
     lea rsi, [rip + .Lk_catalog]
     call json_get
@@ -1961,7 +1965,7 @@ hooks_act:
     cmp qword ptr [rip + c2_page], HP_EVENT
     jne 3f
     xor edi, edi                # the picker: back to the form (no filter there)
-    call agentdlg_filter
+    call agentdlg_x_filter
     mov qword ptr [rip + c2_page], HP_EDIT
     jmp 8f
 3:  call c2_notes_clear
@@ -2000,7 +2004,7 @@ hooks_act:
     mov [rip + h_event], rax
     call mem_free
     xor edi, edi
-    call agentdlg_filter
+    call agentdlg_x_filter
     mov qword ptr [rip + c2_page], HP_EDIT
     jmp 8f
 .Lha_type:

@@ -181,6 +181,28 @@ class ImagesTest(ImagesCase):
         after = int(re.search(r'passes=(\d+)', self.command('print-loop-stats')).group(1))
         self.assertLessEqual(after - before, 6, 'the loop rests once the thumbnails are made')
 
+    def test_a_tool_results_image_live_and_reread(self):
+        """Checklist 3.12: a Read of a picture shows it under the call's output, live (decoded once, kept) and
+        read again from the file (its place: the result's line, its n-th image)."""
+        self.put('dot.png', flat_png(40, 30))
+        self.start()
+        self.chat('image')
+
+        def call_row():
+            return [int(l.split(' ')[0]) for l in self.rows() if re.match(r'\d+ tool', l)][-1]
+        row = call_row()
+        self.until(lambda: re.search(r'^pics 1 drew 1$', self.row_dump(row), re.M) or None, 'the live call drew it')
+        self.assertEqual([r['kind'] for r in self.images()['recs']], ['bytes'])
+        self.assertRegex(self.row_dump(row), r'(?m)^button 40 ')
+        self.reread()
+        row = call_row()
+        self.until(lambda: re.search(r'^pics 1 drew 1$', self.row_dump(row), re.M) or None, 'the reread call drew it')
+        place = [r for r in self.images()['recs'] if r['kind'] == 'place']
+        self.assertEqual(len(place), 1, self.images()['recs'])
+        self.assertEqual(place[0]['size'], '40x30')
+        self.command(f'agent-image-open {place[0]["id"]}')
+        self.until(lambda: re.search(r' image=40x30', self.command('print-state')), 'the picture opens')
+
     def test_a_prompts_image_live_and_reread(self):
         self.start()
         self.chat('hello')

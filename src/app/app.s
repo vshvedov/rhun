@@ -5075,6 +5075,18 @@ FN statusbar_draw
     mov edi, eax
     mov esi, [rsp + 4]
     mov edx, [rsp + 12]
+    mov ecx, [rsp + 8]          # (it gives way in a narrow bar: left of 60 % of it, not drawn)
+    imul ecx, ecx, 60
+    push rdx
+    push rdx
+    mov eax, ecx
+    xor edx, edx
+    mov r8d, 100
+    div r8d
+    mov ecx, eax
+    pop rdx
+    pop rdx
+    add ecx, [rsp]
     call agents_status_item     # phase 4 task 13: the agents' item (agenttab.s)
     mov edi, eax
     mov esi, [rsp + 4]

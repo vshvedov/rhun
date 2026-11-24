@@ -35,7 +35,7 @@
 #   agtab_tab_dot(TAB*, x, y, h) -> eax its width; agtab_dot_w(TAB*) -> eax   tab_draw's, tab_width's
 #   agtab_turn_end(AS*)                ev_turn_end's (agent_drv.s): unseen when no view shows it
 #   agtab_new_made(AS*)                agent_new's: the draft a tab hosts became that conversation
-#   agents_status_item(right, y, h) -> eax the right edge left of it   statusbar_draw's
+#   agents_status_item(right, y, h, min x) -> eax the right edge left of it   statusbar_draw's
 #   agtab_c_print (print-agent-tabs)   headless: the tabs, then the status item
 .include "rhun.inc"
 
@@ -1104,14 +1104,16 @@ at_any_waiting:
 8:  xor eax, eax
     EPILOGUE
 
-# FN agents_status_item(right, y, h) -> eax the right edge left of it: the glyph and the driver's name, a dot
-#   while a conversation waits for the user; a click is Agents: Open. Locals: [rsp] x, +4 y, +8 h, +12 w,
-#   +16 the text's width, +20 UB bits, +24 the dot
+# FN agents_status_item(right, y, h, min x) -> eax the right edge left of it: the glyph and the driver's name, a
+#   dot while a conversation waits for the user; a click is Agents: Open. Not drawn when it would start left of
+#   min x (a narrow bar keeps its room for the cursor's label). Locals: [rsp] x, +4 y, +8 h, +12 w, +16 the text's
+#   width, +20 UB bits, +24 the dot, +28 min x
 FN agents_status_item
     PROLOGUE 48
     mov [rsp], edi
     mov [rsp + 4], esi
     mov [rsp + 8], edx
+    mov [rsp + 28], ecx
     call at_status_drv
     test rax, rax
     jz .Lsi_none
@@ -1136,6 +1138,8 @@ FN agents_status_item
 1:  mov [rsp + 12], eax
     mov ecx, [rsp]
     sub ecx, eax
+    cmp ecx, [rsp + 28]
+    jl .Lsi_none
     mov [rsp], ecx              # x
     mov edi, ID_AGT_STATUS
     mov esi, ecx

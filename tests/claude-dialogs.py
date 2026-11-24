@@ -392,8 +392,8 @@ class SkillsTest(ClaudeDialogCase):
         self.assertEqual(self.head()['focus'], '1')                          # the filter
         items = self.rows('item')
         self.assertIn('item[2] /compact\tClear history but keep a summary\t', items)
-        self.assertIn('item[16] /tools:lint\tplugin · ~1.2k tokens\tOn · locked', items)
-        self.assertIn('item[17] /notes\tuser · < 20 tokens\tOff pill', items)
+        self.assertIn('item[18] /tools:lint\tplugin · ~1.2k tokens\tOn · locked', items)    # (after phase 6's
+        self.assertIn('item[19] /notes\tuser · < 20 tokens\tOff pill', items)                #   /resume, /continue)
         self.command('type comp')                                           # /compact, and /logout's "computer"
         self.assertEqual([i.split('\t')[0] for i in self.rows('item')], ['item[2] /compact', 'item[3] /logout'])
         self.keys('Return')

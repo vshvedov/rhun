@@ -2282,6 +2282,13 @@ g_commands:
     COMMAND agents_focus_last, "Agents: Focus Last Message", agents_focus_last, ""
     COMMAND agents_toggle_thinking, "Agents: Expand or Collapse Thinking", agents_toggle_thinking, ""
     COMMAND agents_toggle_focus_view, "Agents: Toggle Focus View", agents_toggle_focus_view, "ctrl+alt+f"
+    # phase 4 task 12: a proposed change in the Review tab (review.s); its own keys stay (a r A R ] [ } {,
+    #   Ctrl+Enter)
+    COMMAND review_accept, "Review: Accept Proposed Changes", review_cmd_accept, ""
+    COMMAND review_reject, "Review: Reject Proposed Changes", review_cmd_reject, ""
+    COMMAND review_accept_change, "Review: Accept Change at Cursor", review_cmd_accept_change, ""
+    COMMAND review_reject_change, "Review: Reject Change at Cursor", review_cmd_reject_change, ""
+    COMMAND review_edit, "Review: Edit Proposed Text", review_cmd_edit, ""
     COMMAND open_file, "Open File", cmd_open_file, "ctrl+o"
     COMMAND open_folder, "Open Folder", cmd_open_folder, "ctrl+shift+o"
     COMMAND add_workspace_folder, "Add Folder to Workspace", cmd_add_workspace_folder, ""   # resources: workspace.s

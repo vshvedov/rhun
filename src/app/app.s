@@ -1699,7 +1699,13 @@ FN app_save_close
     mov edi, 1
     xor esi, esi
 save_doc:
-    READONLY_RET
+    push rax                    # phase 4 task 12: an offer's edit is not saved (review.s)
+    call review_scratch_save
+    pop rcx
+    test eax, eax
+    jz 0f
+    ret
+0:  READONLY_RET
     PROLOGUE
     mov r13d, edi
     mov r14d, esi
@@ -2099,7 +2105,13 @@ FN app_after_save
     EPILOGUE
 
 FN cmd_save_as
-    READONLY_RET
+    push rax                    # phase 4 task 12: an offer's edit is not saved (review.s)
+    call review_scratch_save
+    pop rcx
+    test eax, eax
+    jz 0f
+    ret
+0:  READONLY_RET
     call nb_active              # notebooks: the notebook's document
     test rax, rax
     jz 3f
@@ -4918,7 +4930,10 @@ tab_menu_open:
     test dword ptr [rax + TAB_flags], TF_PIN
     jz 1f
     lea rdi, [rip + tab_menu_pinned]
-1:  mov rsi, rbx
+1:  mov rsi, rbx                # phase 4 task 12: a Review tab's menu gains its five commands (review.s)
+    call review_tab_menu
+    mov rdi, rax
+    mov rsi, rbx
     call menu_open_tab          # with the extensions' items (menu.s)
     mov dword ptr [rip + g_menu_keys], 1
     EPILOGUE

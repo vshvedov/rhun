@@ -313,6 +313,34 @@ the comment. The card then lists the comments, each with a × to remove it, and 
 The tab is read-only (Ctrl+C copies, Ctrl+A selects all) and is never saved or reopened; closing it
 answers nothing, and the card's answer closes it.
 
+An edit or a write that asks first also opens its change in a Review tab, "Claude Code: FILE",
+beside the card, which gains a link **Review the change**. The tab never takes the keys: it becomes
+the active tab while you are in the panel or its box, and waits behind the active tab while you type
+in a document, its find field, Settings or the Extensions page; the link brings it forward. The
+change is the file's saved text against the text the edit makes (unsaved changes in an open
+document are not the file's: Claude Code reads the file). A file outside the project's folders, or
+one rhun cannot read as text of at most 4 MB, shows the edit's own text against what it becomes,
+"(file not read)"; an edit whose old text is not in the file, "(edited text only)". A file with
+CR LF line ends shows with LF: Claude Code reads it so and writes CR LF back.
+
+The tab and the card answer as one. **Accept** in the tab (or Ctrl+Enter, `a`, or **Review: Accept
+Proposed Changes**) is the card's Yes; **Reject** (`r`, **Review: Reject Proposed Changes**) or closing
+the tab refuses the edit ("User cancelled the edit", which ends the turn); the card's own buttons work
+as before and close the tab. Like the card's, the tab's buttons, keys and commands do nothing for its
+first half second, and its buttons are greyed then. Each change has its own **Accept** and
+**Reject** (`A`, `R`, **Review: Accept Change at Cursor**, **Reject Change at Cursor**): accepting one
+only marks it, rejecting one takes it out of the proposed text, and once every change is decided a
+note says to accept or reject the whole. **Edit Proposed Text** (on the file's line, or the command)
+opens the proposed text as "FILE (proposed)", an untitled document you can change freely; the tab
+follows it, Accept takes it, closing it keeps the text, it closes with the change and is never saved
+(Ctrl+S says to accept the change in its Review tab). A change you altered goes back as the whole
+file's text before and after; with every change taken out it is refused ("User reverted all
+proposed changes in the diff view"). rhun never writes the file: Claude Code does, with what you
+accepted. A withdrawn request, the end of the turn or of Claude Code, or closing the conversation
+closes the tab without an answer. The five commands work in a Review tab of an extension's proposal
+too (not Edit Proposed Text); elsewhere they say "No proposed change is shown.". The tab's menu has
+them as well.
+
 Claude Code may also ask about usage credits for a model ("Continue on Fable with usage credits?",
 "Fable requires usage credits") with **Switch to the default model and continue**, which also
 drops rhun's model choice for the project, and **Continue with NAME**, **Buy usage credits on

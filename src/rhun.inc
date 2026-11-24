@@ -2431,6 +2431,8 @@ ENDSTRUCT CRF_SIZE
     # remote hosts (remote.s): "ssh", "docker", "podman", "wsl", "local" in a remote window, else empty
     CTXKEY CTX_REMOTE_NAME, "remoteName", 0
     CTXKEY CTX_REMOTE_HOST, "remoteHost", 0
+    # phase 4 task 12: the active tab is a Review tab with something undecided (review.s)
+    CTXKEY CTX_VIEWING_PROPOSED, "viewingProposedChange", ck_viewing_proposed
 .endm
 # when.s expands the list as records: FN, the name, padding to 8 bytes
 .macro CTXKEY sym, name, fn

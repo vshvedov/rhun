@@ -46,9 +46,13 @@ F RVP_ctx, 8
 F RVP_orig, 8            # the proposed text as offered (owned) and its length: what "edited" compares with
 F RVP_origlen, 8
 F RVP_scratch, 8         # task 12: its "Edit Proposed Text" document's DOC_id, 0 none
-F RVP_sver, 8            #   that document's version last taken, and when it last moved (time_ms)
-F RVP_sat, 8
+F RVP_sver, 8            #   that document's version last seen, when its text was last taken (time_ms),
+F RVP_sat, 8             #   when it is to be taken again (time_ms, 0 none), and its name (owned: the
+F RVP_sdue, 8            #   document's DOC_name points at it; freed once the document is gone)
+F RVP_sname, 8
 ENDSTRUCT RVP_SIZE
+.equ TMENU_KEEP, 24               # a tab menu's items kept before the five
+.equ SCRATCH_MS, 100             # an edited proposed text is taken at most this often (wsdifftab.s's 100 ms)
 .equ OFFER_HUNKS_MAX, 100        # an offer of more changes is one change (the extension's EVt)
 
 # a file of a proposal
@@ -1258,7 +1262,8 @@ hunks_check:
     call memeq
 9:  EPILOGUE
 
-# build_text(RF*, all): scratch gets the text before with the accepted hunks applied (all: every hunk)
+# build_text(RF*, all): scratch gets the text before with the accepted hunks applied (all 1: every hunk; 2:
+#   every hunk but the rejected ones)
 build_text:
     PROLOGUE
     mov rbx, rdi
@@ -1270,10 +1275,15 @@ build_text:
     imul r14, r13, RVH_SIZE
     add r14, [rbx + RVF_hunks + VEC_ptr]
     inc r13
-    test r15d, r15d
-    jnz 2f
+    cmp r15d, 1
+    je 2f
+    cmp r15d, 2                 # task 12: every hunk but the rejected ones
+    je 21f
     cmp dword ptr [r14 + RVH_state], RVS_ACCEPTED
     jne 1b
+    jmp 2f
+21: cmp dword ptr [r14 + RVH_state], RVS_REJECTED
+    je 1b
 2:  mov rcx, [rbx + RVF_ostart]
     mov rax, [r14 + RVH_ol]
     mov rdx, [rcx + rax*8]      # the hunk's old start
@@ -2843,8 +2853,6 @@ FN review_line_extra
     jne 9f
     test rdx, rdx
     js 2f
-    cmp dword ptr [rbx + RVP_offer], 0  # an offer's changes: decided one by one from task 12
-    jne 9f
     imul rcx, rdx, RVH_SIZE
     add rcx, [r14 + RVF_hunks + VEC_ptr]
     mov eax, [rcx + RVH_line]
@@ -2858,9 +2866,22 @@ FN review_line_extra
 2:  mov eax, [r14 + RVF_line]
     cmp rax, [rsp + 8]
     jne 9f
-    cmp dword ptr [rbx + RVP_offer], 0  # an offer's file line: no second Accept and Reject
-    jne 9f
-    lea r12, [rip + .Lb_accept]
+    cmp dword ptr [rbx + RVP_offer], 0  # an offer's file line: Edit Proposed Text (task 12), after the frame
+    je 21f
+    mov r15d, [rip + g_ed_x]
+    add r15d, [rip + g_ed_w]
+    sub r15d, [rip + g_mt + 4*MI_20]
+    lea rdi, [rip + .Lb_edit]
+    xor esi, esi
+    mov edx, r15d
+    call button
+    test eax, eax
+    jz 9f
+    mov rax, [rbx + RVP_id]
+    mov [rip + edit_id], rax
+    mov dword ptr [rip + g_dirty], 1
+    jmp 9f
+21: lea r12, [rip + .Lb_accept]
     lea r13, [rip + .Lb_reject]
 5:  # right to left: Reject, then Accept
     mov r15d, [rip + g_ed_x]
@@ -3646,10 +3667,40 @@ offer_decide:
     test r12, r12
     js 1f
     test r13, r13
-    jns 9f                      # a change of it: task 12
-1:  mov rdi, rbx
+    jns 2f
+1:  mov rdi, rbx                # the whole: with the text its edit holds now
+    call scratch_take
+    mov rdi, rbx
     mov esi, r14d
     call offer_finish
+    jmp 9f
+2:  mov rax, [rbx + RVP_files + VEC_ptr]   # a change (task 12)
+    cmp r13, [rax + RVF_hunks + VEC_len]
+    jae 9f
+    imul rcx, r13, RVH_SIZE
+    add rcx, [rax + RVF_hunks + VEC_ptr]
+    cmp dword ptr [rcx + RVH_state], RVS_PENDING
+    jne 9f
+    mov dword ptr [rcx + RVH_state], RVS_ACCEPTED   # accepted: only marked
+    test r14d, r14d
+    jnz 3f
+    mov dword ptr [rcx + RVH_state], RVS_REJECTED   # rejected: taken out of the proposed text
+    lea rdi, [rip + scratch]
+    call sb_clear
+    mov rdi, [rbx + RVP_files + VEC_ptr]
+    mov esi, 2
+    call build_text
+    mov rdi, rbx
+    mov rsi, [rip + scratch + SB_ptr]
+    mov rdx, [rip + scratch + SB_len]
+    call offer_retext
+    mov rdi, rbx                # its edit, when open, shows the text too
+    call scratch_put
+3:  mov rdi, rbx
+    call offer_all_toast
+    mov rdi, rbx
+    call build_doc
+    mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
 # offer_finish(RV*, accept): decided: accepted (its text as it stands; the text before: reverted) or rejected;
@@ -3714,8 +3765,27 @@ offer_title:
 1:  lea rdi, [rip + line]
     call sb_push_cstr
     cmp dword ptr [rbx + RVP_done], 0
+    jne 3f
+    mov rdi, r12                # task 12: some decided, the others still to decide
+    call hunks_pending
+    test rax, rax
+    jz 9f
+    cmp rax, [r12 + RVF_hunks + VEC_len]
     je 9f
+    push rax
+    push rax
     lea rdi, [rip + line]
+    lea rsi, [rip + .Lcomma]
+    call sb_push_cstr
+    pop rsi
+    pop rsi
+    lea rdi, [rip + line]
+    call sb_push_u64
+    lea rdi, [rip + line]
+    lea rsi, [rip + .Lto_decide]
+    call sb_push_cstr
+    jmp 9f
+3:  lea rdi, [rip + line]
     lea rsi, [rip + .Ldot]
     call sb_push_cstr
     mov rdi, r12
@@ -3973,10 +4043,6 @@ FN review_offer_dump
     call sb_push_u64
     EPILOGUE
 
-# scratch_orphan(RV*): its "Edit Proposed Text" document closes in the next pass (task 12)
-scratch_orphan:
-    ret
-
 # FN review_tick(): outcomes decided since the last pass go to their owners (an owner that withdrew hears
 #   nothing; a close waits out the card's lock); a tab drawn greyed is drawn again once the lock is over
 FN review_tick
@@ -3986,7 +4052,20 @@ FN review_tick
     jz 71f
     mov qword ptr [rip + show_id], 0
     call offer_show_now
-71: cmp dword ptr [rip + dim_drawn], 0
+71: mov rdi, [rip + edit_id]    # task 12: its button's Edit Proposed Text
+    test rdi, rdi
+    jz 72f
+    mov qword ptr [rip + edit_id], 0
+    call offer_by_id
+    test rax, rax
+    jz 72f
+    mov rdi, rax
+    call offer_edit_open
+72: cmp qword ptr [rip + orphans + VEC_len], 0
+    je 73f
+    call orphans_close
+73: call scratch_follow
+    cmp dword ptr [rip + dim_drawn], 0
     je 1f
     call cur_offer
     test rax, rax
@@ -4077,7 +4156,21 @@ FN review_timeout
 5:  cmp qword ptr [rip + show_id], 0
     je 51f
     xor r12d, r12d
-51: cmp dword ptr [rip + dim_drawn], 0
+51: cmp qword ptr [rip + edit_id], 0    # task 12: an edit to open, edits to close, an edit's text due
+    je 52f
+    xor r12d, r12d
+52: cmp qword ptr [rip + orphans + VEC_len], 0
+    je 53f
+    xor r12d, r12d
+53: call scratch_due
+    cmp eax, -1
+    je 54f
+    cmp r12d, -1
+    je 55f
+    cmp eax, r12d
+    jge 54f
+55: mov r12d, eax
+54: cmp dword ptr [rip + dim_drawn], 0
     je 9f
     call cur_offer
     xor ecx, ecx
@@ -4094,6 +4187,542 @@ FN review_timeout
 9:  mov eax, r12d
     EPILOGUE
 
+
+# ---------------- an offer a change at a time, and its text edited (phase 4 task 12) ----------------
+#
+# A change of an offer accepted is only marked; rejected, it is taken out of the proposed text (the file's
+# text after is made again, its changes found again, those accepted before keep their marks by their old
+# lines). Once every change is decided a toast says what is left to do: the answer is still the whole Accept
+# (the text as it stands) or Reject. "Edit Proposed Text" opens the proposed text in an untitled document of
+# the file's language ("NAME (proposed)"): never dirty (nothing to save, no question when it closes), Save and
+# Save As refused with a toast, in no session file and not in Reopen Closed Tab (it has no path); while it is
+# open the offer takes its text when it changed, at most every 100 ms, and Accept takes it at once; closed, the
+# offer keeps the text last taken; it closes with the offer. Deciding and editing obey the card's lock.
+#
+#   review_cmd_accept, review_cmd_reject, review_cmd_accept_change, review_cmd_reject_change, review_cmd_edit
+#   ck_viewing_proposed() -> rax ptr, rdx len      viewingProposedChange
+#   review_tab_menu(items, tab index) -> rax items  a Review tab's menu gains the five
+#   review_scratch_save() -> eax 1 refused          Save or Save As in an offer's edit
+
+# hunks_pending(RF*) -> rax its changes not decided yet
+hunks_pending:
+    xor eax, eax
+    xor ecx, ecx
+1:  cmp rcx, [rdi + RVF_hunks + VEC_len]
+    jae 9f
+    imul rdx, rcx, RVH_SIZE
+    add rdx, [rdi + RVF_hunks + VEC_ptr]
+    inc rcx
+    cmp dword ptr [rdx + RVH_state], RVS_PENDING
+    jne 1b
+    inc rax
+    jmp 1b
+9:  ret
+
+# offer_retext(RV*, ptr, len): its proposed text is now that (copied); its changes found again, those of the
+#   same old lines that were accepted marked again
+offer_retext:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rbx + RVP_files + VEC_ptr]
+    mov r13, rsi
+    mov r14, rdx
+    mov qword ptr [rip + marks + VEC_len], 0
+    xor r15d, r15d
+1:  cmp r15, [r12 + RVF_hunks + VEC_len]
+    jae 2f
+    imul rax, r15, RVH_SIZE
+    add rax, [r12 + RVF_hunks + VEC_ptr]
+    inc r15
+    cmp dword ptr [rax + RVH_state], RVS_ACCEPTED
+    jne 1b
+    push rax
+    push rax
+    lea rdi, [rip + marks]
+    mov esi, 16
+    call vec_push
+    pop rcx
+    pop rcx
+    mov rdx, [rcx + RVH_ol]
+    mov [rax], rdx
+    mov rdx, [rcx + RVH_oc]
+    mov [rax + 8], rdx
+    jmp 1b
+2:  mov rdi, r13
+    mov rsi, r14
+    call ai_dup
+    mov r15, rax
+    mov rdi, [r12 + RVF_new]
+    call mem_free
+    mov [r12 + RVF_new], r15
+    mov [r12 + RVF_newlen], r14
+    mov rdi, [r12 + RVF_nstart]
+    call mem_free
+    mov qword ptr [r12 + RVF_nstart], 0
+    mov rdi, r12
+    call file_diff
+    mov rdi, r12
+    call offer_cap
+    xor r15d, r15d
+3:  cmp r15, [r12 + RVF_hunks + VEC_len]
+    jae 9f
+    imul rax, r15, RVH_SIZE
+    add rax, [r12 + RVF_hunks + VEC_ptr]
+    inc r15
+    xor ecx, ecx
+4:  cmp rcx, [rip + marks + VEC_len]
+    jae 3b
+    mov rdx, rcx
+    shl rdx, 4
+    add rdx, [rip + marks + VEC_ptr]
+    inc rcx
+    mov r8, [rdx]
+    cmp r8, [rax + RVH_ol]
+    jne 4b
+    mov r8, [rdx + 8]
+    cmp r8, [rax + RVH_oc]
+    jne 4b
+    mov dword ptr [rax + RVH_state], RVS_ACCEPTED
+    jmp 3b
+9:  EPILOGUE
+
+# offer_all_toast(RV*): every change decided: what is left to do
+offer_all_toast:
+    PROLOGUE
+    mov rbx, [rdi + RVP_files + VEC_ptr]
+    mov rdi, rbx
+    call hunks_pending
+    test rax, rax
+    jnz 9f
+    lea rdi, [rip + .Lt_reviewed]
+    cmp qword ptr [rbx + RVF_hunks + VEC_len], 0
+    jne 1f
+    lea rdi, [rip + .Lt_rejected_all]
+1:  call app_toast
+9:  EPILOGUE
+
+# scratch_doc(RV*) -> rax its edit's document, or 0
+scratch_doc:
+    PROLOGUE
+    xor eax, eax
+    mov rdi, [rdi + RVP_scratch]
+    test rdi, rdi
+    jz 9f
+    call extproto_doc
+9:  EPILOGUE
+
+# clean(doc): nothing to save in it (its savepoint is where its undo is)
+clean:
+    mov rax, [rdi + DOC_undo + VEC_len]
+    mov [rdi + DOC_savepoint], rax
+    ret
+
+# scratch_take(RV*): its edit's text, when open and different, is its proposed text now
+scratch_take:
+    PROLOGUE
+    mov rbx, rdi
+    cmp dword ptr [rbx + RVP_done], 0
+    jne 9f
+    call scratch_doc
+    test rax, rax
+    jz 9f
+    mov r14, rax
+    mov rax, [r14 + DOC_version]
+    mov [rbx + RVP_sver], rax
+    mov qword ptr [rbx + RVP_sdue], 0
+    call time_ms
+    mov [rbx + RVP_sat], rax
+    mov rdi, r14
+    call clean
+    mov rdi, r14
+    call doc_text_copy
+    mov r12, rax
+    mov r13, rdx
+    mov rcx, [rbx + RVP_files + VEC_ptr]
+    cmp rdx, [rcx + RVF_newlen]
+    jne 1f
+    mov rdi, rax
+    mov rsi, [rcx + RVF_new]
+    call memeq
+    test eax, eax
+    jnz 8f
+1:  mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call offer_retext
+    mov rdi, rbx
+    call build_doc
+8:  mov rdi, r12
+    call mem_free
+9:  EPILOGUE
+
+# scratch_put(RV*): its edit, when open, shows the proposed text as it is now
+scratch_put:
+    PROLOGUE
+    mov rbx, rdi
+    call scratch_doc
+    test rax, rax
+    jz 9f
+    mov r12, rax
+    mov rcx, [rbx + RVP_files + VEC_ptr]
+    mov rdi, rax
+    mov rsi, [rcx + RVF_new]
+    mov rdx, [rcx + RVF_newlen]
+    call doc_set_text
+    mov rdi, r12
+    call clean
+    mov rax, [r12 + DOC_version]
+    mov [rbx + RVP_sver], rax
+    mov qword ptr [rbx + RVP_sdue], 0
+9:  EPILOGUE
+
+# scratch_orphan(RV*): it is freed: its edit closes in the next pass (its name freed with it)
+scratch_orphan:
+    PROLOGUE
+    mov rbx, rdi
+    cmp qword ptr [rbx + RVP_sname], 0
+    jne 1f
+    cmp qword ptr [rbx + RVP_scratch], 0
+    je 9f
+1:  lea rdi, [rip + orphans]
+    mov esi, 16
+    call vec_push
+    mov rcx, [rbx + RVP_scratch]
+    mov [rax], rcx
+    mov rcx, [rbx + RVP_sname]
+    mov [rax + 8], rcx
+    mov qword ptr [rbx + RVP_scratch], 0
+    mov qword ptr [rbx + RVP_sname], 0
+9:  EPILOGUE
+
+# orphans_close(): the edits of freed offers close (without a question: they are never dirty)
+orphans_close:
+    PROLOGUE
+    xor ebx, ebx
+1:  cmp rbx, [rip + orphans + VEC_len]
+    jae 8f
+    mov r12, rbx
+    shl r12, 4
+    add r12, [rip + orphans + VEC_ptr]
+    inc rbx
+    mov rdi, [r12]
+    test rdi, rdi
+    jz 3f
+    call extproto_doc
+    test rax, rax
+    jz 3f
+    mov rdi, rax
+    call doc_tab
+    test rax, rax
+    js 1b                       # a document without its tab keeps its name (not freed)
+    mov rdi, rax
+    call app_close_tab_now
+3:  mov rdi, [r12 + 8]
+    call mem_free
+    jmp 1b
+8:  mov qword ptr [rip + orphans + VEC_len], 0
+    EPILOGUE
+
+# scratch_follow(): each open edit's text taken when it changed, at most every SCRATCH_MS; an edit closed
+#   leaves the text last taken
+scratch_follow:
+    PROLOGUE
+    xor r12d, r12d
+1:  cmp r12, [rip + proposals + VEC_len]
+    jae 9f
+    mov rax, [rip + proposals + VEC_ptr]
+    mov rbx, [rax + r12*8]
+    inc r12
+    cmp qword ptr [rbx + RVP_scratch], 0
+    je 1b
+    mov rdi, rbx
+    call scratch_doc
+    test rax, rax
+    jnz 2f
+    mov qword ptr [rbx + RVP_scratch], 0    # closed: the text last taken stays
+    mov qword ptr [rbx + RVP_sdue], 0
+    mov rdi, [rbx + RVP_sname]
+    mov qword ptr [rbx + RVP_sname], 0
+    call mem_free
+    jmp 1b
+2:  mov r13, rax
+    cmp dword ptr [rbx + RVP_done], 0
+    jne 1b
+    mov rax, [r13 + DOC_version]
+    cmp rax, [rbx + RVP_sver]
+    je 4f
+    mov [rbx + RVP_sver], rax
+    mov rdi, r13                # never dirty
+    call clean
+    call time_ms
+    mov rcx, [rbx + RVP_sat]
+    add rcx, SCRATCH_MS
+    cmp rax, rcx
+    jb 3f
+    mov rdi, rbx
+    call scratch_take
+    jmp 1b
+3:  mov [rbx + RVP_sdue], rcx
+    jmp 1b
+4:  mov rcx, [rbx + RVP_sdue]
+    test rcx, rcx
+    jz 1b
+    push rcx
+    push rcx
+    call time_ms
+    pop rcx
+    pop rcx
+    cmp rax, rcx
+    jb 1b
+    mov rdi, rbx
+    call scratch_take
+    jmp 1b
+9:  EPILOGUE
+
+# scratch_due() -> eax ms until an edit's text is due to be taken, -1 none
+scratch_due:
+    PROLOGUE
+    mov r13d, -1
+    xor r12d, r12d
+1:  cmp r12, [rip + proposals + VEC_len]
+    jae 9f
+    mov rax, [rip + proposals + VEC_ptr]
+    mov rbx, [rax + r12*8]
+    inc r12
+    cmp qword ptr [rbx + RVP_sdue], 0
+    je 1b
+    call time_ms
+    mov rcx, [rbx + RVP_sdue]
+    sub rcx, rax
+    jns 2f
+    xor ecx, ecx
+2:  cmp r13d, -1
+    je 3f
+    cmp ecx, r13d
+    jge 1b
+3:  mov r13d, ecx
+    jmp 1b
+9:  mov eax, r13d
+    EPILOGUE
+
+# offer_edit_open(RV*): "Edit Proposed Text": its edit (an untitled document of the file's language, the
+#   proposed text) the active tab with the keyboard; not while its card's lock lasts, not once it is decided
+offer_edit_open:
+    PROLOGUE
+    mov rbx, rdi
+    cmp dword ptr [rbx + RVP_done], 0
+    jne 9f
+    call offer_locked
+    test eax, eax
+    jnz 9f
+    mov rdi, rbx
+    call scratch_doc
+    test rax, rax
+    jz 1f
+    mov rdi, rax
+    call doc_tab
+    test rax, rax
+    js 9f
+    mov rdi, rax
+    call app_activate_tab
+    jmp 9f
+1:  mov rdi, [rbx + RVP_sname]      # (an edit closed before: its name was freed when it was seen gone)
+    call mem_free
+    mov qword ptr [rbx + RVP_sname], 0
+    call doc_new
+    mov r12, rax
+    mov r13, [rbx + RVP_files + VEC_ptr]
+    mov rdi, r12
+    mov rsi, [r13 + RVF_new]
+    mov rdx, [r13 + RVF_newlen]
+    call doc_set_text
+    mov qword ptr [r12 + DOC_cur], 0
+    mov qword ptr [r12 + DOC_anchor], 0
+    mov rax, [r13 + RVF_path]   # its language: the file's (found by its path, which it does not keep)
+    mov [r12 + DOC_path], rax
+    mov rdi, r12
+    call doc_language_refresh
+    mov qword ptr [r12 + DOC_path], 0
+    lea rdi, [rip + line]
+    call sb_clear
+    lea rdi, [rip + line]
+    mov rsi, [r13 + RVF_name]
+    call sb_push_cstr
+    lea rdi, [rip + line]
+    lea rsi, [rip + .Lproposed]
+    call sb_push_cstr
+    mov rdi, [rip + line + SB_ptr]
+    mov rsi, [rip + line + SB_len]
+    call ai_dup
+    mov [rbx + RVP_sname], rax
+    mov [r12 + DOC_name], rax
+    mov rdi, r12
+    call clean
+    mov rax, [r12 + DOC_id]
+    mov [rbx + RVP_scratch], rax
+    mov rax, [r12 + DOC_version]
+    mov [rbx + RVP_sver], rax
+    mov qword ptr [rbx + RVP_sdue], 0
+    call time_ms
+    mov [rbx + RVP_sat], rax
+    mov rdi, r12
+    mov esi, TAB_DOC
+    call app_add_tab
+9:  EPILOGUE
+
+# cmd_review() -> rax the proposal the active tab shows, or 0 with the toast "No proposed change is shown."
+cmd_review:
+    PROLOGUE
+    mov rdi, [rip + g_doc]
+    call review_of
+    test rax, rax
+    jnz 9f
+    lea rdi, [rip + .Lt_none]
+    call app_toast
+    xor eax, eax
+9:  EPILOGUE
+
+# FN review_cmd_accept(), FN review_cmd_reject(): "Review: Accept Proposed Changes" and "Review: Reject
+#   Proposed Changes": the whole proposal shown, as Ctrl+Enter and r (for an extension's: every file)
+FN review_cmd_accept
+    mov ecx, 1
+    jmp cmd_whole
+FN review_cmd_reject
+    xor ecx, ecx
+cmd_whole:
+    PROLOGUE
+    mov r12d, ecx
+    call cmd_review
+    test rax, rax
+    jz 9f
+    mov rdi, rax
+    mov rsi, -1
+    mov rdx, -1
+    mov ecx, r12d
+    call review_decide
+9:  EPILOGUE
+
+# FN review_cmd_accept_change(), FN review_cmd_reject_change(): "Review: Accept Change at Cursor" and "Reject
+#   Change at Cursor": the change the cursor is in (on a file's header: its first), as A and R
+FN review_cmd_accept_change
+    mov ecx, 1
+    jmp cmd_change
+FN review_cmd_reject_change
+    xor ecx, ecx
+cmd_change:
+    PROLOGUE
+    mov r12d, ecx
+    call cmd_review
+    test rax, rax
+    jz 9f
+    mov rbx, rax
+    mov rdi, [rip + g_doc]
+    mov rsi, [rdi + DOC_cur]
+    call doc_line_of
+    mov rdi, rbx
+    mov rsi, rax
+    call where
+    test rax, rax
+    js 9f
+    test rdx, rdx
+    jns 1f
+    xor edx, edx
+1:  mov rdi, rbx
+    mov rsi, rax
+    mov ecx, r12d
+    call review_decide
+9:  EPILOGUE
+
+# FN review_cmd_edit(): "Review: Edit Proposed Text" (an offer's only)
+FN review_cmd_edit
+    PROLOGUE
+    call cmd_review
+    test rax, rax
+    jz 9f
+    cmp dword ptr [rax + RVP_offer], 0
+    jne 1f
+    lea rdi, [rip + .Lt_noedit]
+    call app_toast
+    jmp 9f
+1:  mov rdi, rax
+    call offer_edit_open
+9:  EPILOGUE
+
+# FN ck_viewing_proposed() -> rax ptr, rdx len: viewingProposedChange: the active tab is a Review tab with
+#   something not decided yet
+FN ck_viewing_proposed
+    PROLOGUE
+    mov rdi, [rip + g_doc]
+    call review_of
+    test rax, rax
+    jz 8f
+    cmp dword ptr [rax + RVP_done], 0
+    jne 8f
+    lea rax, [rip + .Lv_true]
+    mov edx, 4
+    EPILOGUE
+8:  lea rax, [rip + .Lv_false]
+    mov edx, 5
+    EPILOGUE
+
+# FN review_tab_menu(items, tab index) -> rax the items of a tab's menu: for the active tab when it is a
+#   Review tab, those and the five commands after a line
+FN review_tab_menu
+    PROLOGUE
+    mov rbx, rdi
+    cmp rsi, [rip + g_tab_cur]
+    jne 8f
+    mov rdi, [rip + g_doc]
+    call review_of
+    test rax, rax
+    jz 8f
+    lea rdi, [rip + tmenu]
+    xor ecx, ecx
+1:  cmp ecx, TMENU_KEEP
+    jae 2f
+    mov rax, [rbx]
+    mov rdx, [rbx + 8]
+    mov r8, rax
+    or r8, rdx
+    jz 2f
+    mov [rdi], rax
+    mov [rdi + 8], rdx
+    add rbx, 16
+    add rdi, 16
+    inc ecx
+    jmp 1b
+2:  lea rsi, [rip + tmenu_five]
+    mov ecx, 14 * 8             # the line, the five, the end: 7 pairs
+    rep movsb
+    lea rax, [rip + tmenu]
+    EPILOGUE
+8:  mov rax, rbx
+    EPILOGUE
+
+# FN review_scratch_save() -> eax 1 when the active document is an offer's edit: Save and Save As refused,
+#   with a toast
+FN review_scratch_save
+    PROLOGUE
+    mov rax, [rip + g_doc]
+    test rax, rax
+    jz 8f
+    mov rdx, [rax + DOC_id]
+    xor ecx, ecx
+1:  cmp rcx, [rip + proposals + VEC_len]
+    jae 8f
+    mov rax, [rip + proposals + VEC_ptr]
+    mov rax, [rax + rcx*8]
+    inc rcx
+    cmp dword ptr [rax + RVP_offer], 0
+    je 1b
+    cmp [rax + RVP_scratch], rdx
+    jne 1b
+    lea rdi, [rip + .Lt_save]
+    call app_toast
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
 
 .section .rodata
 .Ltab_prefix: .asciz "Review: "
@@ -4168,6 +4797,25 @@ dump_words: .quad .Lw_pending, .Lw_accepted, .Lw_rejected, .Lw_stale, .Lw_partia
 .Lo_scratch: .asciz " scratch="
 .Lo_shown: .asciz " shown="
 .Lo_locked: .asciz " locked="
+.Lb_edit: .asciz "Edit Proposed Text"
+.Lproposed: .asciz " (proposed)"
+.Lt_reviewed: .asciz "Every change reviewed. Accept Proposed Changes to apply them."
+.Lt_rejected_all: .asciz "Every change rejected. Reject Proposed Changes or close the tab to finish."
+.Lt_none: .asciz "No proposed change is shown."
+.Lt_noedit: .asciz "Only a change an agent asks to make can be edited before it is accepted."
+.Lt_save: .asciz "Accept the change in its Review tab to apply it."
+.Lv_true: .asciz "true"
+.Lv_false: .asciz "false"
+.Lm_line: .asciz ""
+.Lm_accept: .asciz "Accept Proposed Changes"
+.Lm_reject: .asciz "Reject Proposed Changes"
+.Lm_accept_c: .asciz "Accept Change at Cursor"
+.Lm_reject_c: .asciz "Reject Change at Cursor"
+.Lm_edit: .asciz "Edit Proposed Text"
+.p2align 3
+tmenu_five: .quad .Lm_line, 0, .Lm_accept, review_cmd_accept, .Lm_reject, review_cmd_reject
+    .quad .Lm_accept_c, review_cmd_accept_change, .Lm_reject_c, review_cmd_reject_change
+    .quad .Lm_edit, review_cmd_edit, 0, 0
 
 .bss
 .p2align 3
@@ -4176,3 +4824,7 @@ btn_dim: .long 0                # button(): greyed and not pressed (an offer who
 dim_drawn: .long 0              # an offer's tab was drawn greyed: drawn again when the lock is over
 .p2align 3
 show_id: .quad 0                # an offer whose tab is to be shown after the frame (review_offer_show)
+edit_id: .quad 0                # task 12: an offer whose edit is to be opened after the frame (its button)
+marks: .zero VEC_SIZE           # offer_retext: the accepted changes' old lines, {ol, oc}
+orphans: .zero VEC_SIZE         # edits of freed offers, {DOC_id, name}: closed in the next pass
+tmenu: .zero 16 * (TMENU_KEEP + 8)  # review_tab_menu's items

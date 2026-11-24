@@ -270,6 +270,19 @@ class OfferTest(OfferCase):
         self.command('wait-agent ready')
         self.assertEqual((self.project / 'crlf.txt').read_bytes(), b'one\r\nTWO\r\nthree\r\n')
 
+    def test_a_binary_file_is_not_read(self):
+        (self.project / 'bin.dat').write_bytes(b'one\x00two\n')
+        offer = self.edit('editfile bin.dat two TWO')
+        self.assertEqual(offer['label'], 'Claude Code: bin.dat (file not read)')
+
+    def test_a_file_changed_meanwhile_is_refused_by_the_cli(self):
+        self.edit()
+        (self.project / 'notes.txt').write_text('changed\n', encoding='utf-8')
+        self.command('review accept all')
+        self.assertEqual(self.until_decided()[0]['behavior'], 'allow')
+        self.command('wait-agent ready')
+        self.assertEqual((self.project / 'notes.txt').read_text(), 'changed\n')    # nobody wrote it
+
     def test_replace_all(self):
         (self.project / 'r.txt').write_text('a x\nb x\nc x\n', encoding='utf-8')
         self.edit('editjs ' + json.dumps({'file_path': 'r.txt', 'old_string': 'x', 'new_string': 'y',
@@ -352,6 +365,239 @@ class OfferLifeTest(OfferCase):
         self.command('agent-card 1')
         time.sleep(0.3)
         self.assertEqual(len(self.decisions()), 1)
+
+
+LETTERS = 'a\nb\nc\nd\ne\nf\ng\nh\n'
+TWO = {'file_path': 'l.txt', 'old_string': 'b\nc\nd\ne\nf\ng', 'new_string': 'B\nc\nd\ne\nf\nG'}
+
+
+class ChangesTest(OfferCase):
+    """Task 12: a change at a time, and the proposed text edited (IDE 2.4; design 8.5, 15)."""
+
+    def two(self, lock=0):
+        (self.project / 'l.txt').write_text(LETTERS, encoding='utf-8')
+        return self.edit('editjs ' + json.dumps(TWO), lock=lock)
+
+    def hunks(self):
+        return re.findall(r'hunk=\d+ \S+ \S+ state=(\w+)', self.review())
+
+    def toast(self):
+        return self.command('print-toast').strip()
+
+    def in_tab(self):
+        """The keyboard in the active tab (the Review tab opened while it was in the panel)."""
+        self.command('agent-focus editor')
+
+    def test_rejecting_one_change_sends_the_users_version(self):
+        offer = self.two()
+        self.assertEqual(offer['changes'], '2')
+        self.command('review reject 1 1')
+        self.assertEqual(self.hunks(), ['pending'])
+        self.assertEqual(self.offer()['edited'], '1')
+        self.assertEqual(self.decisions(), [])
+        self.command('review accept all')
+        answer = self.until_decided()[0]
+        self.assertEqual(answer['updatedInput'], {'file_path': str(self.project / 'l.txt'), 'old_string': LETTERS,
+                                                  'new_string': 'a\nb\nc\nd\ne\nf\nG\nh\n', 'replace_all': False})
+        self.command('wait-agent ready')
+        self.assertEqual((self.project / 'l.txt').read_text(), 'a\nb\nc\nd\ne\nf\nG\nh\n')
+        # a Write: its content as it stands
+        self.again()
+        (self.project / 'w.txt').write_text(LETTERS, encoding='utf-8')
+        self.edit('writejs ' + json.dumps({'file_path': 'w.txt', 'content': 'a\nB\nc\nd\ne\nf\nG\nh\n'}))
+        self.command('review reject 1 2')
+        self.command('review accept all')
+        answer = self.until_decided()[0]
+        self.assertEqual(answer['updatedInput'], {'file_path': str(self.project / 'w.txt'),
+                                                  'content': 'a\nB\nc\nd\ne\nf\ng\nh\n'})
+
+    def test_accepting_a_change_only_marks_it(self):
+        self.two()
+        self.command('review accept 1 1')
+        self.assertEqual(self.hunks(), ['accepted', 'pending'])
+        offer = self.offer()
+        self.assertEqual((offer['decided'], offer['edited'], offer['done']), ('1', '0', '0'))
+        self.assertIn('2 changes, 1 to decide', self.command('print-doc'))
+        self.assertEqual(self.decisions(), [])
+
+    def test_every_change_rejected_is_the_reverted_denial(self):
+        self.two()
+        self.command('review reject 1 1')
+        self.command('review reject 1 1')
+        self.assertEqual(self.offer()['changes'], '0')
+        self.command('review accept all')
+        answer = self.until_decided()[0]
+        self.assertEqual((answer['behavior'], answer['message'], answer['interrupt']), ('deny', REVERTED, True))
+        self.assertEqual((self.project / 'l.txt').read_text(), LETTERS)
+
+    def test_the_two_toasts(self):
+        self.two()
+        self.command('review accept 1 1')
+        self.assertNotIn('Every change', self.toast())
+        self.command('review accept 1 2')
+        self.assertEqual(self.toast(), 'toast=Every change reviewed. Accept Proposed Changes to apply them.')
+        self.again()
+        self.two()
+        self.command('review reject 1 1')
+        self.command('review reject 1 1')
+        self.assertEqual(self.toast(),
+                         'toast=Every change rejected. Reject Proposed Changes or close the tab to finish.')
+
+    def test_more_than_a_hundred_changes_are_one(self):
+        lines = ['line %d' % i for i in range(300)]
+        (self.project / 'big.txt').write_text('\n'.join(lines) + '\n', encoding='utf-8')
+        changed = [line.upper() if i % 2 else line for i, line in enumerate(lines)]
+        offer = self.edit('writejs ' + json.dumps({'file_path': 'big.txt', 'content': '\n'.join(changed) + '\n'}))
+        self.assertEqual(offer['changes'], '1')
+        lines = ['line %d' % i for i in range(300)]
+        self.again()
+        changed = [line.upper() if i % 3 == 0 else line for i, line in enumerate(lines[:240])] + lines[240:]
+        offer = self.edit('writejs ' + json.dumps({'file_path': 'big.txt', 'content': '\n'.join(changed) + '\n'}))
+        self.assertEqual(offer['changes'], '80')
+
+    def open_edit(self):
+        self.command('cmd review_edit')
+        self.until(lambda: self.offer().get('scratch') == '1', 'the edit')
+        self.assertIn('active=l.txt (proposed)', self.command('print-state'))
+
+    def test_edit_opens_the_proposed_text(self):
+        self.two()
+        self.in_tab()
+        self.open_edit()
+        self.assertEqual(self.focus(), 'editor')
+        self.assertEqual(self.command('print-doc'), 'a\nB\nc\nd\ne\nf\nG\nh\n\n<eod>\n')
+        self.assertIn('dirty=0', self.command('print-state'))
+
+    def test_the_review_tab_follows_the_edit(self):
+        self.two()
+        self.in_tab()
+        self.open_edit()
+        self.command('key ctrl+End')
+        self.command('type z')
+        self.until(lambda: self.offer().get('changes') == '3', 'the edit followed')
+        self.assertEqual(self.offer()['edited'], '1')
+        self.assertIn('dirty=0', self.command('print-state'))
+
+    def test_accept_takes_the_edited_text(self):
+        self.two()
+        self.in_tab()
+        self.open_edit()
+        self.command('key ctrl+End')
+        self.command('type z')
+        self.command('review accept all')       # at once: the edit's text is taken first
+        answer = self.until_decided()[0]
+        self.assertEqual(answer['updatedInput']['new_string'], 'a\nB\nc\nd\ne\nf\nG\nh\nz')
+
+    def test_closing_the_edit_keeps_its_text(self):
+        self.two()
+        self.in_tab()
+        self.open_edit()
+        self.command('key ctrl+End')
+        self.command('type z')
+        self.until(lambda: self.offer().get('changes') == '3', 'the edit followed')
+        self.command('cmd close_tab')
+        self.assertNotIn('(proposed)', self.tabs())
+        self.assertEqual(self.offer()['scratch'], '0')
+        self.command('review accept all')
+        answer = self.until_decided()[0]
+        self.assertEqual(answer['updatedInput']['new_string'], 'a\nB\nc\nd\ne\nf\nG\nh\nz')
+
+    def test_the_edit_goes_with_the_offer_without_a_question(self):
+        self.two()
+        self.in_tab()
+        self.open_edit()
+        self.command('type zz')
+        self.command('agent-card 1')
+        self.until_decided()
+        self.until(lambda: '(proposed)' not in self.tabs(), 'the edit closed')
+        self.assertEqual(self.command('print-dialog'), 'dialog=none\n')
+
+    def test_ctrl_s_in_the_edit_saves_nothing(self):
+        self.two()
+        self.in_tab()
+        self.open_edit()
+        self.command('type q')
+        self.command('cmd save')
+        self.assertEqual(self.toast(), 'toast=Accept the change in its Review tab to apply it.')
+        self.command('cmd save_as')
+        self.assertEqual(self.toast(), 'toast=Accept the change in its Review tab to apply it.')
+        self.assertEqual((self.project / 'l.txt').read_text(), LETTERS)
+        self.assertEqual(sorted(p.name for p in self.project.iterdir()), ['l.txt', 'notes.txt'])
+
+    def test_the_edit_is_not_reopened(self):
+        self.two()
+        self.in_tab()
+        self.open_edit()
+        self.command('cmd close_tab')
+        self.command('cmd reopen_closed_tab')
+        self.assertNotIn('(proposed)', self.tabs())
+
+    def test_the_edits_tick_stops(self):
+        self.two()
+        self.in_tab()
+        self.open_edit()
+        self.command('key ctrl+End')
+        self.command('type z')
+        self.until(lambda: self.offer().get('changes') == '3', 'the edit followed')
+        time.sleep(0.3)
+        before = int(re.search(r'passes=(\d+)', self.command('print-loop-stats')).group(1))
+        time.sleep(1.0)
+        after = int(re.search(r'passes=(\d+)', self.command('print-loop-stats')).group(1))
+        self.assertLessEqual(after - before, 4)
+
+    def test_the_five_commands_and_when_they_show(self):
+        self.start()
+        for name in ('review_accept', 'review_reject', 'review_accept_change', 'review_reject_change',
+                     'review_edit'):
+            self.command('cmd ' + name)
+            self.assertEqual(self.toast(), 'toast=No proposed change is shown.')
+        self.again()
+        self.two()
+        self.in_tab()
+        self.command('cmd review_reject')
+        answer = self.until_decided()[0]
+        self.assertEqual(answer['message'], CANCEL_EDIT)
+
+    def test_change_at_the_cursor(self):
+        self.two()
+        self.in_tab()
+        self.command('key braceright')
+        self.command('key braceright')
+        self.command('cmd review_reject_change')
+        self.assertEqual(self.hunks(), ['pending'])
+        self.assertIn('-2,1 +2,1', self.review())
+        self.command('cmd review_accept_change')
+        self.assertEqual(self.hunks(), ['accepted'])
+
+    def test_the_tabs_keys_still_work(self):
+        self.two()
+        self.in_tab()
+        self.command('key braceright')
+        self.command('key shift+A')
+        self.assertEqual(self.hunks(), ['accepted', 'pending'])
+        self.command('key braceright')
+        self.command('key shift+R')
+        self.assertEqual(self.hunks(), ['accepted'])
+        self.command('key ctrl+Return')
+        answer = self.until_decided()[0]
+        self.assertEqual(answer['updatedInput']['new_string'], 'a\nB\nc\nd\ne\nf\ng\nh\n')
+
+    def test_deciding_and_editing_wait_for_the_lock(self):
+        self.two(lock=600)
+        self.command('review reject 1 1')
+        self.command('cmd review_edit')
+        self.assertEqual(self.hunks(), ['pending', 'pending'])
+        self.assertEqual(self.offer()['scratch'], '0')
+
+    def test_the_tabs_menu_has_the_five(self):
+        self.two()
+        self.in_tab()
+        x, y = map(int, self.command('print-tabs-at').strip().split(','))     # the active tab's middle
+        self.command('click %d %d right' % (x, y))
+        menu = self.command('print-menu')
+        for label in ('Accept Proposed Changes', 'Reject Proposed Changes', 'Accept Change at Cursor',
+                      'Reject Change at Cursor', 'Edit Proposed Text'):
+            self.assertIn(label, menu)
 
 
 if __name__ == '__main__':

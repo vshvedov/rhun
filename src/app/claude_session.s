@@ -4586,18 +4586,23 @@ claude_verbs:
 .Lverb_Working: .asciz "Working"
 .Lverb_Wrangling: .asciz "Wrangling"
 
-# the empty conversation's tips (DRV_tips; mMt @5544637, gMt @5546494): the extension's, but the one that
-#   names Option K (its chat about a selection is phase 4)
+# the empty conversation's tips (DRV_tips; mMt @5544637, gMt @5546494): the extension's, in its order; the Option K
+#   one names the key Insert @-Mention has here (Alt K off macOS)
 .p2align 3
 .globl claude_tips
 claude_tips:
-    .quad .Ltip1, .Ltip2, .Ltip3, .Ltip4, .Ltip5, .Ltip6, .Ltip7, .Ltip8, .Ltip9, .Ltip10, 0
+    .quad .Ltip1, .Ltip2, .Ltip3, .Ltip4, .Ltip5, .Ltip6, .Ltip11, .Ltip7, .Ltip8, .Ltip9, .Ltip10, 0
 .Ltip1: .asciz "// TODO: Everything. Let\342\200\231s start."
 .Ltip2: .asciz "Ready to code? Let's write something worth deploying."
 .Ltip3: .asciz "Type /model to pick the right tool for the job."
 .Ltip4: .asciz "Make a CLAUDE.md file for instructions Claude will read every single time."
 .Ltip5: .asciz "Tired of repeating yourself? Tell Claude to remember what you\342\200\231ve told it using CLAUDE.md."
 .Ltip6: .asciz "Press Shift Tab to automatically approve code edits"
+.ifdef MACOS
+.Ltip11: .asciz "Highlight any text and press Option K to chat about it"
+.else
+.Ltip11: .asciz "Highlight any text and press Alt K to chat about it"
+.endif
 .Ltip7: .asciz "Use Claude Code in the terminal to configure MCP servers. They\342\200\231ll work here, too!"
 .Ltip8: .asciz "Use planning mode to talk through big changes before a commit. Press Shift Tab to cycle between modes."
 .Ltip9: .asciz "What to do first? Ask about this codebase or we can start writing code."

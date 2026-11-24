@@ -2289,7 +2289,10 @@ class ThreadLookTest(TaskEightCase):
                           .split('claude_tips:')[1])
         tips = [t.replace('\\342\\200\\231', '\u2019') for t in tips]
         self.assertIn(empty, tips)
-        self.assertNotIn('Option K', ' '.join(tips))
+        # the extension's eleven, in its order: the Option K one (Alt K off macOS) after Shift Tab's
+        self.assertEqual(tips[6], 'Highlight any text and press Option K to chat about it')
+        self.assertEqual(tips[7], 'Highlight any text and press Alt K to chat about it')
+        self.assertEqual(len(tips), 12)
         self.command('agent-prompt hello')
         self.command('wait-agent ready 15000')
         self.assertEqual(self.engine()['empty'], '-')

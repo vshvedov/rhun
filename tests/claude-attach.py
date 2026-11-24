@@ -749,6 +749,18 @@ class ChipsTest(AttachCase):
                     self.assertFalse(overlap(a, b), line)
             self.assertGreater(int(head['h']), 0, line)
 
+    def test_a_narrow_panel_at_a_large_size_still_shows_a_row_of_chips(self):
+        """At font 32 in a 240 px panel the box and its footer take all the bottom area's cap: the area passes it
+        by one row of chips, so attachments are never invisible."""
+        self.start(extra='[ui]\nagents_width = 240\n[agents]\nfont_size = 32\n')
+        self.chat('hello')
+        self.attach(self.put('a.txt', 'a\n'), self.put('b.txt', 'b\n'))
+        self.command('agent-focus box')
+        self.command('type look at these')
+        self.command('wait 100')
+        shown = [at for at, _ in self.chips_at() if at[2] > 0]
+        self.assertGreaterEqual(len(shown), 1, self.att())
+
     def test_chips_follow_the_conversation(self):
         self.start()
         self.command('cmd focus_agents')

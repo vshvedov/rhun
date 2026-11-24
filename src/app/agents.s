@@ -7712,8 +7712,13 @@ thread_draw:
     jge 46f
     mov ecx, [rsp + 48]
 46: test ecx, ecx                # (a panel too short for any: none)
-    jg 47f
+    jg 461f
     xor ecx, ecx
+    jmp 47f
+461: mov [rsp + 48], ecx         # the box's chips: one row of them at least, past the cap (agentatt.s)
+    call agatt_row_min
+    mov ecx, [rsp + 48]
+    add ecx, eax
 47: mov eax, [rsp + 160]
     cmp eax, ecx
     jbe 42f

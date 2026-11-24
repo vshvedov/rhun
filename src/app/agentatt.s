@@ -2124,6 +2124,19 @@ vis_rows:
     cmova eax, ecx
 9:  ret
 
+# FN agatt_row_min() -> eax the room one row of the box's chips takes (MI_8 above it, MI_32), 0 without
+#   chips: the bottom area may pass its cap by that much, so that a box with attachments always shows them
+FN agatt_row_min
+    xor eax, eax
+    mov rcx, [rip + bx_pack]
+    test rcx, rcx
+    jz 1f
+    cmp qword ptr [rcx + AP_parts + VEC_len], 0
+    je 1f
+    mov eax, [rip + g_pmt + 4*MI_32]
+    add eax, [rip + g_pmt + 4*MI_8]
+1:  ret
+
 # FN agatt_room(room): the bottom area's room for the chips row (its height less the prompt row's and the
 #   footer's): the rows shown are what fits; a panel too low for one shows none
 FN agatt_room

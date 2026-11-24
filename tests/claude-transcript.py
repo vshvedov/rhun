@@ -839,12 +839,6 @@ DIFFERENCES = [
     # its line is opened and its own file read (task 11: then the rows are compared again, children and all)
     ('agent', 'kids', 'Agent:', 34),
     ('agents2', 'kids', 'Agent:', 34),
-    # a backgrounded task's end: the stream's task_notification is a meta line of its summary; the file has
-    # the same summary in a <task-notification> user string (finding 34), whose row is task 8's: until task 8
-    # is merged the reread has no such row (then these three entries go)
-    ('agent', 'drop', 'meta Agent "List the files" completed', 34),
-    ('agents2', 'drop', 'meta Agent "Look at a" completed', 34),
-    ('agents2', 'drop', 'meta Agent "Look at b" completed', 34),
 ]
 
 

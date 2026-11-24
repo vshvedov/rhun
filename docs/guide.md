@@ -240,6 +240,35 @@ skipped); of a drop of more than 1,000 files the first 1,000 are taken. A file d
 explorer, or a file's tab, onto a conversation is mentioned at the box's caret (`@src/main.c`)
 instead of attached.
 
+### Mentions and the editor's selection
+
+`@` in the box opens a menu of the project's files, folders and terminals, best matches first
+(exact names first, tests last); `@src/` lists what is in `src`. Enter picks, Tab on a folder goes
+into it, Escape closes the menu until the text changes. A name with spaces is written quoted
+(`@"a b.txt"`); a path Claude Code would read as another mention (one with `#` or a double quote)
+cannot be mentioned and a toast says so. Claude Code reads a mentioned file itself; rhun sends the
+text as written. The list is made the first time `@` is typed, and again only when a file or
+folder is made, deleted or moved (the watcher, git or rhun itself saw it) or a query finds nothing;
+it leaves out what the exclude setting names and, with **Leave out ignored files** (`[agents]
+respect_gitignore`, on), what `.gitignore` ignores. At most 200,000 files are listed.
+`@terminal:NAME` sends that terminal's last 100 lines with the message. Mentions show as chips in
+the box and in the sent prompt; clicking one there opens the file at its lines.
+
+**Agents: Insert @-Mention** (Alt+K, Option+K on macOS) puts the active file's mention in the box,
+with its selection's lines (`@a.py#L2-4`); **Add to Chat** does the same from the explorer's menu
+(a folder ends in `/`). A path inside the conversation's folder is written relative to it, others
+whole. **Agents: Focus or Unfocus the Message Box** (Ctrl+Esc, Cmd+Esc on macOS) moves the keys
+between the editor and the box, with the selection's mention when there is one. Windows opens the
+Start menu on Ctrl+Esc and some Linux desktops take it too: bind the command to another key there.
+
+The row under the box shows the editor's selection as a chip ("3 lines selected", or the file's
+name without a selection); the next message takes it along, once, as Claude Code's VS Code
+extension sends it. Its × leaves it out until the selection changes. The text of a selection goes
+only from a file rhun knows git does not ignore: a file git ignores, or one git could not be asked
+about (git paused, missing, failing or slower than 2 s), sends its name only. git is asked once a
+file, and only after you typed in the conversation's box. **Attach the selection** and **Attach
+the open file** (`[agents] attach_selection`, `attach_open_file`) turn either off.
+
 ### Modes, model and the command menu
 
 The row under the box holds the permission mode, the model, then at the right the context

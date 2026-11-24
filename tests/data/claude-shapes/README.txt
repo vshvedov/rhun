@@ -787,6 +787,75 @@ files (the answers name the account's cloud sessions).
      policy_disabled...), detail, failure_kind (failed), recovered (connected), bridge_epoch}; remote_control's
      answer has bridge_session_id. The fake's remote_control follows that schema and says so.
 
+Settings dialogs (claude-chat-p7b, 2026-11-24, CLI 2.1.330). Learned with HOME and CLAUDE_CONFIG_DIR in a
+temporary folder (not signed in: control requests are answered locally without it) and a temporary git
+repository; nothing touched ~/.claude (settings.json had the same SHA-256 before and after).
+
+80. mcp_status answers {mcpServers: [{name, status "connected"|"failed"|"needs-auth"|"pending"|"disabled",
+    config, scope, error?, tools?}]}: [] with none. A server added after the process started is not in it
+    (the extension says "It will be available in new sessions."). A failed stdio server (/usr/bin/false)
+    and an unreachable HTTP one both showed "failed"; mcp_reconnect of the failed one: error "Connection
+    closed". mcp_toggle {serverName, enabled false} wrote projects[cwd].disabledMcpServers ["NAME"] in
+    <config>/.claude.json and the next mcp_status said "disabled".
+81. `claude mcp add --scope S --transport T [--env K=V]... [--header "H: v"]... -- NAME CMD|URL ARGS...`:
+    stdout "Added stdio MCP server NAME with command: CMD ARGS to local config" (HTTP: "Added HTTP MCP server
+    NAME with URL: URL to project config" and "Headers: {...}"), then "File modified: PATH"; exit 0. Local
+    scope: projects[cwd].mcpServers in <config>/.claude.json ({type, command, args, env}); user: mcpServers
+    there; project: <cwd>/.mcp.json ({type, url, headers}). Errors on stderr, exit 1: "MCP server NAME
+    already exists in local config", "Invalid name NAME. Names can only contain letters, numbers, hyphens,
+    and underscores.", `mcp remove`: "No MCP server named "NAME" in user scope".
+82. get_hooks_listing answers {events [{name, summary, supportsMatcher, hookCount}], hooks [{event, matcher,
+    source "localSettings"|..., sourceLabel "Local settings (.claude/settings.local.json)", type,
+    displayText, commandText, contentLabel "Command", editable {matcher, config}}], eventCatalog (33 events:
+    PreToolUse .. MessageDisplay, each {name, summary, supportsMatcher}), policy {disabledByPolicy,
+    managedOnly, pluginOnly, allDisabled, policyHookCount}}.
+83. `claude edit-hook --json`, the edit on stdin: {op "add", source, event, matcher, hook} ->
+    {"ok":true}, exit 0, the hook written to that settings file ({matcher, hooks [...]} per event; no
+    matcher key for ""). Remove needs the top-level event too: {op "remove", source, event, target {event,
+    matcher, hook}}; without it "edit_hook: event is not a known hook event" (code bad_request). Failures
+    print one line on stdout and the error on stderr, exit 1: {"ok":false,"error":"edit_hook: source must be
+    userSettings, projectSettings, or localSettings","code":"bad_request"}; "that hook is no longer in
+    localSettings; it may have been changed outside this dialog" (target_missing); and the refusals, which
+    carry the extension's refusal member: not_a_list ("the Stop entry in localSettings is not a list; fix
+    the file by hand", refusal {code "not-a-list", file PATH}), file_unloadable ("the localSettings file has
+    errors and could not be loaded; fix it by hand first", {code "unloadable", file}), target_ambiguous
+    ("more than one identical hook is configured for Stop in localSettings; edit the file by hand",
+    {code "twins", file}). The top-level code is not the refusal's code.
+84. list_permission_rules answers {state: {rules [{behavior, source, rule, description?, editability}],
+    workspaceDirectories [], originalCwd, managedOnly}}. `claude edit-permission-rules --json`: {op "add",
+    behavior, destination, rules [...]} -> {"ok":true,"warnings":[],"stored":[...]}; {op "remove",
+    behavior, source, rule} -> {"ok":true,"warnings":[],"stored":[]} (it leaves "allow": [] behind); a rule
+    with unbalanced parentheses: stderr "Malformed Tool(content) rule — Rules take the form Tool or
+    Tool(content) and must end at the closing ")"; parentheses inside the content are literal", exit 1.
+85. get_sandbox_dialog answers {supported, locked, overrides_locked, policy_origins [], enabled,
+    enabled_in_settings, mode "auto-allow"|"regular"|"disabled", auto_allow_available, no_sandbox_allowed,
+    unsandboxed_fallback, dependencies {errors, warnings}, excluded_commands, restrictions {fs_deny_read,
+    fs_allow_read, fs_allow_write, fs_deny_write, network_allowed_domains, network_denied_domains,
+    network_managed, unix_sockets, allow_all_unix_sockets, ignored_glob_patterns, ignored_unix_sockets}}.
+    `claude edit-sandbox-settings --json` with {mode}, {excludeCommand} or {allowUnsandboxedCommands}:
+    {"ok":true,"written":EDIT}; it writes .claude/settings.local.json's sandbox {enabled,
+    autoAllowBashIfSandboxed, excludedCommands, allowUnsandboxedCommands}.
+86. `claude plugin list --json`, `plugin list --json --available` and `plugin marketplace list --json`
+    print indented JSON over many lines (a reader of the last line alone sees nothing). Installed: [{id,
+    version, scope, enabled, installPath, installedAt, lastUpdated, projectPath?, projectEnabled?}].
+    --available: {installed, available [{pluginId, name, description, marketplaceName, version, source
+    {source "url"|"git-subdir", url, path?, sha}}]}: 3783 plugins, 2.2 MB, all from
+    anthropic-plugin-directory, which marketplace list does not show ([] in a new configuration) although
+    `marketplace update` names it among the "Available marketplaces"; no installCount.
+87. The changes print one line of JSON on stdout (and a "✘ ..." line on stderr when they fail): install
+    {command "install", outcome "ok", plugin, pluginId, scope, message "Successfully installed plugin: ID
+    (scope: project)"}; failed {outcome "failed", message, failureCode "not_found"}; disable/enable {command,
+    outcome, plugin, pluginId, scope, message}; update {..., updateOutcome "up_to_date", oldVersion,
+    newVersion}; uninstall of one not installed: failureCode "not_installed"; marketplace remove|update of an
+    unknown one: {command "marketplace-remove", marketplace, outcome "failed", message "Marketplace 'X' not
+    found", failureCode "not_configured"}; marketplace add of a missing path: failureCode
+    "invalid_source".
+88. `plugin configure --json -- ID` prints indented {pluginId, displayName, schema, inputs, choices,
+    configured, unconfigured}; for an id not installed, stderr "No installed plugin has the id "ID". Use its
+    full id (name@marketplace), as `claude plugin list` shows it.", exit 1. `plugin marketplace add
+    --from-link --resolve-only --json -- SRC` answers {"existing":null} for a new source. reload_plugins
+    answers {commands, agents, plugins, mcpServers, error_count}.
+
 Other things learned
 
 - Without --permission-mode the user's settings decide (C1 holds): with defaultMode auto there,

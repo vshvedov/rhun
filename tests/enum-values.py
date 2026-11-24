@@ -20,6 +20,10 @@ ENUMS = {
     'QO_': ['src/rhun.inc'],   # query askers: index qo_reply, qo_part, qo_trunc
     'ACT_': ['src/rhun.inc'],  # a command's action: index act_names (agentcfg.s); lines merged in parallel
     'OA_': ['src/app/agent_claude.s'],   # what an answer Claude's driver waits for is for
+    'ALF_': ['src/rhun.inc', 'src/app/*.s'],   # a live record's flags (AL_flags), bits
+    'CNF_': ['src/rhun.inc', 'src/app/*.s'],   # a connection's flags (CN_flags), bits
+    'CN_E_': ['src/rhun.inc'],                  # a connection's error
+    'DRVC_': ['src/rhun.inc'],                  # a driver's capabilities, bits
 }
 # names that share a prefix but belong to another enumeration
 SEPARATE = {'PM_RECENT', 'PK_COUNT', 'ACT_COUNT'}  # app.s's project-menu row; the number of query kinds, of actions

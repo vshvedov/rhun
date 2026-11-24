@@ -111,6 +111,8 @@ want:
     je 9f
     cmp dword ptr [rip + g_remote], 0
     jne 9f
+    cmp dword ptr [rip + g_remote_window], 0  # (one before its connection is up too: a terminal there runs on
+    jne 9f                                      #   the host, whose 127.0.0.1 is not this one's)
     sub rsp, 8
     call wfold_count
     test eax, eax

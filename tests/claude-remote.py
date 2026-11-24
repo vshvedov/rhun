@@ -292,6 +292,44 @@ class DockerHost(chat.DrivenCase):
         self.command('wait-agent ready 30000')
         self.assertEqual(self.thread()[-1], REPLY + 'ok: hello')
 
+    # ---- with the terminal bridge (phase 5) and attachments (phase 4) in the same tree ----
+
+    def test_terminal_claude_runs_on_the_host_without_the_bridge(self):
+        # a claude of the host's that writes its environment down (the bridge would add its port to it)
+        sh('printf "#!/bin/sh\\nenv > /root/term.env\\nsleep 30\\n" > /root/envclaude && '
+           'chmod 755 /root/envclaude && rm -f /root/term.env')
+        self.start('executable = /root/envclaude\nide = true\n')
+        self.command('wait 300')                    # the loop's passes, where the bridge would start
+        self.assertTrue(self.command('print-ide').startswith('ide on=0 port=0 '), self.command('print-ide'))
+        self.command('cmd claude_open_terminal')
+        self.until(lambda: sh('cat /root/term.env 2>/dev/null', check=False), 'claude started on the host', 30)
+        env = sh('cat /root/term.env')
+        self.assertNotIn('CLAUDE_CODE_SSE_PORT', env)
+        self.assertNotIn('ENABLE_IDE_INTEGRATION', env)
+        self.assertEqual(sh('ls /root/.claude/ide 2>/dev/null', check=False).split(), [])   # no lock there
+        self.assertEqual(list((self.work / '.claude/ide').glob('*.lock')), [])              # nor here
+        self.assertTrue(self.command('print-ide').startswith('ide on=0 port=0 '))
+
+    def test_this_computers_files_are_not_attached(self):
+        self.start()
+        self.open_listed()
+        local = self.work / 'here.txt'
+        local.write_text('a file of this computer\n', encoding='utf-8')
+        refused = ('toast=Files on this computer cannot be attached in a remote window: the agent runs on %s.'
+                   % HOST)
+        self.command('agent-attach ' + str(local))          # a file given (dropped, pasted as a path)
+        self.assertEqual(self.command('print-toast').strip(), refused)
+        self.assertTrue(self.command('print-agent-attachments').startswith('parts=0 '),
+                        self.command('print-agent-attachments'))
+        self.command('cmd claude_mention_terminal')         # another toast in between
+        self.assertNotEqual(self.command('print-toast').strip(), refused)
+        self.command('agent-menu')                          # the "+" menu's Attach file…
+        self.command('agent-type Attach file')
+        self.command('key Return')
+        self.assertEqual(self.command('print-toast').strip(), refused)
+        self.assertTrue(self.command('print-palette').startswith('none'))     # no browser of this computer
+        self.assertTrue(self.command('print-agent-attachments').startswith('parts=0 '))
+
 
 @unittest.skipUnless(sys.platform.startswith('linux'), 'the local: remote transport is Linux only')
 class LocalHost(chat.DrivenCase):

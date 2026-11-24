@@ -1467,6 +1467,9 @@ FN agatt_attach_paths
     mov rbx, rdi
     lea r12, [rdi + rsi]
     xor r13d, r13d
+    call remote_refused         # a remote window: this machine's files are not attached
+    test eax, eax
+    jnz 9f
     lea rdi, [rip + usb]
     call sb_clear
     mov qword ptr [rip + unsup_n], 0
@@ -2604,10 +2607,50 @@ FN agatt_plus_menu
     call ctx_menu_open
     EPILOGUE
 
-# FN agatt_upload(): "Upload from computer", "Attach file…": the path browser as Attach File
+# FN agatt_upload(): "Upload from computer", "Attach file…": the path browser as Attach File (not in a remote
+#   window: remote_refused)
 FN agatt_upload
+    sub rsp, 8
+    call remote_refused
+    add rsp, 8
+    test eax, eax
+    jnz 1f
     mov edi, 3
     jmp browse_open_kind
+1:  ret
+
+# remote_refused() -> eax 1 in a remote window, with a toast naming its host: the agent runs there, and this
+#   machine's files are not attached to what it is sent (the "+" menu's Attach File, files dropped or given)
+remote_refused:
+    PROLOGUE
+    xor eax, eax
+    cmp dword ptr [rip + g_remote_window], 0
+    jne 1f
+    cmp dword ptr [rip + g_remote], 0
+    je 9f
+1:  lea rdi, [rip + wsb]
+    call sb_clear
+    lea rdi, [rip + wsb]
+    lea rsi, [rip + .Lrr_before]
+    call sb_push_cstr
+    call remote_host
+    cmp byte ptr [rax], 0
+    jne 2f
+    lea rax, [rip + .Lrr_the_host]
+2:  lea rdi, [rip + wsb]
+    mov rsi, rax
+    call sb_push_cstr
+    lea rdi, [rip + wsb]
+    lea rsi, [rip + .Lrr_after]
+    call sb_push_cstr
+    lea rdi, [rip + wsb]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + wsb + SB_ptr]
+    call app_toast
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+9:  EPILOGUE
 
 # FN agatt_add_context(): "Add context", "Mention file from this project…": the box gets the keys and "@" at
 #   its caret (the mention menu opens on it: task 7)
@@ -2647,6 +2690,9 @@ FN agterm_unblock
     ret
 
 .section .rodata
+.Lrr_before: .asciz "Files on this computer cannot be attached in a remote window: the agent runs on "
+.Lrr_the_host: .asciz "the host"
+.Lrr_after: .asciz "."
 .Lm_png: .asciz "image/png"
 .Lm_jpeg: .asciz "image/jpeg"
 .Lm_gif: .asciz "image/gif"

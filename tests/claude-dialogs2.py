@@ -578,6 +578,8 @@ class PluginsTest(Case):
                                     "text This session couldn't reload its plugins. error",
                                     'link[2] Try again', 'link[3] Restart'])
         self.assertEqual(len(self.control('reload_plugins')), 1)
+        body = self.until_body(lambda b: any(l.startswith('head Installed') for l in b), 'the lists read again')
+        self.assertFalse([l for l in body if l.startswith('item[') and 'lint-helper\tfrom' in l])
         self.pick('Try again')
         self.until(lambda: len(self.control('reload_plugins')) == 2, 'asked again')
         self.until_body(lambda b: not any('Restart' in l for l in b), 'the notice gone')

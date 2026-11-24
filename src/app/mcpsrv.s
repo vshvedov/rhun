@@ -14,6 +14,7 @@
 #       writer)
 #   mcp_later_done(token, sb text, flags)   a tool that said MCP_LATER answers (MTF_RAW, MCPF_ERROR)
 #   mcp_calls() -> rax tools/call requests handled since start (print-ide)
+#   mcp_manifest(MS*, sb)   (phase 4) {"initializeResult":…,"toolsListResult":…} written into an open message
 .include "rhun.inc"
 
 .equ MCPF_ERROR, 256
@@ -124,41 +125,10 @@ FN mcp_handle
     mov rdi, r13
     lea rsi, [rip + .Lk_result]
     call jw_key
-    mov rdi, r13
-    call jw_obj
-    mov rdi, r13
-    lea rsi, [rip + .Lk_protocol]
-    call jw_key
-    mov rdi, r13
-    mov rsi, [r15]
-    call jw_cstr
-    mov rdi, r13
-    lea rsi, [rip + .Lk_capabilities]
-    call jw_key
-    mov rdi, r13
-    lea rsi, [rip + .Lv_caps]
-    call jw_raw
-    mov rdi, r13
-    lea rsi, [rip + .Lk_server_info]
-    call jw_key
-    mov rdi, r13
-    call jw_obj
-    mov rdi, r13
-    lea rsi, [rip + .Lk_name]
-    call jw_key
-    mov rdi, r13
-    mov rsi, [rbx + MS_name]
-    call jw_cstr
-    mov rdi, r13
-    lea rsi, [rip + .Lk_version]
-    call jw_key
-    mov rdi, r13
-    mov rsi, [rbx + MS_version]
-    call jw_cstr
-    mov rdi, r13
-    call jw_end_obj
-    mov rdi, r13
-    call jw_end_obj
+    mov rdi, rbx
+    mov rsi, r13
+    mov rdx, [r15]
+    call init_body
     jmp .Lmh_end
 
 .Lmh_ping:
@@ -176,70 +146,9 @@ FN mcp_handle
     mov rdi, r13
     lea rsi, [rip + .Lk_result]
     call jw_key
-    mov rdi, r13
-    call jw_obj
-    mov rdi, r13
-    lea rsi, [rip + .Lk_tools]
-    call jw_key
-    mov rdi, r13
-    call jw_arr
-    mov r14, [rbx + MS_tools]
-    xor r15d, r15d
-6:  cmp r15, [rbx + MS_ntools]
-    jae 7f
-    mov rdi, r13
-    call jw_obj
-    mov rdi, r13
-    lea rsi, [rip + .Lk_name]
-    call jw_key
-    mov rdi, r13
-    mov rsi, [r14 + MT_name]
-    call jw_cstr
-    cmp qword ptr [r14 + MT_desc], 0
-    je 61f
-    mov rdi, r13
-    lea rsi, [rip + .Lk_description]
-    call jw_key
-    mov rdi, r13
-    mov rsi, [r14 + MT_desc]
-    call jw_cstr
-61: mov rdi, r13
-    lea rsi, [rip + .Lk_input_schema]
-    call jw_key
-    mov rdi, r13
-    mov rsi, [r14 + MT_schema]
-    call jw_raw
-    cmp qword ptr [r14 + MT_title], 0
-    je 62f
-    mov rdi, r13
-    lea rsi, [rip + .Lk_annotations]
-    call jw_key
-    mov rdi, r13
-    call jw_obj
-    mov rdi, r13
-    lea rsi, [rip + .Lk_title]
-    call jw_key
-    mov rdi, r13
-    mov rsi, [r14 + MT_title]
-    call jw_cstr
-    mov rdi, r13
-    lea rsi, [rip + .Lk_readonly]
-    call jw_key
-    mov rdi, r13
-    mov esi, [r14 + MT_flags]
-    and esi, MTF_READONLY
-    call jw_bool
-    mov rdi, r13
-    call jw_end_obj
-62: mov rdi, r13
-    call jw_end_obj
-    add r14, MT_SIZE
-    inc r15
-    jmp 6b
-7:  mov rdi, r13
-    call jw_end_arr
-    mov rdi, r13
-    call jw_end_obj
+    mov rdi, rbx
+    mov rsi, r13
+    call tools_body
     jmp .Lmh_end
 
 .Lmh_call:
@@ -468,6 +377,148 @@ FN mcp_result
     call jw_end_obj
     EPILOGUE
 
+# ---- Claude chat phase 4 task 9: the manifests (a host that declares its server's answers up front) ----
+# FN mcp_manifest(MS*, sb): {"initializeResult":{...},"toolsListResult":{"tools":[...]}} written into a
+#   message open in the writer (the newest protocol version rhun knows)
+FN mcp_manifest
+    PROLOGUE
+    mov rbx, rdi
+    mov r13, rsi
+    mov rdi, r13
+    call jw_obj
+    mov rdi, r13
+    lea rsi, [rip + .Lk_init_result]
+    call jw_key
+    mov rdi, rbx
+    mov rsi, r13
+    mov rdx, [rip + .Lv_versions]
+    call init_body
+    mov rdi, r13
+    lea rsi, [rip + .Lk_list_result]
+    call jw_key
+    mov rdi, rbx
+    mov rsi, r13
+    call tools_body
+    mov rdi, r13
+    call jw_end_obj
+    EPILOGUE
+# ---- end ----
+
+# init_body(MS*, sb, protocol version cstr): initialize's result object {protocolVersion, capabilities,
+#   serverInfo {name, version}}
+init_body:
+    PROLOGUE
+    mov rbx, rdi
+    mov r13, rsi
+    mov r12, rdx
+    mov rdi, r13
+    call jw_obj
+    mov rdi, r13
+    lea rsi, [rip + .Lk_protocol]
+    call jw_key
+    mov rdi, r13
+    mov rsi, r12
+    call jw_cstr
+    mov rdi, r13
+    lea rsi, [rip + .Lk_capabilities]
+    call jw_key
+    mov rdi, r13
+    lea rsi, [rip + .Lv_caps]
+    call jw_raw
+    mov rdi, r13
+    lea rsi, [rip + .Lk_server_info]
+    call jw_key
+    mov rdi, r13
+    call jw_obj
+    mov rdi, r13
+    lea rsi, [rip + .Lk_name]
+    call jw_key
+    mov rdi, r13
+    mov rsi, [rbx + MS_name]
+    call jw_cstr
+    mov rdi, r13
+    lea rsi, [rip + .Lk_version]
+    call jw_key
+    mov rdi, r13
+    mov rsi, [rbx + MS_version]
+    call jw_cstr
+    mov rdi, r13
+    call jw_end_obj
+    mov rdi, r13
+    call jw_end_obj
+    EPILOGUE
+
+# tools_body(MS*, sb): tools/list's result object {"tools":[{name, description?, inputSchema, annotations?}]}
+tools_body:
+    PROLOGUE
+    mov rbx, rdi
+    mov r13, rsi
+    mov rdi, r13
+    call jw_obj
+    mov rdi, r13
+    lea rsi, [rip + .Lk_tools]
+    call jw_key
+    mov rdi, r13
+    call jw_arr
+    mov r14, [rbx + MS_tools]
+    xor r15d, r15d
+6:  cmp r15, [rbx + MS_ntools]
+    jae 7f
+    mov rdi, r13
+    call jw_obj
+    mov rdi, r13
+    lea rsi, [rip + .Lk_name]
+    call jw_key
+    mov rdi, r13
+    mov rsi, [r14 + MT_name]
+    call jw_cstr
+    cmp qword ptr [r14 + MT_desc], 0
+    je 61f
+    mov rdi, r13
+    lea rsi, [rip + .Lk_description]
+    call jw_key
+    mov rdi, r13
+    mov rsi, [r14 + MT_desc]
+    call jw_cstr
+61: mov rdi, r13
+    lea rsi, [rip + .Lk_input_schema]
+    call jw_key
+    mov rdi, r13
+    mov rsi, [r14 + MT_schema]
+    call jw_raw
+    cmp qword ptr [r14 + MT_title], 0
+    je 62f
+    mov rdi, r13
+    lea rsi, [rip + .Lk_annotations]
+    call jw_key
+    mov rdi, r13
+    call jw_obj
+    mov rdi, r13
+    lea rsi, [rip + .Lk_title]
+    call jw_key
+    mov rdi, r13
+    mov rsi, [r14 + MT_title]
+    call jw_cstr
+    mov rdi, r13
+    lea rsi, [rip + .Lk_readonly]
+    call jw_key
+    mov rdi, r13
+    mov esi, [r14 + MT_flags]
+    and esi, MTF_READONLY
+    call jw_bool
+    mov rdi, r13
+    call jw_end_obj
+62: mov rdi, r13
+    call jw_end_obj
+    add r14, MT_SIZE
+    inc r15
+    jmp 6b
+7:  mov rdi, r13
+    call jw_end_arr
+    mov rdi, r13
+    call jw_end_obj
+    EPILOGUE
+
 # FN mcp_later_done(token, sb text, flags): the transport the token names sends the answer
 FN mcp_later_done
     mov rax, rdi
@@ -485,6 +536,8 @@ FN mcp_calls
 .Lk_method: .asciz "method"
 .Lk_id: .asciz "id"
 .Lk_result: .asciz "result"
+.Lk_init_result: .asciz "initializeResult"
+.Lk_list_result: .asciz "toolsListResult"
 .Lk_error: .asciz "error"
 .Lk_params: .asciz "params"
 .Lk_protocol: .asciz "protocolVersion"

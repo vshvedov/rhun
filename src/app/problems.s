@@ -34,6 +34,7 @@ tab_dirty: .long 0              # rebuilt at the next tick
 files: .zero VEC_SIZE           # rebuild: the paths, each once, in the order they came
 lbuf: .zero SB_SIZE             # a row's label or description
 doc_tmp: .zero 4096
+gen: .quad 0                    # problems_gen (phase 4 task 9)
 
 .text
 
@@ -47,6 +48,13 @@ FN problems_count
 FN problems_at
     imul rax, rdi, PR_SIZE
     add rax, [rip + probs + VEC_ptr]
+    ret
+# ---- end ----
+
+# ---- Claude chat phase 4 task 9: the store's generation (edtools.s: edtool_diag_gen) ----
+# FN problems_gen() -> rax a number that moves whenever a problem is added or a source is cleared
+FN problems_gen
+    mov rax, [rip + gen]
     ret
 # ---- end ----
 
@@ -128,6 +136,7 @@ FN problems_clear
     dec qword ptr [rip + probs + VEC_len]
     jmp 1b
 2:  mov dword ptr [rip + tab_dirty], 1
+    inc qword ptr [rip + gen]
     mov dword ptr [r12 + PS_count], 0
     mov dword ptr [r12 + PS_errors], 0
     mov dword ptr [r12 + PS_warnings], 0
@@ -142,7 +151,7 @@ FN problems_add
     PROLOGUE
     mov r12, rdi
     mov r13, rsi
-    call problems_tick          # documents opened before it get the ones before it, and not this twice
+    call marks_tick             # documents opened before it get the ones before it, and not this twice
     cmp dword ptr [r12 + PS_count], PER_SOURCE
     jae .Lpa_drop
     cmp qword ptr [rip + probs + VEC_len], ALL_MAX
@@ -199,6 +208,7 @@ FN problems_add
     mov rax, [rip + seq]
     mov [r14 + PR_seq], rax
     mov dword ptr [rip + tab_dirty], 1
+    inc qword ptr [rip + gen]
     inc dword ptr [r12 + PS_count]
     mov eax, [r14 + PR_sev]
     cmp eax, SEV_ERROR
@@ -377,15 +387,24 @@ point_of:
 8:  mov rax, -1
     EPILOGUE
 
+# marks_tick(): problems_tick without the tab's rebuild, for problems_add (phase 4 task 9: a burst of
+#   problems rebuilt the tab once a problem, which made 10,000 of them take minutes; it is rebuilt once, at
+#   the next tick)
+marks_tick:
+    PROLOGUE 16
+    mov qword ptr [rsp], 0      # marks added
+    jmp .Lpt_docs
+
 # problems_tick(): documents opened since the last tick get their problems' marks; a frame only when
 #   marks came (or the tab changed: tab_rebuild)
 FN problems_tick
     PROLOGUE 16
     mov qword ptr [rsp], 0      # marks added
     cmp dword ptr [rip + tab_dirty], 0
-    je 0f
+    je .Lpt_docs
     call tab_rebuild
-0:  cmp qword ptr [rip + probs + VEC_len], 0
+.Lpt_docs:
+    cmp qword ptr [rip + probs + VEC_len], 0
     je 9f
     mov r15, [rip + last_doc]
     xor ebx, ebx

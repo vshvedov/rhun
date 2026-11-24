@@ -734,6 +734,49 @@ start. Until another folder is opened, the chat or the Claude Code provider is s
 rhun quits, its file, the check for another Claude Code and its starts use that folder, even after
 the config names another one.
 
+### What Claude can ask the editor
+
+Each conversation's Claude Code gets an MCP server of rhun's own, named `rhun`, with one tool,
+`getDiagnostics` (Claude sees it as `mcp__rhun__getDiagnostics`; it is the one tool the VS Code
+extension's chat server has). It returns the errors, warnings and other problems rhun shows: those of
+the Problems panel (tasks' matchers, extensions' file diagnostics) and the marks extensions put on
+open files, each problem once. Claude may ask for one file (a `file://` URI, an absolute path, or a
+path relative to the conversation's folder) and for a least severity (`Error`, `Warning`,
+`Information`, `Hint`). Positions count from 0; a line count comes with a file that is open.
+
+Only files of the project are answered: a path inside one of the window's folders or the
+conversation's own folder, judged by how it is written. A symlink is not followed: a link inside the
+project counts as inside wherever it leads, a path outside counts as outside even when it leads in,
+and a path with a `..` part is refused. Problems of other files are left out, and asking for one of
+them is an error ("uri must name a file in the project's folders").
+
+Claude Code asks you before it uses the tool, as for any tool: the card **Do you want to proceed
+with mcp__rhun__getDiagnostics?** (the VS Code extension asks too). Nothing of the editor is read
+before such a call. The server answers at once, so a prompt never waits for it; an older Claude Code
+that does not know such servers simply has no tool.
+
+rhun also adds this note to Claude Code's system prompt, the same for every conversation:
+
+```text
+# rhun Editor Context
+
+You are running inside rhun, a code editor: the user talks to you in its chat.
+
+## Code References in Text
+When you reference files or code locations, use markdown links, so the user can open them with a click:
+- For files: [filename.ts](src/filename.ts)
+- For specific lines: [filename.ts:42](src/filename.ts#L42)
+- For a range of lines: [filename.ts:42-51](src/filename.ts#L42-L51)
+- For folders: [src/utils/](src/utils/)
+Unless the user asks for them, do not use backticks or HTML tags for file references.
+Link paths are relative to your working directory.
+
+## What the editor gives you
+- The tool mcp__rhun__getDiagnostics returns the errors, warnings and other problems rhun shows in its Problems list and in open files, for files in the project's folders. Many languages are checked only in open files: a missing file can mean it was not checked, not that it is clean.
+- The user sees each edit you propose and allows or refuses it before it is written, unless their permission mode allows edits.
+- The user's editor selection or open file may come with a message, marked with ide_selection or ide_opened_file tags; it may or may not be related to the request.
+```
+
 ### Claude Code in the terminal
 
 `claude` started in rhun's terminal connects to rhun, as it does to VS Code's terminal with the

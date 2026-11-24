@@ -5032,3 +5032,11 @@ ENDSTRUCT SGR_SIZE
 .equ SH_UNGROUPED_SHUT, 1       # the sections' state: Ungrouped collapsed, Archived shown open
 .equ SH_ARCHIVED_OPEN, 2
 # ---- end of phase 6, sessions ----
+# ---- Claude chat phase 4 tasks 9, 10: the editor's tools for the chat (edtools.s, claude_mcp.s, claude_hooks.s) ----
+.equ EDF_PRETTY, 1      # edtool_diagnostics: as JSON.stringify(list, null, 2) writes it (else compact)
+.equ EDF_PROJECT, 2     # edtool_diagnostics: files of the project only (edtool_in_project)
+.equ EDS_NOTOPEN, 0     # edtool_save, edtool_saved: no document of the file is open
+.equ EDS_CLEAN, 1       #   nothing unsaved
+.equ EDS_SAVING, 2      #   its save runs
+.equ EDS_FAILED, 3      #   not saved (read-only, changed on disk, or the save failed)
+# ---- Claude chat phase 4 tasks 9, 10: end ----

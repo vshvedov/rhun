@@ -3448,7 +3448,8 @@ SCENARIOS.update({'bigerror': s_bigerror, 'hostilecrash': s_hostilecrash})
 # text/plain TITLE CHARS", "document application/pdf TITLE BYTES", "text CHARS"; FAKE_CLAUDE_SCENARIO=echoblocks
 # when the first text block is not the word), notify (experiment_gates and file_updated to the first server:
 # unrecorded, 2.1.330 sends them only to a server named claude-vscode, finding 47).
-# Knobs: FAKE_CLAUDE_MCP=off (an older CLI: the new members are ignored), slow (unrecorded: the handshake starts
+# Knobs: FAKE_CLAUDE_MCP=off (an older CLI: the new members are ignored), nomanifest (task 9, unrecorded: the
+# manifests ignored, so the handshake of 44 runs; slow and error ignore them too), slow (unrecorded: the handshake starts
 # 1 s after the initialize answer, 0.5 s between its steps), error (unrecorded: after tools/list the fake also
 # asks resources/list and an unknown method, which a server without them answers with JSON-RPC errors);
 # FAKE_CLAUDE_HOOK_DEADLINE=MS (unrecorded: a callback not answered within MS counts as {"continue": true}; 2.1.330
@@ -3487,6 +3488,8 @@ def p4_initialize(request):
         server = {'state': 'pending', 'tools': [], 'next': 0, 'done': threading.Event()}
         P4_SERVERS[name] = server
         manifest = manifests.get(name)
+        if MCP_KNOB in ('nomanifest', 'slow', 'error'):  # task 9 (unrecorded): the manifest ignored, the handshake as 44
+            manifest = None
         if isinstance(manifest, dict):          # 45: parked, no handshake; ids still count from the handshake's
             server.update(state='connected', next=2,
                           tools=((manifest.get('toolsListResult') or {}).get('tools') or []),
@@ -3526,6 +3529,7 @@ def p4_request(name, method, params=None):
 def p4_send(name, message):
     """An mcp_message control request; its request id (the answer comes to P4_ANSWERS)."""
     rid = str(uuid.uuid4())
+    log(sent={'id': rid, 'subtype': 'mcp_message', 'method': message.get('method')})     # task 9
     with COND:
         P4_ANSWERS[rid] = None
         emit({'type': 'control_request', 'request_id': rid,

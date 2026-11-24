@@ -169,6 +169,7 @@ python3 tests/claude-attach.py || fail=1   # a message's parts: attachments, pac
 python3 tests/claude-panels.py || fail=1   # side question, bookmarks, agent map, hand-off, Chrome, Remote Control (p7c)
 python3 tests/claude-paste.py || fail=1    # the clipboard's files and images, long pastes, drops (phase 4 tasks 4, 5)
 python3 tests/claude-mention.py || fail=1   # mentions, the selection chip, the commands that mention (phase 4 tasks 7, 8)
+python3 tests/claude-mcp.py || fail=1      # rhun's MCP server and hooks for the chat (phase 4 tasks 9, 10)
 python3 tests/ext-agents.py || fail=1
 python3 tests/ext-review.py || fail=1
 python3 tests/ext-tools.py || fail=1

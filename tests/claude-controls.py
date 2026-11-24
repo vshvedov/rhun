@@ -464,7 +464,9 @@ class QueueTest(CfgCase):
         self.assertEqual(self.queued(), [])
 
     def initialize(self):
-        return [r['initialize'] for r in self.records() if 'initialize' in r]
+        # phase 4 task 9's members (rhun's in-process server and its note) are tests/claude-mcp.py's
+        return [{k: v for k, v in r['initialize'].items() if k not in chat.P4_INIT}
+                for r in self.records() if 'initialize' in r]
 
     def test_the_new_flags_are_passed(self):
         self.start(env={'FAKE_CLAUDE_ECHO_ENV': 'CLAUDE_CODE_QUESTION_PREVIEW_FORMAT'})
@@ -2427,7 +2429,9 @@ class SeamWordsTest(unittest.TestCase):
              # phase 4 task 2: a message's parts, the editor's context
              'agentatt.s', 'agentctx.s',
              # phase 4 task 7: mentions and the project's file list
-             'agentmention.s', 'filelist.s']
+             'agentmention.s', 'filelist.s',
+             # phase 4 tasks 9, 10: the MCP core and the editor's tools, shared by the bridge and the chat
+             'edtools.s', 'mcpsrv.s']
     # file -> name -> the functions it may appear in
     ALLOWED = {
         'agent_drv.s': {
@@ -2464,6 +2468,8 @@ class SeamWordsTest(unittest.TestCase):
                         '.Lo_terminal'},
         'agents.s': {'.Lclaude_name'},
         'agentext.s': {'.Lph_claude', '.Lsend_refused'},
+        # the bridge's (phase 5): the server's name terminal claude shows, the owner its diffs name
+        'edtools.s': {'.Ls_name', '.Ls_owner'},
     }
     # Claude itself, and (phase 3) its tools' and records' names: the rows above the seam never read them
     NAMES = (r'claude|Claude|AG_CLAUDE|Bash|TodoWrite|tool_use|tool_result|parent_tool_use_id|mcp__|ExitPlanMode|'
@@ -3035,10 +3041,11 @@ class ReviewProtocolTest(ModelCase):
     def test_a_refused_first_prompt_is_in_the_box_only(self):
         # P6: the first prompt that waited for the start, refused by the connection's queue without breaking
         # it: back in the box, no row
+        # (phase 4 task 9: initialize carries rhun's server and note, about 3 KB: the queue holds it, not the prompt)
         self.start(env={'FAKE_CLAUDE_INIT_MS': '500'})
-        self.command('agent-timing queue=1000')
+        self.command('agent-timing queue=6000')
         self.command('agent-new claude')
-        long = 'long ' + 'x' * 2000
+        long = 'long ' + 'x' * 8000
         self.command('agent-prompt ' + long)
         self.command('wait-agent ready 10000')
         self.command('wait 100')
@@ -3050,7 +3057,7 @@ class ReviewProtocolTest(ModelCase):
         self.command('key BackSpace')
         self.command('agent-prompt hello')
         self.command('wait-agent ready 10000')
-        self.command('agent-timing queue=1000')
+        self.command('agent-timing queue=6000')
         self.command('agent-prompt ' + long)
         self.command('wait 100')
         self.assertEqual([r for r in self.thread() if r.startswith('user ')], ['user hello'])

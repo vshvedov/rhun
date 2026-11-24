@@ -1837,8 +1837,10 @@ bt_diagnostics:
     mov esi, ' '
     call sb_push_byte
     mov rax, [rsp + 8]
+    mov rdi, [rax + MK_msg]     # as shown: cut at MARK_MSG_MAX (phase 4 task 9: marks keep it whole)
+    call extmarks_shown
     lea rdi, [rip + out]
-    mov rsi, [rax + MK_msg]
+    mov rsi, rax
     call sb_push_cstr
     lea rdi, [rip + out]
     mov esi, 10

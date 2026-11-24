@@ -333,6 +333,8 @@ cl_start:
     lea rdi, [rip + cw]
     mov esi, 1
     call jw_bool
+    lea rdi, [rip + cw]         # phase 4 task 9: rhun's in-process server and its note (claude_mcp.s)
+    call claude_mcp_init
     mov rdi, rbx                # a child gone already breaks the connection here: its close reports the
     call req_end                #   failed start (cl_close: ev_failed, ev_closed), the state says so
     mov eax, 1
@@ -2754,6 +2756,7 @@ h_request:
     mov rdi, rax
     lea rsi, [rip + .Lk_subtype]
     call json_get
+    mov r14, rax
     mov rdi, rax
     lea rsi, [rip + .Lv_can_use_tool]
     call json_is
@@ -2764,7 +2767,19 @@ h_request:
     mov rdx, r13
     call h_can_use
     EPILOGUE
-1:  mov rdi, rbx                # the dialog cards: one rhun shows waits as the others do
+1:  # ---- phase 4 task 9: rhun's in-process MCP server (claude_mcp.s) ----
+    mov rdi, r14
+    lea rsi, [rip + .Lv_mcp_message]
+    call json_is
+    test eax, eax
+    jz 11f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call claude_mcp_request
+    EPILOGUE
+11: # ---- end ----
+    mov rdi, rbx                # the dialog cards: one rhun shows waits as the others do
     mov rsi, r12
     mov rdx, r13
     call claude_dialog
@@ -2842,6 +2857,65 @@ err_reply:
     mov rdi, rbx
     call cl_write
     EPILOGUE
+
+# ---- phase 4 task 9: the answers claude_mcp.s (and claude_hooks.s) write ----
+# FN claude_err_reply(AL*, id jv, text cstr): err_reply
+FN claude_err_reply
+    jmp err_reply
+
+# FN claude_ok_reply(AL*, id ptr, id len, raw ptr, raw len) -> eax 1 written: {"type":"control_response",
+#   "response":{"subtype":"success","request_id":ID,"response":RAW}}, ID and RAW JSON text written as they
+#   are. The write may close the connection (cl_close): nothing of AL may be used after it
+FN claude_ok_reply
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov [rsp], r8
+    lea rdi, [rip + cw]
+    call jw_begin
+    lea rdi, [rip + cw]
+    call jw_obj
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_type]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_control_response]
+    call jw_cstr
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_response]
+    call jw_key
+    lea rdi, [rip + cw]
+    call jw_obj
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_success]
+    call jw_cstr
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_request_id]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, r12
+    mov rdx, r13
+    call jw_rawn
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_response]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, r14
+    mov rdx, [rsp]
+    call jw_rawn
+    lea rdi, [rip + cw]
+    call jw_end_obj
+    lea rdi, [rip + cw]
+    call jw_end_obj
+    mov rdi, rbx
+    call cl_write
+    EPILOGUE
+# ---- end ----
 
 # h_can_use(AL*, record, request): a tool's permission, a question or a plan Claude waits on: kept in
 #   AL_reqs (AQ: the id and the input as JSON text, so both go back unchanged; the tool; the tool call's
@@ -4402,6 +4476,7 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lv_cancel: .asciz "control_cancel_request"
 .Lv_lifecycle: .asciz "command_lifecycle"
 .Lv_can_use_tool: .asciz "can_use_tool"
+.Lv_mcp_message: .asciz "mcp_message"     # phase 4 task 9
 .Lv_tool_use: .asciz "tool_use"
 .Lv_tool_result: .asciz "tool_result"
 .Lv_set_mode: .asciz "set_permission_mode"

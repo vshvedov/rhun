@@ -798,7 +798,9 @@ class ToolsTest(ToolCase):
         self.scenario('hello')
         request = self.stdin()[0]['request']
         self.assertEqual((request['perTaskStopAffordance'], request['forwardNestedSubagentToolCalls']), (True, True))
-        self.assertEqual(list(request)[-2:], ['perTaskStopAffordance', 'forwardNestedSubagentToolCalls'])
+        # (phase 4 tasks 9, 10: rhun's server, note and hooks come after them: tests/claude-mcp.py)
+        self.assertEqual([k for k in request if k not in chat.P4_INIT][-2:],
+                         ['perTaskStopAffordance', 'forwardNestedSubagentToolCalls'])
 
 
 # The fake's scenarios that make rows, with the cards their turn asks (agent-card words, ";" between the

@@ -433,6 +433,8 @@ MOD = 'cmd' if sys.platform == 'darwin' else 'ctrl'
 # the box's placeholder once nothing else is to be said (UI 1.2 (e), phase 5)
 FOCUS_HINT = ('\u2318 Esc' if sys.platform == 'darwin' else 'ctrl esc') + ' to focus or unfocus Claude'
 ROLES = ('user', 'agent', 'tool', 'result', 'error', 'info', 'thinking', 'meta', 'compact', 'unknown')
+# phase 4 task 9: initialize's members for rhun's in-process MCP server (tests/claude-mcp.py checks them)
+P4_INIT = ('sdkMcpServers', 'sdkMcpServerManifests', 'appendSystemPrompt', 'systemPromptSnapshot')
 PINNED = ['--output-format', 'stream-json', '--verbose', '--input-format', 'stream-json',
           '--include-partial-messages', '--permission-prompt-tool=stdio', '--replay-user-messages',
           '--setting-sources=user,project,local', '--max-thinking-tokens=31999']
@@ -535,7 +537,11 @@ class ChatTest(DrivenCase):
         self.assertEqual(starts[0]['env']['CLAUDE_CODE_ENTRYPOINT'], 'rhun')
         self.assertEqual(starts[0]['env']['MCP_CONNECTION_NONBLOCKING'], 'true')
         self.assertIsNone(starts[0]['env']['CLAUDECODE'])
-        self.assertEqual(self.stdin()[0], {'type': 'control_request', 'request_id': 'r1',
+        first = self.stdin()[0]
+        for member in P4_INIT:          # phase 4 task 9: rhun's server and its note (tests/claude-mcp.py)
+            self.assertIn(member, first['request'])
+            del first['request'][member]
+        self.assertEqual(first, {'type': 'control_request', 'request_id': 'r1',
                                            'request': {'subtype': 'initialize', 'hooks': None,
                                                        'promptSuggestions': True, 'supportedDialogKinds': [
                                                            'fable_overage_consent_prompt', 'auto_mode_server_fallback'],
@@ -1134,7 +1140,8 @@ class RequestTest(DrivenCase):
         self.start()
         self.chat('unhandled')
         error = {'behavior': 'error', 'message': 'not supported by rhun yet'}
-        self.assertEqual(self.logged('unhandled'), [[error] * 5])
+        unknown = {'behavior': 'error', 'message': 'unknown server'}     # phase 4 task 9: an mcp_message
+        self.assertEqual(self.logged('unhandled'), [[error, unknown, error, error, error]])
         self.assertEqual([r['subtype'] for r in self.responses()], ['error'] * 5)
         self.assertIsNone(self.card())
         self.assertEqual(self.thread(), ['user unhandled', REPLY + 'done'])

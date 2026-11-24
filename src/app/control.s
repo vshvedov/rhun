@@ -1314,8 +1314,10 @@ c_print_marks:
     lea rdi, [rip + out]
     mov esi, ' '
     call sb_push_byte
+    mov rdi, [r13 + MK_msg]     # as shown: cut at MARK_MSG_MAX (phase 4 task 9: marks keep it whole)
+    call extmarks_shown
     lea rdi, [rip + out]
-    mov rsi, [r13 + MK_msg]
+    mov rsi, rax
     call sb_push_cstr
     lea rdi, [rip + out]
     mov esi, 10
@@ -2492,6 +2494,7 @@ ctl_tables:
     .quad submitext_ctl         # Submit to Index (submitext.s)
     .quad ide_ctl               # Claude chat phase 5: the bridge for terminal claude (ide_server.s)
     .quad clipdrop_ctl          # phase 4 tasks 4-5: the headless clipboard's kinds, drops (drop.s)
+    .quad claude_mcp_ctl        # Claude chat phase 4 tasks 9, 10: rhun's server and hooks for the chat (claude_mcp.s)
     .quad 0
 ctl_table:
     .quad .Lc_key_up, c_key_up, .Lc_key, c_key, .Lc_modifiers, c_modifiers, .Lc_type, c_type, .Lc_move, c_move, .Lc_click, c_click, .Lc_tap, c_tap

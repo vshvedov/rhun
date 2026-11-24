@@ -250,7 +250,9 @@ class DockerHost(chat.DrivenCase):
         self.until(lambda: 'user slow' in self.thread(), 'the file read again', 10)
         self.command('agent-prompt hello')
         self.command('wait-agent ready 30000')
-        self.assertEqual(self.thread()[-1], REPLY + 'ok: hello')
+        # (the model's label shows where it changes: the ended program's last reply, read from the file
+        # after the reconnect when it landed there late, may carry it already)
+        self.assertIn(self.thread()[-1], (REPLY + 'ok: hello', 'agent ok: hello'))
         starts = self.starts()
         self.assertEqual(len(starts), 2, starts)
         self.assertIn('--resume=s1', starts[1]['argv'])

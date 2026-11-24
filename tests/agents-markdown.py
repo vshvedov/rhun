@@ -346,27 +346,27 @@ class AgentsMarkdown(unittest.TestCase):
         shown = [n for n in rows if rows[n]['y'] != '-1']
         self.assertIn(last, shown)
         # the replies above the view were never parsed: their plain text stands in
-        top = min(shown)
-        hidden = [n for n in range(2, top, 2)]
+        top = min(shown)                # (the row just above the view may be measured: the view's top can
+        hidden = [n for n in range(2, top - 1, 2)]  # fall in its gap, phase 3 task 8's shorter prompts)
         self.assertTrue(hidden, shown)
         self.assertTrue(all(rows[n]['parsed'] == '0' for n in hidden), rows)
         self.assertTrue(all(rows[n]['parsed'] == '1' for n in shown if n % 2 == 0), rows)
         # up: the replies coming into view are parsed, the rows already in view move by the wheel
         # alone; down again: they come back where they were
         self.command('move 1100 400')
-        self.command('scroll -300')
+        self.command('scroll -400')     # (past the reply just above the view: phase 3 task 8's prompts are shorter)
         after = {n: self.row(n)[0] for n in range(1, last + 1)}
         newly = [n for n in hidden if after[n]['parsed'] == '1']
         self.assertTrue(newly, 'scrolling up parsed nothing')
         self.assertTrue(any(after[n]['height'] != rows[n]['height'] for n in newly),
                         'the estimates were exact: nothing to keep in place')
-        # 300 px of wheel at the default sensitivity and scale 1, no more, no less
+        # 400 px of wheel at the default sensitivity and scale 1, no more, no less
         both = [n for n in shown if after[n]['y'] != '-1']
         self.assertTrue(both, (shown, after))
         for n in both:
-            self.assertEqual(int(after[n]['y']) - int(rows[n]['y']), 300,
+            self.assertEqual(int(after[n]['y']) - int(rows[n]['y']), 400,
                              'row %d jumped when a reply above it was parsed' % n)
-        self.command('scroll 300')
+        self.command('scroll 400')
         for n in shown:
             self.assertEqual(self.row(n)[0]['y'], rows[n]['y'], n)
 

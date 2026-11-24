@@ -294,7 +294,7 @@ class RowTest(RowCase):
                 blocks.append(current)
             else:
                 current[1].append(line.strip())
-        self.assertEqual(len(blocks), 25 * 34 * 4)
+        self.assertEqual(len(blocks), 25 * 34 * 5)        # (and the fixture's prompt: task 8)
         for head, parts in blocks:
             size, tw = int(head['size']), int(head['tw'])
             boxes = []
@@ -805,13 +805,14 @@ class ToolsTest(ToolCase):
 PARITY = [
     ('tools', (), {}), ('read', (), {}), ('write', ('1',), {}), ('grep run', (), {}), ('glob run', (), {}),
     ('websearch run', (), {}), ('todo', (), {}), ('image', (), {}), ('toolerror', (), {}), ('denied', (), {}),
-    ('hooks', (), {}), ('unknownblock', (), {}), ('echo', (), {}), ('think a short thought', (), {}),
+    ('hooks', (), {}), ('unknownblock', (), {}), ('/hi', (), {}), ('think a short thought', (), {}),
     ('tool', ('1',), {}), ('tool2', ('1', '3'), {}), ('auto', (), {}), ('ran', (), {}), ('fails', (), {}),
     ('mcp', (), {}), ('other', ('1',), {}), ('ask2', ('2;3;submit',), {}), ('edit', ('1',), {}),
     ('fetch', ('1',), {}), ('pwsh', ('1',), {}), ('net', ('1',), {}), ('skill', ('1',), {}),
     ('project', ('1',), {}), ('glob', ('1',), {}), ('grep', ('1',), {}), ('websearch', ('1',), {}),
     ('noid', (), {}), ('subagent', (), {}), ('pending', ('3',), {}), ('withdraw', (), {}),
-    ('apierror', (), {}), ('/context', (), {}), ('hello', (), {}), ('bg', (), {}),
+    ('apierror', (), {}), ('/context', (), {}), ('hello', (), {}), ('bg', (), {}), ('/compact', (), {}),
+    ('/status', (), {}), ('error', (), {}),
     ('agent', (), {'until': 'The folder has a.py and notes.txt.'}),
 ]
 # What a scenario may differ by between the stream and the file, each with the README finding that says why
@@ -822,15 +823,12 @@ DIFFERENCES = [
     # a call that never got a result (no id: an unrecorded shape) is stopped when its turn ends; the file
     # ends in it, and a file's end stops nothing (finding 27: the file may still grow)
     ('noid', 'state', ('stopped', 'running'), 27),
-    # a custom command: the stream's prompt row is the text rhun sent; the file keeps the command's echo
-    # string instead ("<command-message>…", finding 31), whose row is task 8's
-    ('echo', 'drop', 'user echo', 31),
-    # a local command: the file has its caveat, the command's string and system/local_command, the stream a
-    # <synthetic> reply (finding 31); the rows of the file's form are task 8's
-    ('/context', 'drop', 'user /context', 31),
-    ('/context', 'drop', 'agent ## Context Usage', 31),
     # the turn's error comes from the stream's result record, which the file never has (finding 27)
     ('apierror', 'drop', 'error API Error: Repeated 529 Overloaded errors', 27),
+    ('error', 'drop', 'error ' + 'API Error: 529 {"type":"overloaded_error","message":"Overloaded"}'[:60], 27),
+    # a prompt a UserPromptSubmit hook blocked: its row was made when it was sent; the file has its
+    # system/informational line and no prompt line (finding 32)
+    ('BLOCKME', 'drop', 'user BLOCKME reply ok', 32),
     # a request Claude withdrew: control_cancel_request is a stream record, never a line of the file
     # (finding 27: user, assistant and system lines only; C10)
     ('withdraw', 'drop', 'info Withdrawn by Claude', 27),
@@ -881,6 +879,8 @@ class ParityTest(ToolCase):
         return '\n'.join(line for row in live for line in row)
 
     def test_rows_from_the_file_equal_rows_from_the_stream(self):
+        (self.project / '.claude/commands').mkdir(parents=True)     # /hi: a custom command (finding 31)
+        (self.project / '.claude/commands/hi.md').write_text('Reply with the word hi.\n', encoding='utf-8')
         self.start(self.claude_section('initial_mode = default\n'))
         for prompt, cards, more in PARITY:
             with self.subTest(prompt):
@@ -897,6 +897,27 @@ class ParityTest(ToolCase):
         self.start(env={'FAKE_CLAUDE_TASKS': '1'})
         self.scenario('todo')
         self.compare('todo')
+        self.stop()
+        self.start(env={'FAKE_CLAUDE_PRESERVED': '1'})              # a compaction that sends a record again
+        self.scenario('hello')
+        self.command('agent-prompt /compact')
+        self.command('wait-agent ready 15000')
+        self.assertIn('compact ', self.compare('/compact'))
+        self.stop()
+        self.start(env={'FAKE_CLAUDE_HOOKS': 'block'})              # a prompt a hook blocked (finding 32)
+        self.scenario('BLOCKME reply ok')
+        self.assertIn('meta ', self.compare('BLOCKME'))
+        self.stop()
+        self.start(self.claude_section('initial_mode = default\n'))
+        self.scenario('gone', wait='waiting')                       # its program gone under an answer
+        live = blocks(self.command('print-agent-rows content'))
+        self.command('agent-timing advance=0')
+        self.command('agent-card 1')
+        self.command('wait-agent failed 15000')
+        self.until_gone()
+        reread = blocks(self.command('print-agent-rows content'))
+        self.assertEqual(reread[:len(live)], live)                  # then rhun's own notes: unanswered, failed
+        self.assertEqual([r[0].split(' ')[0] for r in reread[len(live):]], ['info', 'error'], reread)
 
     def test_typed_rows_without_a_driver(self):
         self.start()
@@ -1697,7 +1718,7 @@ class TodoTest(ThinkCase):
                 blocks.append(current)
             else:
                 current[1].append(line.strip())
-        self.assertEqual(len(blocks), 25 * 34 * 3)
+        self.assertEqual(len(blocks), 25 * 34 * 4)        # (and the prompt: task 8)
         seen = set()
         for head, parts in blocks:
             size, tw, h = int(head['size']), int(head['tw']), int(head['h'])
@@ -1739,6 +1760,571 @@ class ThinkParityTest(ThinkCase):
                     self.scenario(prompt)
                 dump = self.compare(prompt.split()[0])
                 self.assertIn('thinking ', dump)
+
+
+# ---- phase 3 task 8: the prompt's bubble, command echoes, the compaction marker, the error block ----
+
+def rect(text):
+    return tuple(int(v) for v in text.split(','))
+
+
+def user_line(content, **flags):
+    """A user line of a conversation's file (content: a string or blocks), with flags (isMeta, ...)."""
+    return dict({'type': 'user', 'message': {'role': 'user', 'content': content}}, **flags)
+
+
+def blocks_line(*texts, image=False):
+    out = [{'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': 'iVBORw0KGgo='}}] \
+        if image else []
+    return user_line(out + [{'type': 'text', 'text': t} for t in texts])
+
+
+COMPACT_SUMMARY = ('This session is being continued from a previous conversation that ran out of context. The '
+                   'summary below covers the earlier portion of the conversation.\n\nSummary: nothing yet.')
+CAVEAT = ('<local-command-caveat>The command below was run directly in Claude Code, not sent to you as a request, '
+          'and its output goes straight to the user.</local-command-caveat>')
+
+
+class TaskEightCase(ToolCase):
+    """The rows of task 8, read through print-agent-rows, print-agent-row (a prompt's bubble fields) and
+    print-agent-thread."""
+
+    def prompt(self, n):
+        """print-agent-row of row n (from 0): its header as a dict (a prompt's bubble=, more=, chips=, ...)."""
+        return self.drawn(n)[0]
+
+    def kinds(self, content=True):
+        """print-agent-rows as (kind, flags or the kind's fields, its text line or '')."""
+        out = []
+        for head, parts in self.rows_of('content' if content else ''):
+            words = head.split(' ')
+            text = next((p[len('text '):] for p in parts if p.startswith('text ')), '')
+            flags = re.search(r' flags=(\S+)', head)
+            out.append((words[1], flags.group(1) if flags else ' '.join(w for w in words[2:]
+                                                                         if not w.startswith(('turn=', 'fold=')))
+                        , text))
+        return out
+
+    def engine(self):
+        """print-agent-thread and print-agent-look, as one dict"""
+        return dict(w.split('=', 1) for w in (self.command('print-agent-thread') + ' ' +
+                                              self.command('print-agent-look')).split())
+
+
+
+class UserRowTest(TaskEightCase):
+    """The prompt: a bubble at the right without a label, clipped at 60 px (scaled) with Show more, its chips,
+    a command's echo; its time line above it (UI 3.2, 3.3)."""
+
+    def test_bubble_is_at_the_right_and_hugs_its_text(self):
+        self.seed_lines([user_line('hi'), reply('ok'), user_line('word ' * 120)])
+        self.start()
+        self.open_listed()
+        short, long_ = self.prompt(0), self.prompt(2)
+        for head in (short, long_):
+            x, _, w, _ = rect(head['bubble'])
+            self.assertEqual(x + w, int(head['left']) + int(head['tw']), head)       # at the right
+            self.assertNotIn('role=user label', head)
+        self.assertLess(rect(short['bubble'])[2], int(short['tw']) // 4, short)     # hugs its text
+        tw = int(long_['tw'])
+        self.assertLessEqual(rect(long_['bubble'])[2], tw * 85 // 100 + 1, long_)  # at most 85 %
+        self.assertGreater(rect(long_['bubble'])[2], tw * 70 // 100, long_)
+        self.assertNotIn('You', self.command('print-agents'))
+
+    def test_collapse_height_follows_the_font(self):
+        self.codex()
+        self.command('agent-test-row user ' + '\\n'.join('line %d' % i for i in range(20)))
+        for size in (8, 13, 32):
+            with self.subTest(size):
+                self.command('cmd agents_font_reset')
+                for _ in range(abs(size - 13)):
+                    self.command('cmd agents_font_%s' % ('increase' if size > 13 else 'decrease'))
+                self.command('print-frames')
+                head = self.prompt(self.base)
+                self.assertEqual(head['clipped'], '1', head)
+                _, _, _, h = rect(head['bubble'])
+                self.assertEqual(h, 3 * mi(20, size) + 2 * mi(6, size), (size, head))
+                self.assertNotEqual(head['more'], '-')
+
+    def test_show_more_and_less(self):
+        self.codex()
+        self.command('agent-test-row user ' + '\\n'.join('line %d' % i for i in range(12)))
+        head = self.prompt(self.base)
+        closed = rect(head['bubble'])[3]
+        x, y, w, h = rect(head['more'])
+        self.command('click %d %d' % (x + w // 2, y + h // 2))
+        self.command('wait 30')
+        head = self.prompt(self.base)
+        self.assertIn('open', self.rows_of()[self.base][0])
+        self.assertGreater(rect(head['bubble'])[3], closed * 2)
+        self.command('agent-row-click %d more' % (self.base + 1))
+        self.command('wait 30')
+        self.assertEqual(rect(self.prompt(self.base)['bubble'])[3], closed)
+        short = self.command('agent-test-row user one line')
+        self.assertEqual(self.prompt(self.base + 1)['more'], '-')         # a short one has none
+
+    def test_chips_open_their_file(self):
+        (self.project / 'src').mkdir()
+        (self.project / 'src/main.c').write_text(''.join('line %d\n' % i for i in range(1, 40)), encoding='utf-8')
+        sel = ('<ide_selection>The user selected the lines 12 to 14 from %s:\nline 12\nline 13\nline 14'
+               '</ide_selection>' % (self.project / 'src/main.c'))
+        opened = '<ide_opened_file>The user opened the file %s in the IDE. This may or may not be related to ' \
+                 'the current task.</ide_opened_file>' % (self.project / 'src/main.c')
+        self.seed_lines([blocks_line(sel, opened, 'explain it')])
+        self.start()
+        self.open_listed()
+        head = self.prompt(0)
+        self.assertEqual(head['chips'], '2', head)
+        rows = self.rows_of('content')
+        self.assertIn('chips', rows[0][0])
+        self.assertEqual([p for p in rows[0][1] if p.startswith('chip ')], ['chip main.c#12-14', 'chip main.c'])
+        self.assertIn('text explain it', rows[0][1])
+        x, y, w, h = rect(head['chip00'])
+        self.command('click %d %d' % (x + w // 2, y + h // 2))
+        self.command('wait 50')
+        self.assertIn(' active=main.c line=12 ', self.command('print-state'))
+
+    def test_an_image_prompt_is_a_chip_and_no_meta_row(self):
+        self.seed_lines([blocks_line('what is this', image=True),
+                         user_line('[Image: source: /tmp/claude/images/1.png]', isMeta=True), reply('a dot')])
+        self.start()
+        self.open_listed()
+        rows = self.rows_of('content')
+        self.assertEqual([r[0].split(' ')[1] for r in rows], ['user', 'agent'], rows)
+        self.assertIn('chip [Image]', rows[0][1])
+        self.assertEqual(self.prompt(0)['chips'], '1')
+        self.assertNotIn('Image: source', self.command('print-agents'))
+        self.assertNotIn('[Image]', self.command('print-agents'))         # (chips are no name)
+
+    def test_queued_row_keeps_its_label(self):
+        self.start()
+        self.scenario('held', wait='working')
+        self.command('agent-prompt more')
+        self.until(lambda: 'queued more' in self.command('print-agents'), 'the message queued')
+        self.assertTrue(self.engine()['last'] != '-')
+        self.command('agent-stop')
+        self.command('wait-agent ready 20000')
+
+    def test_the_time_line_is_still_above_the_prompt(self):
+        self.seed_lines([user_line('hello there'), reply('ok')])
+        self.start()
+        self.open_listed()
+        head = self.prompt(0)
+        self.assertNotEqual(head['time'], '-', head)
+        self.assertGreater(rect(head['bubble'])[1], int(head['y']), head)     # below its time line
+        self.stop()
+        self.start(extra='[agents]\ntimestamps = false\n')
+        self.open_listed()
+        head = self.prompt(0)
+        self.assertEqual(head['time'], '-')
+
+    def test_a_sent_command_is_an_echo_row_at_once(self):
+        self.start()
+        self.command('agent-new claude')
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready 15000')
+        self.command('agent-prompt /context')
+        rows = self.kinds()
+        self.assertEqual(rows[2], ('user', 'echo', '/context'), rows)
+        self.command('wait-agent ready 15000')
+        self.command('agent-prompt /status')                    # answered by the CLI, not in its list (22)
+        self.command('wait-agent ready 15000')
+        self.command('agent-prompt /usr/bin holds what?')       # no command's name: a prompt
+        self.command('wait-agent ready 15000')
+        rows = self.kinds()
+        self.assertIn(('user', 'echo', '/status'), rows)
+        self.assertIn(('user', '-', '/usr/bin holds what?'), rows)
+
+
+class SpecialRowTest(TaskEightCase):
+    """The user's other texts and the system records, classified as the extension's dc does (UI 3.4, 3.20,
+    3.21, 3.24, 3.33)."""
+
+    def test_interrupted_and_tool_interrupted(self):
+        self.seed_lines([user_line('go'), user_line([{'type': 'text', 'text': '[Request interrupted by user]'}]),
+                         user_line('again'), user_line('[Request interrupted by user for tool use]')])
+        self.start()
+        self.open_listed()
+        self.assertEqual(self.kinds(), [('user', '-', 'go'), ('info', '-', 'Interrupted'), ('user', '-', 'again'),
+                                        ('info', '-', 'Tool interrupted')])
+        self.stop()
+        self.start()                                     # live: one row, the stream's mark's
+        self.scenario('held', wait='working')
+        self.command('agent-stop')
+        self.command('wait-agent ready 20000')
+        thread = self.thread()
+        self.assertEqual(thread.count('info Interrupted'), 1, thread)
+
+    def test_command_echo_forms(self):
+        self.seed_lines([user_line('<command-name>/context</command-name>\n            <command-message>context'
+                                   '</command-message>\n            <command-args></command-args>'),
+                         user_line('<command-message>hi</command-message>\n<command-name>/hi</command-name>'),
+                         user_line('<command-name>/compact</command-name><command-args> focus on x '
+                                   '</command-args>'),
+                         user_line('/compact'),
+                         user_line('<command-name>/broken</command-name'),          # unbalanced: text
+                         user_line('/usr/bin is a folder')])
+        self.start()
+        self.open_listed()
+        self.assertEqual(self.kinds(), [('user', 'echo', '/context'), ('user', 'echo', '/hi'),
+                                        ('user', 'echo', '/compact focus on x'), ('user', 'echo', '/compact'),
+                                        ('user', '-', '<command-name>/broken</command-name'),
+                                        ('user', '-', '/usr/bin is a folder')])
+        head = self.prompt(0)
+        self.assertEqual(head['clipped'], '0')
+        self.assertLess(rect(head['bubble'])[3], 3 * 20)                # one line
+
+    def test_a_replayed_echo_makes_no_row(self):
+        (self.project / '.claude/commands').mkdir(parents=True)
+        (self.project / '.claude/commands/hi.md').write_text('Reply with the word hi.\n', encoding='utf-8')
+        self.start(env={'FAKE_CLAUDE_COMMANDS_CHANGED': 'compact,context,usage,hi'})
+        self.command('agent-new claude')
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready 15000')
+        self.command('agent-prompt /hi')
+        self.command('wait-agent ready 15000')
+        self.assertEqual(self.kinds()[2:], [('user', 'echo', '/hi'), ('agent', '-', 'hi')])
+
+    def test_one_line_output_is_a_pill_and_several_are_markdown(self):
+        self.start()
+        self.scenario('hello')
+        for command in ('/compact', '/context', '/status'):
+            self.command('agent-prompt ' + command)
+            self.command('wait-agent ready 15000')
+        live = self.kinds()
+        self.assertIn(('info', 'pill', 'Compacted'), live)
+        self.assertIn(('agent', '-', '## Context Usage'), live)
+        self.assertIn(('info', 'pill', "/status isn't available in this environment."), live)
+        self.assertIn('pill Compacted', self.command('print-agents'))
+        self.reread()
+        self.assertEqual(self.kinds(), live)
+        self.seed_lines([user_line('<local-command-stdout>Set model to `opus` (claude-opus-5-5)'
+                                   '</local-command-stdout>'),
+                         user_line('<local-command-stderr>No such command</local-command-stderr>')], sid='s2')
+
+    def test_task_notification_is_a_meta_line(self):
+        note = ('<task-notification>\n<task-id>a1</task-id>\n<tool-use-id>t1</tool-use-id>\n<status>completed'
+                '</status>\n<summary>Agent "List the files" completed</summary>\n</task-notification>')
+        self.seed_lines([user_line('go'), user_line(note), user_line('<task-notification><summary></summary>'
+                                                                     '</task-notification>')])
+        self.start()
+        self.open_listed()
+        self.assertEqual(self.kinds(), [('user', '-', 'go'), ('meta', '-', 'Agent "List the files" completed')])
+
+    def test_wrapped_notice_opens(self):
+        self.seed_lines([user_line('go'), user_line('<bash-stdout>one\ntwo\nthree</bash-stdout>'),
+                         user_line('<tick>wake up</tick>'), user_line('<tick>unclosed')])
+        self.start()
+        self.open_listed()
+        rows = self.kinds()
+        self.assertEqual(rows[1], ('meta', 'notice', 'Terminal command output'), rows)
+        self.assertEqual(rows[2], ('meta', 'notice', 'Autonomous prompt'), rows)
+        self.assertEqual(rows[3], ('user', '-', '<tick>unclosed'), rows)
+        closed = int(self.drawn(1)[0]['height'])
+        self.command('agent-row-click 2 toggle')
+        self.command('wait 30')
+        self.assertIn('open', self.rows_of()[1][0])
+        self.assertGreater(int(self.drawn(1)[0]['height']), closed)
+        self.command('agent-row-click 2 toggle')
+        self.command('wait 30')
+        self.assertEqual(int(self.drawn(1)[0]['height']), closed)
+
+    def test_diagnostics_line(self):
+        diag = ('<post-tool-use-hook><ide_diagnostics>[{"filePath": "/a.py", "line": 1, "column": 2, '
+                '"message": "x \\"}\\" y", "severity": "Error"}, {"filePath": "/a.py", "line": 3, "column": 1, '
+                '"message": "z", "severity": "Warning"}]</ide_diagnostics></post-tool-use-hook>')
+        self.seed_lines([user_line('go'), user_line(diag)])
+        self.start()
+        self.open_listed()
+        self.assertEqual(self.kinds()[1], ('meta', '-', 'Found 2 new problems'))
+
+    def test_compaction_marker_and_summary(self):
+        self.start()
+        self.scenario('hello')
+        self.command('agent-prompt /compact')
+        self.command('wait-agent ready 15000')
+        rows = self.rows_of('content')
+        marker = [r for r in rows if r[0].split(' ')[1] == 'compact']
+        self.assertEqual(len(marker), 1, rows)
+        self.assertIn('trigger=manual freed=46k', marker[0][0])
+        self.assertIn('text This session is being continued from a previous conversation', marker[0][1])
+        self.assertIn('compact manual 46k', self.command('print-agents'))
+        n = int(marker[0][0].split(' ')[0])
+        label = [l for l in self.drawn(n)[1] if l.startswith('label ')]
+        self.assertTrue(label and label[0].endswith('Compacted chat · manual · 46k tokens freed'), label)
+        closed = int(self.drawn(n)[0]['height'])
+        self.command('agent-row-click %d toggle' % (n + 1))
+        self.command('wait 30')
+        self.assertGreater(int(self.drawn(n)[0]['height']), closed)
+        self.assertIn('open=1', self.rows_of()[n][0])
+        self.command('agent-test-row compact n=3')                    # no summary: the sentence
+        self.command('agent-row-click %d toggle' % (len(rows) + 1))
+        self.command('wait 30')
+        opened = int(self.drawn(len(rows))[0]['height'])
+        self.assertGreater(opened, closed)                           # one line: the sentence
+        self.assertLess(opened, closed + 2 * mi(20, 13))
+
+    def test_marker_comes_after_its_echo_from_stream_and_file(self):
+        for preserved in ('', '1'):
+            with self.subTest(preserved=preserved):
+                self.start(env={'FAKE_CLAUDE_PRESERVED': preserved} if preserved else None)
+                self.scenario('hello')
+                self.command('agent-prompt /compact')
+                self.command('wait-agent ready 15000')
+                live = self.kinds()
+                self.assertEqual(live[2:], [('user', 'echo', '/compact'),
+                                            ('compact', 'trigger=manual freed=46k', COMPACT_SUMMARY.split('\n')[0][:60]),
+                                            ('info', 'pill', 'Compacted')])
+                self.reread()
+                self.assertEqual(self.kinds(), live)
+                self.stop()
+                self.tmp.cleanup()
+                self.setUp()
+
+    def test_a_blocked_prompt_is_a_meta_line(self):
+        self.start(env={'FAKE_CLAUDE_HOOKS': 'block'})
+        self.scenario('BLOCKME reply ok')
+        rows = self.kinds()
+        self.assertEqual(rows[0], ('user', '-', 'BLOCKME reply ok'))
+        self.assertEqual(rows[1][:2], ('meta', '-'))
+        self.assertTrue(rows[1][2].startswith('UserPromptSubmit operation blocked by hook'), rows)
+        self.reread()
+        self.assertEqual(self.kinds(), rows[1:])            # the file has no prompt line (finding 32)
+
+    def test_failed_reply_is_red(self):
+        self.start()
+        self.scenario('apierror')
+        rows = self.kinds()
+        self.assertIn(('agent', 'failed', 'API Error: Repeated 529 Overloaded errors'), rows)
+        self.reread()
+        self.assertIn(('agent', 'failed', 'API Error: Repeated 529 Overloaded errors'), self.kinds())
+        self.command('agent-test-row agent failed=1 a red reply')
+        self.assertIn(('agent', 'failed', 'a red reply'), self.kinds())
+
+    def test_a_result_adds_no_row(self):
+        self.start()
+        self.scenario('hello')
+        self.assertEqual(self.kinds(), [('user', '-', 'hello'), ('agent', '-', 'ok: hello')])
+
+    def test_hostile_texts(self):
+        bidi = 'evil \u202ecod.exe\u202c and \u2066x\u2069 \x9b31m done'
+        self.seed_lines([user_line('<command-name>/x' + '\u202e' + '</command-name>'), user_line(bidi),
+                         user_line('<local-command-stdout>\x1b]0;title\x07out \x1b[31mred\x1b[0m'
+                                   '</local-command-stdout>'),
+                         user_line('<b>not a tag of ours</b>'), user_line('<<<>>>'), user_line('<')])
+        self.start()
+        self.open_listed()
+        rows = self.kinds()
+        self.assertEqual(rows[0], ('user', 'echo', '/x'), rows)
+        self.assertEqual(rows[1], ('user', '-', 'evil cod.exe and x 31m done'), rows)    # (C1 CSI goes)
+        self.assertEqual(rows[2], ('info', 'pill', 'out red'), rows)
+        self.assertEqual([r[2] for r in rows[3:]], ['<b>not a tag of ours</b>', '<<<>>>', '<'])
+
+
+class ErrorBlockTest(TaskEightCase):
+    """The error block pinned at the top of a failed conversation (UI 3.22)."""
+
+    def error(self):
+        """print-agent-error: (its text, {link: (x, y, w, h)})."""
+        out = self.command('print-agent-error')
+        if out.strip() == 'none':
+            return None, {}
+        text, links = '', {}
+        for line in out.splitlines():
+            m = re.match(r'button (\d+) (-?\d+),(-?\d+),(-?\d+),(-?\d+) \d+$', line)
+            if m:
+                links[int(m.group(1)) - 32] = tuple(int(v) for v in m.group(2, 3, 4, 5))
+            elif line.startswith('text '):
+                text = line.split(' ', 2)[2]
+        return text, links
+
+    def test_block_links_after_a_crash(self):
+        self.start()
+        self.scenario('exit', wait='failed')
+        text, links = self.error()
+        self.assertTrue(text.startswith('Claude Code ended (exit status 2).'), text)
+        self.assertEqual(sorted(links), [0, 1, 2, 3])
+        self.assertNotEqual(self.engine()['error'], '-')
+        self.command('agent-error-click 2')                      # View output logs
+        self.assertIn(' active=Claude Code output ', self.command('print-state'))
+        self.command('cmd focus_agents')
+        starts, users = len(self.starts()), len(self.prompts())
+        x, y, w, h = links[0]                                    # Retry: a start, nothing sent
+        self.command('click %d %d' % (x + w // 2, y + h // 2))
+        self.command('wait-agent ready 15000')
+        self.assertEqual(len(self.starts()), starts + 1)
+        self.assertEqual(len(self.prompts()), users)
+        self.assertEqual(self.error()[0], None)
+
+    def test_new_conversation_link(self):
+        self.start()
+        self.scenario('exit', wait='failed')
+        self.command('agent-error-click 1')
+        self.assertIn('New conversation', self.command('print-agents').splitlines()[0])
+        self.assertEqual(self.command('print-agent-rows'), '')
+
+    def test_dismiss_until_the_next_failure(self):
+        self.start()
+        self.scenario('exit', wait='failed')
+        self.command('agent-error-click 3')
+        self.assertEqual(self.error()[0], None)
+        self.assertEqual(self.engine()['error'], '-')
+        self.command('agent-prompt exit')
+        self.command('wait-agent failed 15000')
+        self.assertIsNotNone(self.error()[0])
+
+    def test_unknown_id_text(self):
+        self.seed_lines([user_line('hello'), reply('ok')])
+        self.start(env={'FAKE_CLAUDE_RESUME': 'unknown'})
+        self.open_listed()
+        self.command('agent-prompt again')
+        self.command('wait-agent failed 15000')
+        self.assertEqual(self.error()[0], "Couldn't load this conversation's saved history, so it can't be "
+                                          "continued."[:60])          # (the dump's 60 bytes)
+
+    def test_a_huge_hostile_reason(self):
+        self.start()
+        self.scenario('bigerror')                                # a turn's error of 1 MiB: 2000 characters
+        rows = self.rows_of('content')
+        self.assertEqual(rows[-1][0].split(' ')[1], 'error')
+        line = 'evil cod.exe red 31m ' + 'x' * 60
+        self.assertEqual(rows[-1][1], ['text ' + line[:60]])     # cleaned (the dump's 60 bytes)
+        n = len(rows)
+        started = time.monotonic()
+        head = self.drawn(n - 1)[0]
+        self.assertLess(int(head['height']), 2000 * 20)
+        self.assertLess(time.monotonic() - started, 2)
+        self.scenario('hostilecrash', wait='failed')             # a failure whose output is hostile
+        text, links = self.error()
+        self.assertEqual(sorted(links), [0, 1, 2, 3])
+        self.assertNotIn('\u202e', text)
+        self.assertNotIn('\x1b', text)
+        self.assertNotIn('\u202e', self.command('print-agents'))
+
+
+class ThreadLookTest(TaskEightCase):
+    """The sticky prompt, the veil, the empty conversation (UI 3.1, 3.25), and the fit of task 8's rows."""
+
+    def test_sticky_prompt_and_its_click(self):
+        self.seed_lines([user_line('the first question'), reply('\n\n'.join('paragraph %d' % i for i in range(80))),
+                         user_line('the second question'), reply('short')])
+        self.start()
+        self.open_listed()
+        self.command('key Home')
+        self.assertEqual(self.engine()['sticky'], '-')
+        for _ in range(6):
+            self.command('key Next')
+        e = self.engine()
+        self.assertEqual(e['sticky'], '0', e)                    # the reply's turn: its prompt pinned
+        self.assertNotEqual(e['pin'], '-')
+        walked = int(e['walked'])
+        x, y, w, h = rect(e['pin'])
+        self.command('click %d %d' % (x + w // 2, y + h // 2))
+        self.command('wait 30')
+        e = self.engine()
+        self.assertEqual(e['first'], '0', e)
+        self.assertEqual(e['sticky'], '-', e)
+        self.assertLess(walked, 140)                             # found from the first row's turn: no walk
+
+    def test_thread_dims_under_a_permission_card_not_a_question(self):
+        self.start(self.claude_section('initial_mode = default\n'))
+        self.scenario('tool', wait='waiting')
+        self.assertEqual(self.engine()['veil'], '1')
+        self.command('agent-card 2')
+        self.command('wait-agent ready 15000')
+        self.assertEqual(self.engine()['veil'], '0')
+        self.scenario('ask', wait='waiting')
+        self.assertEqual(self.engine()['veil'], '0')
+
+    def test_empty_state_shows_a_tip_of_the_driver(self):
+        self.seed_lines([user_line('a note of the CLI\'s', isMeta=True)])      # a conversation of no rows
+        self.start()
+        self.open_listed()
+        self.assertEqual(self.command('print-agent-rows'), '')
+        empty = self.engine()['empty'].replace('_', ' ')
+        tips = re.findall(r'\.asciz "(.*)"', (ROOT / 'src/app/claude_session.s').read_text(encoding='utf-8')
+                          .split('claude_tips:')[1])
+        tips = [t.replace('\\342\\200\\231', '\u2019') for t in tips]
+        self.assertIn(empty, tips)
+        self.assertNotIn('Option K', ' '.join(tips))
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready 15000')
+        self.assertEqual(self.engine()['empty'], '-')
+
+    def test_other_agents_empty_line(self):
+        self.codex()
+        self.command('agent-test-truncate 0')
+        self.assertEqual(self.engine()['empty'], 'Nothing_here_yet')
+
+    def test_other_rows_fit(self):
+        self.codex()
+        self.command('agent-test-row user ' + '\\n'.join('a rather long line %d of the prompt' % i
+                                                           for i in range(12)))
+        self.command('agent-test-row user open=1 ' + '\\n'.join('line %d' % i for i in range(9)))
+        self.command('agent-test-row user echo=1 /compact focus on ' + 'everything ' * 20)
+        self.command('agent-test-row compact n=46 manual=1 The summary\\n\\nof **it**')
+        self.command('agent-test-row compact n=2 open=1')
+        self.command('agent-test-row meta notice=1 Terminal command output\\nout put')
+        self.command('agent-test-row meta notice=1 open=1 Teammate message\\n' + 'word ' * 60)
+        ui = int(re.search(r'points=(\d+)', self.command('print-agents-metrics')).group(1))
+        blocks, current = [], None
+        for line in self.command('print-agent-rows-fit').splitlines():
+            if line.startswith('size='):
+                current = (dict(w.split('=', 1) for w in line.split(' ')), [])
+                blocks.append(current)
+            else:
+                current[1].append(line.strip())
+        seen = set()
+        for head, parts in blocks:
+            size, tw = int(head['size']), int(head['tw'])
+            boxes = []
+            for p in parts:
+                words = p.split(' ')
+                kind = words[0] if words[0] != 'button' else 'button' + words[1]
+                seen.add(kind)
+                x, y, w, h = (int(v) for v in words[-1].split(','))
+                self.assertGreaterEqual(x, 0, (head, p))
+                self.assertLessEqual(x + w, tw, (head, p))
+                self.assertLessEqual(y + h, int(head['h']), (head, p))
+                if kind.startswith('button'):
+                    self.assertGreaterEqual(h, mi(16, size, ui) - 1, (head, p))
+                boxes.append((kind, x, y, w, h))
+            for group in ([b for b in boxes if not b[0].startswith('button')],
+                          [b for b in boxes if b[0].startswith('button')]):
+                for i, a in enumerate(group):
+                    for b in group[i + 1:]:
+                        overlap = (a[1] < b[1] + b[3] and b[1] < a[1] + a[3] and
+                                   a[2] < b[2] + b[4] and b[2] < a[2] + a[4] and a[3] and b[3] and a[4] and b[4])
+                        self.assertFalse(overlap, (head, a, b))
+        self.assertTrue({'bubble', 'button10', 'button7', 'label', 'text'} <= seen, seen)
+
+    def test_jump_button_covers_no_row(self):
+        for size in (8, 13, 32):
+            for width in (240, 380, 600):
+                with self.subTest(size=size, width=width):
+                    self.seed_lines([user_line('q%d' % i) if i % 2 == 0 else reply('answer %d ' % i * 30)
+                                     for i in range(40)])
+                    self.start(extra='[agents]\nfont_size = %d\n' % size)
+                    self.open_listed()
+                    self.command('resize %d 700' % (width + 600))
+                    self.command('key Home')
+                    e = self.engine()
+                    if e['jump'] != '-':
+                        x, y, w, h = rect(e['jump'])
+                        head = self.prompt(int(e['first']))
+                        if 'left' in head:
+                            self.assertGreaterEqual(x, int(head['left']) + int(head['tw']), (e, head))
+                    self.stop()
+
+    def test_a_short_window_draws_nothing_outside_the_panel(self):
+        self.codex()
+        for h in (40, 60, 90, 130):
+            self.command('resize 1280 %d' % h)
+            e = self.engine()
+            first = e['first']
+            if first != '-' and int(first) >= 0:
+                head = self.drawn(int(first))[0]
+                self.assertGreaterEqual(int(head['y']), 0, (h, head))
 
 
 if __name__ == '__main__':

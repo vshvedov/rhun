@@ -20,6 +20,10 @@
 #   conversation is opened), agents_toggle_thinking() ("Agents: Expand or Collapse Thinking");
 #   agrow_code_face() -> rax FACE*; agrow_dump(sb, AS*, from, n, content); agrow_fit_dump(sb);
 #   agrow_row_dump(sb, AS*, row)
+#   the prompt (task 8): agrow_prompt_h(AM*, w) -> eax, agrow_prompt_draw(AS*, row or -1, AM*, x, y, w | h << 32),
+#   agrow_prompt_fields(sb, AS*, row, AM*, x, y), agrow_prompt_est(AM*) -> eax, edx, ecx
+#   the error block (task 8): agrow_err_h(AS*, w) -> eax, agrow_err_draw(AS*, x, y, w), agrow_err_at(x, y, w),
+#   agrow_err_dump(sb, AS*), agrow_err_click(AS*, n) -> eax
 .include "rhun.inc"
 
 # RW: a text wrapped at a width, laid out and optionally drawn (rw_wrap)
@@ -38,7 +42,7 @@ F RW_bot, 4
 F RW_max, 4             # lines laid out at most, 0 all
 F RW_pad, 4
 F RW_out, 8             # SB*: each line laid out as its text and a line feed, or 0
-F RW_pad2, 8
+F RW_mute, 8            # the byte drawn muted from, when a segment begins at or after it; -1 none
 ENDSTRUCT RW_SIZE
 
 .equ LM_MEASURE, 0              # tr_lay's modes: the height only
@@ -51,6 +55,10 @@ ENDSTRUCT RW_SIZE
 .equ BIG_UNITS, 250             # a text longer (UTF-16 units) or of more than 3 lines is a button (V7)
 .equ ERR_LINES, 10
 .equ ID_AG_MD, 0x480000         # agents.s's: a row's Markdown links, + (row & 255) << 12 (open thinking's too)
+.equ ERR_ROW, 0xffffff         # the error block's unit for agrow_slot (no row has that index)
+.equ ERR_BLOCK_LINES, 8         # the error block's text: lines drawn at most (the rest: View output logs)
+.equ NO_CONV_LEN, 21            # .Lno_conv's bytes
+.equ COMPACTED_FREE_LEN, 46     # .Lcompacted_free's bytes
 .equ UNSUPPORTED_LEN, 26       # .Lunsupported's bytes              # an error's clip when it is a button: 10 lines of its face
 
 .data
@@ -377,7 +385,13 @@ FN agrow_cut
     cmp [rip + rf_row], r12
     jl 6f
     mov qword ptr [rip + rf_row], -1
-6:  cmp [rip + pend_row], r12
+6:  cmp [rip + pend_open], r12  # a row to open or a chip's file: not a row of the rows cut
+    jl 61f
+    mov qword ptr [rip + pend_open], -1
+61: cmp [rip + pend_chip], r12
+    jl 62f
+    mov qword ptr [rip + pend_chip], -1
+62: cmp [rip + pend_row], r12
     jl 9f
     call pend_clear
 9:  EPILOGUE
@@ -1393,7 +1407,14 @@ rw_wrap:
     sub r8, rcx
     add rcx, [rbx + RW_text]
     mov r9d, [rbx + RW_color]
-    call text_draw
+    mov rax, [rbx + RW_mute]    # muted from RW_mute on (a prompt's truncation marker)
+    test rax, rax
+    js 84f
+    add rax, [rbx + RW_text]
+    cmp rax, rcx
+    ja 84f
+    COLOR r9d, T_MUTED
+84: call text_draw
     mov [rsp + 16 + 40], eax
     pop r8
     pop rcx
@@ -1480,9 +1501,11 @@ FN agrow_est
     mov r12, [rbx + AM_x]
     test r12, r12
     jnz 2f
+    cmp dword ptr [rbx + AM_role], R_COMPACT
+    je 610f
     cmp dword ptr [rbx + AM_role], R_THINK
     jne 0f
-    mov rdi, rbx                # thinking: its label line; open, its text's lines too
+610: mov rdi, rbx                # thinking, a marker: its label line; open, its text's lines too
     call think_est
     EPILOGUE
 0:  mov edx, [rbx + AM_nl]      # a line row: the small face's lines
@@ -1569,7 +1592,18 @@ think_est:
     add eax, [rip + g_pmt + 4*MI_4]
     xor edx, edx
     xor ecx, ecx
-    cmp dword ptr [rip + think_open], 0
+    cmp dword ptr [rbx + AM_role], R_COMPACT
+    jne 610f
+    test dword ptr [rbx + AM_flags], AMF_OPEN  # a marker: open, its summary or the sentence
+    jz 9f
+    add eax, [rip + g_pmt + 4*MI_4]
+    cmp qword ptr [rbx + AM_len], 0
+    jne 620f
+    mov rcx, [rip + ag_fsmall]
+    add eax, [rcx + FACE_lineh]
+    xor ecx, ecx
+    jmp 9f
+610: cmp dword ptr [rip + think_open], 0
     je 9f
     mov r12d, eax
     mov rdi, rbx
@@ -1577,7 +1611,7 @@ think_est:
     test eax, eax
     mov eax, r12d
     jz 9f
-    add eax, [rip + g_pmt + 4*MI_4]
+620: add eax, [rip + g_pmt + 4*MI_4]
     mov edx, [rbx + AM_nl]
     inc edx
     mov rcx, [rbx + AM_len]
@@ -1653,9 +1687,11 @@ FN agrow_h
     call row_of
     cmp qword ptr [rax + AM_x], 0
     jne 1f
+    cmp dword ptr [rax + AM_role], R_COMPACT
+    je 610f
     cmp dword ptr [rax + AM_role], R_THINK
     jne 0f
-    mov dword ptr [rip + lr_mode], LM_MEASURE
+610: mov dword ptr [rip + lr_mode], LM_MEASURE
     mov rdi, rbx
     mov rsi, r12
     xor edx, edx
@@ -1693,6 +1729,12 @@ FN agrow_draw
     jne 1f
     cmp dword ptr [rax + AM_role], R_THINK
     je 0f
+    cmp dword ptr [rax + AM_role], R_COMPACT
+    je 0f
+    mov rdi, r12                # a line row: a wrapped notice is a button (a slot for its id)
+    xor esi, esi
+    call agrow_slot
+    mov [rip + lr_slot], eax
     mov rdi, rbx
     mov rsi, r12
     mov edx, r13d
@@ -1701,7 +1743,7 @@ FN agrow_draw
     mov r9d, LM_DRAW
     call line_lay
     jmp 2f
-0:  mov rdi, r12                # thinking: its label is a button (a slot for its id)
+0:  mov rdi, r12                # thinking, a compaction marker: its label is a button (a slot for its id)
     xor esi, esi
     call agrow_slot
     mov [rip + lr_slot], eax
@@ -1807,6 +1849,8 @@ line_lay:
     mov r14d, ecx
     mov r15d, r8d
     mov [rsp + RW_SIZE], r9d
+    mov [rip + lr_row], r12
+    mov qword ptr [rip + lr_at], 0
     call row_of
     mov [rsp + RW_SIZE + 8], rax
     cmp dword ptr [rax + AM_role], R_UNKNOWN
@@ -1828,7 +1872,14 @@ line_lay:
     COLOR eax, T_MUTED
     mov [rsp + RW_color], eax
     mov dword ptr [rsp + RW_max], 0
-    mov qword ptr [rsp + RW_out], 0
+    mov rax, [rsp + RW_SIZE + 8]    # a wrapped notice: its first line (its label) until it is opened
+    test dword ptr [rax + AM_flags], AMF_NOTICE
+    jz 0f
+    test dword ptr [rax + AM_flags], AMF_OPEN
+    jnz 0f
+    mov dword ptr [rsp + RW_max], 1
+0:  mov qword ptr [rsp + RW_out], 0
+    mov qword ptr [rsp + RW_mute], -1
     xor eax, eax
     cmp dword ptr [rsp + RW_SIZE], LM_DRAW
     sete al
@@ -1840,8 +1891,24 @@ line_lay:
     lea rdi, [rsp]
     call rw_wrap
     imul eax, [rsp + RW_lh]
+    mov [rsp + RW_SIZE + 20], eax
     add eax, [rip + g_pmt + 4*MI_8]
     mov [rsp + RW_SIZE + 4], eax
+    mov rax, [rsp + RW_SIZE + 8]    # the notice's button: its text (MI_16 high at least)
+    test dword ptr [rax + AM_flags], AMF_NOTICE
+    jz 1f
+    cmp dword ptr [rsp + RW_SIZE], LM_DRAW
+    jne 1f
+    mov ecx, [rip + g_pmt + 4*MI_16]
+    mov r8d, [rsp + RW_SIZE + 20]
+    cmp r8d, ecx
+    cmovl r8d, ecx
+    mov edi, PART_TOGGLE
+    mov esi, r13d
+    mov edx, [rsp + RW_y]
+    mov ecx, r15d
+    call toggle_btn
+1:
     cmp dword ptr [rsp + RW_SIZE], LM_DRAW
     jne 9f
     mov rax, [rsp + RW_SIZE + 8]
@@ -1933,6 +2000,14 @@ think_lay:
     mov rdi, rax
     call think_has_text
     mov [rsp + 12], eax
+    mov eax, [rip + think_open] # open: thinking's one state, a compaction marker's own (AMF_OPEN)
+    cmp dword ptr [r14 + AM_role], R_COMPACT
+    jne 610f
+    mov dword ptr [rsp + 12], 1 # (a marker always opens: its summary, or the sentence)
+    mov eax, [r14 + AM_flags]
+    shr eax, 5
+    and eax, 1
+610: mov [rsp + 44], eax
     call think_line_h
     mov [rsp + 16], eax
     mov r13d, [rsp + 4]         # cy
@@ -1963,6 +2038,8 @@ think_lay:
     mov [rsp + 20], eax
     cmp dword ptr [rip + lr_mode], LM_DRAW
     jne 2f
+    cmp dword ptr [r14 + AM_role], R_COMPACT    # (a marker has no dot)
+    je 2f
     test dword ptr [r14 + AM_flags], AMF_LIVE   # streaming in a conversation rhun drives: it blinks
     jz 12f                      #   (the one tick: on 4 ticks, off 4)
     mov rdi, rbx
@@ -2007,7 +2084,7 @@ think_lay:
     cmp dword ptr [rip + lr_mode], LM_DRAW
     jne 3f
     mov edi, IC_CHEV_R
-    cmp dword ptr [rip + think_open], 0
+    cmp dword ptr [rsp + 44], 0
     je 21f
     mov edi, IC_CHEV_D
 21: mov esi, [rsp + 24]
@@ -2030,18 +2107,61 @@ think_lay:
     cmovl ecx, eax
     mov edi, [rsp]
     mov esi, r13d
+    cmp dword ptr [r14 + AM_role], R_COMPACT
+    je 31f
     call think_btn
+    jmp 4f
+31: mov r8d, ecx                # a marker's: its own row opens or closes (after the frame)
+    mov ecx, edx
+    mov edx, esi
+    mov esi, edi
+    mov edi, PART_TOGGLE
+    call toggle_btn
 4:  add r13d, [rsp + 16]
     cmp dword ptr [rsp + 12], 0
     je 8f
-    cmp dword ptr [rip + think_open], 0
+    cmp dword ptr [rsp + 44], 0
     je 8f
     add r13d, [rip + g_pmt + 4*MI_4]    # open: the text
-    mov rdi, r14
+    cmp dword ptr [r14 + AM_role], R_COMPACT
+    jne 41f
+    cmp qword ptr [r14 + AM_len], 0
+    jne 41f
+    mov rax, [rip + ag_fsmall]  # a marker without a summary: the sentence ($Rt), one line cut to the row
+    mov eax, [rax + FACE_lineh]
+    mov [rsp + 28], eax
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    jne 42f
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 28]
+    lea r8, [rip + .Lcompacted_free]
+    mov r9d, COMPACTED_FREE_LEN
+    COLOR r10d, T_MUTED
+    mov r11d, [rsp + 8]
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+    jmp 7f
+42: cmp dword ptr [rip + lr_mode], LM_FIT
+    jne 7f
+    lea rdi, [rip + .Lk_text]
+    mov esi, [rsp]
+    mov edx, r13d
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 28]
+    xor r9d, r9d
+    call lay_line
+    jmp 7f
+41: mov rdi, r14
     call agents_msg_doc
     mov r15, rax
+    xor esi, esi                # thinking's text muted, a summary not
+    cmp dword ptr [r14 + AM_role], R_THINK
+    sete sil
     mov rdi, rax
-    mov esi, 1
     call md_set_muted
     mov rdi, r15
     mov esi, [rsp + 8]
@@ -2489,6 +2609,7 @@ section:
     mov [rsp + RW_color], eax
     mov dword ptr [rsp + RW_draw], 0
     mov qword ptr [rsp + RW_out], 0
+    mov qword ptr [rsp + RW_mute], -1
     xor eax, eax                # the lines laid out: up to the clip and one
     mov ecx, [rsp + RW_SIZE + 16]
     test ecx, ecx
@@ -2504,6 +2625,7 @@ section:
     call sb_clear
     lea rax, [rip + ys]
     mov [rsp + RW_out], rax
+    mov qword ptr [rsp + RW_mute], -1
 2:  lea rdi, [rsp]
     call rw_wrap
     imul eax, ebx               # all its lines
@@ -2524,6 +2646,7 @@ section:
     call gfx_clip_push
     mov dword ptr [rsp + RW_draw], 1
     mov qword ptr [rsp + RW_out], 0
+    mov qword ptr [rsp + RW_mute], -1
     mov eax, [rip + g_cv + CV_cy0]
     mov [rsp + RW_top], eax
     mov eax, [rip + g_cv + CV_cy1]
@@ -3282,6 +3405,7 @@ todo_lay:
     mov dword ptr [rsp + RW_draw], 0
     mov dword ptr [rsp + RW_max], 0
     mov qword ptr [rsp + RW_out], 0
+    mov qword ptr [rsp + RW_mute], -1
     mov eax, [rip + g_cv + CV_cy0]
     mov [rsp + RW_top], eax
     mov eax, [rip + g_cv + CV_cy1]
@@ -3370,6 +3494,7 @@ todo_lay:
     call sb_clear
     lea rax, [rip + ys]
     mov [rsp + RW_out], rax
+    mov qword ptr [rsp + RW_mute], -1
 51: lea rdi, [rsp]
     call rw_wrap
     cmp dword ptr [rsp + RW_SIZE + 36], TODO_DONE
@@ -3580,7 +3705,15 @@ FN agrow_follow
     je 0f
     mov dword ptr [rip + pend_think], 0     # a thinking row's label: all of them open or close
     call agrow_think_toggle
-0:  cmp dword ptr [rip + pend_part], 0
+0:  call agents_viewed          # a row's own open state, a chip's file, the error block's link
+    mov rbx, rax
+    mov rdi, rax
+    call open_follow
+    cmp dword ptr [rip + pend_err], 0
+    je 610f
+    mov rdi, rbx
+    call err_follow
+610: cmp dword ptr [rip + pend_part], 0
     je 9f
     call agents_viewed
     mov rbx, rax
@@ -4074,10 +4207,22 @@ has_action:
     jz 9f
     mov eax, PART_TOGGLE
     EPILOGUE
-0:  mov eax, PART_TOGGLE
+0:  mov rdx, rax                # a compaction marker, a wrapped notice: they open
+    mov eax, PART_TOGGLE
     cmp ecx, R_COMPACT
     je 9f
+    cmp ecx, R_META
+    jne 610f
+    test dword ptr [rdx + AM_flags], AMF_NOTICE
+    jnz 9f
     xor eax, eax
+    EPILOGUE
+610: cmp ecx, R_USER             # a prompt longer than its clip: Show more, Show less
+    jne 620f
+    mov eax, PART_MORE
+    cmp dword ptr [rdx + AM_n], 0
+    jne 9f
+620: xor eax, eax
     EPILOGUE
 1:  xor eax, eax
     test dword ptr [r12 + AT_flags], ATF_HIDDEN
@@ -4152,14 +4297,18 @@ FN agrow_key
     call has_action
     test eax, eax
     jz 8f
+    cmp eax, PART_MORE
+    je 610f
     cmp eax, PART_TOGGLE
     jne 0f
-    mov rdi, rbx                # thinking: all of them open or close (a compaction marker: task 8)
-    mov rsi, r13
+    mov rdi, rbx                # thinking: all of them open or close; a marker, a notice, a long prompt:
+    mov rsi, r13                #   its own row (after the frame)
     call row_of
     cmp dword ptr [rax + AM_role], R_THINK
-    jne 8f
+    jne 610f
     call agrow_think_toggle
+    jmp 8f
+610: mov [rip + pend_open], r13
     jmp 8f
 0:  mov r14d, eax
     mov rdi, rbx
@@ -4252,8 +4401,20 @@ FN agrow_click
     test rsi, rsi
     jnz 2f
     cmp dword ptr [rax + AM_role], R_THINK
+    je 11f
+    mov rcx, rax                # a marker, a notice, a long prompt: its own row opens or closes
+    mov rdi, rbx
+    mov rsi, r12
+    call has_action
+    test eax, eax
+    jz 8f
+    cmp eax, r13d
     jne 8f
-    cmp r13d, PART_TOGGLE       # a thinking row with text: as a click on its label
+    mov [rip + pend_open], r12
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+11: cmp r13d, PART_TOGGLE       # a thinking row with text: as a click on its label
     jne 8f
     mov rdi, rax
     call think_has_text
@@ -4348,9 +4509,11 @@ FN agrow_row_dump
     mov r13, rax
     cmp qword ptr [r13 + AM_x], 0
     jne 4f
+    cmp dword ptr [r13 + AM_role], R_COMPACT
+    je 610f
     cmp dword ptr [r13 + AM_role], R_THINK
     jne 5f
-    mov eax, [r13 + AM_dser]    # thinking: "label X,Y,W,H T", its button, its text's blocks when open
+610: mov eax, [r13 + AM_dser]    # thinking, a marker: "label X,Y,W,H T", its button, its text when open
     cmp eax, [rip + th_serial]
     jne 9f
     mov rdi, r12
@@ -4877,7 +5040,37 @@ FN agrow_dump
     mov rsi, [r14 + AM_text]
     mov rdx, [r14 + AM_len]
     call push_line
-    jmp 8f
+    test dword ptr [r14 + AM_flags], AMF_CHIPS  # a prompt's chips: "  chip LABEL" each
+    jz 8f
+    mov r15, [r14 + AM_name]
+    test r15, r15
+    jz 8f
+71: cmp byte ptr [r15], 0
+    je 8f
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_chip]
+    call sb_push_cstr
+    xor ecx, ecx
+72: movzx eax, byte ptr [r15 + rcx]
+    test eax, eax
+    jz 73f
+    cmp eax, 9
+    je 73f
+    cmp eax, 10
+    je 73f
+    inc rcx
+    jmp 72b
+73: mov rdi, rbx
+    mov rsi, r15
+    mov rdx, rcx
+    call push_line
+74: movzx eax, byte ptr [r15]
+    test eax, eax
+    jz 8f
+    inc r15
+    cmp eax, 10
+    jne 74b
+    jmp 71b
 .Ldmp_think:
     test dword ptr [r14 + AM_flags], AMF_LIVE
     jz 51f
@@ -4957,6 +5150,15 @@ FN agrow_dump
 56: mov rdi, rbx
     mov esi, 10
     call sb_push_byte
+    cmp qword ptr [r14 + AM_len], 0    # its summary's first line
+    je 8f
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_text]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [r14 + AM_text]
+    mov rdx, [r14 + AM_len]
+    call push_line
     jmp 8f
 .Ldmp_unknown:
     mov rdi, rbx
@@ -4986,6 +5188,8 @@ think_label:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    cmp dword ptr [r12 + AM_role], R_COMPACT
+    je .Ltl_compact
     test dword ptr [r12 + AM_flags], AMF_LIVE
     jz 1f
     lea rsi, [rip + .Lthinking_live]
@@ -5049,6 +5253,25 @@ think_label:
 8:  mov rdi, rbx
     call sb_push_cstr
     EPILOGUE
+.Ltl_compact:                   # "Compacted chat · auto|manual · Nk tokens freed" ($Rt @5376317)
+    lea rsi, [rip + .Lcompacted]
+    call sb_push_cstr
+    lea rsi, [rip + .Lw_auto]
+    test dword ptr [r12 + AM_flags], AMF_MANUAL
+    jz 1f
+    lea rsi, [rip + .Lw_manual]
+1:  mov rdi, rbx
+    call sb_push_cstr
+    mov rdi, rbx
+    lea rsi, [rip + .Lthink_sep]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [r12 + AM_n]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_freed]
+    call sb_push_cstr
+    EPILOGUE
 
 # FN agrow_fit_dump(sb): print-agent-rows-fit: the open conversation's typed rows laid out at every panel size
 #   8 to 32 and width 240 to 900 by 20: "size=S w=W row=N tw=TW h=H", then a line a part, "  KIND X,Y,W,H"
@@ -5090,7 +5313,10 @@ FN agrow_fit_dump
     mov rdi, rax
     call line_row
     test eax, eax
-    jz 5f
+    jnz 4f
+    mov rax, [rsp + 8]          # and a prompt
+    cmp dword ptr [rax + AM_role], R_USER
+    jne 5f
 4:  mov rdi, rbx
     lea rsi, [rip + .Lf_size]
     call sb_push_cstr
@@ -5132,15 +5358,28 @@ FN agrow_fit_dump
     mov r8d, [rsp + 4]
     call tr_lay
     jmp 42f
-41: cmp dword ptr [rax + AM_role], R_THINK
+41: cmp dword ptr [rax + AM_role], R_USER
+    je 44f
+    cmp dword ptr [rax + AM_role], R_COMPACT
+    je 45f
+    cmp dword ptr [rax + AM_role], R_THINK
     jne 43f
-    mov dword ptr [rip + lr_mode], LM_FIT   # thinking: its label, its button, its text when open
+45: mov dword ptr [rip + lr_mode], LM_FIT   # thinking, a marker: its label, its button, its text when open
     mov rdi, r15
     mov rsi, r14
     xor edx, edx
     xor ecx, ecx
     mov r8d, [rsp + 4]
     call think_lay
+    jmp 42f
+44: mov dword ptr [rip + lr_mode], LM_FIT   # a prompt: its chips, its bubble, Show more
+    mov rdx, rax
+    mov rdi, r15
+    mov rsi, r14
+    xor ecx, ecx
+    xor r8d, r8d
+    mov r9d, [rsp + 4]
+    call prompt_lay
     jmp 42f
 43: mov rdi, r15                # a line row: its one box
     mov rsi, r14
@@ -5249,6 +5488,7 @@ FN agrow_fit_dump
 .Ld_turn: .asciz " turn="
 .Ld_fold: .asciz " fold="
 .Ld_text: .asciz "  text "
+.Ld_chip: .asciz "  chip "
 .Ld_label: .asciz " label="
 .Ld_open: .asciz " open="
 .Ld_ms: .asciz " ms="
@@ -5263,6 +5503,9 @@ FN agrow_fit_dump
 .Lthinking: .asciz "Thinking"
 .Lthink_sep: .asciz " \302\267 "
 .Lthink_tokens: .asciz " tokens"
+.Lcompacted: .asciz "Compacted chat \302\267 "
+.Lk_freed: .asciz "k tokens freed"
+.Lcompacted_free: .asciz "Conversation was compacted to free up context."
 .Lk_label: .asciz "label"
 .Lk_text: .asciz "text"
 .Lk_check: .asciz "check"
@@ -5331,3 +5574,1478 @@ short_fields: .long AT_name, AT_second, AT_link, AT_tail, AT_desc, AT_note, AT_f
 # FN agrow_dot(x of the text, y of the line, line h, argb): a row's dot in the pad before its text (a reply's)
 FN agrow_dot
     jmp row_dot
+
+# ---------------- the user's prompt, toggles, the error block (phase 3 task 8) ----------------
+
+.data
+.p2align 3
+pend_open: .quad -1             # a row whose AMF_OPEN flips after the frame (a prompt's Show more, a
+                                #   compaction marker, a wrapped notice)
+pend_chip: .quad -1             # a prompt's chip clicked: its row, and pend_chipn its place
+chip_name: .asciz "chip00"      # a dump's field name of a chip's button
+.bss
+.p2align 3
+pend_chipn: .long 0
+pend_err: .long 0               # the error block's link clicked: 1 Retry, 2 new, 3 logs, 4 dismiss
+err_n: .long 0                  # err_lay's links laid out
+err_pad: .long 0
+.text
+
+# nat_w(face, ptr, len, max px) -> eax the widest line's pixels, at most max (the first 64 KiB looked at: a
+#   bubble hugs its text)
+nat_w:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    lea r13, [rsi + rdx]        # its end
+    cmp rdx, 65536
+    jbe 0f
+    lea r13, [rsi + 65536]
+0:  mov eax, ecx
+    shl eax, 6
+    mov [rsp], eax
+    xor r14d, r14d              # the widest
+    xor r15d, r15d              # this line's
+1:  cmp r12, r13
+    jae 8f
+    movzx eax, byte ptr [r12]
+    cmp eax, 10
+    jne 2f
+    cmp r15d, r14d
+    cmova r14d, r15d
+    xor r15d, r15d
+    inc r12
+    jmp 1b
+2:  cmp eax, 9
+    jne 3f
+    mov eax, [rbx + FACE_cellw]
+    shl eax, 8
+    inc r12
+    jmp 4f
+3:  mov rdi, r12
+    mov rsi, r13
+    sub rsi, r12
+    call utf8_decode
+    add r12, rdx
+    mov rdi, rbx
+    mov esi, eax
+    call face_glyph
+    mov eax, [rax + GL_adv]
+4:  add r15d, eax
+    cmp r15d, [rsp]
+    jl 1b
+    mov eax, [rsp]
+    shr eax, 6
+    EPILOGUE
+8:  cmp r15d, r14d
+    cmova r14d, r15d
+    lea eax, [r14 + 63]
+    shr eax, 6
+    EPILOGUE
+
+# line_len(ptr, len) -> rax the bytes of its first line
+line_len:
+    xor eax, eax
+1:  cmp rax, rsi
+    jae 9f
+    cmp byte ptr [rdi + rax], 10
+    je 9f
+    inc rax
+    jmp 1b
+9:  ret
+
+# fade_c(x, y, w, h, argb): the last pixels of a clipped text fade into the colour under it
+fade_c:
+    PROLOGUE 32
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    and r8d, 0x00ffffff
+    mov [rsp + 16], r8d
+    mov eax, ecx
+    xor edx, edx
+    mov ecx, 5
+    div ecx
+    test eax, eax
+    jnz 1f
+    mov eax, 1
+1:  mov [rsp + 12], eax
+    xor ebx, ebx
+2:  cmp ebx, 5
+    jae 9f
+    lea eax, [rbx + 1]
+    imul eax, eax, 51
+    shl eax, 24
+    mov r8d, [rsp + 16]
+    or r8d, eax
+    mov edi, [rsp]
+    mov eax, [rsp + 12]
+    imul eax, ebx
+    mov esi, [rsp + 4]
+    add esi, eax
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 12]
+    call gfx_fill
+    inc ebx
+    jmp 2b
+9:  EPILOGUE
+
+# field_rect(name cstr, x, y, w, h): " NAME=X,Y,W,H" to lr_out (print-agent-row's prompt fields)
+field_rect:
+    PROLOGUE 16
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
+    mov [rsp + 12], r8d
+    mov rbx, rdi
+    mov rdi, [rip + lr_out]
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, [rip + lr_out]
+    mov rsi, rbx
+    call sb_push_cstr
+    mov rdi, [rip + lr_out]
+    mov esi, '='
+    call sb_push_byte
+    lea rdi, [rsp]
+    call lay_rect
+    EPILOGUE
+
+# toggle_btn(part, x, y, w, h): a button of the unit laid out that acts on its row, not on a call: drawn, a
+#   click keeps the row for after the frame (PART_MORE, PART_TOGGLE: its AMF_OPEN flips; PART_CHIP + n: the
+#   chip's file opens); written out as lay_btn writes a button
+toggle_btn:
+    PROLOGUE 32
+    mov eax, [rip + lr_mode]
+    cmp eax, LM_DRAW
+    je 1f
+    call lay_btn
+    EPILOGUE
+1:  mov ebx, edi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
+    mov [rsp + 12], r8d
+    call part_id
+    test eax, eax
+    js 9f
+    mov edi, eax
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 12]
+    call ui_btn
+    test eax, UB_HOVER
+    jz 2f
+    mov dword ptr [rip + g_cursor], CUR_POINTER
+2:  test eax, UB_CLICK
+    jz 9f
+    mov rax, [rip + lr_row]
+    cmp ebx, PART_CHIP
+    jb 3f
+    cmp ebx, PART_CHIP + 16
+    jae 3f
+    mov [rip + pend_chip], rax
+    lea ecx, [rbx - PART_CHIP]
+    mov [rip + pend_chipn], ecx
+    jmp 4f
+3:  mov [rip + pend_open], rax
+4:  mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# prompt_lay(AS* or 0, row or -1, AM*, x, y, w | h << 32) -> eax a prompt row's height below its time line,
+#   in lr_mode (its unit's slot in lr_slot): the extension's user message (UI 3.2, 3.3; $Bt @5962500, cRe
+#   @5547616). From its top: "queued" at the right for a message that has not started; its chips (an image,
+#   a document, a selection, an opened file, a terminal, a browser tab: "LABEL\tTARGET" lines of AM_name),
+#   right-aligned, a chip with a target a button that opens it; the bubble at the right, T_HOVER, as wide as
+#   its text up to 85 % of the row; its text wrapped in it, clipped at 3 x MI_20 (the extension's 60 px,
+#   scaled) with a fade and "Show more" under it, "Show less" when open (AMF_OPEN); a command's echo
+#   (AMF_ECHO) one muted line. AM_n is 1 when the text is longer than the clip (measured). h (drawing an
+#   open one) is the row's height below its time line: its text is not wrapped again to the end. Frame: [0]
+#   x [4] y [8] w [12] h [16] the top of what comes next [20] line h [24] pad x [28] pad y [32] the text's
+#   room [36] its natural width [40] the bubble's x [44] the text's height [48] clipped [52] a chip's h
+#   [56] the next chip's right [60] chips [64] a chip's w [68] its label's w [72] its x [76] the label's w
+#   [80] a small line's h [84] the bubble's w
+prompt_lay:
+    PROLOGUE 96 + RW_SIZE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov [rsp], ecx
+    mov [rsp + 4], r8d
+    mov [rsp + 8], r9d
+    mov rax, r9
+    shr rax, 32
+    mov [rsp + 12], eax
+    mov [rip + lr_row], r12
+    mov qword ptr [rip + lr_at], 0
+    mov [rip + lr_x], ecx
+    mov [rip + lr_y], r8d
+    mov [rip + lr_w], r9d
+    mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_3]
+    mov [rsp + 20], eax
+    PM eax, MI_10
+    mov [rsp + 24], eax
+    PM eax, MI_6
+    mov [rsp + 28], eax
+    mov rax, [rip + ag_fsmall]
+    mov eax, [rax + FACE_lineh]
+    mov ecx, [rip + g_pmt + 4*MI_16]
+    cmp eax, ecx
+    cmovl eax, ecx
+    mov [rsp + 80], eax
+    mov eax, [rsp + 8]          # the text's room: 85 % of the row less the bubble's pads
+    imul eax, eax, 85
+    cdq
+    mov ecx, 100
+    idiv ecx
+    sub eax, [rsp + 24]
+    sub eax, [rsp + 24]
+    cmp eax, 1
+    jge 1f
+    mov eax, 1
+1:  mov [rsp + 32], eax
+    mov eax, [rsp + 4]
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov [rsp + 16], eax
+    mov dword ptr [rsp + 60], 0
+    test dword ptr [r13 + AM_flags], AMF_QUEUED     # "queued", at the right
+    jz .Lpl_chips
+    mov rdi, [rip + ag_fsmall]
+    lea rsi, [rip + .Lqueued_w]
+    call text_w
+    mov [rsp + 76], eax
+    mov eax, [rip + lr_mode]
+    cmp eax, LM_DRAW
+    jne 2f
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [rsp + 8]
+    sub esi, [rsp + 76]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 80]
+    lea r8, [rip + .Lqueued_w]
+    mov r9d, 6
+    COLOR r10d, T_MUTED
+    mov r11d, [rsp + 76]
+    inc r11d
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+    jmp 3f
+2:  cmp eax, LM_FIT
+    jne 3f
+    lea rdi, [rip + .Lk_queued]
+    mov esi, [rsp]
+    add esi, [rsp + 8]
+    sub esi, [rsp + 76]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 76]
+    mov r8d, [rsp + 80]
+    xor r9d, r9d
+    call lay_line
+3:  mov eax, [rsp + 80]
+    add eax, [rip + g_pmt + 4*MI_2]
+    add [rsp + 16], eax
+.Lpl_chips:
+    test dword ptr [r13 + AM_flags], AMF_CHIPS
+    jz .Lpl_bubble
+    mov r14, [r13 + AM_name]
+    test r14, r14
+    jz .Lpl_bubble
+    cmp byte ptr [r14], 0
+    je .Lpl_bubble
+    mov rax, [rip + ag_fsmall]
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_6]
+    mov ecx, [rip + g_pmt + 4*MI_20]
+    cmp eax, ecx
+    cmovl eax, ecx
+    mov [rsp + 52], eax
+    mov eax, [rsp]
+    add eax, [rsp + 8]
+    mov [rsp + 56], eax
+.Lpl_chip:
+    cmp byte ptr [r14], 0
+    je .Lpl_chips_end
+    xor r15d, r15d              # its label: to a TAB, a line feed or the end
+4:  movzx eax, byte ptr [r14 + r15]
+    test eax, eax
+    jz 5f
+    cmp eax, 9
+    je 5f
+    cmp eax, 10
+    je 5f
+    inc r15
+    jmp 4b
+5:  mov rdi, [rip + ag_fsmall]
+    mov rsi, r14
+    mov rdx, r15
+    call text_width
+    mov [rsp + 68], eax
+    add eax, [rip + g_pmt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_8]
+    cmp eax, [rsp + 8]
+    jle 6f
+    mov eax, [rsp + 8]
+6:  mov [rsp + 64], eax
+    mov ecx, [rsp + 56]
+    sub ecx, eax
+    cmp ecx, [rsp]
+    jge 7f
+    mov edx, [rsp]              # it does not fit beside the others: a row of chips under them (the
+    add edx, [rsp + 8]          #   first of a row always fits: cut)
+    cmp [rsp + 56], edx
+    je 7f
+    mov eax, [rsp + 52]
+    add eax, [rip + g_pmt + 4*MI_4]
+    add [rsp + 16], eax
+    mov [rsp + 56], edx
+    mov ecx, edx
+    sub ecx, [rsp + 64]
+7:  mov [rsp + 72], ecx
+    mov eax, [rip + lr_mode]
+    cmp eax, LM_DRAW
+    jne 8f
+    COLOR r9d, T_BORDER
+    COLOR eax, T_PANEL
+    mov edi, [rsp + 72]
+    mov esi, [rsp + 16]
+    mov edx, [rsp + 64]
+    mov ecx, [rsp + 52]
+    PM r8d, MI_RADIUS
+    push rax
+    push rax
+    call gfx_frame
+    add rsp, 16
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp + 72]
+    add esi, [rip + g_pmt + 4*MI_8]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 52]
+    mov r8, r14
+    mov r9, r15
+    COLOR r10d, T_FG
+    mov r11d, [rsp + 64]
+    sub r11d, [rip + g_pmt + 4*MI_8]
+    sub r11d, [rip + g_pmt + 4*MI_8]
+    jg 71f
+    mov r11d, 1
+71: push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+    jmp 81f
+8:  cmp eax, LM_FIT
+    jne 81f
+    lea rdi, [rip + .Lk_chip]
+    mov esi, [rsp + 72]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 64]
+    mov r8d, [rsp + 52]
+    xor r9d, r9d
+    call lay_line
+81: cmp byte ptr [r14 + r15], 9 # a chip with a target: a button that opens it (a dump: " chipN=X,Y,W,H")
+    jne 82f
+    movzx eax, byte ptr [r14 + r15 + 1]
+    test eax, eax
+    jz 82f
+    cmp eax, 10
+    je 82f
+    mov edi, [rsp + 60]
+    cmp edi, 16
+    jae 82f
+    cmp dword ptr [rip + lr_mode], LM_DUMP
+    jne 811f
+    mov eax, [rsp + 60]         # its name: "chip" and its place
+    xor edx, edx
+    mov ecx, 10
+    div ecx
+    add eax, '0'
+    add edx, '0'
+    mov byte ptr [rip + chip_name + 4], al
+    mov byte ptr [rip + chip_name + 5], dl
+    lea rdi, [rip + chip_name]
+    mov esi, [rsp + 72]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 64]
+    mov r8d, [rsp + 52]
+    call field_rect
+    jmp 82f
+811: add edi, PART_CHIP
+    mov esi, [rsp + 72]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 64]
+    mov r8d, [rsp + 52]
+    call toggle_btn
+82: mov eax, [rsp + 72]
+    sub eax, [rip + g_pmt + 4*MI_4]
+    mov [rsp + 56], eax
+    inc dword ptr [rsp + 60]
+83: movzx eax, byte ptr [r14 + r15]  # the next chip's line
+    test eax, eax
+    jz .Lpl_chips_end
+    inc r15
+    cmp eax, 10
+    jne 83b
+    add r14, r15
+    jmp .Lpl_chip
+.Lpl_chips_end:
+    mov eax, [rsp + 52]
+    add eax, [rip + g_pmt + 4*MI_4]
+    add [rsp + 16], eax
+.Lpl_bubble:
+    mov dword ptr [rsp + 48], 0
+    mov rsi, [r13 + AM_text]
+    mov rdx, [r13 + AM_len]
+    test dword ptr [r13 + AM_flags], AMF_ECHO
+    jz 1f
+    mov rdi, rsi                # an echo: its first line
+    mov rsi, rdx
+    call line_len
+    mov rdx, rax
+    mov rsi, [r13 + AM_text]
+    mov rdi, [rip + ag_fui]
+    mov ecx, [rsp + 32]
+    call nat_w
+    mov [rsp + 36], eax
+    mov eax, [rsp + 20]
+    mov [rsp + 44], eax
+    jmp .Lpl_box
+1:  mov rdi, [rip + ag_fui]
+    mov ecx, [rsp + 32]
+    call nat_w
+    mov [rsp + 36], eax
+    call clip_h                 # (the extension's 60 px, scaled)
+    mov r14d, eax
+    test dword ptr [r13 + AM_flags], AMF_OPEN
+    jz 2f
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    jne 2f
+    cmp dword ptr [r13 + AM_n], 0
+    je 2f
+    mov dword ptr [rsp + 48], 1 # an open long one drawn: its height from the row's, wrapped no further
+    mov eax, [rsp + 12]
+    sub eax, [rsp + 16]
+    add eax, [rsp + 4]
+    sub eax, [rsp + 28]
+    sub eax, [rsp + 28]
+    sub eax, [rip + g_pmt + 4*MI_2]
+    sub eax, [rsp + 80]
+    sub eax, [rip + g_pmt + 4*MI_4]
+    cmp eax, [rsp + 20]
+    jge 11f
+    mov eax, [rsp + 20]
+11: mov [rsp + 44], eax
+    jmp .Lpl_box
+2:  lea rdi, [rsp + 96]         # its lines (collapsed: only as many as tell it is longer than the clip)
+    mov rax, [rip + ag_fui]
+    mov [rdi + RW_face], rax
+    mov rax, [r13 + AM_text]
+    mov [rdi + RW_text], rax
+    mov rax, [r13 + AM_len]
+    mov [rdi + RW_len], rax
+    mov eax, [rsp + 32]
+    mov [rdi + RW_w], eax
+    mov eax, [rsp + 20]
+    mov [rdi + RW_lh], eax
+    mov dword ptr [rdi + RW_draw], 0
+    mov qword ptr [rdi + RW_out], 0
+    mov qword ptr [rdi + RW_mute], -1
+    mov dword ptr [rdi + RW_max], 0
+    test dword ptr [r13 + AM_flags], AMF_OPEN
+    jnz 3f
+    mov eax, r14d
+    xor edx, edx
+    div dword ptr [rsp + 20]
+    add eax, 2
+    mov [rdi + RW_max], eax
+3:  call rw_wrap
+    imul eax, [rsp + 20]
+    xor ecx, ecx
+    cmp eax, r14d
+    setg cl
+    mov [rsp + 48], ecx
+    cmp dword ptr [rip + lr_mode], LM_MEASURE
+    jne 4f
+    mov [r13 + AM_n], ecx       # (has_action: a long prompt has Show more)
+4:  test ecx, ecx
+    jz 5f
+    test dword ptr [r13 + AM_flags], AMF_OPEN
+    jnz 5f
+    mov eax, r14d
+5:  mov [rsp + 44], eax
+.Lpl_box:
+    mov eax, [rsp + 36]         # the bubble: at the right, as wide as its text
+    cmp eax, [rsp + 32]
+    jle 1f
+    mov eax, [rsp + 32]
+1:  add eax, [rsp + 24]
+    add eax, [rsp + 24]
+    cmp eax, [rsp + 8]
+    jle 2f
+    mov eax, [rsp + 8]
+2:  mov [rsp + 84], eax
+    mov ecx, [rsp]
+    add ecx, [rsp + 8]
+    sub ecx, eax
+    mov [rsp + 40], ecx
+    mov r14d, [rsp + 44]        # its height
+    add r14d, [rsp + 28]
+    add r14d, [rsp + 28]
+    mov eax, [rip + lr_mode]
+    cmp eax, LM_DRAW
+    je .Lpl_draw
+    cmp eax, LM_FIT
+    jne 3f
+    lea rdi, [rip + .Lk_bubble]
+    mov esi, [rsp + 40]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 84]
+    mov r8d, r14d
+    xor r9d, r9d
+    call lay_line
+    jmp .Lpl_more
+3:  cmp eax, LM_DUMP
+    jne .Lpl_more
+    lea rdi, [rip + .Lk_bubble]
+    mov esi, [rsp + 40]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 84]
+    mov r8d, r14d
+    call field_rect
+    jmp .Lpl_more
+.Lpl_draw:
+    mov edi, [rsp + 40]
+    mov esi, [rsp + 16]
+    mov edx, [rsp + 84]
+    mov ecx, r14d
+    PM r8d, MI_RADIUS
+    COLOR r9d, T_HOVER
+    call gfx_round_rect
+    COLOR r15d, T_FG
+    test dword ptr [r13 + AM_flags], AMF_QUEUED | AMF_ECHO
+    jz 1f
+    COLOR r15d, T_MUTED
+1:  test dword ptr [r13 + AM_flags], AMF_ECHO
+    jz 2f
+    mov rdi, [r13 + AM_text]    # an echo: one line, cut with "…"
+    mov rsi, [r13 + AM_len]
+    call line_len
+    mov r9, rax
+    mov rdi, [rip + ag_fui]
+    mov esi, [rsp + 40]
+    add esi, [rsp + 24]
+    mov edx, [rsp + 16]
+    add edx, [rsp + 28]
+    mov ecx, [rsp + 20]
+    mov r8, [r13 + AM_text]
+    mov r11d, [rsp + 32]
+    inc r11d
+    push r11
+    push r15
+    call ui_text_v_fit
+    add rsp, 16
+    jmp .Lpl_more
+2:  mov edi, [rsp + 40]         # the text, inside the bubble's text area
+    mov esi, [rsp + 16]
+    add esi, [rsp + 28]
+    mov edx, [rsp + 84]
+    mov ecx, [rsp + 44]
+    call gfx_clip_push
+    lea rdi, [rsp + 96]
+    mov rax, [rip + ag_fui]
+    mov [rdi + RW_face], rax
+    mov rax, [r13 + AM_text]
+    mov [rdi + RW_text], rax
+    mov rax, [r13 + AM_len]
+    mov [rdi + RW_len], rax
+    mov eax, [rsp + 40]
+    add eax, [rsp + 24]
+    mov [rdi + RW_x], eax
+    mov eax, [rsp + 16]
+    add eax, [rsp + 28]
+    mov [rdi + RW_y], eax
+    mov eax, [rsp + 32]
+    mov [rdi + RW_w], eax
+    mov eax, [rsp + 20]
+    mov [rdi + RW_lh], eax
+    mov [rdi + RW_color], r15d
+    mov dword ptr [rdi + RW_draw], 1
+    mov qword ptr [rdi + RW_out], 0
+    mov rax, [r13 + AM_mute]
+    mov [rdi + RW_mute], rax
+    mov eax, [rip + g_cv + CV_cy0]
+    mov [rdi + RW_top], eax
+    mov eax, [rip + g_cv + CV_cy1]
+    mov [rdi + RW_bot], eax
+    sub eax, [rdi + RW_y]       # lines to the clip's bottom, no more (a long open one: not to its end)
+    jg 3f
+    mov eax, 0
+3:  xor edx, edx
+    div dword ptr [rsp + 20]
+    add eax, 1
+    mov [rdi + RW_max], eax
+    call rw_wrap
+    cmp dword ptr [rsp + 48], 0 # cut: a fade over its last pixels
+    je 4f
+    test dword ptr [r13 + AM_flags], AMF_OPEN
+    jnz 4f
+    mov edi, [rsp + 40]
+    mov esi, [rsp + 16]
+    add esi, [rsp + 28]
+    add esi, [rsp + 44]
+    PM ecx, MI_10
+    sub esi, ecx
+    mov edx, [rsp + 84]
+    COLOR r8d, T_HOVER
+    call fade_c
+4:  call gfx_clip_pop
+.Lpl_more:
+    add [rsp + 16], r14d
+    cmp dword ptr [rsp + 48], 0
+    je .Lpl_nomore
+    mov eax, [rip + g_pmt + 4*MI_2]
+    add [rsp + 16], eax
+    lea r14, [rip + .Lshow_more]
+    test dword ptr [r13 + AM_flags], AMF_OPEN
+    jz 1f
+    lea r14, [rip + .Lshow_less]
+1:  mov rdi, [rip + ag_fsmall]
+    mov rsi, r14
+    call text_w
+    cmp eax, [rsp + 8]          # (cut to the row: a narrow panel at a large size)
+    jle 11f
+    mov eax, [rsp + 8]
+11: mov [rsp + 76], eax
+    mov ecx, [rsp]
+    add ecx, [rsp + 8]
+    sub ecx, eax
+    mov [rsp + 72], ecx
+    mov eax, [rip + lr_mode]
+    cmp eax, LM_DUMP
+    jne 2f
+    lea rdi, [rip + .Lk_more]
+    mov esi, [rsp + 72]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 76]
+    mov r8d, [rsp + 80]
+    call field_rect
+    jmp 4f
+2:  cmp eax, LM_DRAW
+    jne 3f
+    mov rdi, r14
+    call strlen
+    mov r9, rax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp + 72]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 80]
+    mov r8, r14
+    COLOR r10d, T_ACCENT
+    mov r11d, [rsp + 76]
+    inc r11d
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+3:  mov edi, PART_MORE
+    mov esi, [rsp + 72]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 76]
+    mov r8d, [rsp + 80]
+    call toggle_btn
+4:  mov eax, [rsp + 80]
+    add [rsp + 16], eax
+    jmp .Lpl_end
+.Lpl_nomore:
+    cmp dword ptr [rip + lr_mode], LM_DUMP
+    jne .Lpl_end
+    mov rdi, [rip + lr_out]
+    lea rsi, [rip + .Lf_nomore]
+    call sb_push_cstr
+.Lpl_end:
+    cmp dword ptr [rip + lr_mode], LM_DUMP
+    jne 1f
+    mov rdi, [rip + lr_out]
+    lea rsi, [rip + .Lf_chips]
+    call sb_push_cstr
+    mov rdi, [rip + lr_out]
+    mov esi, [rsp + 60]
+    call sb_push_u64
+    mov rdi, [rip + lr_out]
+    lea rsi, [rip + .Lf_clipped]
+    call sb_push_cstr
+    mov rdi, [rip + lr_out]
+    mov esi, [r13 + AM_n]
+    call sb_push_u64
+1:  mov eax, [rsp + 16]
+    add eax, [rip + g_pmt + 4*MI_4]
+    sub eax, [rsp + 4]
+    EPILOGUE
+
+# FN agrow_prompt_h(AM*, w) -> eax a prompt row's height below its time line (agents.s msg_height); notes in
+#   AM_n whether its text is longer than the clip
+FN agrow_prompt_h
+    PROLOGUE
+    mov dword ptr [rip + lr_mode], LM_MEASURE
+    mov r9d, esi
+    mov rdx, rdi
+    xor edi, edi
+    mov rsi, -1
+    xor ecx, ecx
+    xor r8d, r8d
+    call prompt_lay
+    EPILOGUE
+
+# FN agrow_prompt_draw(AS* or 0, row or -1, AM*, x, y, w | h << 32): a prompt row drawn below its time line
+#   (a queued one, row -1, without buttons); its row focus framed
+FN agrow_prompt_draw
+    PROLOGUE 32
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov [rsp], ecx
+    mov [rsp + 4], r8d
+    mov r14, r9
+    mov dword ptr [rip + lr_slot], -1
+    test r12, r12
+    js 1f
+    mov rdi, r12
+    xor esi, esi
+    call agrow_slot
+    mov [rip + lr_slot], eax
+1:  mov dword ptr [rip + lr_mode], LM_DRAW
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    mov ecx, [rsp]
+    mov r8d, [rsp + 4]
+    mov r9, r14
+    call prompt_lay
+    mov [rsp + 8], eax
+    mov dword ptr [rip + lr_mode], LM_MEASURE
+    test r12, r12
+    js 9f
+    cmp [rip + rf_row], r12
+    jne 9f
+    mov edi, [rsp]
+    sub edi, [rip + g_pmt + 4*MI_4]
+    mov esi, [rsp + 4]
+    mov edx, r14d
+    add edx, [rip + g_pmt + 4*MI_8]
+    mov ecx, [rsp + 8]
+    call focus_frame
+9:  EPILOGUE
+
+# FN agrow_prompt_fields(sb, AS*, row, AM*, x, y): print-agent-row's fields of a prompt row as the last frame
+#   drew it: " left=X tw=W chipNN=X,Y,W,H… bubble=X,Y,W,H more=X,Y,W,H|- chips=N clipped=0|1"
+FN agrow_prompt_fields
+    PROLOGUE 16
+    mov [rip + lr_out], rdi
+    mov rbx, rsi
+    mov r12, rdx
+    mov r13, rcx
+    mov [rsp], r8d
+    mov [rsp + 4], r9d
+    mov rdi, [rip + lr_out]     # the row's left and width
+    lea rsi, [rip + .Lf_left]
+    call sb_push_cstr
+    mov rdi, [rip + lr_out]
+    mov esi, [rsp]
+    call md_push_int
+    mov rdi, [rip + lr_out]
+    lea rsi, [rip + .Lf_tw]
+    call sb_push_cstr
+    mov rdi, [rip + lr_out]
+    mov esi, [rip + th_textw]
+    call md_push_int
+    mov rdi, r12
+    call slot_find
+    mov [rip + lr_slot], eax
+    mov dword ptr [rip + lr_mode], LM_DUMP
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    mov ecx, [rsp]
+    mov r8d, [rsp + 4]
+    mov r9d, [rip + th_textw]
+    call prompt_lay
+    mov dword ptr [rip + lr_mode], LM_MEASURE
+    EPILOGUE
+
+# FN agrow_prompt_est(AM*) -> eax, edx, ecx: a prompt row's estimate parts (agents.s row_parts): a collapsed
+#   prompt's text at most the clip (no width part), an open one's lines and bytes, an echo one line
+FN agrow_prompt_est
+    PROLOGUE
+    mov rbx, rdi
+    PM r12d, MI_4               # its pads and the bubble's
+    add r12d, [rip + g_pmt + 4*MI_4]
+    add r12d, [rip + g_pmt + 4*MI_6]
+    add r12d, [rip + g_pmt + 4*MI_6]
+    mov rax, [rip + ag_fsmall]
+    mov r14d, [rax + FACE_lineh]
+    mov eax, [rip + g_pmt + 4*MI_16]
+    cmp r14d, eax
+    cmovl r14d, eax             # a small line
+    test dword ptr [rbx + AM_flags], AMF_QUEUED
+    jz 1f
+    add r12d, r14d
+    add r12d, [rip + g_pmt + 4*MI_2]
+1:  test dword ptr [rbx + AM_flags], AMF_CHIPS
+    jz 2f
+    mov rax, [rip + ag_fsmall]
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_6]
+    mov ecx, [rip + g_pmt + 4*MI_20]
+    cmp eax, ecx
+    cmovl eax, ecx
+    add r12d, eax
+    add r12d, [rip + g_pmt + 4*MI_4]
+2:  mov rax, [rip + ag_fui]
+    mov r13d, [rax + FACE_lineh]
+    add r13d, [rip + g_pmt + 4*MI_3]
+    test dword ptr [rbx + AM_flags], AMF_ECHO
+    jz 3f
+    lea eax, [r12 + r13]
+    xor edx, edx
+    xor ecx, ecx
+    EPILOGUE
+3:  test dword ptr [rbx + AM_flags], AMF_OPEN
+    jz 4f
+    lea eax, [r12 + r14]        # open: its "Show less" and its lines
+    add eax, [rip + g_pmt + 4*MI_2]
+    mov edx, [rbx + AM_nl]
+    inc edx
+    mov rcx, [rbx + AM_len]
+    cmp rcx, 16777216
+    jbe 9f
+    mov ecx, 16777216
+    jmp 9f
+4:  mov eax, [rbx + AM_nl]      # collapsed: its lines up to the clip, and "Show more" past it
+    inc eax
+    imul eax, r13d
+    push rax
+    push rax
+    call clip_h
+    mov ecx, eax
+    pop rax
+    pop rax
+    cmp eax, ecx
+    jle 5f
+    mov eax, ecx
+    add r12d, r14d
+    add r12d, [rip + g_pmt + 4*MI_2]
+5:  add eax, r12d
+    xor edx, edx
+    xor ecx, ecx
+9:  EPILOGUE
+
+# ---------------- the error block (UI 3.22: iPt @5594295) ----------------
+#
+# While a conversation rhun drives is FAILED its reason (AL_report) is pinned at the top of the thread:
+#   the text (cut at 2000 characters and "…"; an unknown conversation's id: "Couldn't load this
+#   conversation's saved history, so it can't be continued."), then the links "Retry", "Start a new
+#   conversation" (a driver that starts conversations) and "View output logs", and "×" ("Dismiss error":
+#   ALF_ERRGONE, until the next failure). It is a unit of its own for agrow_slot (row ERR_ROW).
+
+# err_live(AS*) -> rax its AL* when the block shows, else 0
+err_live:
+    xor eax, eax
+    test rdi, rdi
+    jz 9f
+    mov rcx, [rdi + AS_live]
+    test rcx, rcx
+    jz 9f
+    cmp dword ptr [rcx + AL_state], ALS_FAILED
+    jne 9f
+    test dword ptr [rcx + AL_flags], ALF_ERRGONE
+    jnz 9f
+    cmp qword ptr [rcx + AL_report + SB_len], 0
+    je 9f
+    mov rax, rcx
+9:  ret
+
+# err_says(AL*): ys holds the block's text
+err_says:
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rip + ys]
+    call sb_clear
+    mov rdi, [rbx + AL_report + SB_ptr]
+    mov rsi, [rbx + AL_report + SB_len]
+    lea rdx, [rip + .Lno_conv]
+    mov ecx, NO_CONV_LEN
+    call str_find
+    test rax, rax
+    js 1f
+    lea rdi, [rip + ys]
+    lea rsi, [rip + .Lnot_found]
+    call sb_push_cstr
+    EPILOGUE
+1:  mov r12, [rbx + AL_report + SB_ptr]  # 2000 characters, "…" when cut
+    mov r13, [rbx + AL_report + SB_len]
+    xor ecx, ecx
+    xor edx, edx
+2:  cmp rcx, r13
+    jae 4f
+    movzx eax, byte ptr [r12 + rcx]
+    and eax, 0xc0
+    cmp eax, 0x80
+    je 3f
+    cmp edx, ERR_CHARS
+    je 5f
+    inc edx
+3:  inc rcx
+    jmp 2b
+4:  lea rdi, [rip + ys]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    EPILOGUE
+5:  lea rdi, [rip + ys]
+    mov rsi, r12
+    mov rdx, rcx
+    call sb_push
+    lea rdi, [rip + ys]
+    lea rsi, [rip + .Lellipsis]
+    call sb_push_cstr
+    EPILOGUE
+
+# err_lay(AS*, x, y, w) -> eax the block's height (0: none), in lr_mode. Frame: [0] x [4] y [8] w [12] pad
+#   [16] the text's room [20] line h [24] cy [28] the links' x [32] the text's lines [36] a link's w
+#   [40] link [44] a link h [48] the × size; RW at [64]
+err_lay:
+    PROLOGUE 64 + RW_SIZE
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
+    call err_live
+    mov r12, rax
+    test rax, rax
+    jz 8f
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    jne 0f
+    mov dword ptr [rip + lr_mode], LM_MEASURE  # drawn: its box first, as tall as it is laid out
+    mov rdi, rbx
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    call err_lay
+    mov dword ptr [rip + lr_mode], LM_DRAW
+    COLOR r9d, T_ERROR
+    COLOR r10d, T_BG
+    mov ecx, eax
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    PM r8d, MI_RADIUS
+    push r10
+    push r10
+    call gfx_frame
+    add rsp, 16
+0:  mov qword ptr [rip + lr_row], ERR_ROW
+    mov qword ptr [rip + lr_at], 0
+    mov eax, [rsp]
+    mov [rip + lr_x], eax
+    mov eax, [rsp + 4]
+    mov [rip + lr_y], eax
+    PM eax, MI_8
+    mov [rsp + 12], eax
+    PM eax, MI_20               # the ×: MI_20 square at the top right
+    mov [rsp + 48], eax
+    mov eax, [rsp + 8]
+    sub eax, [rsp + 12]
+    sub eax, [rsp + 12]
+    sub eax, [rsp + 48]
+    cmp eax, 1
+    jge 1f
+    mov eax, 1
+1:  mov [rsp + 16], eax
+    mov rax, [rip + ag_fsmall]
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_3]
+    mov [rsp + 20], eax
+    mov ecx, [rip + g_pmt + 4*MI_16]
+    cmp eax, ecx
+    cmovl eax, ecx
+    mov [rsp + 44], eax
+    mov rdi, r12
+    call err_says
+    lea rdi, [rsp + 64]         # its lines (8 at most: the rest is in View output logs)
+    mov rax, [rip + ag_fsmall]
+    mov [rdi + RW_face], rax
+    mov rax, [rip + ys + SB_ptr]
+    mov [rdi + RW_text], rax
+    mov rax, [rip + ys + SB_len]
+    mov [rdi + RW_len], rax
+    mov eax, [rsp]
+    add eax, [rsp + 12]
+    mov [rdi + RW_x], eax
+    mov eax, [rsp + 4]
+    add eax, [rsp + 12]
+    mov [rdi + RW_y], eax
+    mov eax, [rsp + 16]
+    mov [rdi + RW_w], eax
+    mov eax, [rsp + 20]
+    mov [rdi + RW_lh], eax
+    COLOR eax, T_ERROR
+    mov [rdi + RW_color], eax
+    mov eax, [rip + err_maxh]   # its lines: 8 at most, as many as half the area holds beside the links
+    sub eax, [rsp + 12]
+    sub eax, [rsp + 12]
+    sub eax, [rip + g_pmt + 4*MI_4]
+    sub eax, [rsp + 44]
+    sub eax, [rsp + 44]
+    cdq
+    idiv dword ptr [rsp + 20]
+    cmp eax, ERR_BLOCK_LINES
+    jle 1f
+    mov eax, ERR_BLOCK_LINES
+1:  cmp eax, 1
+    jge 2f
+    mov eax, 1
+2:  lea rdi, [rsp + 64]
+    mov [rdi + RW_max], eax
+    mov qword ptr [rdi + RW_out], 0
+    mov qword ptr [rdi + RW_mute], -1
+    xor eax, eax
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    sete al
+    mov [rdi + RW_draw], eax
+    mov eax, [rip + g_cv + CV_cy0]
+    mov [rdi + RW_top], eax
+    mov eax, [rip + g_cv + CV_cy1]
+    mov [rdi + RW_bot], eax
+    call rw_wrap
+    mov [rsp + 32], eax
+    mov eax, [rsp + 4]          # the links' first line
+    add eax, [rsp + 12]
+    mov ecx, [rsp + 32]
+    imul ecx, [rsp + 20]
+    add eax, ecx
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov [rsp + 24], eax
+    mov eax, [rsp]
+    add eax, [rsp + 12]
+    mov [rsp + 28], eax
+    mov dword ptr [rsp + 40], 0
+    mov dword ptr [rip + err_n], 0
+.Lel_link:
+    mov eax, [rsp + 40]
+    cmp eax, 3
+    jae .Lel_links_end
+    cmp eax, 1                  # "Start a new conversation": a driver that starts them
+    jne 1f
+    mov rax, [r12 + AL_drv]
+    test dword ptr [rax + DRV_caps], DRVC_NEW
+    jz .Lel_next
+1:  mov eax, [rsp + 40]
+    lea rcx, [rip + err_links]
+    mov r13, [rcx + rax*8]
+    cmp dword ptr [rip + err_n], 0  # " · " before every link but the first
+    je 2f
+    mov rdi, [rip + ag_fsmall]
+    lea rsi, [rip + .Lmiddot_sp]
+    call text_w
+    mov [rsp + 36], eax
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    jne 11f
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp + 28]
+    mov edx, [rsp + 24]
+    mov ecx, [rsp + 44]
+    lea r8, [rip + .Lmiddot_sp]
+    mov r9d, 4
+    COLOR r10d, T_MUTED
+    mov r11d, [rsp + 36]
+    inc r11d
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+11: mov eax, [rsp + 36]
+    add [rsp + 28], eax
+2:  mov rdi, [rip + ag_fsmall]
+    mov rsi, r13
+    call text_w
+    mov [rsp + 36], eax
+    mov ecx, [rsp]              # past the room: on a line of its own
+    add ecx, [rsp + 12]
+    add ecx, [rsp + 16]
+    mov edx, [rsp + 28]
+    add edx, eax
+    cmp edx, ecx
+    jle 3f
+    mov edx, [rsp]
+    add edx, [rsp + 12]
+    cmp [rsp + 28], edx
+    jle 3f
+    mov [rsp + 28], edx
+    mov eax, [rsp + 44]
+    add [rsp + 24], eax
+3:  mov eax, [rsp + 36]         # a link wider than the room is cut to it
+    mov ecx, [rsp]
+    add ecx, [rsp + 12]
+    add ecx, [rsp + 16]
+    sub ecx, [rsp + 28]
+    cmp eax, ecx
+    jle 31f
+    mov eax, ecx
+31: mov [rsp + 36], eax
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    jne 4f
+    mov rdi, r13
+    call strlen
+    mov r9, rax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp + 28]
+    mov edx, [rsp + 24]
+    mov ecx, [rsp + 44]
+    mov r8, r13
+    COLOR r10d, T_ACCENT
+    mov r11d, [rsp + 36]
+    inc r11d
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+4:  mov edi, [rsp + 40]
+    add edi, PART_ERR
+    mov esi, [rsp + 28]
+    mov edx, [rsp + 24]
+    mov ecx, [rsp + 36]
+    mov r8d, [rsp + 44]
+    call err_btn
+    mov eax, [rsp + 36]
+    add [rsp + 28], eax
+    inc dword ptr [rip + err_n]
+.Lel_next:
+    inc dword ptr [rsp + 40]
+    jmp .Lel_link
+.Lel_links_end:
+    mov eax, [rsp + 24]         # its height
+    add eax, [rsp + 44]
+    add eax, [rsp + 12]
+    sub eax, [rsp + 4]
+    mov r14d, eax
+    cmp dword ptr [rip + lr_mode], LM_DUMP     # print-agent-error: the text
+    jne 7f
+    mov rax, [rip + ys + SB_ptr]
+    mov [rip + ln_ptr], rax
+    mov rax, [rip + ys + SB_len]
+    mov [rip + ln_len], rax
+    lea rdi, [rip + .Lk_text]
+    mov esi, [rsp]
+    add esi, [rsp + 12]
+    mov edx, [rsp + 4]
+    add edx, [rsp + 12]
+    mov ecx, [rsp + 16]
+    mov r8d, [rsp + 32]
+    imul r8d, [rsp + 20]
+    xor r9d, r9d
+    call lay_line
+7:  mov edi, PART_ERR + 3       # "×", "Dismiss error"
+    mov esi, [rsp]
+    add esi, [rsp + 8]
+    sub esi, [rsp + 48]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 48]
+    mov r8d, ecx
+    call err_btn
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    jne 71f
+    mov rdi, [rip + ag_fui]
+    mov esi, [rsp]
+    add esi, [rsp + 8]
+    sub esi, [rsp + 48]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 48]
+    mov r8d, ecx
+    lea r9, [rip + .Ltimes]
+    COLOR eax, T_MUTED
+    push rax
+    push rax
+    call ui_text_center
+    add rsp, 16
+71: mov eax, r14d
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# err_btn(part, x, y, w, h): a link of the error block: drawn, a click keeps it for after the frame
+#   (pend_err; "×" has the tip "Dismiss error"); written out as lay_btn writes a button
+err_btn:
+    PROLOGUE 32
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    je 1f
+    call lay_btn
+    EPILOGUE
+1:  mov ebx, edi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
+    mov [rsp + 12], r8d
+    call part_id
+    test eax, eax
+    js 9f
+    mov [rsp + 16], eax
+    mov edi, eax
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 12]
+    call ui_btn
+    mov [rsp + 20], eax
+    test eax, UB_HOVER
+    jz 2f
+    mov dword ptr [rip + g_cursor], CUR_POINTER
+    cmp ebx, PART_ERR + 3
+    jne 2f
+    mov edi, [rsp + 16]
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    add edx, [rsp + 12]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 20]
+    lea r9, [rip + .Ldismiss]
+    call tip_note_text
+2:  test dword ptr [rsp + 20], UB_CLICK
+    jz 9f
+    lea eax, [rbx - PART_ERR + 1]
+    mov [rip + pend_err], eax
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# FN agrow_err_h(AS*, w, max h) -> eax the error block's height at that width (0: it does not show); its text
+#   has as many lines as max h holds beside its links (8 at most, 1 at least)
+FN agrow_err_h
+    PROLOGUE
+    mov [rip + err_maxh], edx
+    mov dword ptr [rip + lr_mode], LM_MEASURE
+    mov ecx, esi
+    xor esi, esi
+    xor edx, edx
+    call err_lay
+    EPILOGUE
+
+# FN agrow_err_draw(AS*, x, y, w): the error block drawn
+FN agrow_err_draw
+    PROLOGUE 16
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
+    mov edi, ERR_ROW
+    xor esi, esi
+    call agrow_slot
+    mov [rip + lr_slot], eax
+    mov dword ptr [rip + lr_mode], LM_DRAW
+    mov rdi, rbx
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    call err_lay
+    mov dword ptr [rip + lr_mode], LM_MEASURE
+    EPILOGUE
+
+# FN agrow_err_dump(sb, AS*): print-agent-error: the block as the last frame drew it ("text X,Y,W,H T", a
+#   "button PART X,Y,W,H ID" a link: 32 Retry, 33 new, 34 logs, 35 ×), "none" when it does not show
+FN agrow_err_dump
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, r12
+    call err_live
+    test rax, rax
+    jnz 1f
+    mov rdi, rbx
+    lea rsi, [rip + .Lnone_nl]
+    call sb_push_cstr
+    EPILOGUE
+1:  mov edi, ERR_ROW
+    call slot_find
+    mov [rip + lr_slot], eax
+    mov [rip + lr_out], rbx
+    mov dword ptr [rip + lr_mode], LM_DUMP
+    mov rdi, r12
+    mov esi, [rip + err_x]
+    mov edx, [rip + err_y]
+    mov ecx, [rip + err_w]
+    call err_lay
+    mov dword ptr [rip + lr_mode], LM_MEASURE
+    EPILOGUE
+
+# FN agrow_err_at(x, y, w): where the block was drawn last (thread_draw; agrow_err_dump lays it out there)
+FN agrow_err_at
+    mov [rip + err_x], edi
+    mov [rip + err_y], esi
+    mov [rip + err_w], edx
+    ret
+
+# err_follow(AS*): the error block's link clicked, after the frame: Retry (its program starts again, nothing
+#   is sent), a new conversation of its kind, its output logs in a read-only tab (the reason and the
+#   program's last error output: AL_report), or "×"
+err_follow:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, [rip + pend_err]
+    mov dword ptr [rip + pend_err], 0
+    test rbx, rbx
+    jz 9f
+    mov r13, [rbx + AS_live]
+    test r13, r13
+    jz 9f
+    cmp r12d, 1
+    jne 1f
+    mov rdi, rbx
+    call agent_retry
+    jmp 9f
+1:  cmp r12d, 2
+    jne 2f
+    mov edi, [rbx + AS_kind]
+    call agent_new
+    jmp 9f
+2:  cmp r12d, 3
+    jne 3f
+    lea rdi, [rip + xs]         # its title: "NAME output"
+    call sb_clear
+    mov rax, [r13 + AL_drv]
+    mov rsi, [rax + DRV_name]
+    lea rdi, [rip + xs]
+    call sb_push_cstr
+    lea rdi, [rip + xs]
+    lea rsi, [rip + .Loutput_sp]
+    call sb_push_cstr
+    lea rdi, [rip + xs]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + xs + SB_ptr]
+    mov rsi, [r13 + AL_report + SB_ptr]
+    mov rdx, [r13 + AL_report + SB_len]
+    call testdiff_output
+    jmp 9f
+3:  cmp r12d, 4
+    jne 9f
+    or dword ptr [r13 + AL_flags], ALF_ERRGONE
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# FN agrow_err_click(AS*, n) -> eax 1: as a click on the block's link n (0 Retry, 1 new, 2 logs, 3 ×),
+#   followed after the frame (agent-error-click)
+FN agrow_err_click
+    PROLOGUE
+    call err_live
+    test rax, rax
+    jz 9f
+    lea eax, [rsi + 1]
+    mov [rip + pend_err], eax
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+9:  EPILOGUE
+
+# open_follow(AS*): a row's AMF_OPEN flipped (pend_open) or a chip's file opened (pend_chip), after the frame
+open_follow:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rip + pend_open]
+    mov qword ptr [rip + pend_open], -1
+    test rbx, rbx
+    jz 5f
+    test r12, r12
+    js 5f
+    cmp r12, [rbx + AS_msgs + VEC_len]
+    jae 5f
+    mov rdi, rbx
+    mov rsi, r12
+    call row_of
+    xor dword ptr [rax + AM_flags], AMF_OPEN
+    mov rdi, rbx
+    mov rsi, r12
+    call agents_msg_changed
+5:  mov r12, [rip + pend_chip]
+    mov qword ptr [rip + pend_chip], -1
+    test rbx, rbx
+    jz 9f
+    test r12, r12
+    js 9f
+    cmp r12, [rbx + AS_msgs + VEC_len]
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r12
+    call row_of
+    test dword ptr [rax + AM_flags], AMF_CHIPS
+    jz 9f
+    mov r13, [rax + AM_name]    # its chip's line, then the target after its TAB
+    test r13, r13
+    jz 9f
+    mov r14d, [rip + pend_chipn]
+1:  test r14d, r14d
+    jz 3f
+2:  movzx eax, byte ptr [r13]
+    test eax, eax
+    jz 9f
+    inc r13
+    cmp eax, 10
+    jne 2b
+    dec r14d
+    jmp 1b
+3:  movzx eax, byte ptr [r13]
+    test eax, eax
+    jz 9f
+    cmp eax, 10
+    je 9f
+    inc r13
+    cmp eax, 9
+    jne 3b
+    xor r14d, r14d
+4:  movzx eax, byte ptr [r13 + r14]
+    test eax, eax
+    jz 5f
+    cmp eax, 10
+    je 5f
+    inc r14
+    jmp 4b
+5:  test r14, r14
+    jz 9f
+    mov rdi, rbx
+    mov rsi, r13
+    mov rdx, r14
+    call agents_open_link
+9:  EPILOGUE
+
+.section .rodata
+.Lqueued_w: .asciz "queued"
+.Lk_queued: .asciz "queued"
+.Lk_chip: .asciz "chip"
+.Lk_bubble: .asciz "bubble"
+.Lk_more: .asciz "more"
+.Lshow_more: .asciz "Show more"
+.Lshow_less: .asciz "Show less"
+.Lf_nomore: .asciz " more=-"
+.Lf_chips: .asciz " chips="
+.Lf_clipped: .asciz " clipped="
+.Lf_left: .asciz " left="
+.Lno_conv: .ascii "No conversation found"
+.Lnot_found: .asciz "Couldn't load this conversation's saved history, so it can't be continued."
+.Lretry: .asciz "Retry"
+.Lnew_conv: .asciz "Start a new conversation"
+.Llogs: .asciz "View output logs"
+.Lmiddot_sp: .asciz " \302\267 "
+.Ltimes: .asciz "\303\227"
+.Ldismiss: .asciz "Dismiss error"
+.Lnone_nl: .asciz "none\n"
+.Loutput_sp: .asciz " output"
+.p2align 3
+err_links: .quad .Lretry, .Lnew_conv, .Llogs
+.bss
+.p2align 2
+err_x: .long 0
+err_y: .long 0
+err_w: .long 0
+err_maxh: .long 0               # the block's height at most (agrow_err_h)
+.text

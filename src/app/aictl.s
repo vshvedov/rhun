@@ -720,6 +720,58 @@ c_print_agent_thread:
     xor eax, eax
     EPILOGUE
 
+# ---- phase 3 task 8: the error block ----
+
+# print-agent-error: the open conversation's error block as the last frame drew it (agrow_err_dump: "text
+#   X,Y,W,H T", "button PART X,Y,W,H ID" a link: 32 Retry, 33 new, 34 logs, 35 ×), "none" when it shows none
+c_print_agent_error:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    mov rbx, rax
+    call ai_out
+    mov rdi, rax
+    mov rsi, rbx
+    call agrow_err_dump
+    xor eax, eax
+    EPILOGUE
+
+# print-agent-look: around the open conversation's rows as the last frame drew them (agents_look_dump: the
+#   veil, the jump button, the error block, the sticky prompt, the empty conversation's line)
+c_print_agent_look:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agents_look_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-error-click N: as a click on the error block's link N (0 Retry, 1 Start a new conversation, 2 View
+#   output logs, 3 ×), followed after the frame
+c_agent_error_click:
+    PROLOGUE
+    call ai_set
+    call agents_viewed
+    test rax, rax
+    jz 8f
+    mov rbx, rax
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    cmp rax, 3
+    ja 8f
+    mov rdi, rbx
+    mov rsi, rax
+    call agrow_err_click
+    test eax, eax
+    jz 8f
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
 # print-agent-spinner: the spinner line of the open conversation and the tick (agspin_dump; phase 3 task 5)
 c_print_agent_spinner:
     PROLOGUE
@@ -884,7 +936,7 @@ ai_opt:
 #   the end of the open conversation ("\n", "\t" in TEXT), as a reader would make it; the options, before or
 #   after the text: ms=N (thinking's time), live=1 (still streaming), t=UNIXMS (its time), notice=1 (a wrapped
 #   notice), echo=1 (a slash command's echo), n=N (a compaction's thousands of tokens freed), manual=1 (a
-#   compaction asked for)
+#   compaction asked for), failed=1 (a failed reply), open=1 (a prompt or marker shown whole)
 c_agent_test_row:
     PROLOGUE 80
     call ai_set
@@ -2304,6 +2356,11 @@ c_agent_card_uncomment:
 .Lc_print_agent_thread: .asciz "print-agent-thread"
 .Lc_agent_test_row: .asciz "agent-test-row"
 .Lc_agent_test_view: .asciz "agent-test-view"
+.Lc_print_agent_error: .asciz "print-agent-error"
+.Lc_agent_error_click: .asciz "agent-error-click"
+.Lc_print_agent_look: .asciz "print-agent-look"
+.Lo_failed: .asciz "failed"
+.Lo_open: .asciz "open"
 .Lc_print_agent_spinner: .asciz "print-agent-spinner"
 .Lc_agent_spin_tick: .asciz "agent-spin-tick"
 .Lk_thinking: .asciz "thinking"
@@ -2381,6 +2438,8 @@ ai_ctl:
     # the thread's engine and rows (agents.s, agentrows.s: phase 3)
     .quad .Lc_print_agent_thread, c_print_agent_thread, .Lc_agent_test_row, c_agent_test_row
     .quad .Lc_agent_test_view, c_agent_test_view
+    .quad .Lc_print_agent_error, c_print_agent_error, .Lc_agent_error_click, c_agent_error_click   # task 8
+    .quad .Lc_print_agent_look, c_print_agent_look
     .quad .Lc_print_agent_spinner, c_print_agent_spinner, .Lc_agent_spin_tick, c_agent_spin_tick   # task 5
     .quad .Lc_print_agent_rows, c_print_agent_rows, .Lc_print_agent_rows_fit, c_print_agent_rows_fit
     .quad .Lc_agent_test_tool, c_agent_test_tool, .Lc_agent_row_click, c_agent_row_click
@@ -2436,8 +2495,8 @@ cfg_fields:                     # agent-cfg-set's words: the word, the AGF_*, wh
 holder_names: .quad .Lh_none, .Lh_other, .Lh_unknown
 row_kinds: .quad .Lk_thinking, .Lk_meta, .Lk_compact, .Lk_unknown, .Lk_user, .Lk_agent, 0
 row_roles: .long R_THINK, R_META, R_COMPACT, R_UNKNOWN, R_USER, R_ASSIST
-row_opts: .quad .Lo_ms, .Lo_live, .Lo_t, .Lo_notice, .Lo_echo, .Lo_n, .Lo_manual, 0
-row_flags: .long 0, AMF_LIVE, 0, AMF_NOTICE, AMF_ECHO, 0, AMF_MANUAL
+row_opts: .quad .Lo_ms, .Lo_live, .Lo_t, .Lo_notice, .Lo_echo, .Lo_n, .Lo_manual, .Lo_failed, .Lo_open, 0
+row_flags: .long 0, AMF_LIVE, 0, AMF_NOTICE, AMF_ECHO, 0, AMF_MANUAL, AMF_FAILED, AMF_OPEN
 band_words: .quad .Lb_error, .Lb_settings, .Lb_auth, .Lb_rate, .Lb_notice
 live_states: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_conn_kill_ms

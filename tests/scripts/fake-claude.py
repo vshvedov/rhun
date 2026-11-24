@@ -598,6 +598,8 @@ def file_line(record, result=None, chain=CHAIN, agent=None):
                             thinkingDisplay=record.get('thinking_display'))
             BLOCK_INDEX[mid] = BLOCK_INDEX.get(mid, -1) + 1
             line.update(apiBlockIndex=BLOCK_INDEX[mid], type='assistant', uuid=uid, timestamp=now_iso())
+            if record.get('error'):         # assistant.error (the binary's schema, finding 35: unrecorded)
+                line['error'] = record['error']
             if block.get('type') == 'tool_use':
                 CALL_LINES[block.get('id')] = uid
         else:
@@ -2666,7 +2668,8 @@ def s_apierror(prompt):
                                            'type': 'message', 'content': [{'type': 'text', 'text': said}]},
           'parent_tool_use_id': None, 'error': 'overloaded', 'uuid': str(uuid.uuid4()), 'session_id': SID})
     transcript({'type': 'assistant', 'message': {'id': str(uuid.uuid4()), 'model': '<synthetic>',
-                                                 'content': [{'type': 'text', 'text': said}]}})
+                                                 'content': [{'type': 'text', 'text': said}]},
+                'error': 'overloaded'})     # (the record's own key, kept in the file as the stream has it: unrecorded)
     result(subtype='error_during_execution', errors=[said], stop=None, terminal='api_error')
 
 
@@ -3324,6 +3327,28 @@ def s_thinkstream(prompt):
 
 
 SCENARIOS.update({'thinkslow': s_thinkslow, 'thinkstream': s_thinkstream})
+
+
+# ---- phase 3 task 8: hostile error texts (unrecorded: the shapes are 35's and the crash's)
+
+HOSTILE = 'evil \u202ecod.exe\u202c \x1b]0;title\x07\x1b[31mred\x1b[0m \u009b31m '
+
+
+def s_bigerror(prompt):
+    """bigerror: the turn fails with an error text of 1 MiB holding bidi and control characters"""
+    result(subtype='error_during_execution', stop=None, terminal='api_error',
+           errors=[HOSTILE + 'x' * (1 << 20)])
+
+
+def s_hostilecrash(prompt):
+    """hostilecrash: 1 MiB of standard error holding bidi and control characters, then a crash"""
+    CRASH.set()
+    sys.stderr.write((HOSTILE + 'y' * 100 + '\n') * 10000)
+    sys.stderr.flush()
+    crash(2)
+
+
+SCENARIOS.update({'bigerror': s_bigerror, 'hostilecrash': s_hostilecrash})
 
 
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already

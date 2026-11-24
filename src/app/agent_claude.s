@@ -1771,7 +1771,12 @@ h_assistant:
     mov rsi, [rsp + 16]
     mov rdx, [rsp + 24]
     call set_msgid
-2:  mov rdi, r13
+2:  mov rdi, [rsp + 32]         # a command the CLI ran itself (finding 22): its output row, no reply
+    lea rsi, [rip + .Lk_lcs]    #   (claude_blocks.s)
+    call jstr
+    test rdx, rdx
+    jnz 8f
+    mov rdi, r13
     lea rsi, [rip + .Lk_content]
     call json_get
     mov r14, rax
@@ -1809,11 +1814,23 @@ h_assistant:
     mov rdx, [rsp + 24]
     mov r9d, 1                  # the finished text
     call ev_text
+    mov [rsp + 40], rax
     mov rdi, [rbx + AL_as]
     mov rsi, [rsp]
     mov rdx, [rsp + 8]
     mov rcx, rax
     call agents_reply_model
+    cmp qword ptr [rsp + 40], 0 # a reply the API failed (assistant.error, finding 35): drawn so
+    jl 5f
+    mov rdi, [rsp + 32]
+    lea rsi, [rip + .Lk_error]
+    call jstr
+    test rdx, rdx
+    jz 5f
+    mov rdi, [rbx + AL_as]
+    mov rsi, [rsp + 40]
+    mov edx, AMF_FAILED
+    call agents_row_flag
 5:  inc r15d
     jmp 3b
 8:  mov rdi, [rbx + AL_as]      # the record's other blocks: calls, unknown blocks (claude_blocks.s)
@@ -1854,6 +1871,10 @@ h_user:
     mov rdi, rbx                # a message of the user's as its turn starts (claude_session.s)
     mov rsi, r12
     call claude_replay
+    mov rdi, [rbx + AL_as]      # and what the agent said in the user's place: a command's output, a
+    mov rsi, r12                #   task's notification (claude_blocks.s)
+    mov edx, ING_REPLAY
+    call claude_ingest
     jmp 9f
 2:  mov rdi, [rbx + AL_as]      # results into their calls' rows (claude_blocks.s)
     mov rsi, r12
@@ -1867,6 +1888,10 @@ h_system:
     mov rbx, rdi
     mov r12, rsi
     call claude_record          # fast mode's state, notifications (claude_session.s)
+    mov rdi, [rbx + AL_as]      # the rows of a system record: a compaction's marker, a meta line
+    mov rsi, r12                #   (claude_blocks.s)
+    mov edx, ING_LIVE
+    call claude_ingest
     mov rdi, r12
     lea rsi, [rip + .Lk_subtype]
     call json_get
@@ -3525,7 +3550,7 @@ claude_drv:
     .quad claude_ended          # DRV_ended (claude_session.s)
     .quad 0xffd97757            # DRV_brand: Claude's own colour (the running dot)
     .quad claude_verb_list      # DRV_verbs: the spinner's (claudecfg.s: the built-in and the user's)
-    .quad 0                     # DRV_tips (phase 3 task 8)
+    .quad claude_tips           # DRV_tips: the empty conversation's (claude_session.s)
     .quad cl_task               # DRV_task (phase 3 task 11)
 cl_types:
     .quad .Lv_stream_event, h_stream, .Lv_assistant, h_assistant, .Lv_system, h_system
@@ -3621,6 +3646,7 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lk_permissionMode: .asciz "permissionMode"
 .Lk_current_mode: .asciz "current_permission_mode"
 .Lk_errors: .asciz "errors"
+.Lk_lcs: .asciz "local_command_source"
 .Lk_result: .asciz "result"
 .Lk_is_error: .asciz "is_error"
 .Lk_terminal: .asciz "terminal_reason"

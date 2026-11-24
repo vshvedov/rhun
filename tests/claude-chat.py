@@ -858,7 +858,7 @@ class ResumeTest(DrivenCase):
         self.seed()
         self.start()
         old = self.open_listed()
-        self.assertEqual(len(old), 7, old)              # with the fixture's thinking row (phase 3 task 6)
+        self.assertEqual(len(old), 8, old)              # its thinking row (phase 3 task 6), its /clear echo (task 8)
         self.command('agent-prompt hello')
         self.command('wait-agent ready')
         starts = self.starts()
@@ -1023,7 +1023,7 @@ class RequestTest(DrivenCase):
         # a deny that interrupts ends the turn (the real CLI: its interrupt mark, then an aborted_tools result)
         streamed = self.thread()
         # phase 3: the rejection is the call's state (the standard rejection shows no text: no result line)
-        self.assertEqual(streamed, ['user tool', 'tool(Bash) touch approved.txt', 'info Interrupted'])
+        self.assertEqual(streamed, ['user tool', 'tool(Bash) touch approved.txt', 'info Tool interrupted'])  # (dc)
         self.assertEqual(self.call_state(1), ('denied', False))
         self.command('agent-prompt hello')          # and the conversation goes on
         self.command('wait-agent ready')
@@ -1060,7 +1060,7 @@ class RequestTest(DrivenCase):
         self.command('agent-card 3')
         self.command('wait-agent ready')
         self.assertEqual([a['behavior'] for a in self.answers()], ['allow', 'deny'])
-        self.assertEqual(self.thread()[-1], 'info Interrupted')     # No interrupts: the turn ends there
+        self.assertEqual(self.thread()[-1], 'info Tool interrupted')     # No interrupts: the turn ends there (dc)
 
     def test_question_cards_in_order(self):
         self.start()
@@ -1365,7 +1365,7 @@ class LifeTest(DrivenCase):
         self.assertIsNone(self.card())
         thread = self.thread()
         self.assertNotIn('info Withdrawn by Claude', thread)
-        self.assertEqual(thread[-1], 'info Interrupted')
+        self.assertEqual(thread[-1], 'info Tool interrupted')      # its call was stopped (dc, phase 3)
 
     def test_escape_stops_a_turn(self):
         self.start()

@@ -3028,6 +3028,8 @@ ENDSTRUCT AT_SIZE
 .equ ING_FILE, 0                # the reader's flags (agent_ingest): a line of the file
 .equ ING_LIVE, 1                # the stream's record: the driver made the reply text rows and the user's
                                 #   own prompts itself
+.equ ING_REPLAY, 2              # a replayed user record of the stream (isReplay): only what the agent said
+                                #   in the user's place (a command's output, a task's notification)
 .equ AGK_STOP, 1                # DRV_task's what
 .equ AGK_BG, 2
 
@@ -3257,6 +3259,7 @@ ENDSTRUCT AL_SIZE
 .equ ALF_AUTHWAIT, 2048         # a start waits for the sign-in state (DRV_auth)
 .equ ALF_ASKAGAIN, 4096         # a start the user asked for: a cached "not signed in" is asked again
 .equ ALF_RESTART, 8192          # a prompt came while its program was ending: a new start when it is gone
+.equ ALF_ERRGONE, 16384         # the error block was dismissed (its "×"): until the next failure
 .equ AL_QUEUE_MAX, 4            # prompts waiting for "ready"
 # AQ: a request the agent waits on (the plan's PR: that prefix is the Problems tab's)
 STRUCT

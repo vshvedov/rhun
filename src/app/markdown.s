@@ -122,7 +122,7 @@ F MD_fns, VEC_SIZE      # MDN: footnote definitions, by their labels (the first 
 F MD_fnused, 4          # footnote numbers given (in order of first use)
 F MD_fnpad, 4
 F MD_muted, 4           # its text in the muted colour where it would be the text colour (md_set_muted)
-F MD_mutedpad, 4
+F MD_tint, 4            # the theme slot its text takes where it would be the text colour, 0 none (md_set_tint)
 ENDSTRUCT MD_SIZE
 
 # a footnote definition (MD_fns)
@@ -1748,6 +1748,14 @@ FN md_set_muted
     test rdi, rdi
     jz 1f
     mov [rdi + MD_muted], esi
+1:  ret
+
+# md_set_tint(m, theme slot or 0): its text drawn in that slot's colour where it would be the text colour
+#   (links and code keep theirs); the layout stays
+FN md_set_tint
+    test rdi, rdi
+    jz 1f
+    mov [rdi + MD_tint], esi
 1:  ret
 
 # md_set_base(m, ptr, len): the absolute folder relative links name (a trailing / left out); an
@@ -6562,9 +6570,12 @@ FN md_draw
     mov r15d, [r13 + MDI_x]
     add r15d, [rsp]             # its left on screen
     mov eax, [r13 + MDI_color]
-    cmp eax, T_FG               # a muted document: its text muted (thinking)
-    jne 0f
-    cmp dword ptr [rbx + MD_muted], 0
+    cmp eax, T_FG               # a muted document: its text muted (thinking); a tinted one: its slot (a
+    jne 0f                      #   failed reply's T_ERROR)
+    cmp dword ptr [rbx + MD_tint], 0
+    je 610f
+    mov eax, [rbx + MD_tint]
+610: cmp dword ptr [rbx + MD_muted], 0
     je 0f
     mov eax, T_MUTED
 0:  lea rcx, [rip + g_theme]

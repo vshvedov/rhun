@@ -39,6 +39,10 @@
 .equ REASON_MAX, 2000           # U7: a rejection's reason longer than this is an OUT, not a note
 .equ CUT_KEY, 40                # an MCP call's second text: characters, then "…" (a URL's host: 30)
 .equ CUT_URL, 30
+.equ US_PLAIN, 1                # user_said's answers: a plain text of a prompt, a chip (in pchips), else 0
+.equ US_CHIP, 2
+.equ CHIP_PATH_MAX, 4096        # a chip's path (the bundle's AD: at most 4096 characters)
+.equ CMD_NAME_MAX, 200          # a command echo's name
 
 .data
 .p2align 2
@@ -58,6 +62,9 @@ rtext: .zero SB_SIZE            # a result's text (the extension's toOutputConte
 t1: .zero SB_SIZE               # scratch
 t2: .zero SB_SIZE
 t3: .zero SB_SIZE
+ptext: .zero SB_SIZE            # a prompt's text blocks, joined (ing_user)
+pchips: .zero SB_SIZE           # its chips: "LABEL\tTARGET" a line each (AM_name, AMF_CHIPS)
+utext: .zero SB_SIZE            # an echo's line, a meta line, a pill's text
 
 .text
 
@@ -490,7 +497,8 @@ seen_grow:
 #   api-request-blob lines copy whole messages: read, they would double every call; the others are
 #   bookkeeping). A file's line of a subagent (isSidechain) is skipped (2.1.330 writes them into the agent's
 #   own file); a record that ran under a call (the stream's parent_tool_use_id) gives only its calls and
-#   results, as children
+#   results, as children. ING_REPLAY: a replayed user record of the stream, only what the agent said in the
+#   user's place (ing_user)
 FN claude_ingest
     PROLOGUE
     mov rbx, rdi
@@ -508,6 +516,8 @@ FN claude_ingest
     lea rsi, [rip + .Lk_type]
     call json_get
     mov r14, rax
+    cmp r13d, ING_REPLAY        # a replayed record: only what the agent said in the user's place
+    je 1f
     mov rdi, r14
     lea rsi, [rip + .Lv_assistant]
     call json_is
@@ -521,11 +531,22 @@ FN claude_ingest
     lea rsi, [rip + .Lv_user]
     call json_is
     test eax, eax
-    jz 9f
+    jz 2f
     mov rdi, rbx
     mov rsi, r12
     call ing_user
-9:  mov eax, 1                  # system records: their rows come with the next tasks
+    jmp 9f
+2:  cmp r13d, ING_REPLAY
+    je 9f
+    mov rdi, r14
+    lea rsi, [rip + .Lv_system]
+    call json_is
+    test eax, eax
+    jz 9f
+    mov rdi, rbx
+    mov rsi, r12
+    call ing_system
+9:  mov eax, 1
     EPILOGUE
 
 # ing_assistant(AS*, record): its content blocks: text (a reply row, read from a file only), tool_use (a
@@ -535,7 +556,16 @@ ing_assistant:
     PROLOGUE 48
     mov rbx, rdi
     mov r12, rsi
-    mov rdi, r12                # the call it ran under, when it did
+    mov rdi, r12                # a command the CLI ran itself (the stream's <synthetic> record, finding 22):
+    lea rsi, [rip + .Lk_lcs]    #   its output row, as the file's system/local_command gives it (31)
+    call jstr
+    test rdx, rdx
+    jz 0f
+    mov rdi, rbx
+    mov rsi, rax
+    call cmd_wrapped
+    EPILOGUE
+0:  mov rdi, r12                # the call it ran under, when it did
     lea rsi, [rip + .Lk_parent]
     call jstr
     mov [rsp], rax
@@ -598,6 +628,18 @@ ing_assistant:
     mov rsi, rax
     mov ecx, [rsp + 16]
     call agents_reply_add
+    test rax, rax
+    js 2b
+    mov [rsp + 32], rax
+    mov rdi, r12                # a reply the API failed (assistant.error, the binary's schema: finding 35)
+    lea rsi, [rip + .Lk_error]
+    call jstr
+    test rdx, rdx
+    jz 2b
+    mov rdi, rbx
+    mov rsi, [rsp + 32]
+    mov edx, AMF_FAILED
+    call agents_row_flag
     jmp 2b
 4:  mov rdi, [rsp + 24]         # thinking: a thinking row (its text: summarized; "" by default)
     lea rsi, [rip + .Lv_thinking]
@@ -749,11 +791,19 @@ dec_into:
     jnz 2b
     ret
 
-# ing_user(AS*, record): the results of calls into their rows (found by id); from a file also the user's
-#   prompts (a prompt stops the calls of the turn before it that still wait), the interrupt marks, nothing
-#   of a meta line or of a text that begins with "<" (commands, notifications: their rows come with task 8)
+# ing_user(AS*, record): the user's side of a conversation. The results of calls go into their rows (found by
+#   id). The rest is classified as the extension's dc classifies it (@3625700, user_said): from a file the
+#   user's prompts (a prompt stops the calls of the turn before it that still wait; its image, document,
+#   selection and opened-file blocks are its chips), command echoes, a command's output, interrupt marks,
+#   task notifications, wrapped notices, diagnostics; from the stream, where the driver made the user's
+#   prompts, only what the agent said in the user's place (a command's output, a task notification, an
+#   interrupt mark; of a replayed record, ING_REPLAY, not the mark). A compaction's summary (isCompactSummary
+#   in the file, isSynthetic in the stream: finding 30) is its marker's text, never a prompt. An isMeta line
+#   is no row (a custom command's body, the local-command caveat, an image's "[Image: source: PATH]": 31, 33).
+#   Frame: [0] the parent's id's length, [8] the structured result, [16] the waiting calls stopped, [24] a
+#   block's type, [32] a summary, [40] a text's ptr, [48] its length
 ing_user:
-    PROLOGUE 48
+    PROLOGUE 64
     mov rbx, rdi
     mov r12, rsi
     mov rdi, r12
@@ -774,6 +824,14 @@ ing_user:
     lea rsi, [rip + .Lk_turFile]
     call json_get
 1:  mov [rsp + 8], rax
+    mov rdi, r12                # a compaction's summary
+    lea rsi, [rip + .Lk_isCompactSummary]
+    call jtrue
+    mov [rsp + 32], eax
+    mov rdi, r12
+    lea rsi, [rip + .Lk_isSynthetic]
+    call jtrue
+    or [rsp + 32], eax
     mov rdi, r12
     lea rsi, [rip + .Lk_message]
     call json_get
@@ -785,24 +843,52 @@ ing_user:
     call json_type
     cmp eax, JT_STR
     jne 3f
-    cmp qword ptr [rsp], 0      # a prompt as a string
+    cmp qword ptr [rsp], 0      # a text as a string
     jne 9f
-    cmp dword ptr [rip + cb_flags], ING_FILE
-    jne 9f
-    mov rdi, rbx
-    call agrow_stop
     mov rdi, r13
     call json_str
+    mov r14, rax
+    mov r15, rdx
+    cmp dword ptr [rsp + 32], 0
+    je 2f
     mov rdi, rbx
-    mov rsi, rax
-    call user_text
+    mov rsi, r14
+    mov rdx, r15
+    call compact_summary
+    jmp 9f
+2:  cmp dword ptr [rip + cb_flags], ING_FILE
+    jne 21f
+    mov rdi, rbx
+    call agrow_stop
+21: lea rdi, [rip + pchips]
+    call sb_clear
+    lea rdi, [rip + ptext]
+    call sb_clear
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, r15
+    call user_said
+    test eax, eax
+    jz 9f
+    cmp eax, US_PLAIN
+    jne 22f
+    lea rdi, [rip + ptext]
+    mov rsi, r14
+    mov rdx, r15
+    call sb_push
+22: mov rdi, rbx
+    call prompt_row
     jmp 9f
 3:  mov dword ptr [rsp + 16], 0 # a prompt's blocks: the waiting calls stopped once
+    lea rdi, [rip + ptext]
+    call sb_clear
+    lea rdi, [rip + pchips]
+    call sb_clear
     xor r14d, r14d
 4:  mov rdi, r13
     call json_len
     cmp r14d, eax
-    jae 9f
+    jae 8f
     mov rdi, r13
     mov esi, r14d
     call json_at
@@ -817,6 +903,8 @@ ing_user:
     call json_is
     test eax, eax
     jz 5f
+    cmp dword ptr [rip + cb_flags], ING_REPLAY
+    je 4b
     mov rdi, rbx
     mov rsi, r15
     mov rdx, [rsp + 8]
@@ -825,7 +913,7 @@ ing_user:
 5:  cmp qword ptr [rsp], 0
     jne 4b
     cmp dword ptr [rip + cb_flags], ING_FILE
-    jne 4b
+    jne 6f
     cmp dword ptr [rsp + 16], 0
     jne 6f
     mov dword ptr [rsp + 16], 1
@@ -835,52 +923,1364 @@ ing_user:
     lea rsi, [rip + .Lv_text]
     call json_is
     test eax, eax
-    jz 4b
+    jz 7f
     mov rdi, r15
     lea rsi, [rip + .Lv_text]
     call jstr
+    mov [rsp + 40], rax
+    mov [rsp + 48], rdx
     mov rdi, rbx
     mov rsi, rax
-    call user_text
+    call user_said
+    cmp eax, US_PLAIN
+    jne 4b
+    lea rdi, [rip + ptext]      # a prompt's texts, a line feed between them
+    cmp qword ptr [rdi + SB_len], 0
+    je 61f
+    mov esi, 10
+    call sb_push_byte
+61: lea rdi, [rip + ptext]
+    mov rsi, [rsp + 40]
+    mov rdx, [rsp + 48]
+    call sb_push
     jmp 4b
+7:  cmp dword ptr [rip + cb_flags], ING_FILE   # an image, a document: a chip of the prompt
+    jne 4b
+    mov rdi, r15
+    mov rsi, [rsp + 24]
+    call media_chip
+    jmp 4b
+8:  cmp dword ptr [rip + cb_flags], ING_FILE
+    jne 9f
+    cmp qword ptr [rsp], 0
+    jne 9f
+    mov rdi, rbx
+    call prompt_row
 9:  EPILOGUE
 
-# user_text(AS*, ptr, len): a text of the user's read from a file: an interrupt mark is the "Interrupted"
-#   row (as the stream's turn end gives it), one beginning with "<" no row, any other a prompt row
-user_text:
+# prompt_row(AS*): a prompt of the user's read from a file: ptext, with pchips as its chips (AM_name, LF
+#   between them, AMF_CHIPS); nothing when both are empty
+prompt_row:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d              # the chips' cstr, or 0
+    cmp qword ptr [rip + pchips + SB_len], 0
+    je 1f
+    lea rdi, [rip + pchips]
+    xor esi, esi
+    call sb_push_byte
+    dec qword ptr [rip + pchips + SB_len]
+    mov r12, [rip + pchips + SB_ptr]
+1:  mov rdx, [rip + ptext + SB_ptr]
+    mov rcx, [rip + ptext + SB_len]
+    test rcx, rcx
+    jnz 2f
+    test r12, r12
+    jz 9f
+    lea rdx, [rip + .Lempty]
+2:  mov rdi, rbx
+    mov esi, R_USER
+    mov r8, r12
+    call agents_row_add
+    test rax, rax
+    js 9f
+    test r12, r12
+    jz 9f
+    mov rdi, rbx
+    mov rsi, rax
+    mov edx, AMF_CHIPS
+    call agents_row_flag
+9:  EPILOGUE
+
+# user_said(AS*, ptr, len) -> eax US_PLAIN, US_CHIP or 0: a text of the user's side (a text block, a string
+#   content) as dc classifies it. Rows made here: an interrupt mark's ("Interrupted", "Tool interrupted": e4;
+#   not for a replayed record), a task notification's summary as a meta line (DD), a command's output (MKt,
+#   cmd_wrapped); from a file also a command's echo in either recorded form (sVe) or a bare "/x" (a prompt row
+#   with AMF_ECHO, "/x A"), a diagnostics line (PKt), a wrapped notice (ND: a meta row with AMF_NOTICE). A
+#   chip goes into pchips (US_CHIP); the user's own text is US_PLAIN (the caller makes the prompt). From the
+#   stream everything else is 0: the driver made the user's prompts. A tag is matched whole at both ends: an
+#   unbalanced or unknown one is the user's text
+user_said:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
     test r13, r13
-    jz 9f
-    cmp byte ptr [r12], '<'
-    je 9f
+    jz 8f
     mov rdi, r12
     mov rsi, r13
     lea rdx, [rip + .Lmark_stop]
     call text_is
+    lea r14, [rip + .Linterrupted]
     test eax, eax
     jnz 1f
     mov rdi, r12
     mov rsi, r13
     lea rdx, [rip + .Lmark_tool]
     call text_is
+    lea r14, [rip + .Ltool_interrupted]
     test eax, eax
-    jnz 1f
+    jz 2f
+1:  cmp dword ptr [rip + cb_flags], ING_REPLAY
+    je 8f
+    mov rdi, r14
+    call strlen
     mov rdi, rbx
+    mov esi, R_INFO
+    mov rdx, r14
+    mov rcx, rax
+    xor r8d, r8d
+    call agents_row_add
+    jmp 8f
+2:  mov rdi, r12
+    mov rsi, r13
+    call trim_ws
+    mov r14, rax
+    mov r15, rdx
+    test r15, r15
+    jz 8f
+    mov rdi, rbx                # a task's end (finding 34): its summary
+    mov rsi, r14
+    mov rdx, r15
+    call task_note
+    test eax, eax
+    jnz 8f
+    mov rdi, rbx                # a command's output
+    mov rsi, r14
+    mov rdx, r15
+    call cmd_wrapped
+    test eax, eax
+    jnz 8f
+    cmp dword ptr [rip + cb_flags], ING_FILE
+    jne 8f
+    mov rdi, rbx                # a command's echo
+    mov rsi, r14
+    mov rdx, r15
+    call echo_tags
+    test eax, eax
+    jnz 8f
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, r15
+    call diag_line
+    test eax, eax
+    jnz 8f
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, r15
+    call notice_row
+    test eax, eax
+    jnz 8f
+    mov rdi, r14
+    mov rsi, r15
+    call chip_of
+    test eax, eax
+    jz 4f
+    mov eax, US_CHIP
+    EPILOGUE
+4:  cmp byte ptr [r14], '/'     # a bare "/x": the echo of a command (the file's "/compact": 30)
+    jne 5f
+    mov rdi, r14
+    mov rsi, r15
+    call slash_name
+    test rax, rax
+    jz 5f
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, r15
+    lea rcx, [r14 + 1]
+    mov r8, rax
+    call echo_row
+    jmp 8f
+5:  mov eax, US_PLAIN
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# between(ptr, len, open cstr, close cstr) -> rax, rdx the text between the first open and the close after
+#   it; 0, 0 when either is missing
+between:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov rdi, r13
+    call strlen
+    mov r15, rax
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    mov rcx, r15
+    call str_find
+    test rax, rax
+    js 8f
+    add rax, r15
+    add rbx, rax                # after the open tag
+    sub r12, rax
+    mov rdi, r14
+    call strlen
+    mov rcx, rax
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r14
+    call str_find
+    test rax, rax
+    js 8f
+    mov rdx, rax
+    mov rax, rbx
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    EPILOGUE
+
+# wrapped(ptr, len, open cstr, close cstr) -> rax, rdx what is between them when the text begins with open
+#   and ends with close (and the close is there once); 0, 0 otherwise
+wrapped:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    call starts
+    test eax, eax
+    jz 8f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r14
+    call ends
+    test eax, eax
+    jz 8f
+    mov r15, rdx                # the close's length
+    mov rdi, r13
+    call strlen
+    mov rcx, r12
+    sub rcx, r15
+    sub rcx, rax
+    js 8f
+    lea rax, [rbx + rax]
+    push rax
+    push rcx
+    mov rdi, rax                # the close only once (t4(t, close) === 1)
+    mov rsi, rcx
+    mov rdx, r14
+    mov rcx, r15
+    call str_find
+    mov rdi, rax
+    pop rdx
+    pop rax
+    test rdi, rdi
+    jns 8f
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    EPILOGUE
+
+# task_note(AS*, ptr, len) -> eax 1 when it was a task's notification ("<task-notification>…": DD): its
+#   summary as a meta line (none when it has none)
+task_note:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Ltn_open]
+    call starts
+    test eax, eax
+    jz 8f
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Ltn_close]
+    call ends
+    test eax, eax
+    jz 8f
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lsum_open]
+    lea rcx, [rip + .Lsum_close]
+    call between
+    test rax, rax
+    jz 7f
+    mov rdi, rax
+    mov rsi, rdx
+    call trim_ws
+    test rdx, rdx
+    jz 7f
+    mov rdi, rbx
+    mov rsi, rax
+    xor ecx, ecx
+    call meta_row
+7:  mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# meta_row(AS*, ptr, len, AMF_* flags): a grey line (R_META)
+meta_row:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, ecx
+    mov rcx, rdx
+    mov rdx, rsi
+    mov esi, R_META
+    xor r8d, r8d
+    call agents_row_add
+    test rax, rax
+    js 9f
+    test r12d, r12d
+    jz 9f
+    mov rdi, rbx
+    mov rsi, rax
+    mov edx, r12d
+    call agents_row_flag
+9:  EPILOGUE
+
+# cmd_wrapped(AS*, ptr, len) -> eax 1 when the text is a command's output, "<local-command-stdout>T</...>"
+#   or its stderr form (MKt): its row (cmd_output)
+cmd_wrapped:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, r12
+    mov rsi, r13
+    call trim_ws
+    mov r12, rax
+    mov r13, rdx
+    xor r14d, r14d              # an error's
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lout_open]
+    lea rcx, [rip + .Lout_close]
+    call wrapped
+    test rax, rax
+    jnz 1f
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lerr_open]
+    lea rcx, [rip + .Lerr_close]
+    call wrapped
+    mov r14d, 1
+    test rax, rax
+    jz 8f
+1:  mov rdi, rbx
+    mov rsi, rax
+    mov ecx, r14d
+    call cmd_output
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# cmd_output(AS*, ptr, len, error): a command's output row, one form from the file's system/local_command,
+#   the <local-command-stdout> strings and the stream's <synthetic> record: one line (not an error's) a pill
+#   ("Switched to NAME" for the model switch's "Set model to NAME", its backticks dropped: Sae, uTn), several
+#   a reply without a label (its Markdown)
+cmd_output:
+    PROLOGUE
+    mov rbx, rdi
+    mov r14d, ecx
+    mov rdi, rsi
+    mov rsi, rdx
+    call trim_ws
+    mov r12, rax
+    mov r13, rdx
+    test r13, r13
+    jz 9f
+    test r14d, r14d
+    jnz 5f
+    mov rdi, r12
+    mov rsi, r13
+    mov edx, 10
+    call mem_chr_n
+    test rax, rax
+    jns 5f
+    lea rdi, [rip + utext]
+    call sb_clear
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lset_model]
+    call starts
+    test eax, eax
+    jz 3f
+    lea rdi, [rip + utext]      # "Switched to " and the rest, its backticks dropped
+    lea rsi, [rip + .Lswitched]
+    call sb_push_cstr
+    lea rdi, [rip + .Lset_model]
+    call strlen
+    add r12, rax
+    sub r13, rax
+    xor r15d, r15d
+1:  cmp r15, r13
+    jae 4f
+    movzx esi, byte ptr [r12 + r15]
+    inc r15
+    cmp esi, '`'
+    je 1b
+    lea rdi, [rip + utext]
+    call sb_push_byte
+    jmp 1b
+3:  lea rdi, [rip + utext]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+4:  mov rdi, rbx
+    mov esi, R_INFO
+    mov rdx, [rip + utext + SB_ptr]
+    mov rcx, [rip + utext + SB_len]
+    xor r8d, r8d
+    call agents_row_add
+    test rax, rax
+    js 9f
+    mov rdi, rbx
+    mov rsi, rax
+    mov edx, AMF_PILL
+    call agents_row_flag
+    EPILOGUE
+5:  mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    mov ecx, 1
+    call agents_reply_add
+9:  EPILOGUE
+
+# mem_chr_n(ptr, len, byte) -> rax its first index, -1
+mem_chr_n:
+    xor eax, eax
+1:  cmp rax, rsi
+    jae 8f
+    cmp byte ptr [rdi + rax], dl
+    je 9f
+    inc rax
+    jmp 1b
+8:  mov rax, -1
+9:  ret
+
+# echo_tags(AS*, ptr, len) -> eax 1 when the text is a command's echo in a recorded form
+#   ("<command-name>/x</command-name>…<command-args>A</command-args>", a custom command's
+#   "<command-message>x</command-message>\n<command-name>/x</command-name>": sVe, 31): its row, "/x A"
+echo_tags:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lcmd_tag]
+    call starts
+    test eax, eax
+    jz 8f
+    cmp byte ptr [r12 + r13 - 1], '>'
+    jne 8f
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lname_open]
+    lea rcx, [rip + .Lname_close]
+    call between
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    mov rsi, rdx
+    call trim_ws
+    test rdx, rdx
+    jz 8f
+    cmp rdx, CMD_NAME_MAX
+    ja 8f
+    cmp byte ptr [rax], '/'     # its name without the "/"
+    jne 1f
+    inc rax
+    dec rdx
+    jz 8f
+1:  mov r14, rax
+    mov r15, rdx
+    mov rdi, rax
+    mov rsi, rdx
+    mov edx, 10
+    call mem_chr_n
+    test rax, rax
+    jns 8f
+    lea rdi, [rip + utext]
+    call sb_clear
+    lea rdi, [rip + utext]
+    mov esi, '/'
+    call sb_push_byte
+    lea rdi, [rip + utext]
+    mov rsi, r14
+    mov rdx, r15
+    call sb_push
+    mov rdi, r12                # its arguments
+    mov rsi, r13
+    lea rdx, [rip + .Largs_open]
+    lea rcx, [rip + .Largs_close]
+    call between
+    test rax, rax
+    jz 2f
+    mov rdi, rax
+    mov rsi, rdx
+    call trim_ws
+    test rdx, rdx
+    jz 2f
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    lea rdi, [rip + utext]
+    mov esi, ' '
+    call sb_push_byte
+    lea rdi, [rip + utext]
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call sb_push
+2:  lea rdi, [rip + utext]      # (the name stays where it is in the record: utext holds the line)
+    mov rsi, [rip + utext + SB_ptr]
+    mov rdx, [rip + utext + SB_len]
+    mov rcx, rsi
+    inc rcx
+    mov r8, r15
+    mov rdi, rbx
+    call echo_row
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# slash_name(ptr, len) -> rax the length of a command's name after a leading "/" (letters, digits, "-", "_",
+#   ":", "."), followed by the end or a blank; 0 when it is none
+slash_name:
+    mov eax, 1
+1:  cmp rax, rsi
+    jae 3f
+    movzx ecx, byte ptr [rdi + rax]
+    cmp ecx, ' '
+    je 3f
+    cmp ecx, 10
+    je 3f
+    cmp ecx, 9
+    je 3f
+    cmp ecx, '-'
+    je 2f
+    cmp ecx, '_'
+    je 2f
+    cmp ecx, ':'
+    je 2f
+    cmp ecx, '.'
+    je 2f
+    mov edx, ecx
+    sub edx, '0'
+    cmp edx, 9
+    jbe 2f
+    or ecx, 0x20
+    sub ecx, 'a'
+    cmp ecx, 25
+    ja 8f
+2:  inc rax
+    jmp 1b
+3:  dec rax
+    ret
+8:  xor eax, eax
+    ret
+
+# echo_row(AS*, line ptr, len, name ptr, len): a command's echo, a prompt row with AMF_ECHO. In a file the
+#   /compact command's echo comes after its compaction's marker and summary (30); the marker that is the last
+#   row then moves after it, so that the file gives echo, marker, output as the stream does (where rhun made
+#   the echo when it was sent)
+echo_row:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov qword ptr [rsp], 0      # the marker moved: its text (owned), length, n, flags, time
+    cmp dword ptr [rip + cb_flags], ING_FILE
+    jne 2f
+    mov rdi, rcx
+    mov rsi, r8
+    lea rdx, [rip + .Lw_compact]
+    call text_is
+    test eax, eax
+    jz 2f
+    mov r14, [rbx + AS_msgs + VEC_len]
+    test r14, r14
+    jz 2f
+    dec r14
+    imul r15, r14, AM_SIZE
+    add r15, [rbx + AS_msgs + VEC_ptr]
+    cmp dword ptr [r15 + AM_role], R_COMPACT
+    jne 2f
+    mov rdi, [r15 + AM_text]
+    mov rsi, [r15 + AM_len]
+    call mem_dup
+    mov [rsp], rax
+    mov rax, [r15 + AM_len]
+    mov [rsp + 8], rax
+    mov eax, [r15 + AM_n]
+    mov [rsp + 16], eax
+    mov eax, [r15 + AM_flags]
+    and eax, AMF_MANUAL
+    mov [rsp + 20], eax
+    mov rax, [r15 + AM_t]
+    mov [rsp + 24], rax
+    mov rdi, rbx
+    mov rsi, r14
+    call agents_rows_cut
+2:  mov rdi, rbx
     mov esi, R_USER
     mov rdx, r12
     mov rcx, r13
     xor r8d, r8d
     call agents_row_add
-    EPILOGUE
-1:  mov rdi, rbx
-    mov esi, R_INFO
-    lea rdx, [rip + .Linterrupted]
-    mov ecx, 11
+    test rax, rax
+    js 3f
+    mov rdi, rbx
+    mov rsi, rax
+    mov edx, AMF_ECHO
+    call agents_row_flag
+3:  cmp qword ptr [rsp], 0
+    je 9f
+    mov rax, [rbx + AS_now]     # the marker again, with its own time
+    mov [rsp + 32], rax
+    mov rdi, rbx
+    mov rsi, [rsp + 24]
+    call agents_stamp
+    mov rdi, rbx
+    mov esi, R_COMPACT
+    mov rdx, [rsp]
+    mov rcx, [rsp + 8]
     xor r8d, r8d
     call agents_row_add
+    test rax, rax
+    js 4f
+    imul rcx, rax, AM_SIZE
+    add rcx, [rbx + AS_msgs + VEC_ptr]
+    mov edx, [rsp + 16]
+    mov [rcx + AM_n], edx
+    mov rdi, rbx
+    mov rsi, rax
+    mov edx, [rsp + 20]
+    call agents_row_flag
+4:  mov rdi, rbx
+    mov rsi, [rsp + 32]
+    call agents_stamp
+    mov rdi, [rsp]
+    call mem_free
+9:  EPILOGUE
+
+# compact_summary(AS*, ptr, len): a compaction's summary (the user string after its boundary): the text of the
+#   marker that is the last row and has none yet; nothing else
+compact_summary:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, [rbx + AS_msgs + VEC_len]
+    test r14, r14
+    jz 9f
+    dec r14
+    imul rax, r14, AM_SIZE
+    add rax, [rbx + AS_msgs + VEC_ptr]
+    cmp dword ptr [rax + AM_role], R_COMPACT
+    jne 9f
+    cmp qword ptr [rax + AM_len], 0
+    jne 9f
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, r12
+    mov rcx, r13
+    call agents_msg_set
+9:  EPILOGUE
+
+# diag_line(AS*, ptr, len) -> eax 1 when the text is a diagnostics hook's
+#   ("<post-tool-use-hook><ide_diagnostics>[…]</ide_diagnostics></post-tool-use-hook>": PKt): a meta line
+#   "Found N new problem(s)" (its Problems tab is phase 4); its JSON is counted, not parsed (the reader must
+#   not parse while it reads)
+diag_line:
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, rsi
+    mov rsi, rdx
+    lea rdx, [rip + .Lhook_open]
+    lea rcx, [rip + .Lhook_close]
+    call wrapped
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    mov rsi, rdx
+    call trim_ws
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + .Ldiag_open]
+    lea rcx, [rip + .Ldiag_close]
+    call wrapped
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    mov rsi, rdx
+    call json_objects
+    test eax, eax
+    jz 8f
+    mov r12d, eax
+    lea rdi, [rip + utext]
+    call sb_clear
+    lea rdi, [rip + utext]
+    lea rsi, [rip + .Lfound_sp]
+    call sb_push_cstr
+    lea rdi, [rip + utext]
+    mov esi, r12d
+    lea rdx, [rip + .Lnew_problem]
+    call plural
+    mov rdi, rbx
+    mov rsi, [rip + utext + SB_ptr]
+    mov rdx, [rip + utext + SB_len]
+    xor ecx, ecx
+    call meta_row
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# json_objects(ptr, len) -> eax the objects at the top level of a JSON array's text ("[{…}, {…}]"), counted
+#   by their braces outside strings; 0 when it is no array
+json_objects:
+    xor eax, eax
+    xor ecx, ecx                # the depth
+    xor edx, edx                # in a string
+    xor r8d, r8d
+1:  cmp r8, rsi
+    jae 9f
+    movzx r9d, byte ptr [rdi + r8]
+    inc r8
+    test edx, edx
+    jz 2f
+    cmp r9d, '\\'
+    jne 11f
+    inc r8
+    jmp 1b
+11: cmp r9d, '"'
+    jne 1b
+    xor edx, edx
+    jmp 1b
+2:  cmp r9d, '"'
+    jne 3f
+    mov edx, 1
+    jmp 1b
+3:  cmp r9d, '['
+    je 4f
+    cmp r9d, '{'
+    jne 5f
+    cmp ecx, 1
+    jne 4f
+    inc eax
+4:  inc ecx
+    jmp 1b
+5:  cmp r9d, ']'
+    je 6f
+    cmp r9d, '}'
+    jne 1b
+6:  dec ecx
+    jmp 1b
+9:  ret
+
+# notice_row(AS*, ptr, len) -> eax 1 when the text is a wrapped notice (ND: a known tag around it, closed once
+#   at its end; teammate, cross-session and channel messages too, whose own form is phase 7): a meta row with
+#   AMF_NOTICE, its label, a line feed, the text inside the tags
+notice_row:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    lea r14, [rip + notice_tags]
+1:  mov rdx, [r14]
+    test rdx, rdx
+    jz 8f
+    mov rdi, r12
+    mov rsi, r13
+    call starts
+    test eax, eax
+    jz 7f
+    mov rdi, [r14]              # the open tag's end: ">" or a blank and attributes
+    call strlen
+    cmp rax, r13
+    jae 7f
+    movzx ecx, byte ptr [r12 + rax]
+    cmp ecx, '>'
+    je 2f
+    cmp ecx, ' '
+    je 2f
+    cmp ecx, 9
+    jne 7f
+2:  mov rdi, r12
+    mov rsi, r13
+    mov rdx, [r14 + 8]
+    call has
+    test eax, eax
+    jz 7f
+    mov rdi, r12                # inside: after the open tag's ">", before the last "</"
+    mov rsi, r13
+    mov edx, '>'
+    call mem_chr_n
+    test rax, rax
+    js 7f
+    lea r15, [r12 + rax + 1]
+    mov rcx, r13
+3:  dec rcx
+    js 7f
+    cmp byte ptr [r12 + rcx], '<'
+    jne 3b
+    lea rax, [r12 + rcx]
+    cmp rax, r15
+    jb 7f
+    sub rax, r15
+    mov [rsp], rax
+    lea rdi, [rip + utext]
+    call sb_clear
+    lea rdi, [rip + utext]
+    mov rsi, [r14 + 16]
+    call sb_push_cstr
+    lea rdi, [rip + utext]
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, r15
+    mov rsi, [rsp]
+    call trim_ws
+    lea rdi, [rip + utext]
+    mov rsi, rax
+    call sb_push
+    mov rdi, rbx
+    mov rsi, [rip + utext + SB_ptr]
+    mov rdx, [rip + utext + SB_len]
+    mov ecx, AMF_NOTICE
+    call meta_row
+    mov eax, 1
+    EPILOGUE
+7:  add r14, 24
+    jmp 1b
+8:  xor eax, eax
+    EPILOGUE
+
+# chip_of(ptr, len) -> eax 1 when the text is a chip of a prompt (pushed into pchips): an editor selection
+#   ("<ide_selection>The user selected the lines A to B from PATH:…": "NAME#A-B", opening PATH:A-B; gKt), an
+#   opened file ("<ide_opened_file>The user opened the file PATH in the IDE…": NAME, opening PATH; yKt), a
+#   terminal ('<terminal name="N">…': N) or a browser tab ('<browser tabGroupId=…>URL</browser>': URL). A path
+#   of more than 4096 bytes or with a control character is none (AD)
+chip_of:
+    PROLOGUE 48
+    mov r12, rdi
+    mov r13, rsi
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lsel_open]
+    lea rcx, [rip + .Lsel_close]
+    call wrapped
+    test rax, rax
+    jnz .Lchip_sel
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lfile_open]
+    lea rcx, [rip + .Lfile_close]
+    call wrapped
+    test rax, rax
+    jnz .Lchip_file
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lterm_open]
+    lea rcx, [rip + .Lterm_close]
+    call wrapped
+    test rax, rax
+    jnz .Lchip_term
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lbrowser_open]
+    lea rcx, [rip + .Lbrowser_close]
+    call wrapped
+    test rax, rax
+    jnz .Lchip_browser
+8:  xor eax, eax
+    EPILOGUE
+.Lchip_sel:                     # "The user selected [the lines A to B ]from PATH:" then a line feed
+    mov r12, rax
+    mov r13, rdx
+    mov qword ptr [rsp + 32], 0 # A, B (0: none)
+    mov qword ptr [rsp + 40], 0
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lsel_said]
+    call starts
+    test eax, eax
+    jz 8b
+    lea rdi, [rip + .Lsel_said]
+    call strlen
+    add r12, rax
+    sub r13, rax
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lsel_lines]
+    call starts
+    test eax, eax
+    jz 2f
+    lea rdi, [rip + .Lsel_lines]
+    call strlen
+    add r12, rax
+    sub r13, rax
+    mov rdi, r12
+    mov rsi, r13
+    call dec_at
+    test rdx, rdx
+    jz 8b
+    mov [rsp + 32], rax
+    add r12, rdx
+    sub r13, rdx
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lsel_to]
+    call starts
+    test eax, eax
+    jz 8b
+    add r12, 4
+    sub r13, 4
+    mov rdi, r12
+    mov rsi, r13
+    call dec_at
+    test rdx, rdx
+    jz 8b
+    mov [rsp + 40], rax
+    add r12, rdx
+    sub r13, rdx
+    cmp r13, 1
+    jb 8b
+    cmp byte ptr [r12], ' '
+    jne 8b
+    inc r12
+    dec r13
+2:  mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lsel_from]
+    call starts
+    test eax, eax
+    jz 8b
+    add r12, 5
+    sub r13, 5
+    mov rdi, r12                # the path: to the line's end, less its ":"
+    mov rsi, r13
+    mov edx, 10
+    call mem_chr_n
+    test rax, rax
+    jns 3f
+    mov rax, r13
+3:  cmp rax, 2
+    jb 8b
+    cmp byte ptr [r12 + rax - 1], ':'
+    jne 8b
+    lea r13, [rax - 1]
+    mov rdi, r12
+    mov rsi, r13
+    call path_ok
+    test eax, eax
+    jz 8b
+    lea rdi, [rip + t3]         # the target: PATH[:A-B]
+    call sb_clear
+    lea rdi, [rip + t3]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    mov rdi, r12                # the label: NAME[#A-B]
+    mov rsi, r13
+    call base
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    lea rdi, [rip + t2]
+    call sb_clear
+    lea rdi, [rip + t2]
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call sb_push
+    cmp qword ptr [rsp + 32], 0
+    je 4f
+    lea rdi, [rip + t2]
+    mov esi, '#'
+    call sb_push_byte
+    lea rdi, [rip + t3]
+    mov esi, ':'
+    call sb_push_byte
+    lea rdi, [rip + t2]
+    mov rsi, [rsp + 32]
+    mov rdx, [rsp + 40]
+    call lines_ab
+    lea rdi, [rip + t3]
+    mov rsi, [rsp + 32]
+    mov rdx, [rsp + 40]
+    call lines_ab
+4:  mov rdi, [rip + t2 + SB_ptr]
+    mov rsi, [rip + t2 + SB_len]
+    mov rdx, [rip + t3 + SB_ptr]
+    mov rcx, [rip + t3 + SB_len]
+    call push_chip
+    mov eax, 1
+    EPILOGUE
+.Lchip_file:                    # "The user opened [the ]file PATH in the IDE…"
+    mov r12, rax
+    mov r13, rdx
+    lea r14, [rip + .Lfile_said]
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r14
+    call starts
+    test eax, eax
+    jnz 5f
+    lea r14, [rip + .Lfile_said2]
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r14
+    call starts
+    test eax, eax
+    jz 8b
+5:  mov rdi, r14
+    call strlen
+    add r12, rax
+    sub r13, rax
+    mov r14, r13                # the path ends at its last " in "
+6:  dec r14
+    js 8b
+    cmp r14, 1
+    jb 8b
+    mov rdi, r12
+    add rdi, r14
+    mov rsi, r13
+    sub rsi, r14
+    lea rdx, [rip + .Lin_ide]
+    call starts
+    test eax, eax
+    jz 6b
+    mov r13, r14
+    mov rdi, r12
+    mov rsi, r13
+    call path_ok
+    test eax, eax
+    jz 8b
+    mov rdi, r12
+    mov rsi, r13
+    call base
+    mov rdi, rax
+    mov rsi, rdx
+    mov rdx, r12
+    mov rcx, r13
+    call push_chip
+    mov eax, 1
+    EPILOGUE
+.Lchip_term:                    # '<terminal name="N">': its name
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Lterm_open]
+    lea rcx, [rip + .Lquote_gt]
+    call between
+    test rax, rax
+    jz 8b
+    mov r12, rax
+    mov r13, rdx
+    mov rdi, r12
+    mov rsi, r13
+    call path_ok
+    test eax, eax
+    jz 8b
+    mov rdi, r12
+    mov rsi, r13
+    xor edx, edx
+    xor ecx, ecx
+    call push_chip
+    mov eax, 1
+    EPILOGUE
+.Lchip_browser:                 # its address, without its scheme
+    mov rdi, r12
+    mov rsi, r13
+    call trim_ws
+    mov rdi, rax
+    mov rsi, rdx
+    mov edx, '>'
+    push rax
+    push rdx
+    call mem_chr_n
+    pop rdx
+    pop rcx
+    test rax, rax
+    js 8b
+    lea r12, [rcx + rax + 1]
+    lea r13, [rcx + rdx]
+    lea rdi, [rip + .Lbrowser_close]
+    call strlen
+    sub r13, rax
+    sub r13, r12
+    jbe 8b
+    mov rdi, r12                # (no "://": the whole is kept)
+    mov rsi, r13
+    lea rdx, [rip + .Lscheme]
+    mov rcx, 3
+    push rdi
+    push rsi
+    call str_find
+    pop rsi
+    pop rdi
+    test rax, rax
+    js 7f
+    lea r12, [rdi + rax + 3]
+    sub rsi, rax
+    sub rsi, 3
+    mov r13, rsi
+7:  mov rdi, r12
+    mov rsi, r13
+    call path_ok
+    test eax, eax
+    jz 8b
+    mov rdi, r12
+    mov rsi, r13
+    xor edx, edx
+    xor ecx, ecx
+    call push_chip
+    mov eax, 1
+    EPILOGUE
+
+# lines_ab(sb, a, b): "A-B" pushed
+lines_ab:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rdx
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, '-'
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, r12
+    call sb_push_u64
+    EPILOGUE
+
+# dec_at(ptr, len) -> rax the decimal number the text begins with, rdx its digits (0: none; 9 at most)
+dec_at:
+    xor eax, eax
+    xor edx, edx
+1:  cmp rdx, rsi
+    jae 9f
+    cmp rdx, 9
+    jae 9f
+    movzx ecx, byte ptr [rdi + rdx]
+    sub ecx, '0'
+    cmp ecx, 9
+    ja 9f
+    imul rax, rax, 10
+    add rax, rcx
+    inc rdx
+    jmp 1b
+9:  ret
+
+# path_ok(ptr, len) -> eax 1 for a chip's path or name: 1 to 4096 bytes, no control character
+path_ok:
+    xor eax, eax
+    test rsi, rsi
+    jz 9f
+    cmp rsi, CHIP_PATH_MAX
+    ja 9f
+    xor ecx, ecx
+1:  cmp rcx, rsi
+    jae 8f
+    cmp byte ptr [rdi + rcx], ' '
+    jb 9f
+    cmp byte ptr [rdi + rcx], 127
+    je 9f
+    inc rcx
+    jmp 1b
+8:  mov eax, 1
+9:  ret
+
+# push_chip(label ptr, len, target ptr, len): a chip into pchips, "LABEL\tTARGET" (a line feed before it when
+#   there are chips already; 16 at most)
+push_chip:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    mov r14, rdx
+    mov r15, rcx
+    mov rdi, [rip + pchips + SB_ptr]
+    mov rsi, [rip + pchips + SB_len]
+    test rsi, rsi
+    jz 2f
+    call nlines
+    cmp eax, 16
+    jae 9f
+    lea rdi, [rip + pchips]
+    mov esi, 10
+    call sb_push_byte
+2:  xor ebx, ebx
+3:  cmp rbx, r13
+    jae 4f
+    movzx esi, byte ptr [r12 + rbx]
+    inc rbx
+    cmp esi, ' '
+    jae 31f
+    mov esi, ' '
+31: lea rdi, [rip + pchips]
+    call sb_push_byte
+    jmp 3b
+4:  lea rdi, [rip + pchips]
+    mov esi, 9
+    call sb_push_byte
+    test r15, r15
+    jz 9f
+    lea rdi, [rip + pchips]
+    mov rsi, r14
+    mov rdx, r15
+    call sb_push
+9:  EPILOGUE
+
+# media_chip(block, type jv): an image block of a prompt is the chip "[Image]" (its thumbnail is phase 4), a
+#   document its title, else "Document"; any other block nothing
+media_chip:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, r12
+    lea rsi, [rip + .Lv_image]
+    call json_is
+    test eax, eax
+    jz 1f
+    lea rdi, [rip + .Lchip_image]
+    call strlen
+    lea rdi, [rip + .Lchip_image]
+    mov rsi, rax
+    xor edx, edx
+    xor ecx, ecx
+    call push_chip
+    EPILOGUE
+1:  mov rdi, r12
+    lea rsi, [rip + .Lv_document]
+    call json_is
+    test eax, eax
+    jz 9f
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_title]
+    call jstr
+    test rdx, rdx
+    jnz 2f
+    lea rdi, [rip + .Lchip_doc]
+    call strlen
+    mov rdx, rax
+    lea rax, [rip + .Lchip_doc]
+2:  cmp rdx, 200
+    jbe 3f
+    mov edx, 200
+3:  mov rdi, rax
+    mov rsi, rdx
+    xor edx, edx
+    xor ecx, ecx
+    call push_chip
+9:  EPILOGUE
+
+# ---------------- system records (task 8) ----------------
+
+# ing_system(AS*, record): a system record of the stream or line of the file, by its subtype:
+#   compact_boundary (a compaction's marker: the stream's compact_metadata {trigger, pre_tokens}, the file's
+#   compactMetadata {trigger, preTokens}: finding 30), informational with a text (a prompt a hook blocked: a
+#   meta line, 32), local_command (the file's output of a command the CLI ran itself, 31); the rest (hooks,
+#   stop_hook_summary, permission_denied, …) no row
+ing_system:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, r12
+    lea rsi, [rip + .Lk_subtype]
+    call json_get
+    mov r13, rax
+    mov rdi, r13
+    lea rsi, [rip + .Lv_boundary]
+    call json_is
+    test eax, eax
+    jz 1f
+    mov rdi, rbx
+    mov rsi, r12
+    call compact_row
+    EPILOGUE
+1:  mov rdi, r13
+    lea rsi, [rip + .Lv_informational]
+    call json_is
+    test eax, eax
+    jz 2f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_content]
+    call jstr
+    test rdx, rdx
+    jz 9f
+    mov rdi, rbx
+    mov rsi, rax
+    xor ecx, ecx
+    call meta_row
+    EPILOGUE
+2:  mov rdi, r13
+    lea rsi, [rip + .Lv_local_command]
+    call json_is
+    test eax, eax
+    jz 9f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_content]
+    call jstr
+    test rdx, rdx
+    jz 9f
+    mov rdi, rbx
+    mov rsi, rax
+    call cmd_wrapped
+9:  EPILOGUE
+
+# compact_row(AS*, record): a compaction's marker (R_COMPACT): the thousands of tokens it freed (its tokens
+#   before it, rounded: $Rt), manual or automatic; its summary is its text when the user string after it
+#   comes (compact_summary)
+compact_row:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, r12
+    lea rsi, [rip + .Lk_cmeta]
+    call json_get
+    test rax, rax
+    jnz 1f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_cmeta_file]
+    call json_get
+1:  mov r13, rax
+    mov rdi, r13
+    lea rsi, [rip + .Lk_pre]
+    call jnum_or
+    cmp eax, -1
+    jne 2f
+    mov rdi, r13
+    lea rsi, [rip + .Lk_pre_file]
+    call jnum_or
+    cmp eax, -1
+    jne 2f
+    xor eax, eax
+2:  add eax, 500
+    xor edx, edx
+    mov ecx, 1000
+    div ecx
+    mov r14d, eax
+    xor r15d, r15d
+    mov rdi, r13
+    lea rsi, [rip + .Lk_trigger]
+    call jstr
+    mov rdi, rax
+    mov rsi, rdx
+    lea rdx, [rip + .Lw_manual]
+    call text_is
+    test eax, eax
+    jz 3f
+    mov r15d, AMF_MANUAL
+3:  mov rdi, rbx
+    mov esi, R_COMPACT
+    lea rdx, [rip + .Lempty]
+    xor ecx, ecx
+    xor r8d, r8d
+    call agents_row_add
+    test rax, rax
+    js 9f
+    imul rcx, rax, AM_SIZE
+    add rcx, [rbx + AS_msgs + VEC_ptr]
+    mov [rcx + AM_n], r14d
+    mov rdi, rbx
+    mov rsi, rax
+    mov edx, r15d
+    call agents_row_flag
 9:  EPILOGUE
 
 # call_block(AS*, block, parent id ptr, len): a tool_use block: its call (a row, or a child of the call it
@@ -3709,6 +5109,11 @@ grep_keys: .quad .Lk_path, .Lin_sp, .Lk_glob, .Lglob_sp, .Lk_typekey, .Ltype_sp,
 mcp_keys: .quad .Lk_query, .Lk_message, .Lk_channel, .Lk_repo, .Lk_url, .Lk_path, .Lk_title, .Lk_search
     .quad .Lk_text, 0
 human_words: .quad .Lw_github, .Lw_github2, .Lw_pubmed, .Lw_pubmed2, .Lw_ai, .Lw_ai2, 0, 0
+notice_tags:                    # notice_row's {open tag, close tag, label} (ND's HVe, and the peer messages)
+    .quad .Lnt_tm, .Lnt_tm_c, .Lnl_tm, .Lnt_bo, .Lnt_bo_c, .Lnl_bo, .Lnt_be, .Lnt_be_c, .Lnl_be
+    .quad .Lnt_tick, .Lnt_tick_c, .Lnl_tick, .Lnt_mr, .Lnt_mr_c, .Lnl_mr, .Lnt_mp, .Lnt_mp_c, .Lnl_mp
+    .quad .Lnt_cc, .Lnt_cc_c, .Lnl_cc, .Lnt_xs, .Lnt_xs_c, .Lnl_xs, .Lnt_ch, .Lnt_ch_c, .Lnl_ch
+    .quad .Lnt_am, .Lnt_am_c, .Lnl_am, 0
 silent: .quad .Lyb, .Lctt, .Ldtt, .Ldue, .Lmark_tool, 0    # the bundle's GEn: nothing shown
 answer_heads: .quad .Lzie1, .Lzie2, .Lo8n, 0
 answer_tails: .quad .Lvtt1, .Lvtt2, 0
@@ -3828,6 +5233,94 @@ answer_tails: .quad .Lvtt1, .Lvtt2, 0
 .Lmark_stop: .asciz "[Request interrupted by user]"
 .Lmark_tool: .asciz "[Request interrupted by user for tool use]"
 .Linterrupted: .asciz "Interrupted"
+.Ltool_interrupted: .asciz "Tool interrupted"
+.Lk_subtype: .asciz "subtype"
+.Lk_lcs: .asciz "local_command_source"
+.Lk_error: .asciz "error"
+.Lk_isCompactSummary: .asciz "isCompactSummary"
+.Lk_isSynthetic: .asciz "isSynthetic"
+.Lk_cmeta: .asciz "compact_metadata"
+.Lk_cmeta_file: .asciz "compactMetadata"
+.Lk_pre: .asciz "pre_tokens"
+.Lk_pre_file: .asciz "preTokens"
+.Lk_trigger: .asciz "trigger"
+.Lv_system: .asciz "system"
+.Lv_boundary: .asciz "compact_boundary"
+.Lv_informational: .asciz "informational"
+.Lv_local_command: .asciz "local_command"
+.Lv_image: .asciz "image"
+.Lv_document: .asciz "document"
+.Lw_manual: .asciz "manual"
+.Lw_compact: .asciz "compact"
+.Ltn_open: .asciz "<task-notification"
+.Ltn_close: .asciz "</task-notification>"
+.Lsum_open: .asciz "<summary>"
+.Lsum_close: .asciz "</summary>"
+.Lout_open: .asciz "<local-command-stdout>"
+.Lout_close: .asciz "</local-command-stdout>"
+.Lerr_open: .asciz "<local-command-stderr>"
+.Lerr_close: .asciz "</local-command-stderr>"
+.Lset_model: .asciz "Set model to "
+.Lswitched: .asciz "Switched to "
+.Lcmd_tag: .asciz "<command-"
+.Lname_open: .asciz "<command-name>"
+.Lname_close: .asciz "</command-name>"
+.Largs_open: .asciz "<command-args>"
+.Largs_close: .asciz "</command-args>"
+.Lhook_open: .asciz "<post-tool-use-hook>"
+.Lhook_close: .asciz "</post-tool-use-hook>"
+.Ldiag_open: .asciz "<ide_diagnostics>"
+.Ldiag_close: .asciz "</ide_diagnostics>"
+.Lfound_sp: .asciz "Found "
+.Lnew_problem: .asciz "new problem"
+.Lsel_open: .asciz "<ide_selection>"
+.Lsel_close: .asciz "</ide_selection>"
+.Lsel_said: .asciz "The user selected "
+.Lsel_lines: .asciz "the lines "
+.Lsel_to: .asciz " to "
+.Lsel_from: .asciz "from "
+.Lfile_open: .asciz "<ide_opened_file>"
+.Lfile_close: .asciz "</ide_opened_file>"
+.Lfile_said: .asciz "The user opened the file "
+.Lfile_said2: .asciz "The user opened file "
+.Lin_ide: .asciz " in "
+.Lterm_open: .asciz "<terminal name=\""
+.Lterm_close: .asciz "</terminal>"
+.Lquote_gt: .asciz "\">"
+.Lbrowser_open: .asciz "<browser tabGroupId=\""
+.Lbrowser_close: .asciz "</browser>"
+.Lchip_image: .asciz "[Image]"
+.Lchip_doc: .asciz "Document"
+.Lnt_tm: .asciz "<teammate-message"
+.Lnt_tm_c: .asciz "</teammate-message>"
+.Lnl_tm: .asciz "Teammate message"
+.Lnt_bo: .asciz "<bash-stdout"
+.Lnt_bo_c: .asciz "</bash-stdout>"
+.Lnl_bo: .asciz "Terminal command output"
+.Lnt_be: .asciz "<bash-stderr"
+.Lnt_be_c: .asciz "</bash-stderr>"
+.Lnl_be: .asciz "Terminal command error output"
+.Lnt_tick: .asciz "<tick"
+.Lnt_tick_c: .asciz "</tick>"
+.Lnl_tick: .asciz "Autonomous prompt"
+.Lnt_mr: .asciz "<mcp-resource-update"
+.Lnt_mr_c: .asciz "</mcp-resource-update>"
+.Lnl_mr: .asciz "MCP resource update"
+.Lnt_mp: .asciz "<mcp-polling-update"
+.Lnt_mp_c: .asciz "</mcp-polling-update>"
+.Lnl_mp: .asciz "MCP polling update"
+.Lnt_cc: .asciz "<local-command-caveat"
+.Lnt_cc_c: .asciz "</local-command-caveat>"
+.Lnl_cc: .asciz "Command caveat"
+.Lnt_xs: .asciz "<cross-session-message"
+.Lnt_xs_c: .asciz "</cross-session-message>"
+.Lnl_xs: .asciz "Message from another session"
+.Lnt_ch: .asciz "<channel"
+.Lnt_ch_c: .asciz "</channel>"
+.Lnl_ch: .asciz "Channel message"
+.Lnt_am: .asciz "<agent-message"
+.Lnt_am_c: .asciz "</agent-message>"
+.Lnl_am: .asciz "Agent message"
 .Lempty: .asciz ""
 .Lellipsis: .asciz "…"
 .Lfile: .asciz "file"

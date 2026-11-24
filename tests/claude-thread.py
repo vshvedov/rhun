@@ -307,8 +307,8 @@ class AnchorTest(ThreadCase):
             at = '2026-10-%02dT12:%02d:00Z' % (1 + i // 8, i % 60)
             rows += [('user', 'step %d' % i, at), ('assistant', 'reply %d' % i, at)]
         self.open_seeded(rows)
-        self.wheel(-900)
-        first, y = self.top_row()
+        self.wheel(-880)                             # (a top row whose time line is wholly above the edge:
+        first, y = self.top_row()                    #   phase 3 task 8's shorter prompts moved it)
         height = int(self.row(first + 1)['height'])
         on = self.engine()
         self.assertEqual(on['follow'], 0, on)

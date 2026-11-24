@@ -237,7 +237,7 @@ class PermissionCardTest(CardCase):
         answer = self.until_answered()[0]
         self.assertEqual((answer['message'], answer['interrupt']), (chat.REJECTED, True))
         self.command('wait-agent ready')
-        self.assertEqual(self.thread()[-1], 'info Interrupted')
+        self.assertEqual(self.thread()[-1], 'info Tool interrupted')      # its call was refused: the CLI's tool mark (dc)
 
     def test_escape_denies_with_the_fields_text(self):
         self.ask('tool')

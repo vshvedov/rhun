@@ -322,6 +322,7 @@ class QueueTest(CfgCase):
 
     def test_queued_rows_count_in_the_scroll(self):
         self.start(env={'FAKE_CLAUDE_INIT_MS': '3000'})
+        self.command('resize 1280 300')             # (a prompt is clipped at 60 px: phase 3 task 8)
         self.command('cmd focus_agents')
         self.command('agent-new claude')
         long = ' '.join('word%d' % i for i in range(400))
@@ -365,7 +366,10 @@ class QueueTest(CfgCase):
                       and m['request'].get('subtype') == 'interrupt']
         self.assertEqual(len(interrupts), 1)
         self.assertNotIn('cancel_queued', interrupts[0]['request'])
-        thread = self.thread()
+        # the reply's label names the model where it changed since the last label shown: the interrupted
+        #   reply before it shows one only when the stop came after its first text (a race of the test's,
+        #   not a rule), so the label is not compared
+        thread = [re.sub(r'^agent\(\S+\) ', 'agent ', row) for row in self.thread()]
         self.assertEqual(thread.count('user more'), 1, thread)
         self.assertEqual(thread[-2:], ['user more', 'agent ok: more'])
         self.assertIn('info Interrupted', thread[:-2])
@@ -692,8 +696,8 @@ class MenuTest(MenuCase):
         self.command('agent-prompt /status')
         self.command('wait-agent ready')
         self.until(lambda: '/status' in self.prompts(), 'sent')
-        self.until(lambda: any("/status isn't available in this environment." in row for row in self.thread()),
-                   "the CLI's answer")
+        self.until(lambda: "pill /status isn't available in this environment." in self.command('print-agents'),
+                   "the CLI's answer")              # (one line of a command's output: a pill, phase 3 task 8)
 
     def toast(self):
         return self.command('print-toast').strip()

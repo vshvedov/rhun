@@ -5,6 +5,7 @@
 .equ WALK_KEEP, 8               # chunks a frame's walked count tells its rows apart in
 .equ HX_CAP, 0x3fffffff         # a chunk's height at most
 .equ EST_CAP, 16777216          # a row's lines and bytes the estimate counts at most
+.equ ERROR_CHARS, 2000          # an error row's characters at most (then "…")
 
 .equ ID_AG_ROW, 0x400000          # + session: a range of its own, as the list has no end
 .equ ID_AG_BACK, 0x5f00
@@ -13,6 +14,8 @@
 .equ ID_AG_TSCROLL, 0x5f03
 .equ ID_AG_FOLLOW, 0x5f04
 .equ ID_AG_MORE, 0x5f05
+.equ ID_AG_STICKY, 0x5f06         # the sticky prompt: a click brings it into view
+.equ STICKY_BYTES, 512          # a sticky prompt's first line: bytes drawn at most (cut with "…")
 .equ ID_AG_MD, 0x480000          # + (row & 255) * 4096: the links of the replies in view
 .equ ID_AG_TIME, 0x63f000        # + (row & 4095): a row's time (its tip), in phase 3's 0x600000-0x63ffff
 
@@ -83,6 +86,15 @@ walk_m: .zero 8 * WALK_KEEP     #   and a bit per row of each
 walk_k: .long 0                 # chunks noted
 walk_x: .long 0                 # rows asked past WALK_KEEP chunks (counted, not told apart)
 lay_off: .long 0                # th_layout: the pixels of lay_row above the area's top
+.p2align 3
+err_r: .zero 16                 # where the last frame drew the error block, its sticky prompt and its jump
+sticky_r: .zero 16              #   button (x, y, w, h; w 0: none)
+jump_r: .zero 16
+empty_txt: .quad 0              # what the last frame drew in an empty conversation (a tip, Loading...), 0
+tip_as: .quad 0                 # the empty conversation a tip was picked for, and which (by the clock)
+tip_n: .long 0
+veil_last: .long 0              # the last frame drew the thread under a veil
+sticky_held: .long 0            # sticky_shield took the pointer from the rows
 th_pend: .long 0                # a page key's step, taken by the next frame as the wheel's
 th_areah: .long 0               # the rows' area's height in the last frame (a page)
 .globl ag_gen
@@ -1326,13 +1338,31 @@ add_msg:
     cmp rcx, 360
     jb 2b
 22: mov r14, rcx
-3:  lea rdi, [rbx + AS_msgs]
+3:  mov qword ptr [rsp + 8], 0  # an error's text: 2000 characters and "…" (the extension's W7), whatever
+    cmp r12d, R_ERROR           #   the agent's message held (a megabyte of it is drawn as 2000)
+    jne 34f
+    xor ecx, ecx
+    xor edx, edx
+31: cmp rcx, r14
+    jae 34f
+    movzx eax, byte ptr [r13 + rcx]
+    and eax, 0xc0
+    cmp eax, 0x80
+    je 32f
+    cmp edx, ERROR_CHARS
+    je 33f
+    inc edx
+32: inc rcx
+    jmp 31b
+33: mov r14, rcx
+    mov qword ptr [rsp + 8], 1
+34: lea rdi, [rbx + AS_msgs]
     mov esi, AM_SIZE
     call vec_push
     mov [rsp], rax
     mov [rax + AM_role], r12d
     # sanitize: tabs -> spaces, drop CR and other controls
-    lea rdi, [r14 + 1]
+    lea rdi, [r14 + 4]
     call mem_alloc
     mov rcx, [rsp]
     mov [rcx + AM_text], rax
@@ -1355,9 +1385,11 @@ add_msg:
     inc rdx
     jmp 4b
     # an escape sequence (the colors of a command's output) shows nothing: a CSI one up to its final
-    # byte, any other the escape alone
+    # byte, an OSC string (a title) to its BEL or ST, any other the escape alone
 41: cmp rcx, r14
     jae 4b
+    cmp byte ptr [r13 + rcx], ']'
+    je 43f
     cmp byte ptr [r13 + rcx], '['
     jne 4b
     inc rcx
@@ -1369,7 +1401,36 @@ add_msg:
     cmp r8d, 0x3e
     ja 42b
     jmp 4b
-6:  mov byte ptr [rax + rdx], 0
+43: inc rcx
+44: cmp rcx, r14
+    jae 4b
+    movzx r8d, byte ptr [r13 + rcx]
+    inc rcx
+    cmp r8d, 7
+    je 4b
+    cmp r8d, 27
+    jne 44b
+    cmp rcx, r14
+    jae 4b
+    cmp byte ptr [r13 + rcx], '\\'
+    jne 44b
+    inc rcx
+    jmp 4b
+6:  push rax                    # C1 and bidi controls show nothing either
+    push rax
+    mov rdi, rax
+    mov rsi, rdx
+    call strip_marks
+    mov rdx, rax
+    pop rax
+    pop rax
+    cmp qword ptr [rsp + 8], 0  # cut: "…"
+    je 61f
+    mov byte ptr [rax + rdx], 0xe2
+    mov byte ptr [rax + rdx + 1], 0x80
+    mov byte ptr [rax + rdx + 2], 0xa6
+    add rdx, 3
+61: mov byte ptr [rax + rdx], 0
     mov rcx, [rsp]
     mov [rcx + AM_len], rdx
     test r15, r15
@@ -1385,6 +1446,56 @@ add_msg:
     call row_init
     mov qword ptr [rbx + AS_changed], 0
 9:  EPILOGUE
+
+# strip_marks(ptr, len) -> rax the length left: the C1 controls (U+0080-009F) and the bidi controls (U+202A-202E,
+#   U+2066-2069) taken out of a cleaned text, in place (a reply, a prompt, an echo, an error must not reorder
+#   what is drawn after them)
+strip_marks:
+    xor eax, eax
+    xor ecx, ecx
+1:  cmp rcx, rsi
+    jae 9f
+    movzx edx, byte ptr [rdi + rcx]
+    cmp edx, 0xc2
+    jne 2f
+    lea r8, [rcx + 1]
+    cmp r8, rsi
+    jae 5f
+    movzx r9d, byte ptr [rdi + r8]
+    cmp r9d, 0x80
+    jb 5f
+    cmp r9d, 0x9f
+    ja 5f
+    add rcx, 2
+    jmp 1b
+2:  cmp edx, 0xe2
+    jne 5f
+    lea r8, [rcx + 2]
+    cmp r8, rsi
+    jae 5f
+    movzx r9d, byte ptr [rdi + rcx + 1]
+    movzx r10d, byte ptr [rdi + rcx + 2]
+    cmp r9d, 0x80
+    jne 3f
+    cmp r10d, 0xaa
+    jb 5f
+    cmp r10d, 0xae
+    ja 5f
+    add rcx, 3
+    jmp 1b
+3:  cmp r9d, 0x81
+    jne 5f
+    cmp r10d, 0xa6
+    jb 5f
+    cmp r10d, 0xa9
+    ja 5f
+    add rcx, 3
+    jmp 1b
+5:  mov [rdi + rax], dl
+    inc rax
+    inc rcx
+    jmp 1b
+9:  ret
 
 # row_init(s): the row add_msg just pushed (the last): its line feeds, its time (AS_now; a row the stream
 #   feeds without one: the clock), its turn, no fold yet, an estimated height, its chunk dirtied; the first row
@@ -3176,6 +3287,8 @@ FN agents_dump
     lea rsi, [rip + .Lr_pill]   # a pill row: "pill TEXT"
 41: mov rdi, r15
     call sb_push_cstr
+    test dword ptr [r13 + AM_flags], AMF_CHIPS     # (a prompt's chips are no name)
+    jnz 5f
     mov rsi, [r13 + AM_name]
     test rsi, rsi
     jz 5f
@@ -4195,9 +4308,13 @@ FN agents_row_add
     PROLOGUE
     mov rbx, rdi
     mov r12, [rbx + AS_msgs + VEC_len]
-    cmp esi, R_THINK            # thinking without text is still a row ("Thought for Ns")
+    xor eax, eax                # thinking without text is still a row ("Thought for Ns"), and a compaction
+    xor r9d, r9d                #   marker before its summary comes
+    cmp esi, R_THINK
     sete al
-    movzx eax, al
+    cmp esi, R_COMPACT
+    sete r9b
+    or eax, r9d
     mov [rip + keep_empty], eax
     call add_msg
     mov dword ptr [rip + keep_empty], 0
@@ -4316,6 +4433,9 @@ FN agents_msg_set
     mov rsi, r13
     mov rdx, r14
     call msg_clean
+    mov rdi, r15
+    mov rsi, rax
+    call strip_marks
     mov byte ptr [r15 + rax], 0
     mov r13, rax
     imul rcx, r12, AM_SIZE
@@ -4412,6 +4532,8 @@ msg_clean:
     jmp 1b
 3:  cmp rcx, rdx
     jae 1b
+    cmp byte ptr [rsi + rcx], ']'
+    je 5f
     cmp byte ptr [rsi + rcx], '['
     jne 1b
     inc rcx
@@ -4422,6 +4544,21 @@ msg_clean:
     sub r8d, 0x40
     cmp r8d, 0x3e
     ja 4b
+    jmp 1b
+5:  inc rcx                     # an OSC string: to its BEL or ST
+6:  cmp rcx, rdx
+    jae 1b
+    movzx r8d, byte ptr [rsi + rcx]
+    inc rcx
+    cmp r8d, 7
+    je 1b
+    cmp r8d, 27
+    jne 6b
+    cmp rcx, rdx
+    jae 1b
+    cmp byte ptr [rsi + rcx], '\\'
+    jne 6b
+    inc rcx
     jmp 1b
 9:  ret
 
@@ -5120,7 +5257,9 @@ row_parts:
     jnz 3f
     cmp eax, R_TOOL
     je 4f
-    PM r14d, MI_40              # a prompt, a reply: the label line and paddings
+    cmp eax, R_USER
+    je 6f
+    PM r14d, MI_40              # a reply: the label line and paddings
     cmp eax, R_USER
     je 1f
     cmp eax, R_ASSIST
@@ -5152,6 +5291,17 @@ row_parts:
 5:  mov rdi, r12                # a typed row (agentrows.s)
     mov rsi, r13
     call agrow_est
+    EPILOGUE
+6:  mov rdi, rbx                # a prompt: its bubble's parts (agentrows.s), its time line and day pill
+    call agrow_prompt_est
+    mov r14d, eax
+    mov r12d, edx
+    mov r13d, ecx
+    mov rdi, rbx
+    call row_above
+    add eax, r14d
+    mov edx, r12d
+    mov ecx, r13d
     EPILOGUE
 
 # row_est(AS*, row, w) -> eax its estimated height at width w
@@ -6088,8 +6238,9 @@ th_reanchor:
 
 # FN agents_thread_dump(sb): print-agent-thread, the open conversation's engine as the last frame left it:
 #   "rows=N content=PX scroll=N max=N follow=0|1 anchor=ROW+PX|- first=N last=N exact=N est=N chunks=N
-#   resolved=N walked=N gen=N focus=N|- think=0|1 sticky=N|- calls=N folds=N" (walked: the rows whose height
-#   the last frame asked; exact and est: the rows whose height is measured for the width drawn last, or not)
+#   resolved=N walked=N gen=N focus=N|- think=0|1 sticky=N|- calls=N folds=N todo=N|-" (walked: the rows whose
+#   height the last frame asked; exact and est: the rows whose height is measured for the width drawn last, or
+#   not)
 FN agents_thread_dump
     PROLOGUE 16
     mov r15, rdi
@@ -6216,6 +6367,75 @@ FN agents_thread_dump
     call sb_push_byte
 9:  EPILOGUE
 
+# FN agents_look_dump(sb): print-agent-look, what the last frame drew around the open conversation's rows
+#   (task 8): "veil=0|1 jump=R|- error=R|- pin=R|- empty=T|-" (R: X,Y,W,H of the jump button, the error
+#   block, the sticky prompt; empty: what an empty conversation shows, blanks as "_")
+FN agents_look_dump
+    PROLOGUE 16
+    mov r15, rdi
+    lea rsi, [rip + .Lt_veil]
+    mov edx, [rip + veil_last]
+    call td_num
+    lea rsi, [rip + .Lt_jump]
+    lea rdx, [rip + jump_r]
+    call td_rect
+    lea rsi, [rip + .Lt_error]
+    lea rdx, [rip + err_r]
+    call td_rect
+    lea rsi, [rip + .Lt_pin]
+    lea rdx, [rip + sticky_r]
+    call td_rect
+    mov rdi, r15
+    lea rsi, [rip + .Lt_empty]
+    call sb_push_cstr
+    mov r12, [rip + empty_txt]
+    test r12, r12
+    jnz 81f
+    mov rdi, r15
+    mov esi, '-'
+    call sb_push_byte
+    jmp 83f
+81: movzx esi, byte ptr [r12]
+    test esi, esi
+    jz 83f
+    inc r12
+    cmp esi, ' '
+    jne 82f
+    mov esi, '_'
+82: mov rdi, r15
+    call sb_push_byte
+    jmp 81b
+83: mov rdi, r15
+    mov esi, 10
+    call sb_push_byte
+9:  EPILOGUE
+
+# td_rect(rsi label, rdx int* {x, y, w, h}) using r15 = sb: " LABEL=X,Y,W,H", or "-" when w is 0
+td_rect:
+    PROLOGUE
+    mov rbx, rdx
+    mov rdi, r15
+    call sb_push_cstr
+    cmp dword ptr [rbx + 8], 0
+    jne 1f
+    mov rdi, r15
+    mov esi, '-'
+    call sb_push_byte
+    EPILOGUE
+1:  xor r12d, r12d
+2:  test r12d, r12d
+    jz 3f
+    mov rdi, r15
+    mov esi, ','
+    call sb_push_byte
+3:  mov rdi, r15
+    mov esi, [rbx + r12*4]
+    call md_push_int
+    inc r12d
+    cmp r12d, 4
+    jb 2b
+    EPILOGUE
+
 # td_num(rsi label, rdx value) using r15 = sb: " LABEL=N" (the label holds its blank and "="); td_int signed;
 #   td_opt: N, or "-" when it is negative
 td_num:
@@ -6270,6 +6490,11 @@ td_opt:
 .Lt_focus: .asciz " focus="
 .Lt_think: .asciz " think="
 .Lt_sticky: .asciz " sticky="
+.Lt_veil: .asciz "veil="
+.Lt_jump: .asciz " jump="
+.Lt_pin: .asciz " pin="
+.Lt_error: .asciz " error="
+.Lt_empty: .asciz " empty="
 .Lt_calls: .asciz " calls="
 .Lt_folds: .asciz " folds="
 .Lt_todo: .asciz " todo="
@@ -6448,9 +6673,15 @@ msg_height:
     add eax, [rip + g_pmt + 4*MI_40]
     jmp 9f
 12: test dword ptr [rbx + AM_flags], AMF_PILL
-    jz 13f
+    jz 121f
     call pill_h                 # a pill: one line of the small face, framed
     add eax, [rip + g_pmt + 4*MI_12]
+    jmp 9f
+121: cmp dword ptr [rbx + AM_role], R_USER
+    jne 13f
+    mov rdi, rbx                # a prompt: its bubble (agentrows.s)
+    mov esi, r12d
+    call agrow_prompt_h
     jmp 9f
 13: mov eax, [rbx + AM_role]
     cmp eax, R_TOOL
@@ -7339,7 +7570,9 @@ thread_draw:
     mov [rsp + 20], eax         # area y
     mov eax, [rsp + 12]
     sub eax, r15d
-    mov [rsp + 24], eax         # area h
+    jns 40f
+    xor eax, eax                # a panel shorter than its header: no area (nothing drawn outside it)
+40: mov [rsp + 24], eax         # area h
     mov dword ptr [rsp + 160], 0
     cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
     je 44f
@@ -7393,7 +7626,49 @@ thread_draw:
     sub eax, [rsp + 28]
     sub eax, [rip + g_pmt + 4*MI_24]
     mov [rsp + 32], eax         # text width
-    # where the thread is this frame (th_layout: the anchor, the wheel, the rows in view measured)
+    mov dword ptr [rip + err_r + 8], 0  # the error block of a failed conversation, pinned at the area's top
+    mov eax, [rsp + 8]          #   (agentrows.s), the rows under it: the panel's width less the scrollbar,
+    sub eax, [rip + g_pmt + 4*MI_8]     # half the area at most
+    sub eax, [rip + g_pmt + 4*MI_8]
+    sub eax, [rip + g_pmt + 4*MI_12]
+    mov [rsp + 60], eax
+    mov rdi, rbx
+    mov esi, eax
+    mov edx, [rsp + 24]
+    shr edx, 1
+    call agrow_err_h
+    test eax, eax
+    jz 49f
+    mov [rsp + 56], eax
+    mov edi, [rsp]
+    add edi, [rip + g_pmt + 4*MI_8]
+    mov [rip + err_r], edi
+    mov esi, [rsp + 20]
+    add esi, [rip + g_pmt + 4*MI_4]
+    mov [rip + err_r + 4], esi
+    mov edx, [rsp + 60]
+    mov [rip + err_r + 8], edx
+    mov [rip + err_r + 12], eax
+    call agrow_err_at
+    mov edi, [rsp]
+    mov esi, [rsp + 20]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 24]
+    call gfx_clip_push
+    mov rdi, rbx
+    mov esi, [rip + err_r]
+    mov edx, [rip + err_r + 4]
+    mov ecx, [rip + err_r + 8]
+    call agrow_err_draw
+    call gfx_clip_pop
+    mov eax, [rsp + 56]
+    add eax, [rip + g_pmt + 4*MI_4]
+    add eax, [rip + g_pmt + 4*MI_8]
+    add [rsp + 20], eax
+    sub [rsp + 24], eax
+    jns 49f
+    mov dword ptr [rsp + 24], 0
+49: # where the thread is this frame (th_layout: the anchor, the wheel, the rows in view measured)
     mov eax, [rsp + 24]
     mov [rip + th_areah], eax
     call agentpop_shield        # the pointer over the popup is the popup's (drawn last, .Ltd_pop)
@@ -7413,25 +7688,26 @@ thread_draw:
     mov edx, [rsp + 8]
     mov ecx, [rsp + 24]
     call gfx_clip_push
+    mov qword ptr [rip + empty_txt], 0
     cmp qword ptr [rbx + AS_msgs + VEC_len], 0
     jne 65f
     cmp dword ptr [rsp + 164], 0
     jne 65f
-    mov rdi, [rip + ag_fsmall]
-    mov esi, [rsp]
-    add esi, [rsp + 28]
-    mov edx, [rsp + 20]
-    add edx, [rip + g_pmt + 4*MI_8]
-    PM ecx, MI_24
-    lea r8, [rip + .Lempty_thread]
-    COLOR r9d, T_MUTED
-    call ui_text_c
-65: # the rows from the anchor's, while in view
+    mov rdi, rbx
+    lea rsi, [rsp]
+    call empty_draw
+65: call sticky_shield          # the pointer over last frame's sticky prompt is the prompt's
+    # the rows from the anchor's, while in view (an area of no height: none, nothing drawn outside it)
     mov r13d, [rsp + 20]
     sub r13d, [rip + lay_off]
     mov r12, [rip + lay_row]
     mov [rip + th_first], r12d
     mov dword ptr [rip + th_last], -1
+    cmp dword ptr [rsp + 24], 0
+    jg 651f
+    mov dword ptr [rip + th_first], -1
+    jmp .Ltd_msgs_done
+651:
     test r12, r12
     jns .Ltd_msg
     xor r12d, r12d
@@ -7513,7 +7789,25 @@ thread_draw:
     inc r12d
     jmp .Ltd_queued
 .Ltd_msgs_done:
-    call gfx_clip_pop
+    call sticky_unshield
+    mov rdi, rbx                # the turn's prompt pinned at the top when it begins above the view
+    lea rsi, [rsp]
+    call sticky_draw
+    mov dword ptr [rip + veil_last], 0
+    mov rdi, rbx                # a permission, plan or dialog card (not a question): the thread under a
+    call veil_on                #   veil (UI 3.1: the list dimmed)
+    test eax, eax
+    jz 72f
+    mov dword ptr [rip + veil_last], 1
+    COLOR r8d, T_PANEL
+    and r8d, 0x00ffffff
+    or r8d, 0x80000000
+    mov edi, [rsp]
+    mov esi, [rsp + 20]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 24]
+    call gfx_fill
+72: call gfx_clip_pop
     mov r8d, [rsp + 160]
     test r8d, r8d
     jnz 431f
@@ -7555,20 +7849,37 @@ thread_draw:
     je 7f
 71: mov rdi, rbx                # the scrollbar moved the thread: the anchor is the row at its scroll
     call th_reanchor
-7:  # jump-to-latest button when not following
+7:  # jump-to-latest button when not following: in the gutter between the rows and the scrollbar, so it
+    #   covers no row at any size (the rows end at x + pad + text width; the scrollbar is MI_12 wide)
+    mov dword ptr [rip + jump_r + 8], 0
     cmp dword ptr [rip + th_follow], 0
     jne .Ltd_pop
-    PM r12d, MI_32
     mov esi, [rsp]
-    add esi, [rsp + 8]
-    sub esi, r12d
-    sub esi, [rip + g_pmt + 4*MI_20]
+    add esi, [rsp + 28]
+    add esi, [rsp + 32]
+    add esi, [rip + g_pmt + 4*MI_2]     # its left
+    mov r12d, [rsp]
+    add r12d, [rsp + 8]
+    sub r12d, [rip + g_pmt + 4*MI_12]
+    sub r12d, [rip + g_pmt + 4*MI_2]
+    sub r12d, esi               # the gutter's room
+    PM eax, MI_24
+    cmp r12d, eax
+    cmovg r12d, eax
+    cmp r12d, [rip + g_pmt + 4*MI_16]
+    jl .Ltd_pop                 # (no room: no button; End still follows)
     mov edx, [rsp + 20]
     add edx, [rsp + 24]
     sub edx, r12d
-    sub edx, [rip + g_pmt + 4*MI_16]
+    sub edx, [rip + g_pmt + 4*MI_8]
+    cmp edx, [rsp + 20]
+    jl .Ltd_pop                 # (an area too short for it)
     mov [rsp + 40], esi
     mov [rsp + 44], edx
+    mov [rip + jump_r], esi
+    mov [rip + jump_r + 4], edx
+    mov [rip + jump_r + 8], r12d
+    mov [rip + jump_r + 12], r12d
     mov edi, esi
     mov esi, edx
     mov edx, r12d
@@ -7598,6 +7909,315 @@ thread_draw:
     call reply_follow           # a link clicked in a reply, now that nothing drawn is in use
     call agrow_follow           # and a typed row's click or key (agentrows.s)
     EPILOGUE
+
+# empty_draw(AS*, frame*): an empty conversation (UI 3.25: mMt, gMt): its agent's badge and one of its driver's
+#   tips (DRV_tips, picked by the clock when it is first drawn empty), muted, centred; an extension's whose
+#   messages are being fetched "Loading..."; any other "Nothing here yet"
+empty_draw:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
+    jne 1f
+    cmp qword ptr [rbx + AS_req], 0
+    je 3f
+    lea r13, [rip + .Lloading_thread]
+    jmp 4f
+1:  mov rdi, rbx
+    call agent_drv_of
+    test rax, rax
+    jz 3f
+    mov r14, [rax + DRV_tips]
+    test r14, r14
+    jz 3f
+    xor ecx, ecx
+2:  cmp qword ptr [r14 + rcx*8], 0
+    je 21f
+    inc ecx
+    jmp 2b
+21: test ecx, ecx
+    jz 3f
+    mov [rsp], ecx
+    cmp [rip + tip_as], rbx
+    je 22f
+    mov [rip + tip_as], rbx
+    call time_ms
+    xor edx, edx
+    mov ecx, 1000
+    div rcx
+    xor edx, edx
+    mov ecx, [rsp]
+    div rcx
+    mov [rip + tip_n], edx
+22: mov eax, [rip + tip_n]
+    cmp eax, [rsp]
+    jb 23f
+    xor eax, eax
+23: mov r13, [r14 + rax*8]
+    xor edi, edi                # the badge: measured under an empty clip, then drawn centred
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    call gfx_clip_push
+    mov edi, [rbx + AS_kind]
+    xor esi, esi
+    xor edx, edx
+    call agent_badge
+    mov [rsp + 4], eax
+    call gfx_clip_pop
+    mov esi, [r12 + 8]
+    sub esi, [rsp + 4]
+    sar esi, 1
+    add esi, [r12]
+    mov edx, [r12 + 20]
+    add edx, [rip + g_pmt + 4*MI_16]
+    mov edi, [rbx + AS_kind]
+    call agent_badge
+    mov edx, [r12 + 20]         # the tip under it
+    add edx, [rip + g_pmt + 4*MI_16]
+    add edx, [rip + g_pmt + 4*MI_20]
+    add edx, [rip + g_pmt + 4*MI_8]
+    jmp 5f
+3:  lea r13, [rip + .Lempty_thread]
+4:  mov edx, [r12 + 20]
+    add edx, [rip + g_pmt + 4*MI_8]
+5:  mov [rip + empty_txt], r13
+    mov [rsp + 8], edx
+    mov rdi, r13                # one muted line, centred in the rows' width, cut with "…"
+    call strlen
+    mov r14, rax
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, r13
+    mov rdx, r14
+    call text_width
+    mov ecx, [r12 + 32]
+    cmp eax, ecx
+    cmovg eax, ecx
+    mov r15d, eax
+    mov esi, ecx
+    sub esi, eax
+    sar esi, 1
+    add esi, [r12]
+    add esi, [r12 + 28]
+    mov rdi, [rip + ag_fsmall]
+    mov edx, [rsp + 8]
+    PM ecx, MI_24
+    mov r8, r13
+    mov r9, r14
+    COLOR r10d, T_MUTED
+    lea r11d, [r15 + 1]
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+    EPILOGUE
+
+# sticky_shield(), sticky_unshield(): while the rows are drawn the pointer over last frame's sticky prompt is
+#   the prompt's (g_block), as the popup's is (agentpop_shield)
+sticky_shield:
+    mov dword ptr [rip + sticky_held], 0
+    cmp dword ptr [rip + sticky_r + 8], 0
+    je 9f
+    cmp dword ptr [rip + g_block], 0
+    jne 9f
+    mov eax, [rip + g_mx]
+    mov ecx, [rip + sticky_r]
+    cmp eax, ecx
+    jl 9f
+    add ecx, [rip + sticky_r + 8]
+    cmp eax, ecx
+    jge 9f
+    mov eax, [rip + g_my]
+    mov ecx, [rip + sticky_r + 4]
+    cmp eax, ecx
+    jl 9f
+    add ecx, [rip + sticky_r + 12]
+    cmp eax, ecx
+    jge 9f
+    mov dword ptr [rip + g_block], 1
+    mov dword ptr [rip + sticky_held], 1
+9:  ret
+sticky_unshield:
+    cmp dword ptr [rip + sticky_held], 0
+    je 1f
+    mov dword ptr [rip + g_block], 0
+    mov dword ptr [rip + sticky_held], 0
+1:  ret
+
+# sticky_draw(AS*, frame*): the sticky prompt (UI 3.1, the turn's prompt as a sticky header): when the first
+#   row drawn belongs to a turn whose prompt begins above the view (or is that prompt, its bubble cut by the
+#   top edge), that prompt's first line at the area's top, in a bubble at the right, on T_PANEL with a 1 px
+#   T_BORDER under it; a click brings the prompt into view. Found from the first row's AM_turn: no walk.
+#   AS_sticky names it (print-agent-thread), -1 none. Frame: thread_draw's
+sticky_draw:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, rsi
+    mov dword ptr [rbx + AS_sticky], -1
+    mov dword ptr [rip + sticky_r + 8], 0
+    cmp dword ptr [r12 + 24], 0
+    jle 9f
+    mov r13, [rip + lay_row]
+    test r13, r13
+    js 9f
+    cmp r13, [rbx + AS_msgs + VEC_len]
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r13
+    call row_at
+    movsxd r14, dword ptr [rax + AM_turn]
+    test r14, r14
+    js 9f
+    cmp r14, r13
+    jg 9f
+    jl 1f
+    mov rdi, rax                # the prompt is the first row: only when its bubble is cut
+    call row_above
+    cmp [rip + lay_off], eax
+    jle 9f
+1:  mov rdi, rbx
+    mov rsi, r14
+    call row_at
+    mov r15, rax
+    cmp dword ptr [r15 + AM_role], R_USER
+    jne 9f
+    mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_lineh]
+    add eax, [rip + g_pmt + 4*MI_6]
+    add eax, [rip + g_pmt + 4*MI_6]
+    mov [rsp], eax              # its height
+    mov edi, [r12]
+    mov esi, [r12 + 20]
+    mov edx, [r12 + 8]
+    mov ecx, eax
+    COLOR r8d, T_PANEL
+    call gfx_fill
+    mov edi, [r12]
+    mov esi, [r12 + 20]
+    add esi, [rsp]
+    mov edx, [r12 + 8]
+    PM ecx, MI_1
+    COLOR r8d, T_BORDER
+    call gfx_fill
+    mov rdi, [r15 + AM_text]    # its first line, at most STICKY_BYTES (at a character's start)
+    mov rsi, [r15 + AM_len]
+    xor eax, eax
+2:  cmp rax, rsi
+    jae 3f
+    cmp byte ptr [rdi + rax], 10
+    je 3f
+    inc rax
+    jmp 2b
+3:  cmp rax, STICKY_BYTES
+    jbe 31f
+    mov eax, STICKY_BYTES
+30: movzx ecx, byte ptr [rdi + rax]
+    and ecx, 0xc0
+    cmp ecx, 0x80
+    jne 31f
+    dec rax
+    jnz 30b
+31: mov [rsp + 8], rax
+    mov eax, [r12 + 32]         # the bubble: as wide as the line, up to 85 % of the rows' width
+    imul eax, eax, 85
+    cdq
+    mov ecx, 100
+    idiv ecx
+    sub eax, [rip + g_pmt + 4*MI_10]
+    sub eax, [rip + g_pmt + 4*MI_10]
+    cmp eax, 1
+    jge 32f
+    mov eax, 1
+32: mov [rsp + 4], eax
+    mov rdi, [rip + ag_fui]
+    mov rsi, [r15 + AM_text]
+    mov rdx, [rsp + 8]
+    call text_width
+    cmp eax, [rsp + 4]
+    jle 33f
+    mov eax, [rsp + 4]
+33: mov [rsp + 16], eax         # the text's width
+    add eax, [rip + g_pmt + 4*MI_10]
+    add eax, [rip + g_pmt + 4*MI_10]
+    mov [rsp + 20], eax         # the bubble's
+    mov ecx, [r12]
+    add ecx, [r12 + 28]
+    add ecx, [r12 + 32]
+    sub ecx, eax
+    mov [rsp + 24], ecx         # its x
+    mov edi, ecx
+    mov esi, [r12 + 20]
+    add esi, [rip + g_pmt + 4*MI_3]
+    mov edx, eax
+    mov ecx, [rsp]
+    sub ecx, [rip + g_pmt + 4*MI_6]
+    PM r8d, MI_RADIUS
+    COLOR r9d, T_HOVER
+    call gfx_round_rect
+    COLOR eax, T_FG
+    test dword ptr [r15 + AM_flags], AMF_ECHO
+    jz 34f
+    COLOR eax, T_MUTED
+34: mov rdi, [rip + ag_fui]
+    mov esi, [rsp + 24]
+    add esi, [rip + g_pmt + 4*MI_10]
+    mov edx, [r12 + 20]
+    mov ecx, [rsp]
+    mov r8, [r15 + AM_text]
+    mov r9, [rsp + 8]
+    mov r11d, [rsp + 16]
+    inc r11d
+    push r11
+    push rax
+    call ui_text_v_fit
+    add rsp, 16
+    mov edi, [r12]              # where it is (the rows under it do not take the pointer next frame)
+    mov [rip + sticky_r], edi
+    mov esi, [r12 + 20]
+    mov [rip + sticky_r + 4], esi
+    mov edx, [r12 + 8]
+    mov [rip + sticky_r + 8], edx
+    mov ecx, [rsp]
+    mov [rip + sticky_r + 12], ecx
+    mov [rbx + AS_sticky], r14d
+    mov edi, ID_AG_STICKY
+    mov esi, [r12]
+    mov edx, [r12 + 20]
+    mov ecx, [r12 + 8]
+    mov r8d, [rsp]
+    call ui_btn
+    test eax, UB_HOVER
+    jz 4f
+    mov dword ptr [rip + g_cursor], CUR_POINTER
+4:  test eax, UB_CLICK
+    jz 9f
+    mov dword ptr [rip + th_follow], 0  # the prompt brought into view: at the area's top
+    mov [rip + th_arow], r14d
+    mov dword ptr [rip + th_aoff], 0
+    mov dword ptr [rip + th_aabove], -1
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# veil_on(AS*) -> eax 1 while the conversation's card is a permission, a plan or a dialog (not a question):
+#   the thread is drawn under a veil (UI 3.1)
+veil_on:
+    xor eax, eax
+    mov rcx, [rdi + AS_live]
+    test rcx, rcx
+    jz 9f
+    cmp qword ptr [rcx + AL_reqs + VEC_len], 0
+    je 9f
+    mov rcx, [rcx + AL_reqs + VEC_ptr]
+    mov rcx, [rcx]
+    mov ecx, [rcx + AQ_kind]
+    cmp ecx, AQK_PERMISSION
+    je 8f
+    cmp ecx, AQK_PLAN
+    je 8f
+    cmp ecx, AQK_DIALOG
+    jne 9f
+8:  mov eax, 1
+9:  ret
 
 # draw_msg(msg, y, h, frame*) ; frame: x at [0], w at [8], pad [28], text width [32]
 draw_msg:
@@ -7668,26 +8288,38 @@ draw_msg:
     je .Ldm_result
     cmp eax, R_INFO
     je .Ldm_result
-    # user / assistant: label line + wrapped text
+    # a prompt: its bubble at the right, without a label (agentrows.s, under its time line)
     cmp eax, R_USER
     jne 1f
-    # user bubble
-    mov edi, r15d
-    sub edi, [rip + g_pmt + 4*MI_8]
-    mov esi, r12d
-    mov edx, [r14 + 32]
-    add edx, [rip + g_pmt + 4*MI_16]
-    mov ecx, r13d
-    sub ecx, [rip + g_pmt + 4*MI_4]
-    PM r8d, MI_RADIUS
-    COLOR r9d, T_HOVER
-    call gfx_round_rect
-    lea r8, [rip + .Lyou]
-    test dword ptr [rbx + AM_flags], AMF_QUEUED
+    mov qword ptr [rbx + AM_mute], -1   # a prompt the CLI cut: its marker muted (print-agent-row muted=)
+    mov rdi, [rbx + AM_text]
+    mov rsi, [rbx + AM_len]
+    test rdi, rdi
     jz 11f
-    lea r8, [rip + .Lqueued]    # not started yet: "queued", its text muted (below)
-11: COLOR r9d, T_MUTED
-    jmp 2f
+    lea rdx, [rip + .Ltruncated]
+    mov ecx, TRUNCATED_LEN
+    call str_find
+    mov [rbx + AM_mute], rax
+11: mov rsi, -1                 # its index (a queued message has none: no buttons)
+    test dword ptr [rbx + AM_flags], AMF_QUEUED
+    jnz 12f
+    mov rcx, [rip + th_as]
+    mov rax, rbx
+    sub rax, [rcx + AS_msgs + VEC_ptr]
+    xor edx, edx
+    mov ecx, AM_SIZE
+    div rcx
+    mov rsi, rax
+12: mov rdi, [rip + th_as]
+    mov rdx, rbx
+    mov ecx, r15d
+    mov r8d, r12d
+    mov r9d, r13d
+    shl r9, 32
+    mov eax, [r14 + 32]
+    or r9, rax
+    call agrow_prompt_draw
+    EPILOGUE
 1:  mov edi, r15d               # a reply: its muted dot in the pad before its label (agentrows.s)
     mov esi, r12d
     add esi, [rip + g_pmt + 4*MI_4]
@@ -7767,7 +8399,10 @@ draw_msg:
     add eax, [rip + g_pmt + 4*MI_28]
     mov [rsp + WR_y], eax
     COLOR eax, T_FG
-    test dword ptr [rbx + AM_flags], AMF_QUEUED
+    test dword ptr [rbx + AM_flags], AMF_FAILED     # a reply the agent marked failed (UI 3.33)
+    jz 320f
+    COLOR eax, T_ERROR
+320: test dword ptr [rbx + AM_flags], AMF_QUEUED
     jz 32f
     COLOR eax, T_MUTED
 32: mov [rsp + WR_color], eax
@@ -7809,7 +8444,14 @@ draw_msg:
     call agrow_draw
     EPILOGUE
 .Ldm_md:
-    # a reply: its Markdown under the label, the part in view (as tall as msg_height measured it)
+    # a reply: its Markdown under the label, the part in view (as tall as msg_height measured it); a failed
+    #   one's text in T_ERROR (UI 3.33, failedReply)
+    xor esi, esi
+    test dword ptr [rbx + AM_flags], AMF_FAILED
+    jz 1f
+    mov esi, T_ERROR
+1:  mov rdi, [rbx + AM_doc]
+    call md_set_tint
     mov eax, r12d
     add eax, [rip + g_pmt + 4*MI_28]
     mov ecx, r13d
@@ -8631,7 +9273,22 @@ FN agents_row_dump
 41: mov rdi, r15                # its time, tip and day ([agents] timestamps)
     mov rsi, rbx
     call stamp_dump
+    cmp dword ptr [rbx + AM_role], R_USER  # a prompt drawn in the last frame: its bubble, Show more, chips
+    jne 43f
+    mov eax, [rbx + AM_dser]
+    cmp eax, [rip + th_serial]
+    jne 43f
+    mov rdi, rbx
+    call row_above
+    mov r9d, eax
+    add r9d, [rbx + AM_dy]
     mov rdi, r15
+    mov rsi, r13
+    mov rdx, r12
+    mov rcx, rbx
+    mov r8d, [rbx + AM_dx]
+    call agrow_prompt_fields
+43: mov rdi, r15
     mov esi, 10
     call sb_push_byte
     cmp qword ptr [rbx + AM_x], 0       # a typed row: its parts as drawn (agentrows.s)
@@ -8788,6 +9445,7 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lst_names: .quad .Lst_time, .Lst_tip, .Lst_day
 .Lthis_reply: .asciz "This reply"
 .Lempty_thread: .asciz "Nothing here yet"
+.Lloading_thread: .asciz "Loading..."
 .Lclaude_name: .asciz "Claude"
 .Lcodex_name: .asciz "Codex"
 .Lgrok_name: .asciz "Grok"

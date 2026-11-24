@@ -23,6 +23,7 @@
 #   Stop when a turn runs), agent_release(AS*) (the program ends politely, as the idle stop does)
 #   agent_new(kind) -> rax AS* or 0           a new conversation of a built-in driver, adopted and opened
 #   agent_closed(AS*)                         its row is freed: the program ends, the record is freed
+#   agent_retry(AS*) -> eax                   the error block's Retry: a failed one's program again, nothing sent
 #   agent_state_set(AL*, state)               keeps AS_state in step: STARTING and WORKING are
 #                                             AGS_WORKING, WAITING and HELD AGS_WAITING, FAILED
 #                                             AGS_ERROR, OFF and READY AGS_IDLE
@@ -995,15 +996,92 @@ is_cmd:
 9:  mov eax, r14d
     EPILOGUE
 
-# user_row(): agent_send's prompt (rbx AS, r12 ptr, r13 len) as the user's row, shown at once
+# user_row(): agent_send's prompt (rbx AS, r12 ptr, r13 len, r15 AL*) as the user's row, shown at once
 user_row:
     PROLOGUE
-    mov rdi, rbx
+    mov rdi, r15
+    mov rsi, r12
+    mov rdx, r13
+    call prompt_row
+    EPILOGUE
+
+# prompt_row(AL*, ptr, len) -> rax its index, -1: a prompt that was written, as the user's row (user_row,
+#   ev_ready, ev_started). One that is a command (is_echo) is a command's echo (AMF_ECHO), drawn as the file's
+#   echo of it will be (phase 3 task 8)
+prompt_row:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rdi, [rbx + AL_as]
     mov esi, R_USER
     mov rdx, r12
     mov rcx, r13
     xor r8d, r8d
     call agents_msg_add
+    mov r14, rax
+    test rax, rax
+    js 9f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call is_echo
+    test eax, eax
+    jz 9f
+    mov rdi, [rbx + AL_as]
+    mov rsi, r14
+    mov edx, AMF_ECHO
+    call agents_row_flag
+9:  mov rax, r14
+    EPILOGUE
+
+# is_echo(AL*, ptr, len) -> eax 1 when the prompt (blanks before it skipped) is "/" and a command's name
+#   (letters, digits, "-", "_", ":", ".") alone or before a blank: what the CLI answers as a command (its
+#   list does not name every one: /status, finding 22), and what the file's echo of it shows (the bundle's
+#   isSlashCommand); "/usr/bin" is none
+is_echo:
+    PROLOGUE
+    mov r12, rsi
+    mov r13, rdx
+1:  test r13, r13
+    jz 8f
+    movzx ecx, byte ptr [r12]
+    cmp ecx, ' '
+    ja 2f
+    inc r12
+    dec r13
+    jmp 1b
+2:  cmp ecx, '/'
+    jne 8f
+    mov eax, 1
+3:  cmp rax, r13
+    jae 5f
+    movzx ecx, byte ptr [r12 + rax]
+    cmp ecx, ' '
+    jbe 5f
+    cmp ecx, '-'
+    je 4f
+    cmp ecx, '_'
+    je 4f
+    cmp ecx, ':'
+    je 4f
+    cmp ecx, '.'
+    je 4f
+    mov edx, ecx
+    sub edx, '0'
+    cmp edx, 9
+    jbe 4f
+    or ecx, 0x20
+    sub ecx, 'a'
+    cmp ecx, 25
+    ja 8f
+4:  inc rax
+    jmp 3b
+5:  cmp rax, 1
+    jbe 8f
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
     EPILOGUE
 
 # agent_start(AL*) -> eax 1 when its program starts (or will, once the login environment is known), 0
@@ -1966,12 +2044,10 @@ FN ev_ready
     mov rcx, r15
     call held_add
     jmp 24f
-22: mov rdi, [rbx + AL_as]
-    mov esi, R_USER
-    mov rdx, r14
-    mov rcx, r15
-    xor r8d, r8d
-    call agents_msg_add
+22: mov rdi, rbx
+    mov rsi, r14
+    mov rdx, r15
+    call prompt_row
 24: mov r13d, 1
     mov rax, [rbx + AL_queue + VEC_ptr]
     mov qword ptr [rax + r12*8], 0
@@ -2009,12 +2085,10 @@ FN ev_started
     call held_take
     mov r12, rax
     mov r13, rdx
-    mov rdi, [rbx + AL_as]
-    mov esi, R_USER
-    mov rdx, r12
-    mov rcx, r13
-    xor r8d, r8d
-    call agents_msg_add
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call prompt_row
     mov rdi, r12
     call mem_free
 9:  EPILOGUE
@@ -2694,6 +2768,10 @@ FN ev_turn_end
     jmp 2f
 1:  cmp r12d, TE_INTERRUPTED
     jne 2f
+    mov rdi, [rbx + AL_as]      # the stream's interrupt mark made its row already ("Interrupted", "Tool
+    call last_interrupt         #   interrupted": the reader, as the file's mark gives it)
+    test eax, eax
+    jnz 2f
     lea rdi, [rip + .Linterrupted]
     call strlen
     mov rdi, [rbx + AL_as]
@@ -2716,6 +2794,34 @@ FN ev_turn_end
 3:  mov rdi, rbx
     call turns_over
 9:  EPILOGUE
+
+# last_interrupt(AS*) -> eax 1 when the conversation's last row is an interrupt's ("Interrupted", "Tool
+#   interrupted", an info row the reader made of the stream's mark during this turn)
+last_interrupt:
+    PROLOGUE
+    xor r12d, r12d
+    mov rcx, [rdi + AS_msgs + VEC_len]
+    test rcx, rcx
+    jz 9f
+    dec rcx
+    imul rbx, rcx, AM_SIZE
+    add rbx, [rdi + AS_msgs + VEC_ptr]
+    cmp dword ptr [rbx + AM_role], R_INFO
+    jne 9f
+    mov rdi, [rbx + AM_text]
+    mov rsi, [rbx + AM_len]
+    lea rdx, [rip + .Linterrupted]
+    call str_eq_cstr
+    mov r12d, eax
+    test eax, eax
+    jnz 9f
+    mov rdi, [rbx + AM_text]
+    mov rsi, [rbx + AM_len]
+    lea rdx, [rip + .Ltool_interrupted]
+    call str_eq_cstr
+    mov r12d, eax
+9:  mov eax, r12d
+    EPILOGUE
 
 # turns_over(al): every message written has had its end (the last turn's end, or a held one the program
 #   dropped: ev_turn_end, ev_dropped): one still held ran without a word that it started (a command the
@@ -2750,6 +2856,24 @@ turns_over:
 4:  mov rdi, rbx
     mov esi, ALS_READY
     call agent_state_set
+9:  EPILOGUE
+
+# FN agent_retry(AS*) -> eax 1 started: the error block's Retry: a conversation whose program failed and is
+#   gone starts it again and sends nothing (its prompts were put back in the box)
+FN agent_retry
+    PROLOGUE
+    xor eax, eax
+    mov rbx, [rdi + AS_live]
+    test rbx, rbx
+    jz 9f
+    cmp dword ptr [rbx + AL_state], ALS_FAILED
+    jne 9f
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    je 8f                       # still ending: its close comes first
+    mov rdi, rbx
+    call agent_start
+    EPILOGUE
+8:  xor eax, eax
 9:  EPILOGUE
 
 # FN ev_closed(al, err): the agent's process is gone: the state is OFF unless it FAILED, the requests it
@@ -2853,7 +2977,8 @@ FN ev_failed
     mov rsi, r12
     mov rdx, r13
     call sb_push
-1:  mov r14d, [rbx + AL_state]
+1:  and dword ptr [rbx + AL_flags], ~ALF_ERRGONE    # the error block shows again (agentrows.s)
+    mov r14d, [rbx + AL_state]
     mov rdi, rbx
     mov esi, ALS_FAILED
     call agent_state_set
@@ -3541,6 +3666,7 @@ opts_failed: .quad .Lo_terminal
 .Lheld_back: .asciz "A queued message was not sent."
 .Lturn_failed: .asciz "The turn failed."
 .Linterrupted: .asciz "Interrupted"
+.Ltool_interrupted: .asciz "Tool interrupted"
 .Ltool: .asciz "tool"
 .Lunanswered: .asciz "Claude Code ended before the request was answered."
 .Lbusy: .asciz "Too many agents are running. Stop one and send again."

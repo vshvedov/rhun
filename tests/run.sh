@@ -159,6 +159,7 @@ python3 tests/claude-review.py || fail=1   # phase 4 tasks 11, 12: an edit's pro
 python3 tests/claude-transcript.py || fail=1   # the typed rows: a call's parts, text that opens in a tab (phase 3)
 python3 tests/claude-thread.py || fail=1   # the thread's engine: heights, the view's anchor, keys (phase 3)
 python3 tests/claude-bridge.py || fail=1   # claude in rhun's terminal: the bridge, its tools, terminal mode (phase 5)
+python3 tests/claude-sessions.py || fail=1   # the session list and the chat header (phase 6)
 python3 tests/ext-agents.py || fail=1
 python3 tests/ext-review.py || fail=1
 python3 tests/ext-tools.py || fail=1

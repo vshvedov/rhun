@@ -405,8 +405,37 @@ class Header(ListCase):
         self.until(lambda: 'user Open at quit' in self.command('print-agents'), 'the conversation again')
 
 
+    def test_a_restore_that_never_finished_is_not_tried_a_third_time(self):
+        self.session('Crashy', age=60)
+        self.BASE = self.BASE.replace('restore_session = false', 'restore_session = true')
+        self.open_list()
+        self.chat_open('Crashy')
+        self.quit()
+        files = list((self.work / 'state').rglob('*.agents-list'))
+        self.assertEqual(len(files), 1, files)
+        text = files[0].read_text(encoding='utf-8')
+        self.assertIn('\ntries\t0\n', text)
+        files[0].write_text(text.replace('\ntries\t0\n', '\ntries\t2\n'), encoding='utf-8')
+        self.open_list()
+        self.until(lambda: ' reopen=Crashy ' in self.head(), 'the notice')
+        self.assertNotIn('user Crashy', self.command('print-agents'))
+        self.command('agent-list reopen')
+        self.until(lambda: 'user Crashy' in self.command('print-agents'), 'the conversation')
+        self.assertIn(' tries=0 ', self.state()[0])
+        self.assertNotIn(' reopen=', self.head())
+
+
 class Speed(ListCase):
     COUNT = 5000
+
+    def timed(self, commands, n=30):
+        """The median round trip of the commands, in turn (each ends with a frame when something changed), ms."""
+        samples = []
+        for i in range(n):
+            start = time.perf_counter()
+            self.command(commands[i % len(commands)])
+            samples.append((time.perf_counter() - start) * 1000)
+        return statistics.median(samples)
 
     def test_five_thousand_sessions(self):
         folder = self.folder()
@@ -418,33 +447,33 @@ class Speed(ListCase):
                                         'message': {'role': 'user', 'content': f'Task number {i} of the project'}})
                             + '\n', encoding='utf-8')
             os.utime(path, (now - i * 60, now - i * 60))
+        t0 = time.perf_counter()
         self.start(extra='[agents]\narchive_after_days = 0\n')
         self.command('cmd focus_agents')
         self.command('wait-agents')
+        self.assertTrue(self.head().startswith('list shown=50 '))
+        opened = (time.perf_counter() - t0) * 1000
+        hover50 = self.timed(['move 1100 300', 'move 1100 301'])
         t0 = time.perf_counter()
         self.command('agent-list search Task')     # every session asked for, then listed
         self.command('wait-agents')
         self.until(lambda: self.head().startswith(f'list shown={self.COUNT} '), 'every session', 60)
-        whole = time.perf_counter() - t0
-        def timed(command, n=20):
-            samples = []
-            for _ in range(n):
-                start = time.perf_counter()
-                self.command(command)
-                samples.append((time.perf_counter() - start) * 1000)
-            return statistics.median(samples)
-        frame = timed('wait 0')                    # a round trip with a frame, nothing changed
-        keys = timed('type 1')                     # a search key: the list made again, a frame
-        timed('key ctrl+a')
-        self.command('key BackSpace')
+        whole = (time.perf_counter() - t0) * 1000
+        hover = self.timed(['move 1100 300', 'move 1100 301'])
+        keys = self.timed(['type  ', 'key BackSpace'])     # a key that keeps all 5,000, and back
+        none = self.timed(['type z', 'key BackSpace'])     # a key that leaves none, and back
         self.command('move 1100 400')
-        scroll = timed('scroll 3')                 # a wheel step over the list: a frame
-        info = (f'5000 sessions: all listed after {whole * 1000:.0f} ms; a frame {frame:.2f} ms, '
-                f'a search key {keys:.2f} ms, a scroll step {scroll:.2f} ms (medians)')
+        scroll = self.timed(['scroll 3', 'scroll 3', 'scroll -3', 'scroll -3'])
+        self.command('key Down')
+        down = self.timed(['key Down', 'key Up'])
+        info = (f'{self.COUNT} sessions: the panel open with its first page {opened:.0f} ms; every session listed '
+                f'{whole:.0f} ms after the search asked for them; medians: a frame (hover) {hover50:.2f} ms with 50 '
+                f'rows, {hover:.2f} ms with {self.COUNT}; a search key {keys:.2f} ms (all kept), {none:.2f} ms '
+                f'(none kept); a scroll step {scroll:.2f} ms; a key Down/Up {down:.2f} ms')
         print(info, file=sys.stderr)
-        (self.work.parent / 'claude-sessions-speed.txt').write_text(info + '\n') if os.environ.get('KEEP_SPEED') else None
-        self.assertLess(keys, frame + 50)
-        self.assertLess(scroll, frame + 50)
+        self.assertLess(hover, hover50 + 5)
+        self.assertLess(scroll, hover50 + 5)
+        self.assertLess(keys, 50)
 
 
 if __name__ == '__main__':

@@ -10,7 +10,7 @@
 # of worktrees and restarts. The file is read once, when the list first needs it (drawing reads rhun's own
 # state; nothing starts a process), and written whole after each change the user makes (file_write_all:
 # a temporary file and a rename). Lines, tab-separated, a name's tab, line end and backslash escaped:
-#   agentlist 1 | filter MASK | show BITS | days N | open KEY | group ID FLAGS NAME | s KEY GID FLAGS TITLE
+#   agentlist 1 | filter MASK | show BITS | tries N | open KEY | group ID FLAGS NAME | s KEY GID FLAGS TITLE
 #
 #   agst_load()                       the file read once (no project: memory only)
 #   agst_reset()                      another project: everything goes; the next load reads its file
@@ -23,7 +23,8 @@
 #   agst_group_new(ptr, len) -> rax GR*; agst_group_rename(id, ptr, len); agst_group_delete(id);
 #   agst_group_flip(id)               collapsed, or open again
 #   agst_filter() -> eax; agst_set_filter(mask); agst_show() -> eax; agst_set_show(bits)
-#   agst_open() -> rax KEY cstr or 0; agst_set_open(AS* or 0)
+#   agst_open() -> rax KEY cstr or 0; agst_set_open(AS* or 0); agst_tries() -> eax, agst_set_tries(n): the
+#     restores of it that did not finish
 #   agst_dump(sb)                     print-agent-list-state
 .include "rhun.inc"
 
@@ -55,6 +56,7 @@ path: .quad 0                   # owned cstr: the state file, or 0 (no project: 
 next_gid: .long 0
 loaded: .long 0
 filter: .long 0                 # LF_* (agentlist.s)
+tries: .long 0                  # restores of the open conversation that did not finish (the breaker, 4.21)
 show: .long 0                   # SH_*: sections shown open
 .p2align 3
 ksb: .zero SB_SIZE              # agst_key's buffer
@@ -67,6 +69,7 @@ fcount: .quad 0
 .Lsuffix: .asciz ".agents-list"
 .Lmagic: .asciz "agentlist 1"
 .Lw_filter: .asciz "filter"
+.Lw_tries: .asciz "tries"
 .Lw_show: .asciz "show"
 .Lw_open: .asciz "open"
 .Lw_group: .asciz "group"
@@ -77,6 +80,7 @@ fcount: .quad 0
 .Ld_file: .asciz " file="
 .Ld_filter: .asciz " filter="
 .Ld_show: .asciz " show="
+.Ld_tries: .asciz " tries="
 .Ld_open: .asciz " open="
 .Ld_group: .asciz "group "
 .Ld_flags: .asciz " flags="
@@ -349,6 +353,7 @@ FN agst_reset
     mov dword ptr [rip + loaded], 0
     mov dword ptr [rip + filter], 0
     mov dword ptr [rip + show], 0
+    mov dword ptr [rip + tries], 0
     inc qword ptr [rip + agst_gen]
     EPILOGUE
 
@@ -525,6 +530,16 @@ line_in:
     jmp 9f
 2:  mov rdi, r12
     mov rsi, r13
+    lea rdx, [rip + .Lw_tries]
+    call str_eq_cstr
+    test eax, eax
+    jz 21f
+    mov edi, 1
+    call num
+    mov [rip + tries], eax
+    jmp 9f
+21: mov rdi, r12
+    mov rsi, r13
     lea rdx, [rip + .Lw_open]
     call str_eq_cstr
     test eax, eax
@@ -673,6 +688,12 @@ save:
     call put_cstr
     call put_tab
     mov edi, [rip + show]
+    call put_num
+    call put_lf
+    lea rdi, [rip + .Lw_tries]
+    call put_cstr
+    call put_tab
+    mov edi, [rip + tries]
     call put_num
     call put_lf
     mov rbx, [rip + open_key]
@@ -1001,6 +1022,23 @@ FN agst_open
     pop rbx
     ret
 
+# FN agst_tries() -> eax the restores of the open conversation that did not finish; agst_set_tries(n), saved
+FN agst_tries
+    push rbx
+    call agst_load
+    mov eax, [rip + tries]
+    pop rbx
+    ret
+FN agst_set_tries
+    PROLOGUE
+    mov ebx, edi
+    call agst_load
+    cmp [rip + tries], ebx
+    je 9f
+    mov [rip + tries], ebx
+    call save
+9:  EPILOGUE
+
 # FN agst_set_open(AS* or 0): the conversation open now (0: the list), saved when it changed
 FN agst_set_open
     PROLOGUE
@@ -1039,7 +1077,7 @@ FN agst_set_open
 8:  call save
 9:  EPILOGUE
 
-# FN agst_dump(sb): "loaded=0|1 file=0|1 filter=N show=N open=KEY|-", a line per group "group ID NAME
+# FN agst_dump(sb): "loaded=0|1 file=0|1 filter=N show=N tries=N open=KEY|-", a line per group "group ID NAME
 #   flags=N", a line per session with a mark "s KEY group=N flags=N title=T|-" (print-agent-list-state)
 FN agst_dump
     PROLOGUE
@@ -1070,6 +1108,12 @@ FN agst_dump
     call sb_push_cstr
     mov rdi, r15
     mov esi, [rip + show]
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Ld_tries]
+    call sb_push_cstr
+    mov rdi, r15
+    mov esi, [rip + tries]
     call sb_push_u64
     mov rdi, r15
     lea rsi, [rip + .Ld_open]

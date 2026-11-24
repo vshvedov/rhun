@@ -28,6 +28,7 @@
 .equ IDT_RENAME, 0xf006         # the rename field
 .equ IDT_UNARCH, 0xf007         # "Unarchive all N sessions"
 .equ IDT_SCROLL, 0xf008
+.equ IDT_REOPEN, 0xf009         # the breaker's "Open it anyway"
 .equ DK_ROW, 1                  # an entry: a session's row
 .equ DK_GROUP, 2                #   a group's header (DE_aux its id)
 .equ DK_UNGROUPED, 3            #   "Ungrouped"
@@ -125,6 +126,9 @@ drop_anchor: .zero 16           # the button it hangs from (x, y, w, h)
 drop_shield: .long 0
 new_gid: .long 0                # "Start new session in this group": the conversation made next joins it
 restored: .long 0               # the conversation open at the last quit was opened again (or will not be)
+reopening: .long 0              # it is being opened again: the next poll says it finished (agst_set_tries 0)
+.p2align 3
+breaker: .quad 0                # it was not opened again: it did not finish opening the last times (4.21)
 drag_as: .quad 0                # a row pressed: it may be dragged onto a group's header
 drag_x: .long 0
 drag_y: .long 0
@@ -153,6 +157,10 @@ held_new: .zero SB_SIZE
 .Lunarch_all1: .asciz "Unarchive all "
 .Lunarch_all2: .asciz " sessions"
 .Lunarch_one: .asciz "Unarchive 1 session"
+.Lbr1: .asciz " was not reopened. It did not finish opening the last "
+.Lbr2: .asciz " times."
+.Lbr_open: .asciz "Open it anyway"
+.Ld_reopen: .asciz " reopen="
 .Lt_search: .asciz "Search sessions"
 .Lt_clear: .asciz "Clear search"
 .Lt_filter: .asciz "Filter by status"
@@ -275,7 +283,10 @@ FN aglist_gone
 3:  cmp [rip + pend_open], rbx
     jne 4f
     mov qword ptr [rip + pend_open], 0
-4:  EPILOGUE
+4:  cmp [rip + breaker], rbx
+    jne 5f
+    mov qword ptr [rip + breaker], 0
+5:  EPILOGUE
 
 # lv_forget(LV*, AS*): the list forgets that session (its keys, its anchor, its selection)
 lv_forget:
@@ -302,6 +313,8 @@ FN aglist_project
     call agst_reset
     call aglist_reset_view
     mov dword ptr [rip + restored], 0
+    mov dword ptr [rip + reopening], 0
+    mov qword ptr [rip + breaker], 0
     mov dword ptr [rip + new_gid], 0
     EPILOGUE
 
@@ -338,6 +351,7 @@ FN aglist_opened
     mov rbx, rdi
     mov dword ptr [rip + drop_open], 0
     mov dword ptr [rip + restored], 1     # (one opened now replaces what a restart would open)
+    mov qword ptr [rip + breaker], 0
     mov rdi, rbx
     xor esi, esi
     mov edx, SF_UNREAD | SF_ARCH
@@ -401,7 +415,12 @@ FN aglist_poll
     mov rdx, [rip + held_new + SB_len]
     call sb_push
     mov dword ptr [rip + g_dirty], 1
-2:  call restore_open
+2:  cmp dword ptr [rip + reopening], 0   # the restore finished: the breaker starts again from 0
+    je 3f
+    mov dword ptr [rip + reopening], 0
+    xor edi, edi
+    call agst_set_tries
+3:  call restore_open
     EPILOGUE
 
 # memcmp_eq(a, n, b, n) -> eax 1 when the n bytes are equal
@@ -451,6 +470,15 @@ restore_open:
     test eax, eax
     jz 1b
     mov dword ptr [rip + restored], 1
+    call agst_tries             # it did not finish opening twice: not again (the breaker), a notice says so
+    cmp eax, 2
+    jb 2f
+    mov [rip + breaker], r13
+    mov dword ptr [rip + g_dirty], 1
+    jmp 9f
+2:  lea edi, [rax + 1]
+    call agst_set_tries
+    mov dword ptr [rip + reopening], 1
     mov rdi, r13
     call agents_open_as
     jmp 9f
@@ -1195,7 +1223,15 @@ FN aglist_draw
     lea rbx, [rip + lv_panel]
     mov dword ptr [rbx + LV_kind], 0
     mov dword ptr [rbx + LV_id], ID_AGL
-    mov rdi, rbx
+    cmp qword ptr [rip + breaker], 0    # the conversation a restart did not open again: why, and Open it anyway
+    je 1f
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    call breaker_band
+    add [rsp + 4], eax
+    sub [rsp + 12], eax
+1:  mov rdi, rbx
     mov esi, [rsp]
     mov edx, [rsp + 4]
     mov ecx, [rsp + 8]
@@ -1206,6 +1242,99 @@ FN aglist_draw
 # FN aglist_after(): the end of the panel's list frame (list_draw): what its clicks asked for (after_frame)
 FN aglist_after
     jmp after_frame
+
+# breaker_band(x, y, w) -> eax its height: "TITLE was not reopened. It did not finish opening the last N
+#   times." and "Open it anyway"
+breaker_band:
+    PROLOGUE 32
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    PM eax, MI_48
+    mov [rsp + 12], eax
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    mov ecx, eax
+    COLOR r8d, T_HOVER
+    call gfx_fill
+    lea rdi, [rip + dsb]
+    call sb_clear
+    mov rdi, [rip + breaker]
+    call title_of
+    lea rdi, [rip + dsb]
+    mov rsi, rax
+    call sb_push
+    lea rdi, [rip + dsb]
+    lea rsi, [rip + .Lbr1]
+    call sb_push_cstr
+    call agst_tries
+    lea rdi, [rip + dsb]
+    mov esi, eax
+    call sb_push_u64
+    lea rdi, [rip + dsb]
+    lea rsi, [rip + .Lbr2]
+    call sb_push_cstr
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [rip + g_pmt + 4*MI_16]
+    mov edx, [rsp + 4]
+    PM ecx, MI_24
+    mov r8, [rip + dsb + SB_ptr]
+    mov r9, [rip + dsb + SB_len]
+    COLOR r10d, T_FG
+    mov r11d, [rsp + 8]
+    sub r11d, [rip + g_pmt + 4*MI_32]
+    push r11
+    push r10
+    call ui_text_v_fit
+    add rsp, 16
+    lea rdi, [rip + .Lbr_open]
+    call strlen
+    mov rdx, rax
+    mov rdi, [rip + ag_fsmall]
+    lea rsi, [rip + .Lbr_open]
+    call text_width
+    add eax, [rip + g_pmt + 4*MI_16]
+    mov r12d, eax
+    mov edi, ID_AGL + IDT_REOPEN
+    mov esi, [rsp]
+    add esi, [rip + g_pmt + 4*MI_8]
+    mov edx, [rsp + 4]
+    add edx, [rip + g_pmt + 4*MI_24]
+    mov ecx, r12d
+    PM r8d, MI_24
+    call ui_btn
+    mov r13d, eax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [rip + g_pmt + 4*MI_8]
+    mov edx, [rsp + 4]
+    add edx, [rip + g_pmt + 4*MI_24]
+    mov ecx, r12d
+    PM r8d, MI_24
+    lea r9, [rip + .Lbr_open]
+    COLOR eax, T_ACCENT
+    push rax
+    push rax
+    call ui_text_center
+    add rsp, 16
+    test r13d, UB_CLICK
+    jz 9f
+    call reopen_anyway
+9:  mov eax, [rsp + 12]
+    EPILOGUE
+
+# reopen_anyway(): "Open it anyway": the conversation the breaker kept closed opens (after the frame)
+reopen_anyway:
+    mov rax, [rip + breaker]
+    test rax, rax
+    jz 1f
+    mov qword ptr [rip + breaker], 0
+    mov [rip + pend_open], rax
+    xor edi, edi
+    jmp agst_set_tries
+1:  ret
 
 # lv_draw(LV*, x, y, w, h): a list in that area: its search row when it shows, then its entries
 lv_draw:
@@ -1664,49 +1793,15 @@ draw_row:
     sub eax, [rip + g_pmt + 4*MI_48]
     sub eax, [rsp + 48]
     mov [rsp + 72], eax         # the title's room
-    mov rdi, rbx                # the match, marked behind it
-    call query
-    test rdx, rdx
-    jz 61f
-    mov rcx, rdx
-    mov rdx, rax
-    mov rdi, [rsp + 56]
-    mov rsi, [rsp + 64]
-    call str_ifind
-    test rax, rax
-    js 61f
-    mov r12, rax
-    mov rdi, rbx
-    call query
-    mov r13, rdx                # its length
-    mov rdi, [rip + ag_fui]
+    mov rdi, rbx                # the matches, marked behind it
     mov rsi, [rsp + 56]
-    mov rdx, r12
-    call text_width
-    mov [rsp + 76], eax
-    mov rdi, [rip + ag_fui]
-    mov rsi, [rsp + 56]
-    add rsi, r12
-    mov rdx, r13
-    call text_width
-    mov edx, eax
-    mov edi, [rsp + 8]
-    add edi, [rip + g_pmt + 4*MI_32]
-    add edi, [rsp + 76]
-    mov ecx, [rsp + 76]         # inside the title's room only
-    cmp ecx, [rsp + 72]
-    jge 61f
-    add ecx, edx
-    cmp ecx, [rsp + 72]
-    jle 611f
-    mov edx, [rsp + 72]
-    sub edx, [rsp + 76]
-611: mov esi, [rsp + 12]
-    add esi, [rip + g_pmt + 4*MI_8]
-    PM ecx, MI_20
-    PM r8d, MI_2
-    COLOR r9d, T_MATCH
-    call gfx_round_rect
+    mov rdx, [rsp + 64]
+    mov ecx, [rsp + 8]
+    add ecx, [rip + g_pmt + 4*MI_32]
+    mov r8d, [rsp + 12]
+    add r8d, [rip + g_pmt + 4*MI_8]
+    mov r9d, [rsp + 72]
+    call mark_matches
 61: mov rdi, [rip + ag_fui]
     mov esi, [rsp + 8]
     add esi, [rip + g_pmt + 4*MI_32]
@@ -1768,6 +1863,64 @@ draw_row:
     mov rdi, rbx
     mov rsi, r14
     call row_click
+9:  EPILOGUE
+
+# mark_matches(LV*, title ptr, len, x, y, room): every match of the list's search in the title, marked behind
+#   it (T_MATCH), within room pixels from x
+mark_matches:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, rsi                # the title
+    mov r13, rdx
+    mov [rsp], ecx
+    mov [rsp + 4], r8d
+    mov [rsp + 8], r9d
+    mov rdi, rbx
+    call query
+    test rdx, rdx
+    jz 9f
+    mov [rsp + 16], rax         # the search
+    mov [rsp + 24], rdx
+    xor r14d, r14d              # where to look from
+1:  cmp r14, r13
+    jae 9f
+    lea rdi, [r12 + r14]
+    mov rsi, r13
+    sub rsi, r14
+    mov rdx, [rsp + 16]
+    mov rcx, [rsp + 24]
+    call str_ifind
+    test rax, rax
+    js 9f
+    lea r15, [r14 + rax]        # the match's offset in the title
+    mov rdi, [rip + ag_fui]
+    mov rsi, r12
+    mov rdx, r15
+    call text_width
+    mov [rsp + 32], eax
+    cmp eax, [rsp + 8]
+    jge 9f                      # past the room
+    mov rdi, [rip + ag_fui]
+    lea rsi, [r12 + r15]
+    mov rdx, [rsp + 24]
+    call text_width
+    mov edx, eax
+    mov ecx, [rsp + 32]
+    add ecx, edx
+    cmp ecx, [rsp + 8]
+    jle 2f
+    mov edx, [rsp + 8]
+    sub edx, [rsp + 32]
+2:  mov edi, [rsp]
+    add edi, [rsp + 32]
+    mov esi, [rsp + 4]
+    PM ecx, MI_20
+    PM r8d, MI_2
+    COLOR r9d, T_MATCH
+    call gfx_round_rect
+    mov r14, r15
+    add r14, [rsp + 24]
+    jmp 1b
 9:  EPILOGUE
 
 # dot_tip(AS*, status, held) -> rax the dot's tip (in lsb), or 0: who has it, then what it does
@@ -3772,9 +3925,11 @@ FN aglist_drop_draw
     sub ecx, [rip + g_pmt + 4*MI_8]
     cmp eax, ecx
     cmovg eax, ecx
+    mov [rsp + 28], eax
     lea rbx, [rip + lv_drop]    # no taller than what it shows
     mov rdi, rbx
     call ensure
+    mov eax, [rsp + 28]
     mov ecx, [rbx + LV_total]
     add ecx, [rip + g_pmt + 4*MI_40]
     add ecx, [rip + g_pmt + 4*MI_8]
@@ -4008,13 +4163,43 @@ lv_dump:
 52: mov rdi, r15
     mov rsi, rax
     call dump_word
+    mov rdi, [rip + breaker]    # the conversation the breaker kept closed
+    test rdi, rdi
+    jz 56f
+    call title_of
+    mov [rsp], rax
+    mov [rsp + 8], rdx
     mov rdi, r15
+    lea rsi, [rip + .Ld_reopen]
+    call sb_push_cstr
+    mov rdi, r15
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call dump_word
+56: mov rdi, r15
     lea rsi, [rip + .Ld_drop]
     call sb_push_cstr
     mov rdi, r15
     mov esi, [rip + drop_open]
     call sb_push_u64
+    lea rax, [rip + lv_drop]    # the dropdown's: where it was drawn last
+    cmp rbx, rax
+    jne 53f
+    xor r12d, r12d
+54: mov rdi, r15
+    mov esi, ','
+    test r12d, r12d
+    jnz 55f
+    mov esi, '@'
+55: call sb_push_byte
+    lea rax, [rip + drop_rect]
+    mov esi, [rax + r12*4]
     mov rdi, r15
+    call sb_push_u64
+    inc r12d
+    cmp r12d, 4
+    jb 54b
+53: mov rdi, r15
     mov esi, 10
     call sb_push_byte
     xor r12d, r12d              # the entries
@@ -4327,7 +4512,7 @@ ctl_words:
     .quad .Lc_filter_menu, c_filter_menu, .Lc_rename, c_rename, .Lc_rename_group, c_rename_group
     .quad .Lc_new_group, c_new_group, .Lc_toggle, c_toggle, .Lc_drag, c_drag
     .quad .Lc_unarchive_all, c_unarchive_all, .Lc_drop_open, c_drop_open, .Lc_drop_close, c_drop_close
-    .quad .Lc_grew, c_grew
+    .quad .Lc_grew, c_grew, .Lc_reopen, c_reopen
     .quad 0, 0
 .Lc_search: .asciz "search"
 .Lc_drop_search: .asciz "drop-search"
@@ -4346,6 +4531,7 @@ ctl_words:
 .Lc_drop_open: .asciz "drop-open"
 .Lc_drop_close: .asciz "drop-close"
 .Lc_grew: .asciz "grew"
+.Lc_reopen: .asciz "reopen"
 .Lw_drop: .asciz "drop"
 .Lw_ext: .asciz "ext"
 .Lw_ctrl: .asciz "ctrl"
@@ -4628,6 +4814,12 @@ c_drop_close:
     call aglist_drop_close
     xor eax, eax
     ret
+
+c_reopen:                       # reopen: the breaker's "Open it anyway"
+    PROLOGUE
+    call reopen_anyway
+    xor eax, eax
+    EPILOGUE
 
 c_grew:                         # grew TITLE: as agents_poll seeing its file grow
     PROLOGUE

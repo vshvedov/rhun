@@ -166,7 +166,8 @@ with the caret at the start of the box recalls your previous prompt in this conv
 first (the last 100, queued ones included); Down with the caret at the end goes forward, and past
 the newest gives back what you had typed. Each conversation keeps the text you leave in its box
 until you come back to it. The box says "Ask Claude to edit…" until your first Send in the window,
-then "Message Claude Code", and "Queue another message…" while Claude works. After a reply Claude
+then "ctrl esc to focus or unfocus Claude" ("⌘ Esc …" on macOS), and "Queue another message…"
+while Claude works. After a reply Claude
 may suggest your next prompt (**Prompt suggestions**, `[claude] prompt_suggestions`): it shows in
 the empty box, and Tab takes it. When Claude Code says the session can think harder on request,
 the word "ultrathink" is drawn in rainbow colours in the box.
@@ -377,6 +378,8 @@ wrapper =
 initial_mode =
 allow_bypass_permissions = false
 prompt_suggestions = true
+use_terminal = false
+ide = true
 env.CLAUDE_CONFIG_DIR = /home/me/.claude-work
 [agents]
 idle_stop_minutes = 10
@@ -405,6 +408,8 @@ scroll_on_send = true
   starts or switches a conversation to it.
 - `prompt_suggestions` (**Prompt suggestions**, on by default): Claude suggests your next prompt
   after a reply, and Tab takes it.
+- `use_terminal` (**Use the terminal**, off by default) and `ide` (**Connect claude in the
+  terminal**, on by default): see [Claude Code in the terminal](#claude-code-in-the-terminal).
 - `env.NAME = value`: a variable for Claude Code's environment, a line each, at most 64 of at most
   8 KiB each. NAME is letters, digits and `_`, and does not start with a digit; a line that breaks
   these rules is dropped with a log line that names it. The values are only in the config file:
@@ -442,6 +447,37 @@ copy** in its source's, and a new conversation in the folder the order above giv
 start. Until another folder is opened, the chat or the Claude Code provider is switched off, or
 rhun quits, its file, the check for another Claude Code and its starts use that folder, even after
 the config names another one.
+
+### Claude Code in the terminal
+
+`claude` started in rhun's terminal connects to rhun, as it does to VS Code's terminal with the
+Claude Code extension: `/ide` in it shows "rhun" with a check mark. While it is connected:
+
+- It knows your selection: the file of the active tab and the text selected in it, sent 300 ms after
+  the selection last changed, so a prompt can say "this function".
+- **Claude: Insert @-Mention in Terminal** (Ctrl+Alt+K, Cmd+Alt+K on macOS) sends it the active
+  file, with the lines selected, as an @-mention, and gives the terminal the keys.
+- An edit it wants to make opens in a Review tab, "Review: " and the name Claude Code gives it, with
+  the proposed change. The tab does not take the keys: what you type still goes to the terminal.
+  **Accept** (or `a`, Ctrl+Enter) gives Claude Code the text with the changes you accepted, and
+  Claude Code writes the file; **Reject** (or `r`), or closing the tab, refuses it. Changes can be
+  decided one at a time (`A`, `R`); rejected ones are left out. rhun itself writes nothing.
+- It can ask for the problems rhun shows: those of the open files and of the Problems panel.
+
+**Claude: Open in Terminal** starts `claude` (the **Claude Code program** when one is set) in a new
+terminal tab named "Claude Code" (or what `CLAUDE_CODE_TERMINAL_TITLE` says), in the project. With
+**Use the terminal** (`[claude] use_terminal`), **Agents: Open** and Ctrl+Esc (Cmd+Esc on macOS) do
+that too, a new tab each time; without it Ctrl+Esc moves the keys to the agents panel and back.
+
+How it works: while a trusted project is open in a local window and **Connect claude in the
+terminal** (`[claude] ide`) is on, rhun listens on 127.0.0.1, on a port from 10000 to 65535, and
+every program started in its terminal gets `CLAUDE_CODE_SSE_PORT` with it. The file
+`ide/PORT.lock` in Claude Code's folder (see above) names the port, the window's folders, "rhun"
+and a random token; only you can read it, and it goes when rhun quits (files left by a rhun that
+did not quit are removed by the next one). A program that does not send the token is turned away,
+and only one `claude` is connected at a time: a newer one replaces the older. A `claude` started
+outside rhun can connect with `/ide` when its folder is one of the window's. In remote windows
+there is none yet.
 
 ### Markdown replies
 

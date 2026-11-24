@@ -134,7 +134,8 @@ class BridgeCase(unittest.TestCase):
         return head, lines[1:]
 
     def port(self):
-        return int(self.ide()[0]['port'])
+        """The port, once the server listens (it starts in the loop's first passes)."""
+        return int(self.until(lambda: self.ide()[0]['port'] != '0' and self.ide()[0]['port'], 'the server listens'))
 
     def lock(self):
         return ide.read_lock(self.work / '.claude', self.port())
@@ -162,6 +163,7 @@ class BridgeCase(unittest.TestCase):
 class ServerTest(BridgeCase):
     def test_the_lock_file_has_the_extensions_six_fields(self):
         self.start()
+        self.port()
         head, _ = self.ide()
         self.assertEqual(head['on'], '1')
         port = int(head['port'])
@@ -188,13 +190,17 @@ class ServerTest(BridgeCase):
         self.ide_dir.mkdir(parents=True)
         self.ide_dir.chmod(0o755)
         self.start()
+        self.port()
         self.assertEqual(stat.S_IMODE(self.ide_dir.stat().st_mode), 0o700)
 
     def test_it_listens_on_the_loopback_only(self):
         self.start()
         port = self.port()
-        out = subprocess.run(['lsof', '-nP', '-a', '-p', str(self.process.pid), '-iTCP:%d' % port,
-                              '-sTCP:LISTEN'], capture_output=True, text=True).stdout
+        try:
+            out = subprocess.run(['lsof', '-nP', '-a', '-p', str(self.process.pid), '-iTCP:%d' % port,
+                                  '-sTCP:LISTEN'], capture_output=True, text=True).stdout
+        except FileNotFoundError:
+            out = ''
         if not out:
             self.skipTest('no lsof here')
         self.assertIn('127.0.0.1:%d' % port, out)
@@ -217,6 +223,7 @@ class ServerTest(BridgeCase):
 
     def test_the_setting_off_means_no_server(self):
         self.start('[claude]\nide = false\n')
+        self.command('wait 300')
         head, _ = self.ide()
         self.assertEqual((head['on'], head['port']), ('0', '0'))
         self.assertFalse(self.ide_dir.exists() and os.listdir(self.ide_dir))
@@ -226,6 +233,7 @@ class ServerTest(BridgeCase):
 
     def test_no_project_no_server(self):
         self.start(target=None)
+        self.command('wait 300')
         self.assertEqual(self.ide()[0]['on'], '0')
         self.assertFalse(self.ide_dir.exists())
 
@@ -252,6 +260,7 @@ class ServerTest(BridgeCase):
         write('20003.lock', 'rhun', alive)
         (self.ide_dir / '20004.lock').write_text('not json', encoding='utf-8')
         self.start()
+        self.port()
         names = set(os.listdir(self.ide_dir))
         self.assertNotIn('20001.lock', names)
         self.assertTrue({'20002.lock', '20003.lock', '20004.lock'} <= names, names)
@@ -759,6 +768,76 @@ class TerminalModeTest(BridgeCase):
         self.command(f'key {MOD}+Escape')
         self.assertEqual(focus(), 0)                    # FOCUS_EDITOR
         self.assertEqual(self.terminals(), [])
+
+
+REAL = os.environ.get('RHUN_REAL_CLAUDE') == '1'
+
+
+@unittest.skipUnless(REAL and sys.platform == 'darwin', 'the real CLI: RHUN_REAL_CLAUDE=1, on macOS')
+class RealTest(BridgeCase):
+    """The real, signed-in claude in rhun's terminal (one small prompt on Haiku, --permission-mode default, a
+    temporary git repository): it connects, /ide shows rhun, it shows the selection, and its edit opens in the
+    Review tab, is accepted there and written by the CLI. rhun keeps its own HOME, but its Claude folder is the
+    real one (the env.HOME pair) and so is the terminal program's HOME: the lock file is in the real
+    ~/.claude/ide for the run only. The CLI writes its own records under ~/.claude (session-env, file-history,
+    backups, projects/<slug>, and ~/.claude.json's entry for the trusted folder); the projects folder of the
+    test's repository is removed after it. ~/.claude/settings.json is compared by its checksum."""
+
+    def test_the_real_cli(self):
+        import hashlib
+        import pwd
+        import shutil
+        home = Path(pwd.getpwuid(os.getuid()).pw_dir)
+        settings = home / '.claude/settings.json'
+
+        def checksum():
+            return hashlib.sha256(settings.read_bytes()).hexdigest() if settings.exists() else None
+        before = checksum()
+        program = os.environ.get('RHUN_REAL_CLAUDE_EXE') or shutil.which('claude') or str(home / '.local/bin/claude')
+        subprocess.run(['git', 'init', '-q'], cwd=self.project, check=True)
+        self.start(f'[claude]\nenv.HOME = {home}\n')
+        self.port()
+        lock = self.ide()[0]['lock']
+        self.assertTrue(lock.startswith(str(home / '.claude/ide/')), lock)
+        try:
+            self.command(f'open {self.project / "a.txt"}')
+            self.command('key shift+End')
+            self.command(f'term-run --env HOME={home} --title Claude -- {program} --permission-mode default '
+                         '--model haiku')
+            self.command('cmd toggle_terminal')
+
+            def screen():
+                return self.term_text()
+            self.until(lambda: 'trust' in screen() or '\u276f' in screen(), 'the CLI starts', 60)
+            if 'Yes, I trust this folder' in screen():
+                self.command('key Down')
+                self.command('key Return')
+            self.until(lambda: self.ide()[0]['client'] != 'none', 'the CLI connects', 60)
+            self.until(lambda: '1 line selected' in screen(), 'the selection shows', 20)
+            self.command('type /ide')
+            time.sleep(1)
+            self.command('key Return')
+            self.until(lambda: '\u2714 rhun' in screen(), '/ide shows rhun', 20)
+            self.command('key Escape')
+            time.sleep(1)
+            self.command('type In a.txt replace the word two with TWO. Use the Edit tool. Do nothing else.')
+            self.command('key Return')
+            self.until(lambda: self.offers(), 'the edit opens in the Review tab', 180)
+            self.assertIn('Opened changes in rhun', screen())
+            self.command('review accept all')
+            self.until(lambda: 'TWO' in (self.project / 'a.txt').read_text(encoding='utf-8'), 'the CLI writes', 60)
+            self.assertEqual((self.project / 'a.txt').read_text(encoding='utf-8'), 'one\nTWO\nthree\nfour\n')
+            self.command('type /exit')
+            self.command('key Return')
+            time.sleep(2)
+        finally:
+            self.stop()
+            slug = re.sub(r'[^A-Za-z0-9]', '-', str(self.project))
+            folder = home / '.claude/projects' / slug
+            if folder.is_dir() and self.work.name in slug:
+                shutil.rmtree(folder)
+        self.assertFalse(Path(lock).exists())
+        self.assertEqual(checksum(), before)
 
 
 if __name__ == '__main__':

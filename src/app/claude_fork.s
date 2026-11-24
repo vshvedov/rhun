@@ -68,6 +68,8 @@
 
 .bss
 .p2align 3
+rerun_said: .long 0             # the re-run's "Continuing the step…" line was added (claude_fork_record)
+.p2align 3
 pes: .zero VEC_SIZE             # PE: the prompts of pe_as's file, in the file's order
 pe_as: .quad 0
 fsb: .zero SB_SIZE              # scratch
@@ -2212,6 +2214,7 @@ FN claude_fork_rerun
     jz 1f
     and dword ptr [rdi + AL_flags], ~ALF_RERUN
     mov [rip + claude_rerun_al], rdi
+    mov dword ptr [rip + rerun_said], 0
     mov eax, 1
 1:  ret
 
@@ -2242,15 +2245,18 @@ FN claude_fork_record
     call json_is
     test eax, eax
     jnz 5f
+    cmp dword ptr [rip + rerun_said], 0     # the line once, at the first record that says so (records before
+    je 1f                                   #   it, a status, may have begun the turn: AL_turns says nothing)
     cmp qword ptr [rbx + AL_turns], 0
-    je 1f
+    je 9f
     cmp dword ptr [rbx + AL_state], ALS_READY   # the handshake ended meanwhile: the turn works
     jne 9f
     mov rdi, rbx
     mov esi, ALS_WORKING
     call agent_state_set
     jmp 9f
-1:  lea rdi, [rip + .Lr_continuing]
+1:  mov dword ptr [rip + rerun_said], 1
+    lea rdi, [rip + .Lr_continuing]
     call strlen
     mov rdi, [rbx + AL_as]
     mov esi, R_META
@@ -2259,12 +2265,20 @@ FN claude_fork_record
     xor r8d, r8d
     call agents_msg_add
     mov dword ptr [rip + g_dirty], 1
+    cmp qword ptr [rbx + AL_turns], 0       # (a turn begun already goes on)
+    jne 3f
     cmp dword ptr [rbx + AL_state], ALS_READY
     jne 2f
     mov rdi, rbx
     call ev_turn_begin
     jmp 9f
 2:  mov qword ptr [rbx + AL_turns], 1
+    jmp 9f
+3:  cmp dword ptr [rbx + AL_state], ALS_READY
+    jne 9f
+    mov rdi, rbx
+    mov esi, ALS_WORKING
+    call agent_state_set
     jmp 9f
 5:  mov qword ptr [rip + claude_rerun_al], 0
     cmp dword ptr [rbx + AL_state], ALS_STARTING

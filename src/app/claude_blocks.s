@@ -65,6 +65,8 @@ t3: .zero SB_SIZE
 ptext: .zero SB_SIZE            # a prompt's text blocks, joined (ing_user)
 pchips: .zero SB_SIZE           # its chips: "LABEL\tTARGET" a line each (AM_name, AMF_CHIPS)
 utext: .zero SB_SIZE            # an echo's line, a meta line, a pill's text
+pc_sb: .zero SB_SIZE            # a prompt's text with its pastes unwrapped (phase 4 task 4)
+pc_tag: .zero SB_SIZE           #   and the closing tag it looks for
 
 .text
 
@@ -876,10 +878,9 @@ ing_user:
     jz 9f
     cmp eax, US_PLAIN
     jne 22f
-    lea rdi, [rip + ptext]
-    mov rsi, r14
-    mov rdx, r15
-    call sb_push
+    mov rdi, r14
+    mov rsi, r15
+    call push_plain
 22: mov rdi, rbx
     call prompt_row
     jmp 9f
@@ -943,10 +944,9 @@ ing_user:
     je 61f
     mov esi, 10
     call sb_push_byte
-61: lea rdi, [rip + ptext]
-    mov rsi, [rsp + 40]
-    mov rdx, [rsp + 48]
-    call sb_push
+61: mov rdi, [rsp + 40]
+    mov rsi, [rsp + 48]
+    call push_plain
     jmp 4b
 7:  cmp dword ptr [rip + cb_flags], ING_FILE   # an image, a document: a chip of the prompt
     jne 4b
@@ -961,6 +961,30 @@ ing_user:
     mov rdi, rbx
     call prompt_row
 9:  EPILOGUE
+
+# push_plain(ptr, len): the user's own text onto ptext, a paste the CLI wrapped (finding 43) as the paste it
+#   was (phase 4 task 4); a text that starts with another tag is kept as it is
+push_plain:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    test r12, r12
+    jz 2f
+    call starts_paste
+    test eax, eax
+    jnz 1f
+    cmp byte ptr [rbx], '<'
+    je 2f
+1:  mov rdi, rbx
+    mov rsi, r12
+    call unwrap_pastes
+    mov rbx, rax
+    mov r12, rdx
+2:  lea rdi, [rip + ptext]
+    mov rsi, rbx
+    mov rdx, r12
+    call sb_push
+    EPILOGUE
 
 # prompt_row(AS*): a prompt of the user's read from a file: ptext, with pchips as its chips (AM_name, LF
 #   between them, AMF_CHIPS); nothing when both are empty
@@ -2316,6 +2340,213 @@ compact_row:
     mov edx, r15d
     call agents_row_flag
 9:  EPILOGUE
+
+# ---- phase 4 task 4: long pastes (finding 43) ----
+# The CLI wraps each long paste the message named in inline_pastes where it stands in the text:
+# "\n\n<pasted_content id=\"XXXX\">\nPASTE\n</pasted_content id=\"XXXX\">\n" (XXXX four hex digits). The row
+# shows the paste as it was: the tags and the line feeds around them (two at most each side) go, the paste
+# stays (the extension's EE and jje, WV@3699613).
+
+# starts_paste(ptr, len) -> eax 1 when the text begins with an opening tag
+starts_paste:
+    xor eax, eax
+    cmp rsi, 20
+    jb 9f
+    sub rsp, 8
+    lea rsi, [rip + .Lpc_open]
+    mov edx, 20
+    call memeq
+    add rsp, 8
+9:  ret
+
+# find(hay ptr, hay len, from, needle ptr, needle len) -> rax the needle's offset at or after from, or -1
+find:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    mov r15, r8
+1:  mov rax, r13
+    add rax, r15
+    cmp rax, r12
+    ja 8f
+    mov al, [r14]
+    cmp [rbx + r13], al
+    jne 2f
+    lea rdi, [rbx + r13]
+    mov rsi, r14
+    mov rdx, r15
+    call memeq
+    test eax, eax
+    jz 2f
+    mov rax, r13
+    EPILOGUE
+2:  inc r13
+    jmp 1b
+8:  mov rax, -1
+    EPILOGUE
+
+# hex4(ptr) -> eax 1 when the four bytes are lower-case hex digits
+hex4:
+    xor ecx, ecx
+1:  movzx eax, byte ptr [rdi + rcx]
+    lea edx, [rax - '0']
+    cmp edx, 9
+    jbe 2f
+    lea edx, [rax - 'a']
+    cmp edx, 5
+    ja 8f
+2:  inc ecx
+    cmp ecx, 4
+    jb 1b
+    mov eax, 1
+    ret
+8:  xor eax, eax
+    ret
+
+# unwrap_pastes(ptr, len) -> rax ptr, rdx len: the text with its wrapped pastes as they were (pc_sb, valid
+#   until the next call), or the text itself when it holds none. Locals: [rsp] i, [rsp + 8] n, [rsp + 16] a,
+#   [rsp + 24] d, [rsp + 32] the closing tag's length, [rsp + 40] the id's place
+unwrap_pastes:
+    PROLOGUE 64
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rbx
+    mov rsi, r12
+    xor edx, edx
+    lea rcx, [rip + .Lpc_open]
+    mov r8d, 20
+    call find
+    test rax, rax
+    js .Lup_same
+    lea rdi, [rip + pc_sb]
+    call sb_clear
+    mov qword ptr [rsp], 0
+    mov qword ptr [rsp + 8], 0
+.Lup_next:
+    mov rdi, rbx                # o: the next opening tag
+    mov rsi, r12
+    mov rdx, [rsp]
+    lea rcx, [rip + .Lpc_open]
+    mov r8d, 20
+    call find
+    test rax, rax
+    js .Lup_end
+    mov r13, rax                # o
+    lea r14, [rax + 20]         # r: the id
+    lea rax, [r14 + 7]
+    cmp rax, r12
+    ja .Lup_skip
+    lea rdi, [rbx + r14]
+    call hex4
+    test eax, eax
+    jz .Lup_skip
+    cmp byte ptr [rbx + r14 + 4], '"'
+    jne .Lup_skip
+    cmp byte ptr [rbx + r14 + 5], '>'
+    jne .Lup_skip
+    cmp byte ptr [rbx + r14 + 6], 10
+    jne .Lup_skip
+    lea rax, [r14 + 7]
+    mov [rsp + 16], rax         # a: the paste's start
+    lea rdi, [rip + pc_tag]         # "\n</pasted_content id=\"XXXX\">"
+    call sb_clear
+    lea rdi, [rip + pc_tag]
+    mov esi, 10
+    call sb_push_byte
+    lea rdi, [rip + pc_tag]
+    lea rsi, [rip + .Lpc_close]
+    call sb_push_cstr
+    lea rdi, [rip + pc_tag]
+    lea rsi, [rbx + r14]
+    mov edx, 4
+    call sb_push
+    lea rdi, [rip + pc_tag]
+    lea rsi, [rip + .Lpc_end]
+    call sb_push_cstr
+    mov rdi, rbx                # d: where "\n</..." begins, + 1
+    mov rsi, r12
+    mov rdx, [rsp + 16]
+    dec rdx
+    mov rcx, [rip + pc_tag + SB_ptr]
+    mov r8, [rip + pc_tag + SB_len]
+    call find
+    test rax, rax
+    js .Lup_end
+    inc rax
+    mov [rsp + 24], rax
+    mov r15, r13                # u: back over two line feeds at most, not before n
+    xor ecx, ecx
+1:  cmp ecx, 2
+    jae 2f
+    cmp r15, [rsp + 8]
+    jbe 2f
+    cmp byte ptr [rbx + r15 - 1], 10
+    jne 2f
+    dec r15
+    inc ecx
+    jmp 1b
+2:  mov rdx, r15                # the text before it
+    sub rdx, [rsp + 8]
+    jbe 3f
+    lea rdi, [rip + pc_sb]
+    mov rsi, [rsp + 8]
+    add rsi, rbx
+    call sb_push
+3:  mov rdx, [rsp + 24]         # the paste: [a, d - 1)
+    dec rdx
+    sub rdx, [rsp + 16]
+    jbe 4f
+    lea rdi, [rip + pc_sb]
+    mov rsi, [rsp + 16]
+    add rsi, rbx
+    call sb_push
+4:  mov rax, [rip + pc_tag + SB_len]        # n: after the closing tag and two line feeds at most
+    dec rax
+    add rax, [rsp + 24]
+    xor ecx, ecx
+5:  cmp ecx, 2
+    jae 6f
+    cmp rax, r12
+    jae 6f
+    cmp byte ptr [rbx + rax], 10
+    jne 6f
+    inc rax
+    inc ecx
+    jmp 5b
+6:  mov [rsp + 8], rax
+    mov [rsp], rax
+    jmp .Lup_next
+.Lup_skip:
+    mov [rsp], r14
+    jmp .Lup_next
+.Lup_end:
+    mov rdx, r12                # the text after the last one
+    sub rdx, [rsp + 8]
+    jbe 7f
+    lea rdi, [rip + pc_sb]
+    mov rsi, [rsp + 8]
+    add rsi, rbx
+    call sb_push
+7:  mov rax, [rip + pc_sb + SB_ptr]
+    mov rdx, [rip + pc_sb + SB_len]
+    test rax, rax
+    jnz 9f
+    lea rax, [rip + .Lpc_open]  # (nothing left: an empty text)
+    xor edx, edx
+9:  EPILOGUE
+.Lup_same:
+    mov rax, rbx
+    mov rdx, r12
+    EPILOGUE
+
+.section .rodata
+.Lpc_open: .ascii "<pasted_content id=\""
+.byte 0
+.Lpc_close: .asciz "</pasted_content id=\""
+.Lpc_end: .asciz "\">"
+.text
 
 # call_block(AS*, block, parent id ptr, len): a tool_use block: its call (a row, or a child of the call it
 #   ran under), its parts by its tool's input filler, its one-line summary and name for print-agents

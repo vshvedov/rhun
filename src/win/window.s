@@ -77,6 +77,9 @@ FN win_open_window
     test rax, rax
     jz 8f
     mov [rip + win_hwnd], rax
+    mov rcx, rax                # files dropped on the window come as WM_DROPFILES (phase 4 task 5)
+    mov edx, 1
+    API DragAcceptFiles
     # a mode change since win_appearance_init reached no window of rhun's: read the mode again
     call win_setting_changed
     mov rdi, [rip + win_hwnd]
@@ -365,13 +368,18 @@ FN win_clip_set
 10: mov eax, [rsp + 80]
     EPILOGUE
 
+# win_clip_get(kinds CLIPK_*, an image's most bytes): files (CF_HDROP), else an image (the registered "PNG" or
+# "image/png"), else rhun's own format, else CF_UNICODETEXT (phase 4 task 4). A bitmap alone (CF_DIB, no text)
+# is told, not attached: rhun has no PNG encoder.
 FN win_clip_get
     PROLOGUE 128
+    mov [rsp + 120], edi
+    mov [rsp + 124], esi
     mov rax, [rip + app_clip_active_token]
     mov [rsp + 104], rax
     xor r12d, r12d
     xor r13d, r13d
-    mov qword ptr [rsp + 112], 0
+    mov qword ptr [rsp + 112], 0   # what was read: 0 text, 1 native, 2 files, 3 too large, 4 image, 5 a bitmap
     inc qword ptr [rip + win_clip_depth]
     mov rax, [rip + win_deferred_overflow]
     mov [rsp + 96], rax
@@ -380,7 +388,30 @@ FN win_clip_get
     call win_clip_open
     test eax, eax
     jz 9f
-    test ebx, ebx
+    test dword ptr [rsp + 120], CLIPK_FILES
+    jz 20f
+    mov ecx, 15                 # CF_HDROP
+    API GetClipboardData
+    test rax, rax
+    jz 20f
+    mov rdi, rax
+    call win_hdrop_list
+    test rax, rax
+    jz 20f
+    mov r12, rax
+    mov r13, rdx
+    mov qword ptr [rsp + 112], 2
+    jmp 8f
+20: test dword ptr [rsp + 120], CLIPK_IMAGE
+    jz 30f
+    mov edi, [rsp + 124]
+    call win_clip_png
+    mov [rsp + 112], rcx
+    mov r12, rax
+    mov r13, rdx
+    test ecx, ecx
+    jnz 8f
+30: test ebx, ebx
     jz 7f
     mov ecx, ebx
     API GetClipboardData
@@ -404,21 +435,53 @@ FN win_clip_get
     mov r13, rdx
 8:  API CloseClipboard
 9:  dec qword ptr [rip + win_clip_depth]
-    test r12, r12
-    jz 12f
     mov rax, [rip + win_deferred_overflow]
     cmp rax, [rsp + 96]
     jne 12f
+    mov rax, [rsp + 112]
+    cmp eax, 3
+    je 14f
+    cmp eax, 5
+    je 15f
+    test r12, r12
+    jz 12f
     mov rdi, [rsp + 104]
     mov rsi, r12
     mov rdx, r13
-    cmp qword ptr [rsp + 112], 0
+    cmp eax, 2
+    je 16f
+    cmp eax, 4
+    je 17f
+    cmp eax, 0
     je 13f
     call app_clip_complete_native
+    jmp 10f
+16: mov rcx, rdx
+    mov rdx, rsi
+    mov esi, CLIPK_FILES
+    call app_clip_complete_kind
+    jmp 10f
+17: mov rcx, rdx
+    mov rdx, rsi
+    mov esi, CLIPK_IMAGE
+    call app_clip_complete_kind
     jmp 10f
 13:
     mov ecx, 1
     call app_clip_complete
+    jmp 10f
+14: mov qword ptr [rip + g_clip_read], 0     # larger than the request reads: not copied
+    mov rdi, [rsp + 104]
+    mov esi, CLIPK_IMAGE
+    xor edx, edx
+    mov rcx, CLIP_TOO_BIG
+    call app_clip_complete_kind
+    jmp 10f
+15: mov rdi, [rsp + 104]        # a bitmap without text: rhun cannot attach it
+    mov esi, CLIPK_IMAGE
+    xor edx, edx
+    mov rcx, CLIP_NOT_TAKEN
+    call app_clip_complete_kind
     jmp 10f
 12: mov rdi, [rsp + 104]
     xor esi, esi
@@ -506,6 +569,8 @@ FN win_deferred_push
     cmp esi, 0x1a
     je .Ldefer_yes
     cmp esi, 0x2e0
+    je .Ldefer_yes
+    cmp esi, 0x233              # WM_DROPFILES (phase 4 task 5): the HDROP lives until DragFinish
     je .Ldefer_yes
     cmp esi, 0x200
     jb .Ldefer_keys
@@ -638,6 +703,8 @@ win_wndproc_deferred:
     je .Lwm_dpi
     cmp edx, 0x1a
     je .Lwm_setting
+    cmp edx, 0x233
+    je .Lwm_dropfiles
     cmp edx, 0x200
     je .Lwm_motion
     cmp edx, 0x201
@@ -670,6 +737,10 @@ win_wndproc_deferred:
     jmp .Lwm_ret
 .Lwm_close:
     call app_on_close
+    jmp .Lwm_zero
+.Lwm_dropfiles:
+    mov rdi, r13                # files dropped from the system (no enter, move or leave: no veil)
+    call win_drop_files
     jmp .Lwm_zero
 .Lwm_setting:
     # WM_SETTINGCHANGE: the system's dark mode among others

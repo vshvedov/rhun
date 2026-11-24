@@ -597,7 +597,10 @@ FN composer_owner
     jne 10f
     call agentpop_close         # its own already
     EPILOGUE
-10:    call box
+10: test r15d, r15d             # phase 4 task 4: the long pastes stay with the text (agentpaste.s)
+    jnz 11f
+    call agpaste_forget
+11: call box
     mov rdi, rax
     call tf_text
     mov r12, rax
@@ -782,6 +785,7 @@ FN composer_row_gone
 FN composer_sent
     PROLOGUE
     mov rbx, rdi
+    call agpaste_forget         # phase 4 task 4: the long pastes went with the text (agentpaste.s)
     call note_drop
     call hist_reset
     mov qword ptr [rip + restored], 0
@@ -1293,6 +1297,9 @@ FN composer_paste
     mov rsi, r12
     mov rdx, r13
     call ta_insert
+    mov rdi, r12                # phase 4 task 4: a long paste is remembered (agentpaste.s)
+    mov rsi, r13
+    call agpaste_remember
     mov rdi, rbx
     call agentext_box_typed
     call agentext_box_changed

@@ -8,6 +8,10 @@ clip_request_next: .quad 0
 clip_requests: .zero 8 * CPR_COUNT
 clip_request_count: .quad 0
 clip_pumping: .quad 0
+.globl g_clip_last_kind, g_clip_read, g_clip_asked
+g_clip_asked: .quad 0           # the kinds the last request the platform got asked for (print-clip)
+g_clip_last_kind: .quad 0       # the kind of the last completion that reached a request (print-clip)
+g_clip_read: .quad 0            #   and the bytes it brought (a platform that stopped past a limit: what it read)
 .globl clip_delivery_view
 clip_delivery_view: .quad 0
 .text
@@ -221,8 +225,14 @@ FN clip_context_matches
     mov eax, r13d
     EPILOGUE
 
-# Request wrappers capture destination now. Only the FIFO head touches the platform.
+# Request wrappers capture destination now. Only the FIFO head touches the platform. A plain request takes
+# what its destination takes (phase 4 task 4): the agents' box of a driver with parts also files and an image
+# (agpaste_kinds), everything else text.
 FN app_clip_request
+    sub rsp, 8
+    call agpaste_kinds
+    add rsp, 8
+    mov r9d, eax
     xor edi, edi
     xor esi, esi
     xor edx, edx
@@ -230,12 +240,14 @@ FN app_clip_request
     jmp clip_request_enqueue
 FN app_clip_request_vim
     mov r8d, 1
+    mov r9d, CLIPK_TEXT
 clip_request_enqueue:
-    PROLOGUE 32
+    PROLOGUE 48
     mov [rsp], rdi
     mov [rsp + 8], rsi
     mov [rsp + 16], rdx
     mov [rsp + 24], r8
+    mov [rsp + 32], r9
     cmp qword ptr [rip + clip_request_count], CPR_COUNT
     jae .Lcre_full
     cmp qword ptr [rip + clip_request_next], -1
@@ -281,6 +293,9 @@ clip_request_enqueue:
     mov [rbx + CPR_putcount], rax
     mov rax, [rsp + 16]
     mov [rbx + CPR_putmode], rax
+    mov eax, [rsp + 32]
+    mov [rbx + CPR_kinds], eax
+    mov dword ptr [rbx + CPR_imgmax], MP_IMAGE_MAX + 1
     mov rax, [rip + clip_request_count]
     lea rdx, [rip + clip_requests]
     mov [rdx + rax*8], rbx
@@ -345,6 +360,9 @@ FN app_clip_pump
     mov qword ptr [rbx + CPR_started], 1
     mov rax, [rbx + CPR_token]
     mov [rip + app_clip_active_token], rax
+    mov edi, [rbx + CPR_kinds]
+    mov [rip + g_clip_asked], rdi
+    mov esi, [rbx + CPR_imgmax]
     PCALL P_clip_get
     jmp .Lcpp_unlock
 .Lcpp_stale:
@@ -484,6 +502,8 @@ clip_complete:
     cmp qword ptr [rbx + CPR_started], 1
     jne .Lclc_done
     mov qword ptr [rbx + CPR_started], 2
+    mov qword ptr [rip + g_clip_last_kind], CLIPK_TEXT
+    mov [rip + g_clip_read], r13
     cmp ecx, 1
     jne .Lclc_pop
     cmp r13, DOC_MULTI_BYTES_MAX
@@ -543,4 +563,67 @@ clip_complete:
     call clip_request_pop
     call app_clip_pump
 .Lclc_done:
+    EPILOGUE
+
+# ---- phase 4 task 4: files and an image beside text ----
+
+# FN app_clip_request_kinds(kinds CLIPK_*) -> eax 1 queued: a request for the focused destination that takes
+#   those kinds (app_clip_request asks for what the destination takes)
+FN app_clip_request_kinds
+    mov r9d, edi
+    xor edi, edi
+    xor esi, esi
+    xor edx, edx
+    xor r8d, r8d
+    jmp clip_request_enqueue
+
+# FN app_clip_complete_kind(token, kind CLIPK_*, ptr, len): a platform's answer of one kind. Text is
+#   app_clip_complete's. Files (absolute paths, a NUL after each) or an image's bytes reach the destination
+#   (agpaste_take) only for the head request that asked for that kind, while its destination is still the one
+#   that asked (clip_context_matches); ptr 0 is a failure (len CLIP_TOO_BIG: the image was larger than the
+#   request reads, which the destination says). The platform owns the bytes through this call.
+FN app_clip_complete_kind
+    cmp esi, CLIPK_TEXT
+    jne 1f
+    mov rsi, rdx                # text: (token, ptr, len, ok)
+    mov rdx, rcx
+    xor ecx, ecx
+    test rsi, rsi
+    setnz cl
+    jmp app_clip_complete
+1:  PROLOGUE 16
+    mov r12d, esi
+    mov r13, rdx
+    mov r14, rcx
+    test rdi, rdi
+    jz .Lcck_done
+    cmp qword ptr [rip + clip_request_count], 0
+    je .Lcck_done
+    mov rbx, [rip + clip_requests]
+    cmp rdi, [rbx + CPR_token]
+    jne .Lcck_done
+    cmp qword ptr [rbx + CPR_started], 1
+    jne .Lcck_done
+    mov qword ptr [rbx + CPR_started], 2
+    mov [rip + g_clip_last_kind], r12
+    test r13, r13
+    jnz 3f
+    cmp r14, CLIP_TOO_BIG       # (the platform set g_clip_read to what it read before it stopped)
+    je 2f
+    xor r14d, r14d
+3:  mov [rip + g_clip_read], r14
+2:  test [rbx + CPR_kinds], r12d
+    jz .Lcck_pop
+    mov rdi, rbx
+    call clip_context_matches
+    test eax, eax
+    jz .Lcck_pop
+    mov edi, r12d
+    mov rsi, r13
+    mov rdx, r14
+    call agpaste_take
+.Lcck_pop:
+    call clip_request_pop
+    call app_clip_pump
+.Lcck_done:
     EPILOGUE

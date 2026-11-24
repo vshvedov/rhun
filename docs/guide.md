@@ -222,6 +222,24 @@ A message whose attachments would not fit in the program's input is not sent: "T
 large to send: remove an attachment." A message written while Claude works keeps only the paths of
 its files (they are read again if it comes back) and at most 10 MB of pasted pictures.
 
+Paste (Ctrl+V, Command+V on macOS) in the box takes the best the clipboard has: files copied in a
+file manager are attached, else a picture (a screenshot, an image copied in a browser) is attached
+as "Image", else the text is pasted. A picture is taken as PNG, JPEG, GIF or WebP (on macOS a TIFF
+is turned into PNG by the system; on Windows a clipboard with only a bitmap says "The image on the
+clipboard is in a format rhun cannot attach."); one over 10 MB is not read past its limit: "The
+image on the clipboard is larger than 10 MB · not attached". Clipboard bytes that are no picture
+are never pasted as text. Every other field (the editor, the terminal, Find) pastes the text as
+before. A long paste (more than 800 characters or more than two line breaks) stays in the box as
+its text and also goes to Claude Code beside the message as a paste of its own, as the VS Code
+extension sends it; the conversation shows it as the text it was.
+
+Files dragged from the system onto a conversation show "Drop to attach as context" over it, and
+dropped there they are attached the same way (a folder becomes a mention). On Windows the drop
+works without that hint while dragging. Files dropped anywhere else open in tabs (at most 20, folders
+skipped); of a drop of more than 1,000 files the first 1,000 are taken. A file dragged from the
+explorer, or a file's tab, onto a conversation is mentioned at the box's caret (`@src/main.c`)
+instead of attached.
+
 ### Modes, model and the command menu
 
 The row under the box holds the permission mode, the model, then at the right the context

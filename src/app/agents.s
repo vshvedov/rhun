@@ -7314,6 +7314,11 @@ FN agents_draw
     mov ecx, [rsp + 28]
     call thread_draw
     call agside_draw
+    mov edi, [rsp + 16]         # phase 4 task 5: a drop on the conversation (agentpaste.s), beside a side
+    mov esi, [rsp + 20]         #   panel
+    mov edx, [rsp + 24]
+    mov ecx, [rsp + 28]
+    call agpaste_area
     jmp 9f
 1:  mov edi, [rsp]
     mov esi, [rsp + 4]

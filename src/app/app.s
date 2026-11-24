@@ -3275,6 +3275,7 @@ FN app_render
     call tip_commit             # after every button with a tooltip has been drawn
     call tip_draw
     call places_frame_end       # views hear focus and visibility changes once a frame
+    call drop_frame             # phase 4 task 5: a drop nobody took opens; an in-app drag follows (drop.s)
     mov edi, [rsp + 36]
     test edi, edi
     jz 2f
@@ -4911,6 +4912,7 @@ tab_drag_step:
     # let go: the tab settles in its place, in full view
     cmp dword ptr [rip + tab_drag], 0
     je .Lds_none
+    call drag_tab_released      # phase 4 task 5: a file's tab let go over a conversation is a mention (drop.s)
     mov dword ptr [rip + tab_drag], 0
     mov dword ptr [rip + g_tabscroll_reveal], 1
     mov dword ptr [rip + g_dirty], 1

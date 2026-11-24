@@ -2070,6 +2070,11 @@ FN agentext_send
     mov rdx, r12
     mov rcx, r13
     call agterm_parts
+    mov rdi, rbx                # phase 4 task 4: the long pastes the prompt holds (agentpaste.s)
+    mov rsi, [rsp]
+    mov rdx, r12
+    mov rcx, r13
+    call agpaste_parts
     mov rdi, [rsp]
     call agatt_count
     test rax, rax

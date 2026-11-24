@@ -2491,6 +2491,7 @@ ctl_tables:
     .quad newext_ctl            # New Extension (newext.s)
     .quad submitext_ctl         # Submit to Index (submitext.s)
     .quad ide_ctl               # Claude chat phase 5: the bridge for terminal claude (ide_server.s)
+    .quad clipdrop_ctl          # phase 4 tasks 4-5: the headless clipboard's kinds, drops (drop.s)
     .quad 0
 ctl_table:
     .quad .Lc_key_up, c_key_up, .Lc_key, c_key, .Lc_modifiers, c_modifiers, .Lc_type, c_type, .Lc_move, c_move, .Lc_click, c_click, .Lc_tap, c_tap

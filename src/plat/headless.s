@@ -12,6 +12,13 @@ headless_clip_plain:
 hclip: .zero SB_SIZE
 headless_clip_native:
 hclip_wire: .zero SB_SIZE
+hclip_files: .zero SB_SIZE      # clip-set files: paths, a NUL after each (phase 4 task 4)
+hclip_image: .quad 0            # clip-set image: an image file's path (read when pasted, never past the limit)
+hclip_held: .quad 0             # clip-hold: the request waiting for clip-release, its kinds and image limit
+hclip_held_kinds: .long 0
+hclip_held_max: .long 0
+hclip_hold: .long 0
+.globl hclip_hold
 # window requests, recorded for tests; a move grabs the pointer like a compositor does
 .globl g_hl_grab, g_hl_moves, g_hl_minimized, g_hl_frames
 g_hl_grab: .long 0
@@ -399,6 +406,11 @@ FN headless_clip_reset
     call sb_free
     lea rdi, [rip + hclip_wire]
     call sb_free
+    lea rdi, [rip + hclip_files]
+    call sb_free
+    mov rdi, [rip + hclip_image]
+    call mem_free
+    mov qword ptr [rip + hclip_image], 0
     EPILOGUE
 
 FN headless_clip_set
@@ -470,9 +482,223 @@ FN headless_clip_write
     xor eax, eax
     EPILOGUE
 
+# headless_clip_get(kinds CLIPK_*, an image's most bytes): files, else an image, else text, as the request
+#   asks (phase 4 task 4); clip-hold keeps the request until clip-release delivers it
 FN headless_clip_get
     PROLOGUE
     mov rbx, [rip + app_clip_active_token]
+    cmp dword ptr [rip + hclip_hold], 0
+    je 1f
+    mov [rip + hclip_held], rbx
+    mov [rip + hclip_held_kinds], edi
+    mov [rip + hclip_held_max], esi
+    EPILOGUE
+1:  mov edx, esi
+    mov esi, edi
+    mov rdi, rbx
+    call hl_clip_deliver
+    EPILOGUE
+
+# hl_clip_deliver(token, kinds, an image's most bytes): what the headless clipboard holds, of the best kind
+hl_clip_deliver:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    test r12d, CLIPK_FILES
+    jz 2f
+    mov r14, [rip + hclip_files + SB_len]
+    test r14, r14
+    jz 2f
+    mov rdi, [rip + hclip_files + SB_ptr]
+    mov rsi, r14
+    call mem_dup
+    mov r15, rax
+    mov rdi, rbx
+    mov esi, CLIPK_FILES
+    mov rdx, rax
+    mov rcx, r14
+    call app_clip_complete_kind
+    mov rdi, r15
+    call mem_free
+    EPILOGUE
+2:  test r12d, CLIPK_IMAGE
+    jz 4f
+    mov rdi, [rip + hclip_image]
+    test rdi, rdi
+    jz 4f
+    lea esi, [r13 - 1]          # never more than the request takes: a larger file is not read
+    call file_read_limited
+    test rax, rax
+    jnz 3f
+    cmp rdx, -27
+    jne 4f                      # unreadable: the text, as a system whose image failed
+    mov qword ptr [rip + g_clip_read], 0
+    mov rdi, rbx
+    mov esi, CLIPK_IMAGE
+    xor edx, edx
+    mov rcx, CLIP_TOO_BIG
+    call app_clip_complete_kind
+    EPILOGUE
+3:  mov r15, rax
+    mov rdi, rbx
+    mov esi, CLIPK_IMAGE
+    mov rcx, rdx
+    mov rdx, rax
+    call app_clip_complete_kind
+    mov rdi, r15
+    call mem_free
+    EPILOGUE
+4:  mov rdi, rbx
+    call hl_clip_text
+    EPILOGUE
+
+# headless_clip_release(): clip-release: the held request gets what the clipboard holds now
+FN headless_clip_release
+    PROLOGUE
+    mov dword ptr [rip + hclip_hold], 0
+    mov rdi, [rip + hclip_held]
+    test rdi, rdi
+    jz 9f
+    mov qword ptr [rip + hclip_held], 0
+    mov esi, [rip + hclip_held_kinds]
+    mov edx, [rip + hclip_held_max]
+    call hl_clip_deliver
+9:  EPILOGUE
+
+# headless_clip_put(kind CLIPK_*, ptr, len) -> eax 1: clip-set: text (as a copy from another program), a
+#   file list (NUL after each path) or an image file's path; the other kinds stay. len 0 clears that kind;
+#   kind 0 clears all
+FN headless_clip_put
+    PROLOGUE
+    mov r12d, edi
+    mov r13, rsi
+    mov r14, rdx
+    test r12d, r12d
+    jnz 1f
+    call headless_clip_reset
+    jmp 8f
+1:  cmp r12d, CLIPK_TEXT
+    jne 2f
+    lea rdi, [rip + hclip_wire]
+    call sb_free
+    lea rdi, [rip + hclip]
+    call sb_free
+    test r14, r14
+    jz 8f
+    lea rdi, [rip + hclip]
+    mov rsi, r13
+    mov rdx, r14
+    call sb_push
+    jmp 8f
+2:  cmp r12d, CLIPK_FILES
+    jne 3f
+    lea rdi, [rip + hclip_files]
+    call sb_free
+    lea rdi, [rip + hclip_files]
+    mov rsi, r13
+    mov rdx, r14
+    call sb_push
+    jmp 8f
+3:  mov rdi, [rip + hclip_image]
+    call mem_free
+    mov qword ptr [rip + hclip_image], 0
+    test r14, r14
+    jz 8f
+    mov rdi, r13
+    mov rsi, r14
+    call mem_dup
+    mov [rip + hclip_image], rax
+8:  mov eax, 1
+    EPILOGUE
+
+# headless_clip_dump(sb): print-clip: "text=BYTES files=N image=BYTES|- read=BYTES kind=K asked=K held=0|1":
+#   the clipboard, what the last answer brought and of which kind, what the last request asked for
+FN headless_clip_dump
+    PROLOGUE
+    mov rbx, rdi
+    lea rsi, [rip + .Lhc_text]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + hclip + SB_len]
+    call sb_push_u64
+    lea rsi, [rip + .Lhc_files]
+    mov rdi, rbx
+    call sb_push_cstr
+    xor r12d, r12d              # the paths: a NUL after each
+    xor ecx, ecx
+    mov rax, [rip + hclip_files + SB_ptr]
+1:  cmp rcx, [rip + hclip_files + SB_len]
+    jae 2f
+    cmp byte ptr [rax + rcx], 0
+    jne 11f
+    inc r12
+11: inc rcx
+    jmp 1b
+2:  mov rdi, rbx
+    mov rsi, r12
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lhc_image]
+    call sb_push_cstr
+    mov rdi, [rip + hclip_image]
+    test rdi, rdi
+    jz 3f
+    call vfs_stat
+    test rax, rax
+    js 3f
+    mov rdi, rbx
+    mov rsi, [rip + vfs_statbuf + 48]
+    call sb_push_u64
+    jmp 4f
+3:  mov rdi, rbx
+    mov esi, '-'
+    call sb_push_byte
+4:  mov rdi, rbx
+    lea rsi, [rip + .Lhc_read]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + g_clip_read]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lhc_kind]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + g_clip_last_kind]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lhc_asked]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + g_clip_asked]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lhc_held]
+    call sb_push_cstr
+    xor esi, esi
+    cmp qword ptr [rip + hclip_held], 0
+    setne sil
+    mov rdi, rbx
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    EPILOGUE
+
+.section .rodata
+.Lhc_text: .asciz "text="
+.Lhc_files: .asciz " files="
+.Lhc_image: .asciz " image="
+.Lhc_read: .asciz " read="
+.Lhc_kind: .asciz " kind="
+.Lhc_held: .asciz " held="
+.Lhc_asked: .asciz " asked="
+.text
+
+# hl_clip_text(token): the text the headless clipboard holds (rhun's own rich copy first)
+hl_clip_text:
+    PROLOGUE
+    mov rbx, rdi
     mov rdi, [rip + hclip_wire + SB_ptr]
     test rdi, rdi
     jz .Lhcg_plain

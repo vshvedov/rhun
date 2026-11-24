@@ -437,7 +437,8 @@ F P_tick, 8             # ()
 F P_draw, 8             # () renders if possible
 F P_cursor, 8           # (shape)
 F P_clip_set, 8         # (ptr, len) -> 1 accepted write request, 0 known failure
-F P_clip_get, 8         # () snapshots app_clip_active_token, completes through app_clip_complete
+F P_clip_get, 8         # (CLIPK_* wanted, an image's most bytes) snapshots app_clip_active_token, completes
+                        #   through app_clip_complete (text) or app_clip_complete_kind (files, an image)
 F P_move, 8             # ()
 F P_resize, 8           # (edges)
 F P_minimize, 8         # ()
@@ -1441,7 +1442,9 @@ ENDSTRUCT TF_SIZE
 .equ CPR_putkind, 120
 .equ CPR_putcount, 128
 .equ CPR_putmode, 136
-.equ CPR_SIZE, 144
+.equ CPR_kinds, 144              # CLIPK_* the request takes (phase 4 task 4)
+.equ CPR_imgmax, 148             #   and the most bytes of an image it reads
+.equ CPR_SIZE, 152
 .equ CPR_COUNT, 16
 .equ CPX_DOCUMENT, 1
 .equ CPX_FIELD, 2
@@ -3487,6 +3490,22 @@ ENDSTRUCT AP_SIZE
 .equ ATT_FOLDER, 7
 .equ ATT_NOTFILE, 8
 .equ ID_AG_CHIP, 0x700000       # the box's chips: + part * 2 (+ 1 its x)
+
+# ---- phase 4 tasks 4 and 5: the clipboard's files and images, files dropped on the window (clippaste.s,
+#   drop.s, agentpaste.s; the platform layers) ----
+.equ CLIPK_TEXT, 1              # a clipboard request's kinds, and an answer's kind (app_clip_complete_kind)
+.equ CLIPK_FILES, 2             #   absolute paths, a NUL after each
+.equ CLIPK_IMAGE, 4             #   an image file's bytes (PNG, or what the system gave that rhun takes)
+.equ CLIPK_ALL, 7
+.equ CLIP_TOO_BIG, -1           # app_clip_complete_kind's len with ptr 0: more than the request reads
+.equ CLIP_NOT_TAKEN, -2         #   an image in a form rhun cannot attach (Windows: a bitmap alone)
+.equ CLIP_FILES_MAX, 1048576    # a file list's bytes at most (the platforms stop reading past it)
+.equ DROP_ENTER, 1              # app_on_drop's events
+.equ DROP_MOVE, 2
+.equ DROP_LEAVE, 3
+.equ DROP_FILES, 4
+.equ DROP_PATHS_MAX, 1000       # a drop's paths taken at most, and their bytes
+.equ DROP_BYTES_MAX, 1048576
 
 # ---- a driver's lists and the project's choices, per driver kind and project (src/app/agentcfg.s) ----
 STRUCT

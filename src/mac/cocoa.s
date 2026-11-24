@@ -160,6 +160,13 @@ FN mac_open_window
     MSG initWithFrame_
     STX x0, view
     mov x21, x0
+    EXT x2, _NSPasteboardTypeFileURL    // files dropped on the view (phase 4 task 5)
+    CLS x0, NSArray
+    MSG arrayWithObject_
+    mov x2, x0
+    mov x0, x21
+    MSG registerForDraggedTypes_
+    mov x0, x21
     mov x2, #1
     MSG setWantsLayer_
     mov x0, x21
@@ -1022,16 +1029,318 @@ FN mac_clip_paste_board_tagged
     XCALL mem_free
 2:  XLEAVE
 
-// p_clip_get(): app_on_paste(text) right away
+// p_clip_get(kinds, image limit): the general pasteboard's files, image or text, right away
 p_clip_get:
     XENTRY
+    mov x20, x0
+    mov x21, x1
     ADR x9, app_clip_active_token
     ldr x19, [x9]
     CLS x0, NSPasteboard
     MSG generalPasteboard
     mov x1, x19
-    XCALL mac_clip_paste_board_tagged
+    mov x2, x20
+    mov x3, x21
+    XCALL mac_clip_paste_kinds
     XLEAVE
+
+// ---- phase 4 tasks 4 and 5: the pasteboard's files and images; files dropped on the view ----
+
+// file_url_query(): x0 the classes [NSURL], x1 the options {NSPasteboardURLReadingFileURLsOnlyKey: YES}
+// (autoreleased; the caller has a pool)
+file_url_query:
+    ENTER
+    CLS x0, NSURL
+    mov x2, x0
+    CLS x0, NSArray
+    MSG arrayWithObject_
+    mov x19, x0
+    CLS x0, NSNumber
+    mov x2, #1
+    MSG numberWithBool_
+    mov x2, x0
+    EXT x3, _NSPasteboardURLReadingFileURLsOnlyKey
+    CLS x0, NSDictionary
+    MSG dictionaryWithObject_forKey_
+    mov x1, x0
+    mov x0, x19
+    LEAVE
+    ret
+
+// mac_clip_files(board) -> owned paths in x8 (a NUL after each), their bytes in x2; 0, 0 when the board has
+// no file URL. At most CLIP_FILES_MAX bytes: the paths past that are left out.
+FN mac_clip_files
+    XENTRY 16
+    mov x19, x0
+    mov x22, #0
+    mov x23, #0
+    cbz x19, Lmcf_return
+    bl _objc_autoreleasePoolPush
+    str x0, [sp]
+    bl file_url_query
+    mov x3, x1
+    mov x2, x0
+    mov x0, x19
+    MSG readObjectsForClasses_options_
+    cbz x0, Lmcf_cleanup
+    mov x20, x0
+    MSG count
+    mov x21, x0
+    cbz x21, Lmcf_cleanup
+    mov x0, #1 << 20
+    add x0, x0, #1
+    XCALL mem_alloc_try
+    mov x22, x8
+    cbz x22, Lmcf_cleanup
+    mov x24, #0
+1:  cmp x24, x21
+    b.hs 3f
+    mov x0, x20
+    mov x2, x24
+    MSG objectAtIndex_
+    add x24, x24, #1
+    cbz x0, 1b
+    MSG fileSystemRepresentation
+    cbz x0, 1b
+    mov x25, x0
+    bl _strlen
+    mov x26, x0
+    cbz x26, 1b
+    add x9, x23, x26
+    add x9, x9, #1
+    cmp x9, #1 << 20
+    b.hi 3f
+    add x0, x22, x23
+    mov x1, x25
+    mov x2, x26
+    bl _memcpy
+    add x23, x23, x26
+    strb wzr, [x22, x23]
+    add x23, x23, #1
+    b 1b
+3:  cbnz x23, Lmcf_cleanup
+    mov x0, x22
+    XCALL mem_free
+    mov x22, #0
+Lmcf_cleanup:
+    ldr x0, [sp]
+    bl _objc_autoreleasePoolPop
+Lmcf_return:
+    mov x8, x22
+    mov x2, x23
+    XLEAVE
+
+// mac_clip_image(board, limit) -> owned bytes in x8, their count in x2: the board's PNG, else its TIFF made a
+// PNG by the system (rhun decodes no TIFF); 0, 0 none; 0, -1 an image of limit bytes or more (not copied)
+FN mac_clip_image
+    XENTRY 16
+    mov x19, x0
+    mov x20, x1
+    mov x22, #0
+    mov x23, #0
+    cbz x19, Lmci_return
+    bl _objc_autoreleasePoolPush
+    str x0, [sp]
+    mov x0, x19
+    EXT x2, _NSPasteboardTypePNG
+    MSG dataForType_
+    cbnz x0, 2f
+    mov x0, x19
+    EXT x2, _NSPasteboardTypeTIFF
+    MSG dataForType_
+    cbz x0, Lmci_cleanup
+    mov x2, x0
+    CLS x0, NSBitmapImageRep
+    MSG imageRepWithData_
+    cbz x0, Lmci_cleanup
+    mov x21, x0
+    CLS x0, NSDictionary
+    MSG dictionary
+    mov x3, x0
+    mov x0, x21
+    mov x2, #4                  // NSBitmapImageFileTypePNG
+    MSG representationUsingType_properties_
+    cbz x0, Lmci_cleanup
+2:  mov x21, x0
+    MSG length
+    mov x24, x0
+    cbz x24, Lmci_cleanup
+    cmp x24, x20
+    b.lo 3f
+    mov x23, #-1                // too large: not copied
+    b Lmci_cleanup
+3:  mov x0, x21
+    MSG bytes
+    cbz x0, Lmci_cleanup
+    mov x25, x0
+    add x0, x24, #1
+    XCALL mem_alloc_try
+    mov x22, x8
+    cbz x22, Lmci_cleanup
+    mov x0, x22
+    mov x1, x25
+    mov x2, x24
+    bl _memcpy
+    mov x23, x24
+Lmci_cleanup:
+    ldr x0, [sp]
+    bl _objc_autoreleasePoolPop
+Lmci_return:
+    mov x8, x22
+    mov x2, x23
+    XLEAVE
+
+// mac_clip_paste_kinds(board, token, kinds, image limit): files when asked and there, else an image when asked
+// and there, else the text (mac_clip_paste_board_tagged); the general board and tests' private boards alike
+FN mac_clip_paste_kinds
+    XENTRY
+    mov x19, x0
+    mov x20, x1
+    mov x21, x2
+    mov x22, x3
+    tst x21, #2                 // CLIPK_FILES
+    b.eq 2f
+    mov x0, x19
+    XCALL mac_clip_files
+    cbz x8, 2f
+    mov x23, x8
+    mov x3, x2
+    mov x0, x20
+    mov x1, #2
+    mov x2, x23
+    XCALL app_clip_complete_kind
+    mov x0, x23
+    XCALL mem_free
+    b 9f
+2:  tst x21, #4                 // CLIPK_IMAGE
+    b.eq 4f
+    mov x0, x19
+    mov x1, x22
+    XCALL mac_clip_image
+    cbnz x8, 3f
+    cmn x2, #1
+    b.ne 4f
+    ADR x9, g_clip_read         // the system holds it; rhun copied none of it
+    str xzr, [x9]
+    mov x0, x20
+    mov x1, #4
+    mov x2, #0
+    mov x3, #-1                 // CLIP_TOO_BIG
+    XCALL app_clip_complete_kind
+    b 9f
+3:  mov x23, x8
+    mov x3, x2
+    mov x0, x20
+    mov x1, #4
+    mov x2, x23
+    XCALL app_clip_complete_kind
+    mov x0, x23
+    XCALL mem_free
+    b 9f
+4:  mov x0, x19
+    mov x1, x20
+    XCALL mac_clip_paste_board_tagged
+9:  XLEAVE
+
+// drag_point(sender) -> w0 x, w1 y: where a drag is, in the view's pixels
+drag_point:
+    stp x29, x30, [sp, #-32]!
+    mov x29, sp
+    str d8, [sp, #16]
+    MSG draggingLocation
+    LDX x0, view
+    mov x2, #0
+    MSG convertPoint_fromView_
+    LDW d8, scale
+    fmul d0, d0, d8
+    fmul d1, d1, d8
+    fcvtms w0, d0
+    fcvtms w1, d1
+    ldr d8, [sp, #16]
+    ldp x29, x30, [sp], #32
+    ret
+
+// drag_files(sender) -> w0 1 when the drag carries file URLs
+drag_files:
+    ENTER
+    mov x19, x0
+    bl _objc_autoreleasePoolPush
+    mov x20, x0
+    mov x0, x19
+    MSG draggingPasteboard
+    mov x19, x0
+    bl file_url_query
+    mov x3, x1
+    mov x2, x0
+    mov x0, x19
+    MSG canReadObjectForClasses_options_
+    and w19, w0, #1
+    mov x0, x20
+    bl _objc_autoreleasePoolPop
+    mov w0, w19
+    LEAVE
+    ret
+
+// draggingEntered:, draggingUpdated: -> NSDragOperationCopy for files (app_on_drop DROP_ENTER, DROP_MOVE)
+FN mac_drag_enter
+    mov w9, #1
+    b 1f
+FN mac_drag_update
+    mov w9, #2
+1:  IMP
+    mov w21, w9
+    mov x19, x2
+    mov x0, x2
+    bl drag_files
+    mov x22, #0
+    cbz w0, 9f
+    mov x0, x19
+    bl drag_point
+    mov w2, w1
+    mov w1, w0
+    mov w0, w21
+    mov x3, #0
+    mov x4, #0
+    XCALL app_on_drop
+    mov x22, #1                 // NSDragOperationCopy
+9:  mov x0, x22
+    IMPRET
+
+// draggingExited: (app_on_drop DROP_LEAVE)
+FN mac_drag_exit
+    IMP
+    mov w0, #3
+    mov w1, #0
+    mov w2, #0
+    mov x3, #0
+    mov x4, #0
+    XCALL app_on_drop
+    IMPRET
+
+// performDragOperation: the file URLs (app_on_drop DROP_FILES with the paths) -> YES when there were any
+FN mac_drag_perform
+    IMP 16
+    mov x19, x2
+    mov x0, x2
+    bl drag_point
+    stp w0, w1, [sp]
+    mov x0, x19
+    MSG draggingPasteboard
+    XCALL mac_clip_files
+    mov x20, x8
+    mov x21, x2
+    mov x22, #0
+    cbz x20, 9f
+    mov w0, #4
+    ldp w1, w2, [sp]
+    mov x3, x20
+    mov x4, x21
+    XCALL app_on_drop
+    mov x0, x20
+    XCALL mem_free
+    mov x22, #1
+9:  mov x0, x22
+    IMPRET
 
 // window requests come while drawing; they run after the frame
 p_move:
@@ -2280,6 +2589,10 @@ view_methods:
     METHOD firstRectForCharacterRange_actualRange_, v_firstRect, t_rect
     METHOD characterIndexForPoint_, v_characterIndex, t_index
     METHOD doCommandBySelector_, v_doCommand, t_v_sel
+    METHOD draggingEntered_, mac_drag_enter, t_Q_id       // phase 4 task 5: files dropped on the view
+    METHOD draggingUpdated_, mac_drag_update, t_Q_id
+    METHOD draggingExited_, mac_drag_exit, t_v_id
+    METHOD performDragOperation_, mac_drag_perform, t_B_id
     .quad 0
 windel_methods:
     METHOD windowShouldClose_, w_shouldClose, t_B_id
@@ -2528,6 +2841,21 @@ DEFSEL applicationShouldTerminate_, "applicationShouldTerminate:"
 DEFSEL application_openURLs_, "application:openURLs:"
 DEFSEL applicationShouldHandleReopen_hasVisibleWindows_, "applicationShouldHandleReopen:hasVisibleWindows:"
 DEFSEL applicationSupportsSecureRestorableState_, "applicationSupportsSecureRestorableState:"
+// phase 4 tasks 4 and 5: the pasteboard's files and images, drops
+DEFSEL readObjectsForClasses_options_, "readObjectsForClasses:options:"
+DEFSEL canReadObjectForClasses_options_, "canReadObjectForClasses:options:"
+DEFSEL numberWithBool_, "numberWithBool:"
+DEFSEL dictionaryWithObject_forKey_, "dictionaryWithObject:forKey:"
+DEFSEL dictionary, "dictionary"
+DEFSEL imageRepWithData_, "imageRepWithData:"
+DEFSEL representationUsingType_properties_, "representationUsingType:properties:"
+DEFSEL registerForDraggedTypes_, "registerForDraggedTypes:"
+DEFSEL draggingPasteboard, "draggingPasteboard"
+DEFSEL draggingLocation, "draggingLocation"
+DEFSEL draggingEntered_, "draggingEntered:"
+DEFSEL draggingUpdated_, "draggingUpdated:"
+DEFSEL draggingExited_, "draggingExited:"
+DEFSEL performDragOperation_, "performDragOperation:"
 
 .macro DEFCLS name
     .section __DATA,__objc_classrefs,regular,no_dead_strip
@@ -2551,6 +2879,10 @@ DEFCLS NSTrackingArea
 DEFCLS NSMenu
 DEFCLS NSMenuItem
 DEFCLS CATransaction
+DEFCLS NSURL                    // phase 4 tasks 4 and 5
+DEFCLS NSNumber
+DEFCLS NSDictionary
+DEFCLS NSBitmapImageRep
 
 .section __DATA,__objc_imageinfo,regular,no_dead_strip
     .long 0, 64

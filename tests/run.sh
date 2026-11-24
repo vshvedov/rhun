@@ -35,6 +35,7 @@ check clipboard-paste-queue build/clipboard_paste_queue_test
 if [ "$(uname -s)" = Darwin ]; then
     check mac-clipboard-read build/mac_clipboard_read_test
     check mac-clipboard-metadata build/mac_clipboard_metadata_test
+    check mac-clipboard-kinds build/mac_clipboard_kinds_test   # phase 4 tasks 4, 5: files, images, drops
     if python3 tests/mac-clipboard-metadata.py; then :; else fail=1; fi
 fi
 if [ "$(uname -s)" = Linux ]; then
@@ -105,6 +106,7 @@ done
 check json build/json_test
 check sha1 build/sha1_test
 check base64 build/base64_test   # phase 4 task 2: attachments' encoder
+check urilist build/urilist_test   # phase 4 tasks 4, 5: text/uri-list as paths (X11, Wayland)
 check images build/image_test $(ls tests/data/images/* | LC_ALL=C sort)
 python3 tests/image-fuzz.py 1 20 || fail=1
 check cpu build/cpu_test
@@ -164,6 +166,7 @@ python3 tests/claude-sessions.py || fail=1   # the session list and the chat hea
 python3 tests/claude-dialogs.py || fail=1   # the dialog shell and the dialogs that show what Claude Code reports (phase 7)
 python3 tests/claude-attach.py || fail=1   # a message's parts: attachments, packs, chips, the + menu (phase 4 tasks 2, 3)
 python3 tests/claude-panels.py || fail=1   # side question, bookmarks, agent map, hand-off, Chrome, Remote Control (p7c)
+python3 tests/claude-paste.py || fail=1    # the clipboard's files and images, long pastes, drops (phase 4 tasks 4, 5)
 python3 tests/ext-agents.py || fail=1
 python3 tests/ext-review.py || fail=1
 python3 tests/ext-tools.py || fail=1

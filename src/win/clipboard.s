@@ -6,6 +6,8 @@
 win_clip_format_id: .quad 0
 .section .rdata,"dr"
 win_clip_format_name: .short 'c','o','m','.','r','1','3','.','r','h','u','n','.','c','l','i','p','b','o','a','r','d','.','v','1',0
+win_png_name: .short 'P','N','G',0      # the image formats browsers and the system's tools register (phase 4 task 4)
+win_mime_png_name: .short 'i','m','a','g','e','/','p','n','g',0
 .text
 
 # Registered IDs are shared by name across processes. Retry a failed registration.
@@ -337,3 +339,180 @@ FN win_clip_read_handle
     xor eax, eax
     xor edx, edx
     EPILOGUE
+
+# ---- phase 4 tasks 4 and 5: files (CF_HDROP, WM_DROPFILES) and PNG images ----
+.bss
+.p2align 3
+hd_sb: .zero SB_SIZE
+.text
+
+# win_hdrop_list(HDROP) -> rax owned paths ("/" separators, a NUL after each) or 0, rdx their bytes; at most
+#   CLIP_FILES_MAX bytes (the paths past that are left out)
+FN win_hdrop_list
+    PROLOGUE 96
+    mov rbx, rdi
+    lea rdi, [rip + hd_sb]
+    call sb_clear
+    mov rcx, rbx
+    mov edx, -1
+    xor r8d, r8d
+    xor r9d, r9d
+    API DragQueryFileW
+    mov r12d, eax               # the count
+    xor r13d, r13d
+1:  cmp r13d, r12d
+    jae 8f
+    mov rcx, rbx
+    mov edx, r13d
+    xor r8d, r8d
+    xor r9d, r9d
+    API DragQueryFileW
+    inc r13d
+    test eax, eax
+    jz 1b
+    cmp eax, 32767
+    ja 1b
+    mov r14d, eax
+    lea edi, [rax*2 + 2]
+    call mem_alloc
+    mov r15, rax
+    mov rcx, rbx
+    lea edx, [r13 - 1]
+    mov r8, r15
+    lea r9d, [r14 + 1]
+    API DragQueryFileW
+    mov rdi, r15
+    call win_utf8
+    mov r14, rax
+    mov rdi, r15
+    call mem_free
+    test r14, r14
+    jz 1b
+    mov rdi, r14
+    call win_slashes
+    mov rdi, r14
+    call strlen
+    mov r15, rax
+    mov rcx, [rip + hd_sb + SB_len]
+    lea rcx, [rcx + rax + 1]
+    cmp rcx, CLIP_FILES_MAX
+    ja 7f
+    lea rdi, [rip + hd_sb]
+    mov rsi, r14
+    mov rdx, r15
+    call sb_push
+    lea rdi, [rip + hd_sb]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, r14
+    call mem_free
+    jmp 1b
+7:  mov rdi, r14
+    call mem_free
+8:  xor eax, eax
+    xor edx, edx
+    cmp qword ptr [rip + hd_sb + SB_len], 0
+    je 9f
+    mov rdi, [rip + hd_sb + SB_ptr]
+    mov rsi, [rip + hd_sb + SB_len]
+    call mem_dup
+    mov rdx, [rip + hd_sb + SB_len]
+9:  EPILOGUE
+
+# win_clip_png(limit) -> rax owned bytes, rdx count, rcx 4 an image; rcx 3: an image of limit bytes or more (not
+#   copied); rcx 5: a bitmap (CF_DIB) and no text; rcx 0: none. The clipboard is open
+FN win_clip_png
+    PROLOGUE 96
+    mov ebx, edi
+    lea rcx, [rip + win_png_name]
+    API RegisterClipboardFormatW
+    test eax, eax
+    jz 1f
+    mov ecx, eax
+    API GetClipboardData
+    test rax, rax
+    jnz 3f
+1:  lea rcx, [rip + win_mime_png_name]
+    API RegisterClipboardFormatW
+    test eax, eax
+    jz 2f
+    mov ecx, eax
+    API GetClipboardData
+    test rax, rax
+    jnz 3f
+2:  mov ecx, 8                  # CF_DIB without CF_UNICODETEXT
+    API IsClipboardFormatAvailable
+    test eax, eax
+    jz 8f
+    mov ecx, 13
+    API IsClipboardFormatAvailable
+    test eax, eax
+    jnz 8f
+    xor eax, eax
+    xor edx, edx
+    mov ecx, 5
+    EPILOGUE
+3:  mov r12, rax                # the PNG: its size first
+    mov rcx, rax
+    API GlobalSize
+    test rax, rax
+    jz 8f
+    mov r13, rax
+    cmp r13, rbx
+    jb 4f
+    xor eax, eax
+    xor edx, edx
+    mov ecx, 3
+    EPILOGUE
+4:  mov rcx, r12
+    API GlobalLock
+    test rax, rax
+    jz 8f
+    mov r14, rax
+    lea rdi, [r13 + 1]
+    call mem_alloc_try
+    mov r15, rax
+    test rax, rax
+    jz 5f
+    mov rdi, rax
+    mov rsi, r14
+    mov rdx, r13
+    call memcpy
+5:  mov rcx, r12
+    API GlobalUnlock
+    test r15, r15
+    jz 8f
+    mov rax, r15
+    mov rdx, r13
+    mov ecx, 4
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    xor ecx, ecx
+    EPILOGUE
+
+# win_drop_files(HDROP): WM_DROPFILES: the paths, where they were dropped (client pixels), then DragFinish
+FN win_drop_files
+    PROLOGUE 112
+    mov rbx, rdi
+    mov qword ptr [rsp + 96], 0
+    mov rcx, rbx
+    lea rdx, [rsp + 96]
+    API DragQueryPoint
+    mov rdi, rbx
+    call win_hdrop_list
+    mov r12, rax
+    mov r13, rdx
+    mov rcx, rbx
+    API DragFinish
+    test r12, r12
+    jz 9f
+    mov edi, DROP_FILES
+    mov esi, [rsp + 96]
+    mov edx, [rsp + 100]
+    mov rcx, r12
+    mov r8, r13
+    call app_on_drop
+    mov rdi, r12
+    call mem_free
+9:  EPILOGUE

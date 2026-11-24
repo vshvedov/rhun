@@ -41,3 +41,4 @@ SetWindowPlacement
     LoadIconW
     SendMessageW
     DestroyWindow
+    IsClipboardFormatAvailable

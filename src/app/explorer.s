@@ -1238,6 +1238,11 @@ FN explorer_body_draw
     mov [rsp + 28], eax
     test eax, UB_PRESS
     jz 5f
+    mov rdi, [r14 + N_path]     # phase 4 task 5: a press may begin a drag of its path (drop.s)
+    call strlen
+    mov rdi, [r14 + N_path]
+    lea rsi, [rax + 1]
+    call drag_paths_begin
     mov [rip + exp_cursor], r12d
     mov dword ptr [rip + g_focus], FOCUS_EXPLORER
     mov rdi, r14

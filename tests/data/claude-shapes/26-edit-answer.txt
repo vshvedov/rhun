@@ -1,0 +1,133 @@
+# edit: from the first Edit's stream: deny with interrupt; an allow after the file changed; an Edit of crlf.txt allowed as asked; one allowed with a whole-file LF-only updatedInput
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:Edit
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in control_request/can_use_tool:Edit {"type": "control_request", "request_id": "e1f4eb05-dda0-4a07-bd79-a14279903b80", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "display_name": "Edit", "input": {"file_path": "$CWD/notes.txt", "old_string": "bravo", "new_string": "BRAVO", "replace_all": false}, "description": "notes.txt", "permission_suggestions": [{"type": "setMode", "mode": "acceptEdits", "destination": "session"}], "tool_use_id": "toolu_0124WZUy5zxzUyZqUpeU3Wcy"}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "e1f4eb05-dda0-4a07-bd79-a14279903b80", "response": {"behavior": "deny", "message": "User cancelled the edit", "interrupt": true, "toolUseID": "toolu_0124WZUy5zxzUyZqUpeU3Wcy"}}}
+in control_response/success
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed.", "is_error": true, "tool_use_id": "toolu_0124WZUy5zxzUyZqUpeU3Wcy"}]}, "parent_tool_use_id": null, "session_id": "13ceec41-b4a0-4165-8f67-96c326908240", "uuid": "c3169e16-9825-4eb8-94ad-b0f11fc376e2", "timestamp": "2026-11-24T00:30:45.481Z", "tool_use_result": "User rejected tool use", "tool_result_meta": [{"id": "toolu_0124WZUy5zxzUyZqUpeU3Wcy", "non_execution_kind": "user-rejected"}]}
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]}, "parent_tool_use_id": null, "session_id": "13ceec41-b4a0-4165-8f67-96c326908240", "uuid": "6c2e2ef7-3f65-412b-9774-c6d731b813e3", "timestamp": "2026-11-24T00:30:45.482Z"}
+in result/error_during_execution
+out user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Replace the second line of notes.txt with BRAVO."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "c056fad1-7575-4637-a2af-330cf1abf5c7"}
+in command_lifecycle
+in system/init
+in system/status
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Replace the second line of notes.txt with BRAVO."}]}, "session_id": "13ceec41-b4a0-4165-8f67-96c326908240", "parent_tool_use_id": null, "uuid": "c056fad1-7575-4637-a2af-330cf1abf5c7", "timestamp": "2026-11-24T00:30:45.492Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in system/thinking_tokens
+in stream_event/content_block_delta:thinking_delta
+in system/thinking_tokens
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:Edit
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in control_request/can_use_tool:Edit {"type": "control_request", "request_id": "3cbf8a33-093b-4f79-bf3d-e10367d4856e", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "display_name": "Edit", "input": {"file_path": "$CWD/notes.txt", "old_string": "alpha\nbravo\n", "new_string": "alpha\nBRAVO\n", "replace_all": false}, "description": "notes.txt", "permission_suggestions": [{"type": "setMode", "mode": "acceptEdits", "destination": "session"}], "tool_use_id": "toolu_01HCkcEzM1t75Di5H34exRd8"}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "3cbf8a33-093b-4f79-bf3d-e10367d4856e", "response": {"behavior": "allow", "updatedInput": {"file_path": "$CWD/notes.txt", "old_string": "alpha\nbravo\n", "new_string": "alpha\nBRAVO\n", "replace_all": false}, "toolUseID": "toolu_01HCkcEzM1t75Di5H34exRd8"}}}
+in control_response/success
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "File content has changed since it was last read. This commonly happens when a linter or formatter run via Bash rewrites the file. Call Read on this file to refresh, then retry the edit.", "is_error": true, "tool_use_id": "toolu_01HCkcEzM1t75Di5H34exRd8"}]}, "parent_tool_use_id": null, "session_id": "13ceec41-b4a0-4165-8f67-96c326908240", "uuid": "e1cdff2a-4181-475e-a751-2897b7d6365a", "timestamp": "2026-11-24T00:30:48.437Z", "tool_use_result": "Error: File content has changed since it was last read. This commonly happens when a linter or formatter run via Bash rewrites the file. Call Read on this file to refresh, then retry the edit.", "tool_result_meta": [{"id": "toolu_01HCkcEzM1t75Di5H34exRd8", "permission_decision": {"decision": "accept", "source": "user_temporary"}}]}
+in system/status
+in stream_event/message_start
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:Read
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "toolu_01SBCYBhCRfvjiYvXG8rzkEK", "type": "tool_result", "content": "1\talpha\n2\tchanged meanwhile\n3\tcharlie\n4\tdelta\n5\techo\n6\t"}]}, "parent_tool_use_id": null, "session_id": "13ceec41-b4a0-4165-8f67-96c326908240", "uuid": "160b94ea-3218-464d-9181-678cafab9d09", "timestamp": "2026-11-24T00:30:49.742Z", "tool_use_result": {"type": "text", "file": {"filePath": "$CWD/notes.txt", "content": "alpha\nchanged meanwhile\ncharlie\ndelta\necho\n", "numLines": 6, "startLine": 1, "totalLines": 6}}, "tool_result_meta": [{"id": "toolu_01SBCYBhCRfvjiYvXG8rzkEK", "permission_decision": {"decision": "accept", "source": "config", "reason_type": "mode"}}]}
+in system/status
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in system/thinking_tokens
+in stream_event/content_block_delta:thinking_delta
+in system/thinking_tokens
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+out user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Replace the second line of crlf.txt with TWO."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "94af600b-6f36-4b1d-87a8-a371cf4856fa"}
+in command_lifecycle
+in system/init
+in system/status
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Replace the second line of crlf.txt with TWO."}]}, "session_id": "13ceec41-b4a0-4165-8f67-96c326908240", "parent_tool_use_id": null, "uuid": "94af600b-6f36-4b1d-87a8-a371cf4856fa", "timestamp": "2026-11-24T00:30:54.448Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in stream_event/content_block_delta:thinking_delta
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:Read
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "toolu_01GwpvTojhbzGXzJckp1mmL6", "type": "tool_result", "content": "1\tone\n2\ttwo\n3\tthree\n4\tfour\n5\tfive\n6\t"}]}, "parent_tool_use_id": null, "session_id": "13ceec41-b4a0-4165-8f67-96c326908240", "uuid": "56fa6ba2-cf38-4e53-b254-bb12f1f49c4e", "timestamp": "2026-11-24T00:30:55.971Z", "tool_use_result": {"type": "text", "file": {"filePath": "$CWD/crlf.txt", "content": "one\ntwo\nthree\nfour\nfive\n", "numLines": 6, "startLine": 1, "totalLines": 6}}, "tool_result_meta": [{"id": "toolu_01GwpvTojhbzGXzJckp1mmL6", "permission_decision": {"decision": "accept", "source": "config", "reason_type": "mode"}}]}
+in system/status
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in system/thinking_tokens
+in stream_event/content_block_delta:thinking_delta
+in system/thinking_tokens
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:Edit
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in control_request/can_use_tool:Edit {"type": "control_request", "request_id": "74803905-b4fb-46f8-939d-667fc5fc9b44", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "display_name": "Edit", "input": {"file_path": "$CWD/crlf.txt", "old_string": "two", "new_string": "TWO", "replace_all": false}, "description": "crlf.txt", "permission_suggestions": [{"type": "setMode", "mode": "acceptEdits", "destination": "session"}], "tool_use_id": "toolu_01PpgZT1GenKLM9t7fXzgaTY"}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "74803905-b4fb-46f8-939d-667fc5fc9b44", "response": {"behavior": "allow", "updatedInput": {"file_path": "$CWD/crlf.txt", "old_string": "two", "new_string": "TWO", "replace_all": false}, "toolUseID": "toolu_01PpgZT1GenKLM9t7fXzgaTY"}}}
+in control_response/success
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "toolu_01PpgZT1GenKLM9t7fXzgaTY", "type": "tool_result", "content": "The file $CWD/crlf.txt has been updated successfully. (file state is current in your context — no need to Read it back)"}]}, "parent_tool_use_id": null, "session_id": "13ceec41-b4a0-4165-8f67-96c326908240", "uuid": "961b1fc5-113a-4892-bc7c-6ba7ead57849", "timestamp": "2026-11-24T00:30:57.683Z", "tool_use_result": {"filePath": "$CWD/crlf.txt", "oldString": "two", "newString": "TWO", "originalFile": "one\ntwo\nthree\nfour\nfive\n", "structuredPatch": [{"oldStart": 1, "oldLines": 5, "newStart": 1, "newLines": 5, "lines": [" one", "-two", "+TWO", " three", " four", " five"]}], "userModified": false, "replaceAll": false}, "tool_result_meta": [{"id": "toolu_01PpgZT1GenKLM9t7fXzgaTY", "permission_decision": {"decision": "accept", "source": "user_temporary"}}]}
+in system/status
+in stream_event/message_start
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+out user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Replace the third line of crlf.txt with THREE."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "298c3fd0-43c2-4876-9d1a-afb19c4ffcfe"}
+in command_lifecycle
+in system/init
+in system/status
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Replace the third line of crlf.txt with THREE."}]}, "session_id": "13ceec41-b4a0-4165-8f67-96c326908240", "parent_tool_use_id": null, "uuid": "298c3fd0-43c2-4876-9d1a-afb19c4ffcfe", "timestamp": "2026-11-24T00:31:01.111Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:Edit
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in control_request/can_use_tool:Edit {"type": "control_request", "request_id": "97256b4e-f26c-4a19-96ac-dd809ba7815d", "request": {"subtype": "can_use_tool", "tool_name": "Edit", "display_name": "Edit", "input": {"file_path": "$CWD/crlf.txt", "old_string": "three", "new_string": "THREE", "replace_all": false}, "description": "crlf.txt", "permission_suggestions": [{"type": "setMode", "mode": "acceptEdits", "destination": "session"}], "tool_use_id": "toolu_01RYv8hBjMbxFQgYvMQBrGsE"}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "97256b4e-f26c-4a19-96ac-dd809ba7815d", "response": {"behavior": "allow", "updatedInput": {"file_path": "$CWD/crlf.txt", "old_string": "one\nTWO\nthree\nfour\nfive\n", "new_string": "one\nTWO\nTHREE\nfour\nfive\n", "replace_all": false}, "toolUseID": "toolu_01RYv8hBjMbxFQgYvMQBrGsE"}}}
+in control_response/success
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "toolu_01RYv8hBjMbxFQgYvMQBrGsE", "type": "tool_result", "content": "The file $CWD/crlf.txt has been updated successfully. (file state is current in your context — no need to Read it back)"}]}, "parent_tool_use_id": null, "session_id": "13ceec41-b4a0-4165-8f67-96c326908240", "uuid": "06e9c959-ce17-4047-a16a-d3e775723d4b", "timestamp": "2026-11-24T00:31:02.589Z", "tool_use_result": {"filePath": "$CWD/crlf.txt", "oldString": "one\nTWO\nthree\nfour\nfive\n", "newString": "one\nTWO\nTHREE\nfour\nfive\n", "originalFile": "one\nTWO\nthree\nfour\nfive\n", "structuredPatch": [{"oldStart": 1, "oldLines": 5, "newStart": 1, "newLines": 5, "lines": [" one", " TWO", "-three", "+THREE", " four", " five"]}], "userModified": false, "replaceAll": false}, "tool_result_meta": [{"id": "toolu_01RYv8hBjMbxFQgYvMQBrGsE", "permission_decision": {"decision": "accept", "source": "user_temporary"}}]}
+in system/status
+in stream_event/message_start
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+in command_lifecycle

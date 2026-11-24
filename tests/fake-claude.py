@@ -3,6 +3,7 @@
 2.1.330 runs did not produce): the same records in the same order (tests/data/claude-shapes, made from the
 recordings by tools/claude-shapes.py; README.txt there has the command line and what was learned) and the
 fields rhun reads. The fake cannot drift from the CLI without this failing (spec 11)."""
+import base64
 import importlib.util
 import json
 import os
@@ -1463,6 +1464,487 @@ class Phase3(Base):
         blocks = [r['message']['content'][0]['type'] for r in fake.records if r.get('type') == 'assistant']
         self.assertIn('mystery', blocks)
         self.assertTrue(any(r.get('error') == 'overloaded' for r in fake.records if r.get('type') == 'assistant'))
+
+
+def cut_file(name):
+    """A phase 4 shape file (claude-shapes --cut-data): [(dir, shape, record or None)], '#' lines (the run that
+    follows) as ('#', TEXT, None)."""
+    out = []
+    for line in (SHAPES / (name + '.txt')).read_text(encoding='utf-8').splitlines():
+        out.append(('#', line[1:].strip(), None) if line.startswith('#') else claude_shapes.parse_cut_line(line))
+    return out
+
+
+def run_of(lines, word):
+    """The lines of the run whose '#' line starts with word."""
+    out, inside = [], False
+    for item in lines:
+        if item[0] == '#':
+            inside = item[1].startswith(word)
+        elif inside:
+            out.append(item)
+    return out
+
+
+def recorded(lines, direction, kind=None, subtype=None):
+    """The detailed records of a direction (and type, and request subtype or message method)."""
+    out = []
+    for d, _, record in lines:
+        if d != direction or record is None or (kind and record.get('type') != kind):
+            continue
+        request = record.get('request') or {}
+        if subtype and subtype not in (request.get('subtype'), (request.get('message') or {}).get('method')):
+            continue
+        out.append(record)
+    return out
+
+
+PASTE_ID = re.compile(r'pasted_content id=\\*"\d+\\*"')
+# a two-page PDF's head as the recorded one (the shape files keep 16 characters of base64)
+PDF = base64.b64encode(b'%PDF-1.4\n1 0 obj\n<< >>\nendobj\ntrailer\n<< >>\n%%EOF\n').decode()
+DOT = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC'
+NOTES = 'alpha\nbravo\ncharlie\ndelta\necho\n'
+# the data the recordings sent, by the 16 characters the shape files keep
+WHOLE = {DOT: DOT, PDF: PDF, NOTES: NOTES, 'The secret word is mango.\n': 'The secret word is mango.\n',
+         base64.b64encode(b'This is not an image, just some text.\n').decode():
+             base64.b64encode(b'This is not an image, just some text.\n').decode()}
+WHOLE = {key[:16] + '…': value for key, value in WHOLE.items()}
+# the extension's three hooks (P 2.2), as finding 48 sent them
+EXT_HOOKS = {'PreToolUse': [{'matcher': 'Edit|Write|MultiEdit', 'hookCallbackIds': ['hook_0']},
+                            {'matcher': 'Edit|Write|Read', 'hookCallbackIds': ['hook_1']}],
+             'PostToolUse': [{'matcher': 'Edit|Write|MultiEdit', 'hookCallbackIds': ['hook_2'], 'contextOnly': True}]}
+
+
+def whole(value, project):
+    """A recorded 'out' record made sendable: cut data restored, $CWD the test's project."""
+    if isinstance(value, dict):
+        return {k: (WHOLE[v] if k == 'data' and v in WHOLE else whole(v, project)) for k, v in value.items()}
+    if isinstance(value, list):
+        return [whole(v, project) for v in value]
+    if isinstance(value, str):
+        return value.replace('$CWD', str(project))
+    return value
+
+
+class Phase4(Base):
+    """What phase 4 reads (README.txt findings 38 on; shape files 23 to 26): a message's blocks and their replay,
+    rhun's in-process MCP server, the SDK hooks, the answers to an edit."""
+
+    def cut(self, value):
+        return claude_shapes.cut(value, [(str(self.project), '$CWD')])
+
+    def mcp_fake(self, *args, servers=('rhun',), hooks=None, manifests=None, answer=None, **env):
+        """A fake started with sdkMcpServers (and hooks, manifests), its initialize answer, and a thread that
+        answers the CLI's mcp_message requests as the recorder's server did (answer(message): a reply to use
+        instead, None to keep the recorder's, False to leave it unanswered)."""
+        fake = self.fake(*args, base=REPLAY, **env)
+        fake.mcp, fake.hooked = [], []
+        request = {'subtype': 'initialize', 'hooks': hooks, 'promptSuggestions': False,
+                   'sdkMcpServers': list(servers)}
+        if manifests:
+            request['sdkMcpServerManifests'] = manifests
+        fake.send({'type': 'control_request', 'request_id': 'r1', 'request': request})
+        fake.answer_mcp = answer or (lambda message: None)
+        return fake
+
+    def serve(self, fake, record):
+        """The recorder's answer to an mcp_message of the CLI (24-sdk-mcp's out lines)."""
+        message = record['request']['message']
+        fake.mcp.append(message)
+        mine = fake.answer_mcp(message)
+        if mine is False:
+            return
+        if mine is None:
+            if 'id' not in message:
+                mine = {'jsonrpc': '2.0', 'result': {}, 'id': 0}
+            elif message['method'] == 'initialize':
+                mine = {'jsonrpc': '2.0', 'id': message['id'], 'result': {
+                    'protocolVersion': message['params']['protocolVersion'],
+                    'capabilities': {'tools': {'listChanged': True}}, 'serverInfo': {'name': 'rhun', 'version': '0.19.2'}}}
+            elif message['method'] == 'tools/list':
+                mine = {'jsonrpc': '2.0', 'id': message['id'], 'result': {'tools': [TOOL]}}
+            elif message['method'] == 'tools/call':
+                mine = {'jsonrpc': '2.0', 'id': message['id'], 'result': {'content': [{'type': 'text', 'text': DIAG}]}}
+            else:
+                mine = {'jsonrpc': '2.0', 'id': message['id'], 'error': {'code': -32601, 'message': 'Method not found'}}
+        fake.answer(record, {'mcp_response': mine})
+
+    def until_served(self, fake, test, timeout=20):
+        """Reads records, serving the CLI's mcp_message requests, until test(record) holds."""
+        def step(record):
+            if is_type('control_request', 'mcp_message')(record):
+                self.serve(fake, record)
+            return test(record)
+        return fake.until(step, timeout)
+
+    def test_cut_files_parse_and_keep_their_shapes(self):
+        for name in ('23-attach', '24-sdk-mcp', '25-sdk-hooks', '26-edit-answer'):
+            lines = cut_file(name)
+            self.assertTrue(lines, name)
+            for direction, shape, record in lines:
+                if record is not None:
+                    self.assertEqual(claude_shapes.shape(record, hooks=True) or
+                                     '%s/%s' % (record.get('type'), record.get('subtype')), shape, (name, record))
+                    self.assertNotIn('/Users/', json.dumps(record), name)
+
+    def test_23_blocks_replayed_and_saved_as_recorded(self):
+        """The recorded messages (order, image alone, opened file alone, inline_pastes, documents, not an image)
+        sent again: the fake's replays are the recorded replays (data cut, the paste id aside); the file's prompt
+        lines carry the blocks, imagePasteIds and the isMeta image line."""
+        lines = cut_file('23-attach')
+        fake = self.fake(base=REPLAY)
+        fake.initialize(suggestions=False)
+        sent = recorded(run_of(lines, 'order'), 'out', 'user') + recorded(run_of(lines, 'notimage'), 'out', 'user')
+        replays = [r for r in recorded(run_of(lines, 'order'), 'in', 'user') + recorded(run_of(lines, 'notimage'), 'in',
+                                                                                       'user') if r.get('isReplay')]
+        self.assertEqual(len(sent), len(replays))
+        for message, expected in zip(sent, replays):
+            message = whole(message, self.project)
+            message.pop('uuid', None)
+            mark = len(fake.records)
+            fake.send(message)
+            replay = fake.until(lambda r: r.get('type') == 'user' and r.get('isReplay'))
+            fake.until(is_type('result'))
+            got = json.dumps(self.cut(replay['message']['content']), ensure_ascii=False)
+            self.assertEqual(PASTE_ID.sub('id', got), PASTE_ID.sub('id', json.dumps(expected['message']['content'],
+                                                                                    ensure_ascii=False)), mark)
+        fake.finish()
+        lines = Phase3.lines(self, next(r['session_id'] for r in fake.records if is_type('system', 'init')(r)))
+        self.assertEqual(file_faults(lines), [])
+        prompts = [l for l in lines if l['type'] == 'user' and not l.get('isMeta')
+                   and l['message']['content'][0].get('type') != 'tool_result']
+        self.assertEqual([p.get('imagePasteIds') for p in prompts], [[1], [2], None, None, None, None, None])
+        meta = [l['message']['content'][0]['text'] for l in lines if l.get('isMeta')]
+        self.assertEqual(len(meta), 2)
+        self.assertTrue(all(m.startswith('[Image: source: /tmp/claude-') and m.endswith('.png]') for m in meta), meta)
+        self.assertIn('<pasted_content id=', json.dumps(prompts[3]['message']))
+
+    def test_echoblocks_names_each_block(self):
+        fake = self.fake(base=REPLAY)
+        fake.initialize(suggestions=False)
+        fake.send({'type': 'user', 'message': {'role': 'user', 'content': [
+            {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png', 'data': DOT}},
+            {'type': 'document', 'source': {'type': 'text', 'media_type': 'text/plain', 'data': NOTES},
+             'title': 'notes.txt'},
+            {'type': 'document', 'source': {'type': 'base64', 'media_type': 'application/pdf', 'data': PDF},
+             'title': 'two.pdf'},
+            {'type': 'text', 'text': 'echoblocks'}]}, 'parent_tool_use_id': None, 'session_id': ''})
+        reply = fake.until(is_type('result'))['result']
+        fake.finish()
+        self.assertEqual(reply.split('\n'), ['image image/png 69', 'document text/plain notes.txt 31',
+                                             'document application/pdf two.pdf %d' % len(base64.b64decode(PDF)),
+                                             'text 10'])
+
+    def test_24_handshake_call_error_and_interrupt(self):
+        lines = cut_file('24-sdk-mcp')
+        asked = [r['request']['message'] for r in recorded(lines, 'in', 'control_request', 'mcp_message')]
+        fake = self.mcp_fake(FAKE_CLAUDE_LOG=str(self.home / 'fake.log'))
+        # the JSON-RPC initialize goes out before the initialize answer, then initialized and tools/list
+        first = fake.until(lambda r: r.get('type') in ('control_request', 'control_response'))
+        self.assertTrue(is_type('control_request', 'mcp_message')(first))
+        self.assertEqual(first['request']['message'], asked[0])
+        self.serve(fake, first)
+        self.until_served(fake, lambda r: r.get('type') == 'control_response' and r['response'].get('request_id') == 'r1')
+        self.until_served(fake, lambda r: is_type('control_request', 'mcp_message')(r)
+                          and r['request']['message'].get('method') == 'tools/list')
+        self.assertEqual(fake.mcp[:3], asked[:3])
+        for attempt in range(40):          # 44: the server is listed once its tools/list was answered
+            fake.send({'type': 'control_request', 'request_id': 'r2-%d' % attempt, 'request': {'subtype': 'mcp_status'}})
+            status = self.until_served(fake, lambda r: r.get('type') == 'control_response'
+                                       and r['response'].get('request_id') == 'r2-%d' % attempt)
+            if status['response']['response']['mcpServers']:
+                break
+            time.sleep(0.05)
+        self.assertEqual(status['response']['response']['mcpServers'],
+                         [{'name': 'rhun', 'status': 'connected', 'serverInfo': {'name': 'rhun', 'version': '0.19.2'},
+                           'transport': 'sdk', 'scope': 'dynamic', 'source': 'sdk',
+                           'tools': [{'name': 'getDiagnostics', 'annotations': {'readOnly': True}}]}])
+        # a call: can_use_tool as recorded, then tools/call, then the tool row with the content list
+        fake.prompt('diag')
+        init = self.until_served(fake, is_type('system', 'init'))
+        self.assertIn('mcp__rhun__getDiagnostics', init['tools'])
+        self.assertEqual(init['mcp_servers'], [{'name': 'rhun', 'status': 'connected', 'source': 'sdk'}])
+        request = self.until_served(fake, is_type('control_request', 'can_use_tool'))
+        model = recorded(lines, 'in', 'control_request', 'can_use_tool')[0]['request']
+        self.assertEqual(list(request['request']), list(model))
+        for key in ('tool_name', 'mcp_server', 'display_name', 'permission_suggestions', 'server_policy_ask_only'):
+            self.assertEqual(request['request'][key], model[key], key)
+        fake.answer(request, {'behavior': 'allow', 'updatedInput': {}, 'toolUseID': request['request']['tool_use_id']})
+        call = self.until_served(fake, lambda r: bool(fake.mcp) and fake.mcp[-1].get('method') == 'tools/call')
+        sent_call = fake.mcp[-1]
+        model_call = next(m for m in asked if m.get('method') == 'tools/call')
+        self.assertEqual(list(sent_call), list(model_call))
+        self.assertEqual(list(sent_call['params']['_meta']), list(model_call['params']['_meta']))
+        self.assertEqual((sent_call['id'], sent_call['params']['_meta']['progressToken']), (2, 2))
+        row = self.until_served(fake, is_result_of(request['request']['tool_use_id']))
+        model_row = next(r for r in recorded(lines, 'in', 'user') if isinstance(r['message']['content'], list)
+                         and r['message']['content'][0].get('type') == 'tool_result')
+        self.assertEqual(list(row['message']['content'][0]), list(model_row['message']['content'][0]))
+        self.assertEqual(row['tool_use_result'], row['message']['content'][0]['content'])
+        self.assertEqual(self.until_served(fake, is_type('result'))['result'], 'The diagnostics tool returned 1 entry.')
+        del call
+        # isError: the text as a string, is_error, "Error: " + text
+        fake.answer_mcp = lambda m: {'jsonrpc': '2.0', 'id': m['id'], 'result': {
+            'content': [{'type': 'text', 'text': 'rhun: the diagnostics are not ready'}], 'isError': True}} \
+            if m.get('method') == 'tools/call' else None
+        fake.prompt('diag a.py')
+        request = self.until_served(fake, is_type('control_request', 'can_use_tool'))
+        self.assertEqual(request['request']['input'], {'uri': 'file://%s' % (self.project / 'a.py')})
+        fake.answer(request, {'behavior': 'allow', 'updatedInput': request['request']['input'],
+                              'toolUseID': request['request']['tool_use_id']})
+        row = self.until_served(fake, is_result_of(request['request']['tool_use_id']))
+        self.assertEqual((row['message']['content'][0]['content'], row['message']['content'][0]['is_error'],
+                          row['tool_use_result']),
+                         ('rhun: the diagnostics are not ready', True, 'Error: rhun: the diagnostics are not ready'))
+        self.until_served(fake, is_type('result'))
+        # a call held and interrupted: notifications/cancelled, no control_cancel_request, the stopped text
+        fake.answer_mcp = lambda m: False if m.get('method') == 'tools/call' else None
+        mark = len(fake.records)
+        fake.prompt('diag')
+        request = self.until_served(fake, is_type('control_request', 'can_use_tool'))
+        fake.answer(request, {'behavior': 'allow', 'updatedInput': {}, 'toolUseID': request['request']['tool_use_id']})
+        before = len(fake.mcp)
+        self.until_served(fake, lambda r: len(fake.mcp) > before and fake.mcp[-1].get('method') == 'tools/call')
+        held = fake.mcp[-1]
+        fake.interrupt('r9')
+        cancelled = self.until_served(fake, lambda r: is_type('control_request', 'mcp_message')(r)
+                                      and r['request']['message'].get('method') == 'notifications/cancelled')
+        model_cancel = next(m for m in asked if m.get('method') == 'notifications/cancelled')
+        self.assertEqual(cancelled['request']['message'], dict(model_cancel, params=dict(
+            model_cancel['params'], requestId=held['id'])))
+        stopped = self.until_served(fake, is_result_of(request['request']['tool_use_id']))
+        model_stopped = recorded(lines, 'in', 'user')[-2]
+        self.assertEqual(stopped['message']['content'][0]['content'], model_stopped['message']['content'][0]['content'])
+        self.assertEqual(stopped['tool_use_result'], model_stopped['tool_use_result'])
+        self.assertEqual(self.until_served(fake, is_type('result'))['terminal_reason'], 'aborted_tools')
+        self.assertFalse([r for r in fake.since(mark) if r.get('type') == 'control_cancel_request'])
+        fake.finish()
+        methods = [l['mcp']['method'] for l in logged(self.home / 'fake.log') if 'mcp' in l]
+        self.assertEqual(methods[:3], ['initialize', 'notifications/initialized', 'tools/list'])
+
+    def test_24_variants_manifests_off_error_late_never(self):
+        # manifests (45): parked, no handshake, the call's id 2
+        fake = self.mcp_fake(manifests={'rhun': {'initializeResult': {
+            'protocolVersion': '2025-11-25', 'capabilities': {'tools': {'listChanged': True}},
+            'serverInfo': {'name': 'rhun', 'version': '0.19.2'}}, 'toolsListResult': {'tools': [TOOL]}}})
+        answer = fake.until(lambda r: r.get('type') == 'control_response')['response']['response']
+        self.assertEqual(answer['sdk_mcp_manifests_parked'], {'rhun': 'parked'})
+        self.assertEqual(list(answer)[list(answer).index('current_permission_mode') + 1], 'sdk_mcp_manifests_parked')
+        fake.prompt('diag')
+        request = self.until_served(fake, is_type('control_request', 'can_use_tool'))
+        fake.answer(request, {'behavior': 'allow', 'updatedInput': {}, 'toolUseID': request['request']['tool_use_id']})
+        self.until_served(fake, is_type('result'))
+        fake.finish()
+        self.assertEqual([(m['method'], m['id']) for m in fake.mcp], [('tools/call', 2)])
+        # an older CLI (FAKE_CLAUDE_MCP=off): nothing new at all
+        (self.project / 'notes.txt').write_text(NOTES)
+        fake = self.mcp_fake(hooks=EXT_HOOKS, FAKE_CLAUDE_MCP='off')
+        answer = fake.until(lambda r: r.get('type') == 'control_response')['response']['response']
+        self.assertNotIn('hooks_applied', answer)
+        fake.prompt('hookedit notes.txt')
+        request = fake.until(is_type('control_request', 'can_use_tool'))
+        fake.answer(request, {'behavior': 'allow', 'updatedInput': request['request']['input'],
+                              'toolUseID': request['request']['tool_use_id']})
+        fake.until(is_type('result'))
+        fake.finish()
+        self.assertFalse([r for r in fake.records if is_type('control_request', 'mcp_message')(r)
+                          or is_type('control_request', 'hook_callback')(r)])
+        # tools/list answered with an error: asked again three times, then connected without tools (44)
+        fake = self.mcp_fake(answer=lambda m: {'jsonrpc': '2.0', 'id': m['id'], 'error': {
+            'code': -32603, 'message': 'rhun: no tools today'}} if m.get('method') == 'tools/list' else None,
+                             FAKE_CLAUDE_MCP='error')
+        fake.prompt('hello')
+        init = self.until_served(fake, is_type('system', 'init'))
+        self.until_served(fake, is_type('result'))
+        fake.finish()
+        self.assertEqual([m['method'] for m in fake.mcp], ['initialize', 'notifications/initialized', 'tools/list',
+                                                           'tools/list', 'tools/list', 'tools/list', 'resources/list',
+                                                           'no/such-method'])
+        self.assertEqual(init['mcp_servers'], [{'name': 'rhun', 'status': 'connected', 'source': 'sdk'}])
+        self.assertNotIn('mcp__rhun__getDiagnostics', init['tools'])
+        # a server that never answers (51): initialize again at half the wait, then failed; the turn waited
+        fake = self.mcp_fake(answer=lambda m: False, FAKE_CLAUDE_MCP_WAIT_MS='800')
+        started = time.time()
+        fake.prompt('hello')
+        init = self.until_served(fake, is_type('system', 'init'))
+        self.assertGreaterEqual(time.time() - started, 0.7)
+        self.assertEqual(init['mcp_servers'], [{'name': 'rhun', 'status': 'failed', 'source': 'sdk'}])
+        self.until_served(fake, is_type('result'))
+        fake.finish()
+        self.assertEqual([m['method'] for m in fake.mcp], ['initialize', 'initialize'])
+        # slow: the handshake begins after the initialize answer
+        fake = self.mcp_fake(FAKE_CLAUDE_MCP='slow')
+        first = fake.until(lambda r: r.get('type') in ('control_request', 'control_response'))
+        self.assertEqual(first['type'], 'control_response')
+        fake.prompt('diag')
+        request = self.until_served(fake, is_type('control_request', 'can_use_tool'))
+        fake.answer(request, {'behavior': 'allow', 'updatedInput': {}, 'toolUseID': request['request']['tool_use_id']})
+        self.until_served(fake, is_type('result'))
+        fake.finish()
+
+    def hook_turn(self, fake, prompt, answers, allow=None):
+        """Runs a prompt of a hook scenario: each hook_callback is answered only once every callback of its event
+        has arrived (answers(request) gives the answer, None: none), can_use_tool by allow(request) or with its
+        own input. The control requests in order."""
+        order, waiting = [], []
+        fake.prompt(prompt)
+        while True:
+            record = self.until_served(fake, lambda r: r.get('type') in ('control_request', 'result'))
+            if is_type('control_request', 'mcp_message')(record):
+                continue
+            if record.get('type') == 'result':
+                for item in waiting:
+                    if answers(item) is not None:
+                        fake.answer(item, answers(item))
+                return order, record
+            order.append(record)
+            if is_type('control_request', 'hook_callback')(record):
+                waiting.append(record)
+                event = record['request']['input']['hook_event_name']
+                expected = sum(len(m['hookCallbackIds']) for m in EXT_HOOKS[event]
+                               if re.fullmatch(m['matcher'], record['request']['input']['tool_name']))
+                if len(waiting) == expected:
+                    for item in waiting:
+                        if answers(item) is not None:
+                            fake.answer(item, answers(item))
+                    waiting = []
+            elif is_type('control_request', 'can_use_tool')(record):
+                fake.answer(record, dict(allow(record) if allow else {
+                    'behavior': 'allow', 'updatedInput': record['request']['input']},
+                    toolUseID=record['request']['tool_use_id']))
+
+    def test_25_hooks_around_an_edit_a_write_and_a_read(self):
+        lines = cut_file('25-sdk-hooks')
+        model = [r['request'] for r in recorded(lines, 'in', 'control_request', 'hook_callback')]
+        (self.project / 'notes.txt').write_text(NOTES)
+        fake = self.mcp_fake(hooks=EXT_HOOKS, FAKE_CLAUDE_LOG=str(self.home / 'fake.log'))
+        answer = self.until_served(fake, lambda r: r.get('type') == 'control_response'
+                                   and r['response'].get('request_id') == 'r1')['response']['response']
+        self.assertTrue(answer['hooks_applied'])
+        context = '<ide_diagnostics>[\n  {\n    "filePath": "%s",\n    "line": 2\n  }\n]</ide_diagnostics>' % (
+            self.project / 'notes.txt')
+
+        def answers(request):
+            if request['request']['input']['hook_event_name'] == 'PostToolUse':
+                return {'continue': True, 'hookSpecificOutput': {'hookEventName': 'PostToolUse',
+                                                                 'additionalContext': context}}
+            return {'continue': True}
+
+        def whole_file(request):
+            text = (self.project / 'notes.txt').read_text()
+            edit = request['request']['input']
+            return {'behavior': 'allow', 'updatedInput': {
+                'file_path': edit['file_path'], 'old_string': text,
+                'new_string': text.replace(edit['old_string'], edit['new_string'], 1), 'replace_all': False}}
+        order, _ = self.hook_turn(fake, 'hookedit notes.txt', answers, whole_file)
+        self.assertEqual([(r['request']['subtype'], r['request'].get('callback_id')) for r in order],
+                         [(r['subtype'], r.get('callback_id')) for r in model[:2]] + [('can_use_tool', None)] +
+                         [(r['subtype'], r.get('callback_id')) for r in model[2:3]])
+        for got, want in zip([r['request'] for r in order if r['request']['subtype'] == 'hook_callback'], model):
+            self.assertEqual(list(got), list(want))
+            self.assertEqual(list(got['input']), list(want['input']))
+            self.assertEqual(got['input']['scratchpad_dir'].split('/')[-1], 'scratchpad')
+        post = order[-1]['request']['input']
+        self.assertEqual(post['tool_input']['old_string'], NOTES)        # the input as allowed
+        self.assertEqual(list(post['tool_response']), list(model[2]['input']['tool_response']))
+        self.assertEqual((self.project / 'notes.txt').read_text(), 'alpha (edited)\n' + NOTES.split('\n', 1)[1])
+        # the context reaches no stream record; the file's line comes right after the call's result
+        self.assertFalse([r for r in fake.records if 'ide_diagnostics' in json.dumps(r)
+                          and r.get('type') not in ('control_response',)])
+        order, _ = self.hook_turn(fake, 'writefile w.txt hi', answers,
+                                  lambda r: {'behavior': 'allow', 'updatedInput': dict(r['request']['input'],
+                                                                                        content='hello from rhun\n')})
+        self.assertEqual([r['request'].get('callback_id', 'ask') for r in order], ['hook_0', 'hook_1', 'ask', 'hook_2'])
+        self.assertEqual((self.project / 'w.txt').read_text(), 'hello from rhun\n')
+        order, _ = self.hook_turn(fake, 'hookread notes.txt', answers)
+        self.assertEqual([r['request'].get('callback_id', 'ask') for r in order], ['hook_1'])
+        fake.finish()
+        lines = Phase3.lines(self, next(r['session_id'] for r in fake.records if is_type('system', 'init')(r)))
+        self.assertEqual(file_faults(lines), [])
+        for i, line in enumerate(lines):
+            if line['type'] == 'attachment' and line['attachment']['type'] == 'hook_additional_context':
+                self.assertEqual(lines[i - 1]['message']['content'][0]['type'], 'tool_result')
+                self.assertEqual(line['parentUuid'], lines[i - 1]['uuid'])
+                self.assertEqual(line['attachment']['content'], [context])
+                self.assertEqual(line['renderedRole'], 'system')
+        self.assertEqual(sorted(l['attachment']['hookName'] for l in lines if l['type'] == 'attachment'),
+                         ['PostToolUse:Edit', 'PostToolUse:Write'])
+        hooks = [l['hook'] for l in logged(self.home / 'fake.log') if 'hook' in l]
+        self.assertEqual([h['callback_id'] for h in hooks][:3], ['hook_0', 'hook_1', 'hook_2'])
+
+    def test_25_a_deadline_and_an_unknown_answer(self):
+        (self.project / 'notes.txt').write_text(NOTES)
+        fake = self.mcp_fake(hooks=EXT_HOOKS, FAKE_CLAUDE_HOOK_DEADLINE='300')
+        fake.prompt('hookedit notes.txt')
+        first = self.until_served(fake, is_type('control_request', 'hook_callback'))
+        self.assertNotIn('deadline_ms', first['request'])                # 48: 2.1.330 sends none
+        request = self.until_served(fake, is_type('control_request', 'can_use_tool'))   # nobody answered the hooks
+        fake.answer(request, {'behavior': 'allow', 'updatedInput': request['request']['input'],
+                              'toolUseID': request['request']['tool_use_id']})
+        post = self.until_served(fake, is_type('control_request', 'hook_callback'))
+        fake.answer(post, {'weird': True})
+        self.assertEqual(self.until_served(fake, is_type('result'))['result'], 'edited')
+        fake.finish()
+
+    def test_26_answers_to_an_edit(self):
+        lines = cut_file('26-edit-answer')
+        texts = [r['message']['content'][0]['content'] for r in recorded(lines, 'in', 'user')
+                 if isinstance(r['message']['content'], list) and r['message']['content'][0].get('is_error')]
+        (self.project / 'notes.txt').write_text(NOTES)
+        (self.project / 'crlf.txt').write_bytes(b'one\r\ntwo\r\nthree\r\nfour\r\nfive\r\n')
+        fake = self.fake(base=REPLAY)
+        fake.initialize(suggestions=False)
+
+        def turn(prompt, answer, before=None):
+            fake.prompt(prompt)
+            request = fake.until(is_type('control_request', 'can_use_tool'))
+            if before:
+                before()
+            fake.answer(request, dict(answer(request['request']), toolUseID=request['request']['tool_use_id']))
+            tid = request['request']['tool_use_id']
+            row = fake.until(is_result_of(tid))
+            return row, fake.until(is_type('result'))
+        # deny with interrupt: Yb whatever the message, aborted_tools, the denial listed
+        row, end = turn('editfile notes.txt bravo BRAVO',
+                        lambda r: {'behavior': 'deny', 'message': 'User cancelled the edit', 'interrupt': True})
+        self.assertEqual(row['message']['content'][0]['content'], texts[0])
+        self.assertEqual(row['tool_use_result'], 'User rejected tool use')
+        self.assertEqual((end['terminal_reason'], [d['tool_name'] for d in end['permission_denials']]),
+                         ('aborted_tools', ['Edit']))
+        # an allow after the file changed: the recorded refusal, the file untouched
+        row, _ = turn('editfile notes.txt bravo BRAVO', lambda r: {'behavior': 'allow', 'updatedInput': r['input']},
+                      lambda: (self.project / 'notes.txt').write_text('alpha\nchanged meanwhile\n'))
+        self.assertEqual(row['message']['content'][0]['content'], texts[1])
+        self.assertEqual((self.project / 'notes.txt').read_text(), 'alpha\nchanged meanwhile\n')
+        # CR LF: LF strings, CR LF kept; then a whole-file LF updatedInput, CR LF kept
+        row, _ = turn('editfile crlf.txt two TWO', lambda r: {'behavior': 'allow', 'updatedInput': r['input']})
+        self.assertEqual(row['tool_use_result']['originalFile'], 'one\ntwo\nthree\nfour\nfive\n')
+        self.assertEqual((self.project / 'crlf.txt').read_bytes(), b'one\r\nTWO\r\nthree\r\nfour\r\nfive\r\n')
+        turn('editfile crlf.txt three THREE', lambda r: {'behavior': 'allow', 'updatedInput': {
+            'file_path': r['input']['file_path'], 'old_string': 'one\nTWO\nthree\nfour\nfive\n',
+            'new_string': 'one\nTWO\nTHREE\nfour\nfive\n', 'replace_all': False}})
+        self.assertEqual((self.project / 'crlf.txt').read_bytes(), b'one\r\nTWO\r\nTHREE\r\nfour\r\nfive\r\n')
+        fake.finish()
+
+    def test_notify_and_the_logged_members(self):
+        log = self.home / 'fake.log'
+        fake = self.mcp_fake(hooks=EXT_HOOKS, FAKE_CLAUDE_LOG=str(log))
+        fake.prompt('notify')
+        self.until_served(fake, is_type('result'))
+        fake.finish()
+        self.assertEqual([m.get('method') for m in fake.mcp][-2:], ['experiment_gates', 'file_updated'])
+        init = next(l['initialize'] for l in logged(log) if 'initialize' in l)
+        self.assertEqual((init['sdkMcpServers'], init['hooks']), (['rhun'], EXT_HOOKS))
+
+
+# the recorder's server (finding 46): one tool, one entry for a.py
+TOOL = {'name': 'getDiagnostics', 'description': 'Get the errors, warnings and other diagnostics rhun shows.',
+        'inputSchema': {'type': 'object', 'properties': {'uri': {'type': 'string'}}},
+        'annotations': {'title': 'Get diagnostics', 'readOnlyHint': True}}
+DIAG = json.dumps([{'uri': 'file:///p/a.py', 'linesInFile': 10, 'diagnostics': [
+    {'message': 'invalid syntax', 'severity': 'Error', 'range': {'start': {'line': 3, 'character': 11},
+                                                                'end': {'line': 3, 'character': 12}},
+     'source': 'python', 'code': 'E999'}]}], separators=(',', ':'))
 
 
 def logged(path):

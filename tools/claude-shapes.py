@@ -11,8 +11,13 @@ has records of its own (README.txt finding 27): `claude-shapes.py --file FILE.js
 records a reader of the file reads (user, assistant and system lines; the bookkeeping types are left out), and
 `claude-shapes.py --file-keys FILE.jsonl...` the field order of every kind of line: file-keys.txt.
 `--fold` (with a recording or --file) also folds a repeated pair of shapes (thinking_tokens and thinking_delta
-alternate once per delta) into one; `--hooks` keeps the hook records shape() leaves out."""
+alternate once per delta) into one; `--hooks` keeps the hook records shape() leaves out.
+`--cut-data RECORDING.jsonl` prints the phase 4 shape files (23 to 26): one line per record, both directions,
+`DIR SHAPE` or, for the records whose content the protocol pins (DETAIL), `DIR SHAPE JSON` with every base64
+`data` string cut to 16 characters, the run's folder written $CWD, its slug $SLUG and the home folder ~
+(records that carry the user's own setup, such as system/init or the initialize answer, keep only their shape)."""
 import json
+import re
 import sys
 
 # records whose place depends on timing, not on the protocol (commands_changed comes about 300 ms after
@@ -256,12 +261,73 @@ def key_order_ok(line, recorded):
     return any(all(name in p and subsequence(names, p[name]) for name, names in parts.items()) for p in same)
 
 
+CUT = 16
+
+
+def cut(value, places):
+    """value with base64 data cut to CUT characters and the places (text, name) replaced, recursively."""
+    if isinstance(value, dict):
+        return {k: (v[:CUT] + '…' if k == 'data' and isinstance(v, str) and len(v) > CUT else cut(v, places))
+                for k, v in value.items()}
+    if isinstance(value, list):
+        return [cut(v, places) for v in value]
+    if isinstance(value, str):
+        for text, name in places:
+            value = value.replace(text, name)
+    return value
+
+
+def detailed(direction, msg):
+    """Whether a record's content goes into a phase 4 shape file: everything rhun wrote, the CLI's requests,
+    withdrawals, user records (replays, tool results) and its echoes of rhun's answers to its own requests."""
+    kind = msg.get('type')
+    if direction == 'out':
+        return True
+    if kind in ('control_request', 'control_cancel_request', 'user', 'tool_progress'):
+        return True
+    return kind == 'control_response' and isinstance(part(msg, 'response.response'), dict) \
+        and 'mcp_response' in part(msg, 'response.response')
+
+
+def cut_lines(path, home):
+    """The lines of a phase 4 shape file from a recording ({"dir", "msg"} lines)."""
+    items = [json.loads(line) for line in open(path, encoding='utf-8')]
+    cwd = next((i['msg'].get('cwd') for i in items if isinstance(i.get('msg'), dict)
+                and i['msg'].get('subtype') == 'init' and i['msg'].get('cwd')), None) or next(
+        (part(i['msg'], 'request.input.cwd') for i in items if isinstance(i.get('msg'), dict)
+         and isinstance(part(i['msg'], 'request.input.cwd'), str)), None)
+    places = []
+    if cwd:
+        places += [(cwd, '$CWD'), (re.sub(r'[^A-Za-z0-9]', '-', cwd), '$SLUG')]
+    places.append((home, '~'))
+    out = []
+    for item in items:
+        msg, direction = item.get('msg'), item.get('dir')
+        if direction not in ('in', 'out') or not isinstance(msg, dict):
+            continue
+        name = shape(msg, hooks=True) or ((msg.get('type') or '?') + '/' + str(msg.get('subtype')))
+        if detailed(direction, msg):
+            out.append('%s %s %s' % (direction, name, json.dumps(cut(msg, places), ensure_ascii=False)))
+        elif not out or out[-1] != '%s %s' % (direction, name):     # runs of one shape (deltas) folded
+            out.append('%s %s' % (direction, name))
+    return out
+
+
+def parse_cut_line(line):
+    """(dir, shape, record or None) of a phase 4 shape file's line."""
+    direction, name, *rest = line.split(' ', 2)
+    return direction, name, json.loads(rest[0]) if rest else None
+
+
 if __name__ == '__main__':
     args = sys.argv[1:]
     fold = '--fold' in args
     hooks = '--hooks' in args
     args = [a for a in args if a not in ('--fold', '--hooks')]
-    if args[0] == '--keys':          # claude-shapes.py --keys RECORDING... : the recorded field orders
+    if args[0] == '--cut-data':      # the phase 4 shape files: both directions, pinned contents with data cut
+        import os.path
+        print('\n'.join(cut_lines(args[1], os.path.expanduser('~'))))
+    elif args[0] == '--keys':          # claude-shapes.py --keys RECORDING... : the recorded field orders
         print('\n'.join(sorted({line for path in args[1:] for line in key_lines(recording(path))})))
     elif args[0] == '--file-keys':   # the field orders of the conversation files' lines
         print('\n'.join(sorted({line for path in args[1:] for line in file_key_lines(file_records(path))})))

@@ -1,0 +1,149 @@
+# order: the run of finding 38's message order, an image alone, ide_opened_file alone, inline_pastes, documents
+out control_request/initialize: {"type": "control_request", "request_id": "r1", "request": {"subtype": "initialize", "hooks": null, "promptSuggestions": false, "supportedDialogKinds": ["fable_overage_consent_prompt", "auto_mode_server_fallback"], "perTaskStopAffordance": true, "forwardNestedSubagentToolCalls": true}}
+in system/hook_started:SessionStart
+in system/hook_response:SessionStart
+in control_response/success
+out user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "<ide_selection>The user selected the lines 2 to 3 from $CWD/notes.txt:\nbravo\ncharlie\n\nThis may or may not be related to the current task.</ide_selection>"}, {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAAN…"}}, {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "alpha\nbravo\nchar…"}, "title": "notes.txt"}, {"type": "text", "text": "<terminal name=\"zsh\">\n$ echo hi\nhi\n</terminal>"}, {"type": "text", "text": "Reply with the word ok."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "cef92a6a-099a-44f3-9382-8381161d8cdb"}
+in command_lifecycle
+in system/init
+in system/status
+in system/commands_changed
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "<ide_selection>The user selected the lines 2 to 3 from $CWD/notes.txt:\nbravo\ncharlie\n\nThis may or may not be related to the current task.</ide_selection>"}, {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAAN…"}}, {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "alpha\nbravo\nchar…"}, "title": "notes.txt"}, {"type": "text", "text": "<terminal name=\"zsh\">\n$ echo hi\nhi\n</terminal>"}, {"type": "text", "text": "Reply with the word ok."}]}, "session_id": "ccf8537a-9675-483c-8efa-fe2cbf3952a3", "parent_tool_use_id": null, "uuid": "cef92a6a-099a-44f3-9382-8381161d8cdb", "timestamp": "2026-11-24T00:22:14.493Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in rate_limit_event/None
+in result/success
+out user:image {"type": "user", "message": {"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAAN…"}}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "eef15920-b497-4c71-afb4-a28371b83734"}
+in command_lifecycle
+in system/init
+in system/status
+in user:image {"type": "user", "message": {"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAAN…"}}]}, "session_id": "ccf8537a-9675-483c-8efa-fe2cbf3952a3", "parent_tool_use_id": null, "uuid": "eef15920-b497-4c71-afb4-a28371b83734", "timestamp": "2026-11-24T00:22:17.210Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in system/thinking_tokens
+in stream_event/content_block_delta:thinking_delta
+in system/thinking_tokens
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+out user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "<ide_opened_file>The user opened the file $CWD/notes.txt in the IDE. This may or may not be related to the current task.</ide_opened_file>"}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "540a52f3-ab2e-4a08-af9a-0f3d39037bc1"}
+in command_lifecycle
+in system/init
+in system/status
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "<ide_opened_file>The user opened the file $CWD/notes.txt in the IDE. This may or may not be related to the current task.</ide_opened_file>"}]}, "session_id": "ccf8537a-9675-483c-8efa-fe2cbf3952a3", "parent_tool_use_id": null, "uuid": "540a52f3-ab2e-4a08-af9a-0f3d39037bc1", "timestamp": "2026-11-24T00:22:21.317Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in system/thinking_tokens
+in stream_event/content_block_delta:thinking_delta
+in system/thinking_tokens
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+out user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "a second paste that stands alone\nwith two\nline feeds or more\nin it"}, {"type": "text", "text": "Here is my log: first pasted line of the log\nsecond pasted line of the log\nthird pasted line\nfourth line Reply with the word ok."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "736736bc-5505-4c15-b3c0-2e013f6dbc91", "inline_pastes": ["first pasted line of the log\nsecond pasted line of the log\nthird pasted line\nfourth line", "a second paste that stands alone\nwith two\nline feeds or more\nin it"]}
+in command_lifecycle
+in system/init
+in system/status
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "\n\n<pasted_content id=\"4583\">\na second paste that stands alone\nwith two\nline feeds or more\nin it\n</pasted_content id=\"4583\">\n"}, {"type": "text", "text": "Here is my log: \n\n<pasted_content id=\"4583\">\nfirst pasted line of the log\nsecond pasted line of the log\nthird pasted line\nfourth line\n</pasted_content id=\"4583\">\n\n Reply with the word ok."}]}, "session_id": "ccf8537a-9675-483c-8efa-fe2cbf3952a3", "parent_tool_use_id": null, "uuid": "736736bc-5505-4c15-b3c0-2e013f6dbc91", "timestamp": "2026-11-24T00:22:25.584Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+out user:document {"type": "user", "message": {"role": "user", "content": [{"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "The secret word …"}, "title": "secret.txt"}, {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQKMSAw…"}, "title": "two.pdf"}, {"type": "text", "text": "Reply with the titles of the two documents, the secret word and the words on the PDF pages."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "bee986e5-92f7-4cc6-9d3f-4a0341470ade"}
+in command_lifecycle
+in system/init
+in system/status
+in user:document {"type": "user", "message": {"role": "user", "content": [{"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": "The secret word …"}, "title": "secret.txt"}, {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": "JVBERi0xLjQKMSAw…"}, "title": "two.pdf"}, {"type": "text", "text": "Reply with the titles of the two documents, the secret word and the words on the PDF pages."}]}, "session_id": "ccf8537a-9675-483c-8efa-fe2cbf3952a3", "parent_tool_use_id": null, "uuid": "bee986e5-92f7-4cc6-9d3f-4a0341470ade", "timestamp": "2026-11-24T00:22:27.929Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in system/thinking_tokens
+in stream_event/content_block_delta:thinking_delta
+in system/thinking_tokens
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+in command_lifecycle
+# notimage: an image block whose data is not an image
+out control_request/initialize: {"type": "control_request", "request_id": "r1", "request": {"subtype": "initialize", "hooks": null, "promptSuggestions": false, "supportedDialogKinds": ["fable_overage_consent_prompt", "auto_mode_server_fallback"], "perTaskStopAffordance": true, "forwardNestedSubagentToolCalls": true}}
+in system/hook_started:SessionStart
+in system/hook_response:SessionStart
+in control_response/success
+out user:image {"type": "user", "message": {"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "VGhpcyBpcyBub3Qg…"}}, {"type": "text", "text": "Reply with the word ok."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "5c9def22-3f5f-4de9-bc41-cbcd5b7dbcfc"}
+in command_lifecycle
+in system/init
+in system/status
+in system/commands_changed
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "[Image could not be processed: Unable to resize image — image processing is unavailable and dimensions could not be read from the file header. Please convert the image to PNG, JPEG, GIF, or WebP.]"}, {"type": "text", "text": "Reply with the word ok."}]}, "session_id": "55344844-097f-42a9-82bc-62a457bc1c1e", "parent_tool_use_id": null, "uuid": "5c9def22-3f5f-4de9-bc41-cbcd5b7dbcfc", "timestamp": "2026-11-24T00:22:32.019Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in rate_limit_event/None
+in result/success
+out user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Reply with the word ok."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "9f364f9e-8f06-40e7-9833-ec96bb372ca6"}
+in command_lifecycle
+in system/init
+in system/status
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Reply with the word ok."}]}, "session_id": "55344844-097f-42a9-82bc-62a457bc1c1e", "parent_tool_use_id": null, "uuid": "9f364f9e-8f06-40e7-9833-ec96bb372ca6", "timestamp": "2026-11-24T00:22:34.850Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+in command_lifecycle
+# big3: a 3 MiB PNG, replayed as the CLI re-encoded it
+out control_request/initialize: {"type": "control_request", "request_id": "r1", "request": {"subtype": "initialize", "hooks": null, "promptSuggestions": false, "supportedDialogKinds": ["fable_overage_consent_prompt", "auto_mode_server_fallback"], "perTaskStopAffordance": true, "forwardNestedSubagentToolCalls": true}}
+in system/hook_started:SessionStart
+in system/hook_response:SessionStart
+in control_response/success
+out user:image {"type": "user", "message": {"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAAN…"}}, {"type": "text", "text": "Reply with the word ok."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "f6e3f1b9-9404-40b9-8acb-031d52580567"}
+in command_lifecycle
+in system/init
+in system/status
+in system/commands_changed
+in rate_limit_event/None
+in user:image {"type": "user", "message": {"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/jpeg", "data": "/9j/4AAQSkZJRgAB…"}}, {"type": "text", "text": "Reply with the word ok."}]}, "session_id": "a73126b3-445a-4edc-aedc-6725ab887dbf", "parent_tool_use_id": null, "uuid": "f6e3f1b9-9404-40b9-8acb-031d52580567", "timestamp": "2026-11-24T00:23:01.473Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+in command_lifecycle

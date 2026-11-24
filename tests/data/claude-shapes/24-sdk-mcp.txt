@@ -1,0 +1,162 @@
+# server: sdkMcpServers [rhun], the handshake, a call, an isError call (the model retried), a call held 5 s and interrupted
+out control_request/initialize: {"type": "control_request", "request_id": "r1", "request": {"subtype": "initialize", "hooks": null, "promptSuggestions": false, "supportedDialogKinds": ["fable_overage_consent_prompt", "auto_mode_server_fallback"], "perTaskStopAffordance": true, "forwardNestedSubagentToolCalls": true, "sdkMcpServers": ["rhun"]}}
+in system/hook_started:SessionStart
+in system/hook_response:SessionStart
+in control_request/mcp_message: {"type": "control_request", "request_id": "e7492d79-1a9f-43c5-9719-b6490b8c90a2", "request": {"subtype": "mcp_message", "server_name": "rhun", "message": {"method": "initialize", "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "claude-code", "title": "Claude Code", "description": "Anthropic's agentic coding tool", "websiteUrl": "https://claude.com/claude-code", "version": "2.1.330"}}, "jsonrpc": "2.0", "id": 0}}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "e7492d79-1a9f-43c5-9719-b6490b8c90a2", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 0, "result": {"protocolVersion": "2025-11-25", "capabilities": {"tools": {"listChanged": true}}, "serverInfo": {"name": "rhun", "version": "0.19.2"}}}}}}
+in control_response/success
+in control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "e7492d79-1a9f-43c5-9719-b6490b8c90a2", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 0, "result": {"protocolVersion": "2025-11-25", "capabilities": {"tools": {"listChanged": true}}, "serverInfo": {"name": "rhun", "version": "0.19.2"}}}}}}
+in control_request/mcp_message: {"type": "control_request", "request_id": "19579ecf-9ec8-402d-9509-65d288e489a4", "request": {"subtype": "mcp_message", "server_name": "rhun", "message": {"jsonrpc": "2.0", "method": "notifications/initialized"}}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "19579ecf-9ec8-402d-9509-65d288e489a4", "response": {"mcp_response": {"jsonrpc": "2.0", "result": {}, "id": 0}}}}
+in control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "19579ecf-9ec8-402d-9509-65d288e489a4", "response": {"mcp_response": {"jsonrpc": "2.0", "result": {}, "id": 0}}}}
+in control_request/mcp_message: {"type": "control_request", "request_id": "7777cde8-7ac1-4f5c-b748-f4dc16a31640", "request": {"subtype": "mcp_message", "server_name": "rhun", "message": {"method": "tools/list", "jsonrpc": "2.0", "id": 1}}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "7777cde8-7ac1-4f5c-b748-f4dc16a31640", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 1, "result": {"tools": [{"name": "getDiagnostics", "description": "Get the errors, warnings and other diagnostics rhun currently shows in its Problems list. Returns a JSON array with one entry per file, each listing that file's diagnostics.", "inputSchema": {"type": "object", "properties": {"uri": {"type": "string", "description": "file:// URI of the one file to check."}, "minSeverity": {"type": "string", "enum": ["Error", "Warning", "Information", "Hint"], "description": "Include only diagnostics at least this severe."}}, "additionalProperties": false, "$schema": "http://json-schema.org/draft-07/schema#"}, "annotations": {"title": "Get diagnostics", "readOnlyHint": true}}]}}}}}
+in control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "7777cde8-7ac1-4f5c-b748-f4dc16a31640", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 1, "result": {"tools": [{"name": "getDiagnostics", "description": "Get the errors, warnings and other diagnostics rhun currently shows in its Problems list. Returns a JSON array with one entry per file, each listing that file's diagnostics.", "inputSchema": {"type": "object", "properties": {"uri": {"type": "string", "description": "file:// URI of the one file to check."}, "minSeverity": {"type": "string", "enum": ["Error", "Warning", "Information", "Hint"], "description": "Include only diagnostics at least this severe."}}, "additionalProperties": false, "$schema": "http://json-schema.org/draft-07/schema#"}, "annotations": {"title": "Get diagnostics", "readOnlyHint": true}}]}}}}}
+in system/commands_changed
+out control_request/mcp_status: {"type": "control_request", "request_id": "r2", "request": {"subtype": "mcp_status"}}
+in control_response/success
+out user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Call the getDiagnostics tool of the rhun server and reply with the number of entries."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "b30ae20e-056f-499a-9818-7ff395c744dd"}
+in command_lifecycle
+in system/init
+in system/status
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Call the getDiagnostics tool of the rhun server and reply with the number of entries."}]}, "session_id": "eff1062a-f4fa-4bbe-8dea-1682941ee32b", "parent_tool_use_id": null, "uuid": "b30ae20e-056f-499a-9818-7ff395c744dd", "timestamp": "2026-11-24T00:25:07.992Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in rate_limit_event/None
+in system/thinking_tokens
+in stream_event/content_block_delta:thinking_delta
+in system/thinking_tokens
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:mcp__rhun__getDiagnostics
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in control_request/can_use_tool:mcp__rhun__getDiagnostics {"type": "control_request", "request_id": "14fbe226-7c94-45cd-8419-c25fe8cbc548", "request": {"subtype": "can_use_tool", "tool_name": "mcp__rhun__getDiagnostics", "mcp_server": {"name": "rhun", "source": "sdk"}, "display_name": "GetDiagnostics", "input": {}, "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "mcp__rhun__getDiagnostics"}], "behavior": "allow", "destination": "localSettings"}], "server_policy_ask_only": false, "tool_use_id": "toolu_01JNtJ9NJBjZiqkoFRWhF9XS"}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "14fbe226-7c94-45cd-8419-c25fe8cbc548", "response": {"behavior": "allow", "updatedInput": {}, "toolUseID": "toolu_01JNtJ9NJBjZiqkoFRWhF9XS"}}}
+in control_response/success
+in control_request/mcp_message: {"type": "control_request", "request_id": "b7ea6574-5970-42ff-9b18-44a25091a185", "request": {"subtype": "mcp_message", "server_name": "rhun", "message": {"method": "tools/call", "params": {"name": "getDiagnostics", "arguments": {}, "_meta": {"claudecode/toolUseId": "toolu_01JNtJ9NJBjZiqkoFRWhF9XS", "progressToken": 2}}, "jsonrpc": "2.0", "id": 2}}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "b7ea6574-5970-42ff-9b18-44a25091a185", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "[{\"uri\":\"file://$CWD/a.py\",\"linesInFile\":10,\"diagnostics\":[{\"message\":\"invalid syntax\",\"severity\":\"Error\",\"range\":{\"start\":{\"line\":3,\"character\":11},\"end\":{\"line\":3,\"character\":12}},\"source\":\"python\",\"code\":\"E999\"}]}]"}]}}}}}
+in control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "b7ea6574-5970-42ff-9b18-44a25091a185", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 2, "result": {"content": [{"type": "text", "text": "[{\"uri\":\"file://$CWD/a.py\",\"linesInFile\":10,\"diagnostics\":[{\"message\":\"invalid syntax\",\"severity\":\"Error\",\"range\":{\"start\":{\"line\":3,\"character\":11},\"end\":{\"line\":3,\"character\":12}},\"source\":\"python\",\"code\":\"E999\"}]}]"}]}}}}}
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"tool_use_id": "toolu_01JNtJ9NJBjZiqkoFRWhF9XS", "type": "tool_result", "content": [{"type": "text", "text": "[{\"uri\":\"file://$CWD/a.py\",\"linesInFile\":10,\"diagnostics\":[{\"message\":\"invalid syntax\",\"severity\":\"Error\",\"range\":{\"start\":{\"line\":3,\"character\":11},\"end\":{\"line\":3,\"character\":12}},\"source\":\"python\",\"code\":\"E999\"}]}]"}]}]}, "parent_tool_use_id": null, "session_id": "eff1062a-f4fa-4bbe-8dea-1682941ee32b", "uuid": "ce47c280-2cd9-43e1-9894-fd9c09af4fc7", "timestamp": "2026-11-24T00:25:09.395Z", "tool_use_result": [{"type": "text", "text": "[{\"uri\":\"file://$CWD/a.py\",\"linesInFile\":10,\"diagnostics\":[{\"message\":\"invalid syntax\",\"severity\":\"Error\",\"range\":{\"start\":{\"line\":3,\"character\":11},\"end\":{\"line\":3,\"character\":12}},\"source\":\"python\",\"code\":\"E999\"}]}]"}], "tool_result_meta": [{"id": "toolu_01JNtJ9NJBjZiqkoFRWhF9XS", "permission_decision": {"decision": "accept", "source": "user_temporary"}}]}
+in system/status
+in stream_event/message_start
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+out user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Call the getDiagnostics tool of the rhun server and reply with the number of entries."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "f12900b5-0206-4828-8799-d22389253264"}
+in command_lifecycle
+in system/init
+in system/status
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Call the getDiagnostics tool of the rhun server and reply with the number of entries."}]}, "session_id": "eff1062a-f4fa-4bbe-8dea-1682941ee32b", "parent_tool_use_id": null, "uuid": "f12900b5-0206-4828-8799-d22389253264", "timestamp": "2026-11-24T00:25:12.161Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:mcp__rhun__getDiagnostics
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in control_request/can_use_tool:mcp__rhun__getDiagnostics {"type": "control_request", "request_id": "9ce65940-81d3-4fa8-a4b1-63a9e6e9c90f", "request": {"subtype": "can_use_tool", "tool_name": "mcp__rhun__getDiagnostics", "mcp_server": {"name": "rhun", "source": "sdk"}, "display_name": "GetDiagnostics", "input": {}, "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "mcp__rhun__getDiagnostics"}], "behavior": "allow", "destination": "localSettings"}], "server_policy_ask_only": false, "tool_use_id": "toolu_01DrsuQ458sTcfFUFaVYynvv"}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "9ce65940-81d3-4fa8-a4b1-63a9e6e9c90f", "response": {"behavior": "allow", "updatedInput": {}, "toolUseID": "toolu_01DrsuQ458sTcfFUFaVYynvv"}}}
+in control_response/success
+in control_request/mcp_message: {"type": "control_request", "request_id": "8f49befc-71f4-453e-9391-e3fb576e355f", "request": {"subtype": "mcp_message", "server_name": "rhun", "message": {"method": "tools/call", "params": {"name": "getDiagnostics", "arguments": {}, "_meta": {"claudecode/toolUseId": "toolu_01DrsuQ458sTcfFUFaVYynvv", "progressToken": 3}}, "jsonrpc": "2.0", "id": 3}}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "8f49befc-71f4-453e-9391-e3fb576e355f", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "rhun: the diagnostics are not ready"}], "isError": true}}}}}
+in control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "8f49befc-71f4-453e-9391-e3fb576e355f", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 3, "result": {"content": [{"type": "text", "text": "rhun: the diagnostics are not ready"}], "isError": true}}}}}
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "rhun: the diagnostics are not ready\n\nThis tool's input schema was not in your prompt when you called it. The input schema is: {\"type\":\"object\",\"properties\":{\"uri\":{\"type\":\"string\",\"description\":\"file:// URI of the one file to check.\"},\"minSeverity\":{\"type\":\"string\",\"enum\":[\"Error\",\"Warning\",\"Information\",\"Hint\"],\"description\":\"Include only diagnostics at least this severe.\"}},\"additionalProperties\":false,\"$schema\":\"http://json-schema.org/draft-07/schema#\"}\nIf your input does not match this schema, correct it and call the tool again. If it matches, the error above has another cause. If the corrected call fails the same way, call ToolSearch with query \"select:mcp__rhun__getDiagnostics\" to load the tool, then call it again.", "is_error": true, "tool_use_id": "toolu_01DrsuQ458sTcfFUFaVYynvv"}]}, "parent_tool_use_id": null, "session_id": "eff1062a-f4fa-4bbe-8dea-1682941ee32b", "uuid": "491dae85-45aa-4f56-9fd5-482cc000f4fe", "timestamp": "2026-11-24T00:25:13.103Z", "tool_use_result": "Error: rhun: the diagnostics are not ready", "tool_result_meta": [{"id": "toolu_01DrsuQ458sTcfFUFaVYynvv", "permission_decision": {"decision": "accept", "source": "user_temporary"}}]}
+in system/status
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in system/thinking_tokens
+in stream_event/content_block_delta:thinking_delta
+in system/thinking_tokens
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:ToolSearch
+in stream_event/content_block_stop
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:mcp__rhun__getDiagnostics
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01V6skBC5R3C829wGZdqyTz3", "content": [{"type": "tool_reference", "tool_name": "mcp__rhun__getDiagnostics"}]}]}, "parent_tool_use_id": null, "session_id": "eff1062a-f4fa-4bbe-8dea-1682941ee32b", "uuid": "edb1cc89-a751-49fe-8ee5-2151b9b7ffec", "timestamp": "2026-11-24T00:25:14.660Z", "tool_use_result": {"matches": ["mcp__rhun__getDiagnostics"], "query": "select:mcp__rhun__getDiagnostics", "total_deferred_tools": 121}, "tool_result_meta": [{"id": "toolu_01V6skBC5R3C829wGZdqyTz3", "permission_decision": {"decision": "accept", "source": "config"}}]}
+in control_request/can_use_tool:mcp__rhun__getDiagnostics {"type": "control_request", "request_id": "4d12ae61-2fcf-4170-a1b4-61617717aea5", "request": {"subtype": "can_use_tool", "tool_name": "mcp__rhun__getDiagnostics", "mcp_server": {"name": "rhun", "source": "sdk"}, "display_name": "GetDiagnostics", "input": {}, "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "mcp__rhun__getDiagnostics"}], "behavior": "allow", "destination": "localSettings"}], "server_policy_ask_only": false, "tool_use_id": "toolu_01LbExND3nYHdMHgikXDW2q6"}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "4d12ae61-2fcf-4170-a1b4-61617717aea5", "response": {"behavior": "allow", "updatedInput": {}, "toolUseID": "toolu_01LbExND3nYHdMHgikXDW2q6"}}}
+in control_response/success
+in control_request/mcp_message: {"type": "control_request", "request_id": "697c9872-4deb-4cb3-a8e8-68f61446fb98", "request": {"subtype": "mcp_message", "server_name": "rhun", "message": {"method": "tools/call", "params": {"name": "getDiagnostics", "arguments": {}, "_meta": {"claudecode/toolUseId": "toolu_01LbExND3nYHdMHgikXDW2q6", "progressToken": 4}}, "jsonrpc": "2.0", "id": 4}}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "697c9872-4deb-4cb3-a8e8-68f61446fb98", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "rhun: the diagnostics are not ready"}], "isError": true}}}}}
+in control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "697c9872-4deb-4cb3-a8e8-68f61446fb98", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 4, "result": {"content": [{"type": "text", "text": "rhun: the diagnostics are not ready"}], "isError": true}}}}}
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "rhun: the diagnostics are not ready", "is_error": true, "tool_use_id": "toolu_01LbExND3nYHdMHgikXDW2q6"}]}, "parent_tool_use_id": null, "session_id": "eff1062a-f4fa-4bbe-8dea-1682941ee32b", "uuid": "a2c23c3a-d9f2-48cb-b809-835c5e8da9bd", "timestamp": "2026-11-24T00:25:14.667Z", "tool_use_result": "Error: rhun: the diagnostics are not ready", "tool_result_meta": [{"id": "toolu_01LbExND3nYHdMHgikXDW2q6", "permission_decision": {"decision": "accept", "source": "user_temporary"}}]}
+in system/status
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in stream_event/content_block_delta:thinking_delta
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:mcp__rhun__getDiagnostics
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in control_request/can_use_tool:mcp__rhun__getDiagnostics {"type": "control_request", "request_id": "04afaa81-9dd8-4986-a320-1f370ebc3a0e", "request": {"subtype": "can_use_tool", "tool_name": "mcp__rhun__getDiagnostics", "mcp_server": {"name": "rhun", "source": "sdk"}, "display_name": "GetDiagnostics", "input": {}, "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "mcp__rhun__getDiagnostics"}], "behavior": "allow", "destination": "localSettings"}], "server_policy_ask_only": false, "tool_use_id": "toolu_015xcvB4ttB5Xfpk1VqtphZa"}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "04afaa81-9dd8-4986-a320-1f370ebc3a0e", "response": {"behavior": "allow", "updatedInput": {}, "toolUseID": "toolu_015xcvB4ttB5Xfpk1VqtphZa"}}}
+in control_response/success
+in control_request/mcp_message: {"type": "control_request", "request_id": "2be3b388-35e9-4b37-bba8-3e1ed997157f", "request": {"subtype": "mcp_message", "server_name": "rhun", "message": {"method": "tools/call", "params": {"name": "getDiagnostics", "arguments": {}, "_meta": {"claudecode/toolUseId": "toolu_015xcvB4ttB5Xfpk1VqtphZa", "progressToken": 5}}, "jsonrpc": "2.0", "id": 5}}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "2be3b388-35e9-4b37-bba8-3e1ed997157f", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "rhun: the diagnostics are not ready"}], "isError": true}}}}}
+in control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "2be3b388-35e9-4b37-bba8-3e1ed997157f", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 5, "result": {"content": [{"type": "text", "text": "rhun: the diagnostics are not ready"}], "isError": true}}}}}
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "rhun: the diagnostics are not ready", "is_error": true, "tool_use_id": "toolu_015xcvB4ttB5Xfpk1VqtphZa"}]}, "parent_tool_use_id": null, "session_id": "eff1062a-f4fa-4bbe-8dea-1682941ee32b", "uuid": "373d8b72-86b7-48a4-b314-be5190c7454e", "timestamp": "2026-11-24T00:25:15.649Z", "tool_use_result": "Error: rhun: the diagnostics are not ready", "tool_result_meta": [{"id": "toolu_015xcvB4ttB5Xfpk1VqtphZa", "permission_decision": {"decision": "accept", "source": "user_temporary"}}]}
+in system/status
+in stream_event/message_start
+in stream_event/content_block_start:thinking
+in system/thinking_tokens
+in stream_event/content_block_delta:thinking_delta
+in system/thinking_tokens
+in stream_event/content_block_delta:signature_delta
+in assistant:thinking
+in stream_event/content_block_stop
+in stream_event/content_block_start:text
+in stream_event/content_block_delta:text_delta
+in assistant:text
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in result/success
+out user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Call the getDiagnostics tool of the rhun server and reply with the number of entries."}]}, "parent_tool_use_id": null, "session_id": "", "uuid": "03c1c790-14c5-4e08-958b-8f769c5157e5"}
+in command_lifecycle
+in system/init
+in system/status
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "Call the getDiagnostics tool of the rhun server and reply with the number of entries."}]}, "session_id": "eff1062a-f4fa-4bbe-8dea-1682941ee32b", "parent_tool_use_id": null, "uuid": "03c1c790-14c5-4e08-958b-8f769c5157e5", "timestamp": "2026-11-24T00:25:19.782Z", "isReplay": true}
+in stream_event/message_start
+in stream_event/content_block_start:tool_use
+in stream_event/content_block_delta:input_json_delta
+in assistant:tool_use:mcp__rhun__getDiagnostics
+in stream_event/content_block_stop
+in stream_event/message_delta
+in stream_event/message_stop
+in control_request/can_use_tool:mcp__rhun__getDiagnostics {"type": "control_request", "request_id": "f38a9531-f0e9-48e7-a640-20e1830b644d", "request": {"subtype": "can_use_tool", "tool_name": "mcp__rhun__getDiagnostics", "mcp_server": {"name": "rhun", "source": "sdk"}, "display_name": "GetDiagnostics", "input": {}, "permission_suggestions": [{"type": "addRules", "rules": [{"toolName": "mcp__rhun__getDiagnostics"}], "behavior": "allow", "destination": "localSettings"}], "server_policy_ask_only": false, "tool_use_id": "toolu_01CGB146ervLevmNwNLTPdjc"}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "f38a9531-f0e9-48e7-a640-20e1830b644d", "response": {"behavior": "allow", "updatedInput": {}, "toolUseID": "toolu_01CGB146ervLevmNwNLTPdjc"}}}
+in control_response/success
+in control_request/mcp_message: {"type": "control_request", "request_id": "8e166cf1-7c64-4fd5-8c14-85d32b8c3509", "request": {"subtype": "mcp_message", "server_name": "rhun", "message": {"method": "tools/call", "params": {"name": "getDiagnostics", "arguments": {}, "_meta": {"claudecode/toolUseId": "toolu_01CGB146ervLevmNwNLTPdjc", "progressToken": 6}}, "jsonrpc": "2.0", "id": 6}}}
+out control_request/interrupt: {"type": "control_request", "request_id": "r9", "request": {"subtype": "interrupt"}}
+in control_request/mcp_message: {"type": "control_request", "request_id": "1fec8d22-2fbd-45d0-b63a-1ac982e46d77", "request": {"subtype": "mcp_message", "server_name": "rhun", "message": {"jsonrpc": "2.0", "method": "notifications/cancelled", "params": {"requestId": 6, "reason": "AbortError: remote-cancel"}}}}
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "1fec8d22-2fbd-45d0-b63a-1ac982e46d77", "response": {"mcp_response": {"jsonrpc": "2.0", "result": {}, "id": 0}}}}
+in control_response/success
+in user:tool_result {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "content": "The user doesn't want to proceed with this tool use. The tool use was rejected (eg. if it was a file edit, the new_string was NOT written to the file). STOP what you are doing and wait for the user to tell you how to proceed. Correction to the text above: this call was stopped while running, not refused before it ran. It may have run in part or in full, and its changes may have been written. No permission prompt was involved. Work it started elsewhere (a remote command, a background process) may still be running, so check before starting the same work again. The instruction to stop and wait still stands.", "is_error": true, "tool_use_id": "toolu_01CGB146ervLevmNwNLTPdjc"}]}, "parent_tool_use_id": null, "session_id": "eff1062a-f4fa-4bbe-8dea-1682941ee32b", "uuid": "5d1136d9-f0f0-452f-9f54-9b41301f8ed0", "timestamp": "2026-11-24T00:25:21.679Z", "tool_use_result": "User rejected tool use", "tool_result_meta": [{"id": "toolu_01CGB146ervLevmNwNLTPdjc", "non_execution_kind": "user-rejected"}]}
+in user:text {"type": "user", "message": {"role": "user", "content": [{"type": "text", "text": "[Request interrupted by user for tool use]"}]}, "parent_tool_use_id": null, "session_id": "eff1062a-f4fa-4bbe-8dea-1682941ee32b", "uuid": "56d21744-c51b-462a-870d-06bce9eb9d71", "timestamp": "2026-11-24T00:25:21.682Z"}
+in control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "1fec8d22-2fbd-45d0-b63a-1ac982e46d77", "response": {"mcp_response": {"jsonrpc": "2.0", "result": {}, "id": 0}}}}
+in result/error_during_execution
+in command_lifecycle
+out control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "8e166cf1-7c64-4fd5-8c14-85d32b8c3509", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 6, "result": {"content": [{"type": "text", "text": "[{\"uri\":\"file://$CWD/a.py\",\"linesInFile\":10,\"diagnostics\":[{\"message\":\"invalid syntax\",\"severity\":\"Error\",\"range\":{\"start\":{\"line\":3,\"character\":11},\"end\":{\"line\":3,\"character\":12}},\"source\":\"python\",\"code\":\"E999\"}]}]"}]}}}}}
+in control_response/success {"type": "control_response", "response": {"subtype": "success", "request_id": "8e166cf1-7c64-4fd5-8c14-85d32b8c3509", "response": {"mcp_response": {"jsonrpc": "2.0", "id": 6, "result": {"content": [{"type": "text", "text": "[{\"uri\":\"file://$CWD/a.py\",\"linesInFile\":10,\"diagnostics\":[{\"message\":\"invalid syntax\",\"severity\":\"Error\",\"range\":{\"start\":{\"line\":3,\"character\":11},\"end\":{\"line\":3,\"character\":12}},\"source\":\"python\",\"code\":\"E999\"}]}]"}]}}}}}

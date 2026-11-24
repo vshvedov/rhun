@@ -3351,6 +3351,619 @@ def s_hostilecrash(prompt):
 SCENARIOS.update({'bigerror': s_bigerror, 'hostilecrash': s_hostilecrash})
 
 
+# ---- Phase 4 (README.txt findings 38 on; shape files 23 to 26): a message's blocks, rhun's in-process MCP server,
+# the SDK hooks and the answers to an edit, as 2.1.330 recorded them.
+# initialize's hooks, sdkMcpServers, sdkMcpServerManifests, appendSystemPrompt and systemPromptSnapshot are logged
+# with the others; the answer gains hooks_applied true (hooks given) and sdk_mcp_manifests_parked {NAME: "parked"}
+# (manifests given). For each server in sdkMcpServers without a manifest the CLI's handshake goes out as recorded:
+# the JSON-RPC initialize as an mcp_message request BEFORE the initialize answer, then notifications/initialized
+# and tools/list after rhun answered (a JSON-RPC error to tools/list is asked again 250, 500 and 1000 ms later,
+# then the server is connected without tools); every answer is logged {"mcp": {server, method, id, answer}}. A
+# turn waits for the handshake (FAKE_CLAUDE_MCP_WAIT_MS, default 60000 as recorded; initialize is sent again at
+# half of it; past it the server is "failed"). system/init's mcp_servers and tools and mcp_status name the server
+# and its tools (mcp__NAME__TOOL). Hook callbacks go out in the phase 4 scenarios only (the older scenarios run
+# no callbacks): every matching PreToolUse callback at once, can_use_tool after all were answered, PostToolUse
+# after the tool ran; an additionalContext answer becomes the file's hook_additional_context line after the
+# result (no stream record); each answer is logged {"hook": {callback_id, event, tool, answer}}; with no
+# deadline the fake waits as the CLI did (tool_progress heartbeats every 30 s).
+# The replay of a user message: the blocks as sent, except an image whose bytes are not PNG, JPEG, GIF or WebP
+# (the recorded text block in its place) and inline_pastes wrapped in <pasted_content> tags (finding 43); the
+# file's prompt line holds the same blocks, imagePasteIds, then the isMeta "[Image: source: ...]" line. Not
+# mimicked: the CLI's re-encoding of large images (39) and its own expansion of @mentions (42).
+# Scenarios: diag [FILE] (a getDiagnostics call of the first server: can_use_tool, tools/call, the tool row with
+# what came back; an interrupt while the call waits sends notifications/cancelled), hookedit [FILE] (an Edit of
+# the file's first line with the callbacks around it), hookread FILE, editfile FILE OLD NEW and writefile FILE
+# TEXT (they ask; an allow's updatedInput is applied as the CLI applies it: CR LF kept, a file changed since the
+# call refused), echoblocks (a reply with one line per block of its message: "image image/png BYTES", "document
+# text/plain TITLE CHARS", "document application/pdf TITLE BYTES", "text CHARS"; FAKE_CLAUDE_SCENARIO=echoblocks
+# when the first text block is not the word), notify (experiment_gates and file_updated to the first server:
+# unrecorded, 2.1.330 sends them only to a server named claude-vscode, finding 47).
+# Knobs: FAKE_CLAUDE_MCP=off (an older CLI: the new members are ignored), slow (unrecorded: the handshake starts
+# 1 s after the initialize answer, 0.5 s between its steps), error (unrecorded: after tools/list the fake also
+# asks resources/list and an unknown method, which a server without them answers with JSON-RPC errors);
+# FAKE_CLAUDE_HOOK_DEADLINE=MS (unrecorded: a callback not answered within MS counts as {"continue": true}; 2.1.330
+# sent no deadline_ms and waited); FAKE_CLAUDE_MCP_WAIT_MS (above).
+P4_MEMBERS = ('hooks', 'sdkMcpServers', 'sdkMcpServerManifests', 'appendSystemPrompt', 'systemPromptSnapshot')
+MCP_KNOB = ENV.get('FAKE_CLAUDE_MCP', '')
+P4_SERVERS = {}                     # name -> {state: pending|connected|failed, tools: [...], next: JSON-RPC id, done: Event}
+P4_HOOKS = {}                       # event -> [(matcher, [callback ids])]
+P4_ANSWERS = {}                     # the fake's mcp_message and hook_callback request ids -> None until answered
+P4_IMAGES = [0]                     # images of the conversation so far (imagePasteIds)
+P4_CONTENT = [None]                 # the blocks of the message whose turn runs (echoblocks)
+MCP_CLIENT = {'name': 'claude-code', 'title': 'Claude Code', 'description': "Anthropic's agentic coding tool",
+              'websiteUrl': 'https://claude.com/claude-code', 'version': '2.1.330'}
+NOT_IMAGE = ('[Image could not be processed: Unable to resize image — image processing is unavailable and '
+             'dimensions could not be read from the file header. Please convert the image to PNG, JPEG, GIF, or WebP.]')
+CHANGED = ('File content has changed since it was last read. This commonly happens when a linter or formatter run '
+           'via Bash rewrites the file. Call Read on this file to refresh, then retry the edit.')
+
+
+def p4_initialize(request):
+    """initialize's phase 4 members: the hooks kept, each server's handshake begun (its first request goes out
+    before the answer, as recorded). The answer's extra members, in the recorded order."""
+    extra = {}
+    if MCP_KNOB == 'off':
+        return extra
+    hooks = request.get('hooks') if isinstance(request.get('hooks'), dict) else {}
+    for event, matchers in hooks.items():
+        P4_HOOKS[event] = [(m.get('matcher') or '', list(m.get('hookCallbackIds') or [])) for m in matchers or []
+                           if isinstance(m, dict)]
+    if hooks:
+        extra['hooks_applied'] = True
+    manifests = request.get('sdkMcpServerManifests') if isinstance(request.get('sdkMcpServerManifests'), dict) else {}
+    for name in request.get('sdkMcpServers') or []:
+        if not isinstance(name, str) or name in P4_SERVERS:
+            continue
+        server = {'state': 'pending', 'tools': [], 'next': 0, 'done': threading.Event()}
+        P4_SERVERS[name] = server
+        manifest = manifests.get(name)
+        if isinstance(manifest, dict):          # 45: parked, no handshake; ids still count from the handshake's
+            server.update(state='connected', next=2,
+                          tools=((manifest.get('toolsListResult') or {}).get('tools') or []),
+                          info=(manifest.get('initializeResult') or {}).get('serverInfo'))
+            server['done'].set()
+            extra.setdefault('sdk_mcp_manifests_parked', {})[name] = 'parked'
+            continue
+        first = None if MCP_KNOB == 'slow' else p4_send(name, p4_request(name, 'initialize', {
+            'protocolVersion': '2025-11-25', 'capabilities': {}, 'clientInfo': MCP_CLIENT}))
+        threading.Thread(target=p4_handshake, args=(name, first), daemon=True).start()
+    return extra
+
+
+def p4_answer_members(response, extra):
+    """The initialize answer with extra inserted where 2.1.330 puts them (after current_permission_mode)."""
+    if not extra:
+        return response
+    out = {}
+    for key, value in response.items():
+        out[key] = value
+        if key == 'current_permission_mode':
+            out.update(extra)
+    return out
+
+
+def p4_request(name, method, params=None):
+    """A JSON-RPC request of the CLI's, in the recorded member order (initialize and tools/call carry params)."""
+    server = P4_SERVERS[name]
+    message = {'method': method}
+    if params is not None:
+        message['params'] = params
+    message.update(jsonrpc='2.0', id=server['next'])
+    server['next'] += 1
+    return message
+
+
+def p4_send(name, message):
+    """An mcp_message control request; its request id (the answer comes to P4_ANSWERS)."""
+    rid = str(uuid.uuid4())
+    with COND:
+        P4_ANSWERS[rid] = None
+        emit({'type': 'control_request', 'request_id': rid,
+              'request': {'subtype': 'mcp_message', 'server_name': name, 'message': message}})
+    return rid
+
+
+def p4_wait(rid, timeout=None, interruptible=False):
+    """The answer to one of the fake's requests (the control response's response member, or {"error": TEXT}),
+    or None: timeout, stdin closed, or (interruptible) an interrupt."""
+    deadline = None if timeout is None else time.time() + timeout
+    with COND:
+        while P4_ANSWERS.get(rid) is None:
+            if CLOSED.is_set() or (interruptible and INTERRUPT.is_set() and not DEAF.is_set()):
+                return None
+            if deadline is not None and time.time() >= deadline:
+                return None
+            COND.wait(0.05)
+        return P4_ANSWERS.pop(rid)
+
+
+def p4_answer(response):
+    """A control response to one of the fake's own requests: kept for its waiter. True when it was one."""
+    rid = response.get('request_id')
+    with COND:
+        if rid not in P4_ANSWERS:
+            return False
+        P4_ANSWERS[rid] = response.get('response') if response.get('subtype') == 'success' \
+            else {'error': response.get('error', '')}
+        if not isinstance(P4_ANSWERS[rid], dict):
+            P4_ANSWERS[rid] = {}
+        COND.notify_all()
+    return True
+
+
+def p4_ask(name, method, params=None, timeout=5):
+    """A request of the handshake: sent, answered (logged), the JSON-RPC reply or None."""
+    message = p4_request(name, method, params) if method != 'notifications/initialized' else {
+        'jsonrpc': '2.0', 'method': method}
+    answer = p4_wait(p4_send(name, message), timeout)
+    log(mcp={'server': name, 'method': method, 'id': message.get('id'), 'answer': answer})
+    return (answer or {}).get('mcp_response') if isinstance(answer, dict) else None
+
+
+def p4_handshake(name, first):
+    """44: initialize (sent again at half the wait, failed at the whole), notifications/initialized, tools/list
+    (asked again 250, 500, 1000 ms after an error reply); 51: a server that never answers is failed."""
+    server = P4_SERVERS[name]
+    wait = int(ENV.get('FAKE_CLAUDE_MCP_WAIT_MS', '60000')) / 1000
+    try:
+        if first is None:                       # FAKE_CLAUDE_MCP=slow
+            time.sleep(1)
+            first = p4_send(name, p4_request(name, 'initialize', {
+                'protocolVersion': '2025-11-25', 'capabilities': {}, 'clientInfo': MCP_CLIENT}))
+        answer = p4_wait(first, wait / 2)
+        if answer is None and not CLOSED.is_set():
+            answer = p4_wait(p4_send(name, p4_request(name, 'initialize', {
+                'protocolVersion': '2025-11-25', 'capabilities': {}, 'clientInfo': MCP_CLIENT})), wait / 2)
+        log(mcp={'server': name, 'method': 'initialize', 'id': 0, 'answer': answer})
+        reply = (answer or {}).get('mcp_response') if isinstance(answer, dict) else None
+        if not isinstance(reply, dict) or not isinstance(reply.get('result'), dict):
+            server['state'] = 'failed'
+            return
+        server['info'] = reply['result'].get('serverInfo')
+        if MCP_KNOB == 'slow':
+            time.sleep(0.5)
+        p4_ask(name, 'notifications/initialized')
+        for delay in (0, 0.25, 0.5, 1.0):
+            time.sleep(delay + (0.5 if MCP_KNOB == 'slow' else 0))
+            listed = p4_ask(name, 'tools/list', timeout=wait)
+            if isinstance(listed, dict) and isinstance(listed.get('result'), dict):
+                server['tools'] = [t for t in listed['result'].get('tools') or [] if isinstance(t, dict)]
+                break
+        server['state'] = 'connected'
+        if MCP_KNOB == 'error':                 # unrecorded: methods a server without them refuses
+            p4_ask(name, 'resources/list')
+            p4_ask(name, 'no/such-method', {})
+    finally:
+        server['done'].set()
+
+
+def p4_before_turn():
+    """51: a turn waits for every server's handshake (the CLI held system/init until tools/list was answered)."""
+    for server in list(P4_SERVERS.values()):
+        server['done'].wait(int(ENV.get('FAKE_CLAUDE_MCP_WAIT_MS', '60000')) / 1000 + 1)
+
+
+def p4_tool_names():
+    return ['mcp__%s__%s' % (name, t.get('name')) for name, s in P4_SERVERS.items() if s['state'] == 'connected'
+            for t in s['tools']]
+
+
+def p4_init_servers():
+    return [{'name': name, 'status': 'connected' if s['state'] == 'connected' else 'failed', 'source': 'sdk'}
+            for name, s in P4_SERVERS.items()]
+
+
+def p4_status():
+    """mcp_status's mcpServers (44, 51)."""
+    out = []
+    for name, s in P4_SERVERS.items():
+        if s['state'] == 'pending':             # 44: absent while its tools/list is unanswered
+            continue
+        if s['state'] == 'failed':
+            out.append({'name': name, 'status': 'failed', 'transport': 'sdk', 'scope': 'user', 'source': 'sdk'})
+            continue
+        out.append({'name': name, 'status': 'connected', 'serverInfo': s.get('info') or {'name': name},
+                    'transport': 'sdk', 'scope': 'dynamic', 'source': 'sdk',
+                    'tools': [{'name': t.get('name'), 'annotations': {
+                        'readOnly': bool((t.get('annotations') or {}).get('readOnlyHint'))}} for t in s['tools']]})
+    return out
+
+
+def p4_magic(data):
+    """The image kind of base64 data by its first bytes, or None."""
+    import base64
+    try:
+        head = base64.b64decode(data[:64] + '=' * (-len(data[:64]) % 4))
+    except (ValueError, TypeError):
+        return None
+    for magic, kind in ((b'\x89PNG\r\n\x1a\n', 'png'), (b'\xff\xd8\xff', 'jpg'), (b'GIF8', 'gif')):
+        if head.startswith(magic):
+            return kind
+    return 'webp' if head[:4] == b'RIFF' and head[8:12] == b'WEBP' else None
+
+
+def p4_blocks(entry):
+    """The message's blocks as the CLI replays and saves them (38, 43)."""
+    content = entry.get('content')
+    if not isinstance(content, list):
+        return content
+    blocks = []
+    for block in content:
+        if isinstance(block, dict) and block.get('type') == 'image':
+            if p4_magic(str((block.get('source') or {}).get('data', ''))) is None:
+                block = {'type': 'text', 'text': NOT_IMAGE}
+        blocks.append(block)
+    pastes = [p for p in entry.get('pastes') or [] if isinstance(p, str) and p.strip()][:100]
+    if pastes:
+        tag = str(1000 + uuid.uuid4().int % 9000)
+        texts = [i for i, b in enumerate(blocks) if isinstance(b, dict) and b.get('type') == 'text']
+        for paste in pastes:
+            for i in texts:
+                said = blocks[i].get('text', '')
+                at_ = said.find(paste)
+                if at_ < 0 or (i != texts[-1] and said != paste):
+                    continue
+                rest = said[at_ + len(paste):]
+                wrapped = '\n\n<pasted_content id="%s">\n%s\n</pasted_content id="%s">\n' % (tag, paste, tag)
+                blocks[i] = dict(blocks[i], text=said[:at_] + wrapped + ('\n' + rest if rest else ''))
+                break
+    return blocks
+
+
+def p4_prompt_line(entry, prompt):
+    """The file's prompt line: as before for a plain text message; with other blocks or pastes the blocks as
+    replayed, imagePasteIds after timestamp, then the isMeta image line (38)."""
+    blocks = p4_blocks(entry)
+    plain = isinstance(blocks, list) and all(isinstance(b, dict) and b.get('type') == 'text' for b in blocks) \
+        and not entry.get('pastes')
+    if not isinstance(blocks, list) or plain:
+        transcript({'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': prompt}]}})
+        return
+    images = []
+    for block in blocks:
+        if isinstance(block, dict) and block.get('type') == 'image':
+            P4_IMAGES[0] += 1
+            images.append((P4_IMAGES[0], p4_magic(str((block.get('source') or {}).get('data', '')))))
+    line = file_line({'type': 'user', 'message': {'role': 'user', 'content': blocks}})
+    if images:                                  # imagePasteIds comes right after timestamp (file-keys.txt)
+        ordered = {}
+        for key, value in line.items():
+            ordered[key] = value
+            if key == 'timestamp':
+                ordered['imagePasteIds'] = [n for n, _ in images]
+        line = ordered
+    fork_copy()
+    os.makedirs(os.path.dirname(TRANSCRIPT), exist_ok=True)
+    with open(TRANSCRIPT, 'a', encoding='utf-8') as stream:
+        stream.write(json.dumps(line, ensure_ascii=False) + '\n')
+    if images:
+        folder = '/tmp/claude-%d/%s/%s/images' % (os.getuid() if hasattr(os, 'getuid') else 0,
+                                                  re.sub(r'[^A-Za-z0-9]', '-', CWD), SID)
+        transcript({'type': 'user', 'isMeta': True, 'message': {'role': 'user', 'content': [
+            {'type': 'text', 'text': '[Image: source: %s/%d.%s]' % (folder, n, kind)} for n, kind in images]}})
+
+
+def p4_callbacks(event, tool, tid, tool_input, response=None):
+    """48: the matching callbacks of event, sent together, then every answer awaited (FAKE_CLAUDE_HOOK_DEADLINE:
+    at most that long each; else as long as it takes, tool_progress every 30 s). The answers in order (None:
+    withdrawn); [] without hooks."""
+    sent = []
+    for matcher, ids in P4_HOOKS.get(event, []):
+        try:
+            if matcher and not re.fullmatch(matcher, tool):
+                continue
+        except re.error:
+            continue
+        for callback in ids:
+            hook_input = {'session_id': SID, 'transcript_path': TRANSCRIPT, 'cwd': CWD,
+                          'scratchpad_dir': '/tmp/claude-%d/%s/%s/scratchpad' % (
+                              os.getuid() if hasattr(os, 'getuid') else 0, re.sub(r'[^A-Za-z0-9]', '-', CWD), SID),
+                          'prompt_id': TURN_UUID[0] or SID, 'permission_mode': MODE,
+                          'effort': {'level': current_effort() or 'medium'}, 'hook_event_name': event,
+                          'tool_name': tool, 'tool_input': tool_input}
+            if response is not None:
+                hook_input['tool_response'] = response
+            hook_input['tool_use_id'] = tid
+            if event == 'PostToolUse':
+                hook_input['duration_ms'] = 4
+            rid = str(uuid.uuid4())
+            with COND:
+                P4_ANSWERS[rid] = None
+                emit({'type': 'control_request', 'request_id': rid, 'request': {
+                    'subtype': 'hook_callback', 'callback_id': callback, 'input': hook_input, 'tool_use_id': tid}})
+            sent.append((rid, callback))
+    answers = []
+    deadline = ENV.get('FAKE_CLAUDE_HOOK_DEADLINE')
+    for rid, callback in sent:
+        if deadline:
+            answer = p4_wait(rid, int(deadline) / 1000, interruptible=True)
+            if answer is None and not CLOSED.is_set() and not (INTERRUPT.is_set() and not DEAF.is_set()):
+                answer = {'continue': True}     # past the deadline the call goes on
+        else:
+            beat, answer = 0, None
+            while answer is None and not CLOSED.is_set() and not (INTERRUPT.is_set() and not DEAF.is_set()):
+                answer = p4_wait(rid, 30, interruptible=True)
+                if answer is None and not CLOSED.is_set() and not INTERRUPT.is_set():
+                    emit({'type': 'tool_progress', 'tool_use_id': 'hook-%s-%s-heartbeat-%d' % (event, tid, beat),
+                          'tool_name': event, 'parent_tool_use_id': tid, 'elapsed_time_seconds': 30 * (beat + 1),
+                          'heartbeat': True, 'uuid': str(uuid.uuid4()), 'session_id': SID})
+                    beat += 1
+        with COND:
+            P4_ANSWERS.pop(rid, None)
+        log(hook={'callback_id': callback, 'event': event, 'tool': tool, 'answer': answer})
+        answers.append(answer)
+    return answers
+
+
+def p4_context_lines(tid, tool, answers):
+    """48: each PostToolUse answer's additionalContext as the file's attachment line after the call's result."""
+    for answer in answers:
+        output = (answer or {}).get('hookSpecificOutput') if isinstance(answer, dict) else None
+        context = output.get('additionalContext') if isinstance(output, dict) else None
+        if not isinstance(context, str):
+            continue
+        line = {'parentUuid': CHAIN[0], 'isSidechain': False, 'attachment': {
+            'type': 'hook_additional_context', 'content': [context], 'hookName': 'PostToolUse:%s' % tool,
+            'toolUseID': tid, 'hookEvent': 'PostToolUse'}, 'type': 'attachment', 'uuid': str(uuid.uuid4()),
+            'timestamp': now_iso(), 'rendered': [{'content': '<system-reminder>\nPostToolUse:%s hook additional '
+                                                             'context: %s\n</system-reminder>' % (tool, context)}],
+            'renderedRole': 'system', 'userType': 'external',
+            'entrypoint': ENV.get('CLAUDE_CODE_ENTRYPOINT') or 'sdk-cli', 'cwd': CWD, 'sessionId': SID,
+            'version': '2.1.330', 'gitBranch': ''}
+        with open(TRANSCRIPT, 'a', encoding='utf-8') as stream:
+            stream.write(json.dumps(line, ensure_ascii=False) + '\n')
+
+
+def p4_withdrawn_call(tid):
+    """A call whose callbacks or request an interrupt withdrew (unrecorded for callbacks)."""
+    tool_result(tid, REJECTED, True)
+    cut_off(tool_turn=True)
+
+
+def p4_file_call(name, tool_input, ask_input, apply):
+    """An Edit or Write that asks (16): PreToolUse callbacks, can_use_tool, the allowed input applied (apply returns
+    the outcome), PostToolUse callbacks, the result and the context lines. 'ok', 'error' (the tool failed: the
+    turn goes on) or 'ended' (withdrawn, denied: the turn's end was sent)."""
+    path = tool_input['file_path']
+    mid = message_start()
+    tid = tool_use(mid, 0, name, tool_input)
+    message_end('tool_use')
+    before = p4_lf(path)
+    if None in p4_callbacks('PreToolUse', name, tid, ask_input):
+        p4_withdrawn_call(tid)
+        return 'ended'
+    if MODE in ('acceptEdits', 'bypassPermissions') or rule_allows(name, path):
+        answer = {'behavior': 'allow'}
+    else:
+        answer = ask_request(request_id(), {
+            'subtype': 'can_use_tool', 'tool_name': name, 'display_name': name, 'input': ask_input,
+            'description': os.path.basename(path),
+            'permission_suggestions': [{'type': 'setMode', 'mode': 'acceptEdits', 'destination': 'session'}],
+            'tool_use_id': tid})
+        if answer is None:
+            p4_withdrawn_call(tid)
+            return 'ended'
+        log(answer=answer)
+    if answer.get('behavior') != 'allow':
+        DENIALS.append({'tool_name': name, 'tool_use_id': tid, 'tool_input': ask_input})
+        if answer.get('interrupt') is True:     # 49: Yb, whatever the message said
+            user({'type': 'tool_result', 'content': REJECTED, 'is_error': True, 'tool_use_id': tid},
+                 tool_use_result='User rejected tool use')
+            cut_off(tool_turn=True)
+            return 'ended'
+        tool_result(tid, answer.get('message', ''), True)
+        final('not changed')
+        return 'ended'
+    apply_updates(answer)
+    allowed = answer.get('updatedInput') if isinstance(answer.get('updatedInput'), dict) else ask_input
+    outcome = apply(allowed, before)
+    posts = p4_callbacks('PostToolUse', name, tid, allowed, outcome[2] if isinstance(outcome[2], dict) else None)
+    give(tid, name, outcome)
+    p4_context_lines(tid, name, posts)
+    return 'error' if outcome[1] else 'ok'
+
+
+def p4_lf(path):
+    """A file's text as the CLI sees it (CR LF read as LF, 49), or None."""
+    try:
+        with open(path, 'rb') as stream:
+            return stream.read().decode('utf-8', 'replace').replace('\r\n', '\n')
+    except OSError:
+        return None
+
+
+def p4_apply_edit(edit, before):
+    """49: the edit applied to the file's LF text; written back with CR LF when the file had them; refused when the
+    file changed since the call."""
+    path = edit.get('file_path', '')
+    try:
+        with open(path, 'rb') as stream:
+            raw = stream.read()
+    except OSError:
+        return read_missing()
+    text_ = raw.decode('utf-8', 'replace').replace('\r\n', '\n')
+    if before is not None and text_ != before:
+        return CHANGED, True, 'Error: ' + CHANGED
+    old = str(edit.get('old_string', '')).replace('\r\n', '\n')
+    new = str(edit.get('new_string', '')).replace('\r\n', '\n')
+    outcome = edit_outcome(path, text_, old, new, edit.get('replace_all') is True)
+    if not outcome[1]:
+        changed = text_.replace(old, new) if edit.get('replace_all') is True else text_.replace(old, new, 1)
+        with open(path, 'wb') as stream:
+            stream.write((changed.replace('\n', '\r\n') if b'\r\n' in raw else changed).encode('utf-8'))
+    return outcome
+
+
+def p4_apply_write(edit, before):
+    path = edit.get('file_path', '')
+    content = str(edit.get('content', ''))
+    with open(path, 'w', encoding='utf-8', newline='') as stream:
+        stream.write(content)
+    return write_outcome(path, content, before)
+
+
+def p4_path(word, default):
+    return os.path.join(CWD, word if word else default)
+
+
+def s_editfile(prompt, default_old=None):
+    """editfile FILE OLD NEW (hookedit [FILE]: its first line gets " (edited)")."""
+    words = prompt.split()
+    path = p4_path(words[1] if len(words) > 1 else '', 'notes.txt')
+    if default_old is not None or len(words) < 4:
+        first = (p4_lf(path) or '').split('\n', 1)[0]
+        old, new = first, first + ' (edited)'
+    else:
+        old, new = words[2], words[3]
+    ask_input = {'file_path': path, 'old_string': old, 'new_string': new, 'replace_all': False}
+    done = p4_file_call('Edit', {'replace_all': False, 'file_path': path, 'old_string': old, 'new_string': new},
+                        ask_input, p4_apply_edit)
+    if done != 'ended':
+        final('edited' if done == 'ok' else 'not edited')
+
+
+def s_hookedit(prompt):
+    s_editfile(prompt, default_old=True)
+
+
+def s_writefile(prompt):
+    """writefile FILE TEXT"""
+    words = prompt.split(None, 2)
+    path = p4_path(words[1] if len(words) > 1 else '', 'w.txt')
+    content = words[2] if len(words) > 2 else 'hi'
+    tool_input = {'file_path': path, 'content': content}
+    done = p4_file_call('Write', tool_input, dict(tool_input), p4_apply_write)
+    if done != 'ended':
+        final('written' if done == 'ok' else 'not written')
+
+
+def s_hookread(prompt):
+    """hookread FILE: a Read with its PreToolUse callbacks (48: no can_use_tool)."""
+    words = prompt.split()
+    path = p4_path(words[1] if len(words) > 1 else '', 'notes.txt')
+    mid = message_start()
+    tid = tool_use(mid, 0, 'Read', {'file_path': path})
+    message_end('tool_use')
+    if None in p4_callbacks('PreToolUse', 'Read', tid, {'file_path': path}):
+        p4_withdrawn_call(tid)
+        return
+    give(tid, 'Read', read_call(path))
+    final('read')
+
+
+def s_diag(prompt):
+    """diag [FILE]: 46's call of the first server's getDiagnostics."""
+    words = prompt.split()
+    name = next((n for n, s in P4_SERVERS.items() if s['state'] == 'connected'
+                 and any(t.get('name') == 'getDiagnostics' for t in s['tools'])), None)
+    if name is None:
+        final('There is no getDiagnostics tool.')
+        return
+    full = 'mcp__%s__getDiagnostics' % name
+    args = {'uri': 'file://' + p4_path(words[1], '')} if len(words) > 1 else {}
+    mid = message_start()
+    tid = tool_use(mid, 0, full, args)
+    message_end('tool_use')
+    if MODE == 'bypassPermissions' or rule_allows(full, ''):
+        answer = {'behavior': 'allow'}
+    else:
+        answer = ask_request(request_id(), {
+            'subtype': 'can_use_tool', 'tool_name': full, 'mcp_server': {'name': name, 'source': 'sdk'},
+            'display_name': 'GetDiagnostics', 'input': args,
+            'permission_suggestions': [{'type': 'addRules', 'rules': [{'toolName': full}], 'behavior': 'allow',
+                                        'destination': 'localSettings'}],
+            'server_policy_ask_only': False, 'tool_use_id': tid})
+        if answer is None:
+            p4_withdrawn_call(tid)
+            return
+        log(answer=answer)
+    if answer.get('behavior') != 'allow':
+        DENIALS.append({'tool_name': full, 'tool_use_id': tid, 'tool_input': args})
+        tool_result(tid, REJECTED if answer.get('interrupt') is True else answer.get('message', ''), True)
+        if answer.get('interrupt') is True:
+            cut_off(tool_turn=True)
+        else:
+            final('not called')
+        return
+    apply_updates(answer)
+    arguments = answer.get('updatedInput') if isinstance(answer.get('updatedInput'), dict) else args
+    call_id = P4_SERVERS[name]['next']
+    message = p4_request(name, 'tools/call', {'name': 'getDiagnostics', 'arguments': arguments,
+                                             '_meta': {'claudecode/toolUseId': tid, 'progressToken': call_id}})
+    rid = p4_send(name, message)
+    answer = p4_wait(rid, interruptible=True)
+    if answer is None:
+        if INTERRUPT.is_set() and not DEAF.is_set():    # 46: no control_cancel_request; the server is told
+            p4_send(name, {'jsonrpc': '2.0', 'method': 'notifications/cancelled',
+                           'params': {'requestId': call_id, 'reason': 'AbortError: remote-cancel'}})
+            ACKED.wait(5)
+            user({'type': 'tool_result', 'content': STOPPED, 'is_error': True, 'tool_use_id': tid},
+                 tool_use_result='User rejected tool use')
+            cut_off(tool_turn=True)
+        return
+    log(mcp={'server': name, 'method': 'tools/call', 'id': call_id, 'answer': answer})
+    reply = answer.get('mcp_response') if isinstance(answer.get('mcp_response'), dict) else {}
+    found = reply.get('result') if isinstance(reply.get('result'), dict) else None
+    if found is None:                           # unrecorded: a JSON-RPC error (or an error control response)
+        said = str((reply.get('error') or {}).get('message') if isinstance(reply.get('error'), dict)
+                   else answer.get('error', 'no answer'))
+        give(tid, full, (said, True, 'Error: ' + said))
+        final('The diagnostics tool failed.')
+        return
+    content = found.get('content') if isinstance(found.get('content'), list) else []
+    if found.get('isError') is True:
+        said = '\n'.join(str(c.get('text', '')) for c in content if isinstance(c, dict))
+        give(tid, full, (said, True, 'Error: ' + said))
+        final('The diagnostics tool failed: ' + said)
+        return
+    give(tid, full, (content, False, content))
+    try:
+        entries = len(json.loads(content[0]['text'])) if content else 0
+    except (ValueError, KeyError, TypeError, IndexError):
+        entries = 0
+    final('The diagnostics tool returned %d %s.' % (entries, 'entry' if entries == 1 else 'entries'))
+
+
+def s_echoblocks(prompt):
+    """echoblocks: one line per block of the message rhun sent (not the replay's rewrite)."""
+    import base64
+    lines = []
+    for block in P4_CONTENT[0] if isinstance(P4_CONTENT[0], list) else []:
+        if not isinstance(block, dict):
+            continue
+        source = block.get('source') if isinstance(block.get('source'), dict) else {}
+        data = str(source.get('data', ''))
+        if block.get('type') == 'text':
+            lines.append('text %d' % len(block.get('text', '')))
+        elif source.get('type') == 'base64':
+            try:
+                size = len(base64.b64decode(data))
+            except ValueError:
+                size = -1
+            lines.append(' '.join(str(x) for x in (block.get('type'), source.get('media_type'), block.get('title'), size)
+                                  if x is not None))
+        else:
+            lines.append(' '.join(str(x) for x in (block.get('type'), source.get('media_type'), block.get('title'),
+                                                   len(data)) if x is not None))
+    final('\n'.join(lines) or 'no blocks')
+
+
+def s_notify(prompt):
+    """notify: unrecorded for a server not named claude-vscode (47): experiment_gates, then file_updated."""
+    name = next(iter(P4_SERVERS), None)
+    if name is not None:
+        for method, params in (('experiment_gates', {'gates': {'tengu_vscode_inline_pastes': True}}),
+                               ('file_updated', {'filePath': os.path.join(CWD, 'notes.txt'), 'oldContent': 'one\n',
+                                                 'newContent': 'two\n'})):
+            answer = p4_wait(p4_send(name, {'method': method, 'params': params, 'jsonrpc': '2.0'}), 5)
+            log(mcp={'server': name, 'method': method, 'id': None, 'answer': answer})
+    final('notified')
+
+
+SCENARIOS.update({'diag': s_diag, 'hookedit': s_hookedit, 'hookread': s_hookread, 'editfile': s_editfile,
+                  'writefile': s_writefile, 'echoblocks': s_echoblocks, 'notify': s_notify})
+
+
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already
 DISCARDED = [False]                 # FAKE_CLAUDE_DISCARD_HELD: one held message was marked to be discarded
 QUIET = set()                       # FAKE_CLAUDE_NO_LIFECYCLE=local: the uuids of the CLI's own commands
@@ -3367,13 +3980,14 @@ def handle(message):
             SUGGEST[0] = request.get('promptSuggestions') is True
             logged_init = {'promptSuggestions': request.get('promptSuggestions'),
                            'supportedDialogKinds': request.get('supportedDialogKinds')}
-            for member in ('perTaskStopAffordance', 'forwardNestedSubagentToolCalls'):   # phase 3 sends both
-                if member in request:
+            for member in ('perTaskStopAffordance', 'forwardNestedSubagentToolCalls') + P4_MEMBERS:   # phases 3, 4
+                if member in request and (member not in P4_MEMBERS or request[member] is not None):
                     logged_init[member] = request[member]
             log(initialize=logged_init)
             if 'start' in HOOKS_ON:         # finding 32: SessionStart's records come before the answer
                 hook_records('SessionStart', 'SessionStart:startup')
-            respond(rid, init_response())
+            extra = p4_initialize(request)  # phase 4: a server's first request goes out before the answer
+            respond(rid, p4_answer_members(init_response(), extra))
             if not COMMANDS_SENT[0]:        # 2.1.330 follows the answer with the full command list
                 COMMANDS_SENT[0] = True
                 emit({'type': 'system', 'subtype': 'commands_changed', 'commands': changed_commands(),
@@ -3459,12 +4073,16 @@ def handle(message):
             stop_task(rid, request.get('task_id'))
         elif sub == 'background_tasks':
             to_background(rid, request.get('tool_use_id'))
+        elif sub == 'mcp_status':           # phase 4 (44, 51): the SDK servers
+            respond(rid, {'mcpServers': p4_status()})
         else:
             respond_error(rid, 'Unsupported control request subtype: %s' % sub)
     elif kind == 'control_response':
         response = message.get('response', {})
         if REPLAY:                          # 18: with --replay-user-messages every answer comes back as sent
             emit(message)
+        if p4_answer(response):             # phase 4: an answer to the fake's mcp_message or hook_callback
+            return
         with COND:
             rid = response.get('request_id')
             if rid in PENDING and PENDING[rid] is None:   # a late answer to a withdrawn id is ignored (C10)
@@ -3474,7 +4092,8 @@ def handle(message):
     elif kind == 'user':
         uid = message.get('uuid') if isinstance(message.get('uuid'), str) else None
         content = message.get('message', {}).get('content')
-        entry = {'text': prompt_text(message), 'uuid': uid, 'content': content}
+        entry = {'text': prompt_text(message), 'uuid': uid, 'content': content,
+                 'pastes': message.get('inline_pastes')}     # phase 4 (43)
         with COND:
             if uid and ENV.get('FAKE_CLAUDE_REFUSE_HELD') and (BUSY[0] or QUEUE) and not REFUSED[0]:
                 REFUSED[0] = True           # unrecorded: the state exists in the schema, no run produced it
@@ -3497,7 +4116,8 @@ def handle(message):
 def system_init():
     """system/init: sent at the start of every turn (2.1.330, finding 17), not only the first (C4)."""
     emit({'type': 'system', 'subtype': 'init', 'cwd': CWD, 'session_id': SID,
-          'tools': ['Task', 'AskUserQuestion', 'Bash', 'ExitPlanMode'] + todo_tools(), 'mcp_servers': [],
+          'tools': ['Task', 'AskUserQuestion', 'Bash', 'ExitPlanMode'] + todo_tools() + p4_tool_names(),
+          'mcp_servers': p4_init_servers(),
           'model': current_model() + '[1m]', 'permissionMode': MODE, 'slash_commands': ['compact', 'context', 'usage'],
           'apiKeySource': ENV.get('FAKE_CLAUDE_KEYSRC', 'none'), 'claude_code_version': '2.1.330',
           'output_style': 'default', 'capabilities': ['interrupt_receipt_v1', 'msg_lifecycle_v1'],
@@ -3526,6 +4146,8 @@ def turn(entry):
     if 'prompt' in HOOKS_ON or 'block' in HOOKS_ON:     # finding 32
         if prompt_hook(prompt):
             return False
+    p4_before_turn()                 # phase 4 (44, 51): system/init waits for the servers' handshakes
+    P4_CONTENT[0] = entry['content']
     system_init()
     if LATE_USER:                    # wait for the stop rather than write to a reader that is gone
         CLOSED.wait(int(ENV.get('FAKE_CLAUDE_USER_LATE_WAIT_MS', '10000')) / 1000)
@@ -3533,7 +4155,7 @@ def turn(entry):
     if custom_command(prompt, entry):           # finding 31: `echo`, or /NAME with .claude/commands/NAME.md
         return True
     if REPLAY:                       # finding 17: the message comes back, with its uuid (the CLI's own without one)
-        emit({'type': 'user', 'message': {'role': 'user', 'content': entry['content']}, 'session_id': SID,
+        emit({'type': 'user', 'message': {'role': 'user', 'content': p4_blocks(entry)}, 'session_id': SID,
               'parent_tool_use_id': None, 'uuid': entry['uuid'] or str(uuid.uuid4()), 'timestamp': now_iso(),
               'isReplay': True})
     del DENIALS[:]
@@ -3541,7 +4163,7 @@ def turn(entry):
     if LATE_USER:                    # nobody stopped it (10 s at most): the line goes in now
         transcript(LATE_USER.pop())
     elif scenario not in (s_unsaved, s_racing):     # (they save it later, if at all)
-        transcript({'type': 'user', 'message': {'role': 'user', 'content': [{'type': 'text', 'text': prompt}]}})
+        p4_prompt_line(entry, prompt)               # phase 4: a message's blocks (38)
     scenario(prompt)
     return True
 

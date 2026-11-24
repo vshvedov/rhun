@@ -498,6 +498,196 @@ finding names were in the temporary repository's .claude/settings.local.json.
     local_command_output, the top-level tool_progress and tool_use_summary, api_retry, api_error.
     command_lifecycle states: queued, started, completed, cancelled; no record anywhere carried ran_ahead.
 
+Phase 4 findings (CLI 2.1.330, recorded 2026-11-23 on macOS, same subscription)
+
+Letters are those of task 1 of the phase 4 plan (2026-11-24-claude-chat-phase4.md): (a) is 38 and 39, (b) 40, (c)
+41, (d) 42, (e) 43, (f) 44, (g) 45, (h) 46, (i) 47, (j) 48, (k) 49, (l) 50, (m) 51.
+Command line and environment: phase 3's (the pinned line, --replay-user-messages, --permission-mode=default,
+--session-id=UUID, --model=haiku --effort=low; HOME, PATH, USER, LANG, TMPDIR and rhun's three forced values);
+initialize phase 3's {"hooks":null,"promptSuggestions":false,"supportedDialogKinds":[the two],
+"perTaskStopAffordance":true,"forwardNestedSubagentToolCalls":true} plus the members a finding names. 24
+processes, one temporary git repository each (notes.txt "alpha\nbravo\ncharlie\ndelta\necho\n", crlf.txt the
+five words with CR LF, a.py of ten lines with a syntax error on line 4, the 1x1 dot.png, a two-page two.pdf of
+852 bytes, "a b.txt", src/m.c), 34 model turns of one sentence. "The answer" is the control_response rhun
+wrote; with --replay-user-messages every one of them comes back on stdout (18), which the shape files show.
+
+38. Image blocks. [image jpeg, image gif, image webp, text] (1x1 each, 286, 43 and 68 bytes): accepted, Claude
+    counted 3. The replay ({type, message, session_id, parent_tool_use_id, uuid, timestamp, isReplay}) and the
+    file's prompt line hold the blocks unchanged (same base64) for these small images; the prompt line has
+    imagePasteIds [1, 2, 3] (one number per image, counted across the conversation: in another run the second
+    message's single image was [2]) and a new key turnPromptId; it is followed by ONE user line
+    isMeta true whose content is one text block per image, "[Image: source: /private/tmp/claude-UID/<slug>/<session
+    id>/images/N.EXT]" (EXT jpg, gif, webp, png: the stored copy is the bytes rhun sent). That folder was
+    /private/tmp/claude-501/... although TMPDIR named another folder (node's own cache did go to TMPDIR). The API
+    request (the file's api-request-blob) carries the blocks, the prompt's text with "\n" appended, and the
+    "[Image: source: ...]" texts in the same user message. An image block whose data is not an image (base64 of
+    a line of text, media_type image/png) is NOT refused: the CLI replaces it, in the replay, the file and the
+    request, with the text block "[Image could not be processed: Unable to resize image — image processing is
+    unavailable and dimensions could not be read from the file header. Please convert the image to PNG, JPEG,
+    GIF, or WebP.]"; no imagePasteIds, no isMeta line, a normal turn, and the next turn is normal too.
+39. The image limit. One process each, [image png, text "Reply with the word ok."]: noise PNGs padded to the
+    file size with a private ancillary chunk (prVt): 3 MiB (1000 x 1000 RGB), 5, 8 and 10 MiB (1024 x 1024
+    RGBA): ALL FOUR gave a normal turn (result success, about 3.5 s). The CLI re-encoded each before sending:
+    the replay and the file's prompt line hold {media_type "image/jpeg", data} of 1000 x 1000 or 1024 x 1024
+    pixels and about 505 KB (673,392 base64 characters for each 1024 x 1024 one: the padding is gone); the
+    images/1.png copy is the original file, byte for byte. 8000 x 8000 (a grey PNG of 226,477 bytes): normal
+    turn; replayed as image/png 1932 x 1932, 35,744 bytes. So the CLI scales pixels down itself (the binary's
+    defaults: maxWidth 2000, maxHeight 2000, maxBase64Size 5242880, targetRawSize 3932160, per-model
+    image_limits may lower them) and re-encodes large files: pixels are limited by the CLI, not refused.
+    MP_IMAGE_MAX: the largest file size that gave a normal turn is 10 MiB (10,485,760 bytes), the largest
+    tried; nothing was refused. NOT known: a size above 10 MiB (rhun's own 16 MiB line limit makes 12 MiB of
+    file bytes, 16 MiB of base64, the most a line can carry); whether a photo-like PNG of large dimensions that
+    the CLI cannot shrink under 5 MB fails ("Unable to resize image (N base64). The image exceeds the 5 MB API
+    limit and compression failed. ..." is in the binary; not provoked). Megabytes do NOT come back in the
+    replay of these: the echo carries the re-encoded image.
+40. Documents. [document {source {type text, media_type text/plain, data "The secret word is mango.\n"}, title
+    "secret.txt"}, document {source {type base64, media_type application/pdf, data}, title "two.pdf"}, text]:
+    accepted; Claude named both titles, the secret word and the text of both PDF pages ("PAGE ONE KIWI", "PAGE
+    TWO PLUM"): it sees the title and reads the PDF. Replay and file: the blocks unchanged (block keys type,
+    source, title as sent), no imagePasteIds, no isMeta line. A text document of 1 MiB (16,384 lines of 63
+    "x"): replayed unchanged, then refused by the CLI itself before any request (usage all 0): assistant
+    text with error "invalid_request" "Prompt is too long · the request is ~1095002 tokens (limit 1000000) but
+    this conversation is only ~274786 tokens — the rest is system prompt, tool definitions, and attachment
+    content. A single-exchange conversation cannot be compacted; reduce attached files/tools or start with
+    less context.", result subtype success with is_error true, terminal_reason prompt_too_long, stop_reason
+    stop_sequence; the process exited 1 at EOF. How many tokens a real text of 1 MiB counts is not known.
+41. Order and emptiness. [text "<ide_selection>The user selected the lines 2 to 3 from PATH:\nbravo\ncharlie\n\n
+    This may or may not be related to the current task.</ide_selection>", image png, document text
+    "notes.txt", text "<terminal name=\"zsh\">\n$ echo hi\nhi\n</terminal>", text prompt]: accepted; replay,
+    file and API request keep exactly that order (the file: imagePasteIds [1], then the isMeta image line).
+    [image] alone (no text block): accepted, a normal turn ("I got the image, but there's no text with it").
+    [text "<ide_opened_file>The user opened the file PATH in the IDE. This may or may not be related to the
+    current task.</ide_opened_file>"] alone: accepted, a normal turn (Claude asked what to do with the file).
+    Nothing in the CLI treats these tags specially: they reach the model as written.
+42. Mentions in stream-json input: THE CLI EXPANDS THEM ITSELF. "... @notes.txt ...": no stream record but the
+    replay (unchanged text), no Read call; the file gets, after the prompt line, attachment {type "file",
+    filename ABSOLUTE, content {type "text", file {filePath, content, numLines, startLine, totalLines}},
+    displayPath "notes.txt", savedCopyFraming {enveloped false}} (the line also has rendered and renderedRole),
+    and Claude answered from it. "@notes.txt#2-3" (the extension's Alt+K form): the WHOLE file (startLine 1,
+    numLines 6): "#2-3" is not read as a range. "@notes.txt#L2-3": lines 2 and 3 only (startLine 2, numLines 2,
+    content "bravo\ncharlie"). "@\"a b.txt\"": attachment file "a b.txt". "@src/": attachment {type
+    "directory", path, content "m.c" (the listing), displayPath "src"}. "@missing.txt": nothing at all (no
+    attachment, no error). "@/ABSOLUTE/outside.txt" (outside the repository): attached, displayPath
+    "../../fix/outside.txt" (relative to the cwd). Each was the first mention of its file in its process.
+43. inline_pastes. The schema in the binary: inline_pastes is "Text the user pasted that is still in
+    message.content where they put it: each entry one paste. ... the CLI may wrap each entry in
+    <pasted_content> tags where it still stands in the last text block, or where a text block holds nothing
+    else. It looks for the first 100 entries that are not blank." (an entry is a string; not an array:
+    "malformed_inline_pastes", the rest past 100: "inline_pastes_cut"). Sent: content [text P2, text "Here is
+    my log: " + P1 + " Reply with the word ok."], "inline_pastes":[P1, P2] beside message (P1 and P2 of four
+    lines each): accepted, a normal turn; the replay, the file's prompt line and the request carry the
+    REWRITTEN text: [text "\n\n<pasted_content id=\"4583\">\nP2\n</pasted_content id=\"4583\">\n", text "Here is
+    my log: \n\n<pasted_content id=\"4583\">\nP1\n</pasted_content id=\"4583\">\n\n Reply with the word ok."]
+    (one id for both pastes of the message; how it is chosen is not known). The file keeps no inline_pastes
+    member. So the CLI takes the member and wraps the pastes; a reader of the replay or the file sees the tags.
+44. The server (f). initialize with "sdkMcpServers":["rhun"]: the answer has the keys of decision 9 and nothing
+    new (no sdk_mcp_manifests_parked, no mcp_servers_applied). About 0.36 s after the initialize request, and
+    about 40 ms BEFORE the initialize answer, the CLI sends control_request {type, request_id (a uuid), request
+    {subtype "mcp_message", server_name "rhun", message}} with message {"method":"initialize","params":
+    {"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"claude-code","title":"Claude
+    Code","description":"Anthropic's agentic coding tool","websiteUrl":"https://claude.com/claude-code",
+    "version":"2.1.330"}},"jsonrpc":"2.0","id":0}; after rhun's answer (and the initialize answer)
+    {"jsonrpc":"2.0","method":"notifications/initialized"}, then {"method":"tools/list","jsonrpc":"2.0","id":1},
+    all before the first prompt is read. Answers taken: {"mcp_response":{"jsonrpc":"2.0","id":ID,"result":R}}
+    for a request, {"mcp_response":{"jsonrpc":"2.0","result":{},"id":0}} for a notification. JSON-RPC ids count
+    up per server (tools/call 2, 3, ...). system/init's mcp_servers gains {name "rhun", status "connected",
+    source "sdk"} and its tools list "mcp__rhun__getDiagnostics" (listed although the tool is deferred: 46);
+    mcp_status's entry {name, status "connected", serverInfo {name, version}, transport "sdk", scope "dynamic",
+    source "sdk", tools [{name, annotations {readOnly true}}]}. tools/list answered 3 s late: mcp_status 0.5 s
+    after the start had no rhun entry at all; a prompt sent then waited: its system/init came only after the
+    answer (3.5 s), with the tool. tools/list answered with a JSON-RPC error: asked again 250, 500 and 1000 ms
+    later (ids 2, 3, 4), then the server stays "connected" with tools []. The initialize answer naming
+    protocolVersion "2024-11-05" (asked "2025-11-25"): accepted, connected, tools listed.
+45. Manifests (g). The same start with "sdkMcpServerManifests":{"rhun":{"initializeResult":{protocolVersion,
+    capabilities, serverInfo},"toolsListResult":{"tools":[TOOL]}}}: the answer gains
+    "sdk_mcp_manifests_parked":{"rhun":"parked"} (after other_hook_ask_outranks_host) and NO mcp_message comes at
+    the start (no initialize, no notifications/initialized, no tools/list); mcp_status is "connected" with the
+    tool at once; the call (46) came the same way, as tools/call id 2. It saves the three round trips.
+46. A tool call (h). tools/list [{name "getDiagnostics", description, inputSchema {type object, properties
+    {uri, minSeverity}}, annotations {title, readOnlyHint true}}]. "Call the getDiagnostics tool of the rhun
+    server ...": the assistant's tool_use {type, id, name "mcp__rhun__getDiagnostics", input {}, caller {type
+    "direct"}} (Claude passed no arguments; in two of four runs it first called ToolSearch "select:
+    mcp__rhun__getDiagnostics"). In default mode can_use_tool IS asked, readOnlyHint notwithstanding: request
+    {subtype, tool_name, mcp_server {name "rhun", source "sdk"}, display_name "GetDiagnostics", input,
+    permission_suggestions [{type "addRules", rules [{toolName "mcp__rhun__getDiagnostics"}], behavior "allow",
+    destination "localSettings"}], server_policy_ask_only false, tool_use_id}: no tool_kind, no description.
+    After the allow: mcp_message {"method":"tools/call","params":{"name":"getDiagnostics","arguments":{},
+    "_meta":{"claudecode/toolUseId":TOOL_USE_ID,"progressToken":ID}},"jsonrpc":"2.0","id":ID}. The answer
+    {"content":[{"type":"text","text":T}]}: tool_result content is that LIST (not a string), no is_error key,
+    tool_use_result the same list; the file's line the same (toolUseResult the list). With "isError":true:
+    tool_result content the STRING T, is_error true, tool_use_result "Error: T"; when the tool had not been
+    loaded by ToolSearch the CLI appends "\n\nThis tool's input schema was not in your prompt when you called
+    it. The input schema is: SCHEMA\nIf your input does not match this schema, correct it and call the tool
+    again. ..." (Claude then retried twice). Interrupt while the call's answer was held 5 s: NO
+    control_cancel_request; 16 ms after the interrupt an mcp_message {"jsonrpc":"2.0","method":
+    "notifications/cancelled","params":{"requestId":6,"reason":"AbortError: remote-cancel"}}, the interrupt's
+    answer {still_queued []}, tool_result is_error with exactly 36's stopped-while-running text,
+    tool_use_result "User rejected tool use" (the file: toolDenialKind "user-rejected"), "[Request interrupted
+    by user for tool use]", result error_during_execution aborted_tools; the answer written 4 s later was
+    echoed and changed nothing; the process exited 1 at EOF (C9).
+47. Notifications from the CLI (i). In every run with the server (an Edit, a Write, two tool calls, an
+    interrupt) the only notifications were notifications/initialized and notifications/cancelled: NO
+    experiment_gates, file_updated, open_artifact or offer notifications. The binary sends experiment_gates
+    and the extension's other notifications only to an SDK server named exactly "claude-vscode"
+    (e.find(g => g.name === "claude-vscode")); a server named rhun gets none.
+48. Hooks (j). initialize "hooks":{"PreToolUse":[{"matcher":"Edit|Write|MultiEdit","hookCallbackIds":
+    ["hook_0"]},{"matcher":"Edit|Write|Read","hookCallbackIds":["hook_1"]}],"PostToolUse":[{"matcher":
+    "Edit|Write|MultiEdit","hookCallbackIds":["hook_2"],"contextOnly":true}]} with sdkMcpServers: the answer
+    has "hooks_applied":true (after current_permission_mode). A callback: control_request {subtype
+    "hook_callback", callback_id "hook_N", input, tool_use_id}: NO issued_at and NO deadline_ms. input keys, in
+    order: session_id, transcript_path, cwd, scratchpad_dir, prompt_id, permission_mode, [agent_id,
+    agent_type: a subagent's call], effort {level}, hook_event_name, tool_name, tool_input, [tool_response:
+    PostToolUse], tool_use_id, [duration_ms: PostToolUse]. Read: hook_1 only, then the tool runs (no
+    can_use_tool). Edit and Write: hook_0 and hook_1 sent together (hook_1 arrives while hook_0 is still
+    unanswered), can_use_tool only after BOTH were answered, the tool runs, then hook_2 (its tool_input is
+    the input as allowed, updatedInput included; tool_response the structured result, as tool_use_result),
+    then the tool_result record. Answers {"continue":true} taken. hook_2 answered {"continue":true,
+    "hookSpecificOutput":{"hookEventName":"PostToolUse","additionalContext":"<ide_diagnostics>[\n  {\n
+    \"filePath\": ..., \"line\": 2, \"column\": 1, \"message\": \"Unknown word: BRAVO\", \"code\": \"spell\",
+    \"severity\": \"Warning\"\n  }\n]</ide_diagnostics>"}}: no stream record carries it (no record held
+    ide_diagnostics, no <post-tool-use-hook> text); the file has, right after the call's tool_result line
+    (parentUuid that line's uuid), attachment {type "hook_additional_context", content [THE CONTEXT],
+    hookName "PostToolUse:Edit", toolUseID, hookEvent "PostToolUse"} with rendered [{content
+    "<system-reminder>\nPostToolUse:Edit hook additional context: THE CONTEXT\n</system-reminder>"}] and
+    renderedRole "system"; no hook_success line for a callback hook. Claude mentioned the problem ("flagged
+    notes.txt line 2 with a spell-check warning: Unknown word: BRAVO"). hook_0 held 65 s: the CLI waited the
+    whole time (no deadline), sent tool_progress {type, tool_use_id "hook-PreToolUse-TOOL_USE_ID-heartbeat-N",
+    tool_name "PreToolUse", parent_tool_use_id TOOL_USE_ID, elapsed_time_seconds 30 then 60, heartbeat true,
+    uuid, session_id} every 30 s, and went on 12 ms after the answer. An answer {"weird":true}: taken
+    silently, the Edit ran. A subagent's Read and Edit (Agent tool, general-purpose, foreground): the same
+    callbacks with agent_id and agent_type "general-purpose"; its can_use_tool Edit has agent_id.
+49. The answer to an edit (k). Edit allowed with updatedInput {file_path, old_string: the whole file,
+    new_string: the whole changed file, replace_all false}: the file on disk is the new text; tool_result
+    "The file PATH has been updated successfully. (file state is current ...)", tool_use_result {filePath,
+    oldString, newString (the whole texts), originalFile, structuredPatch [one hunk, oldStart 1 oldLines 5,
+    lines " alpha", "-bravo", "+BRAVO", " charlie", ...], userModified false, replaceAll false}. Write allowed
+    with another content ("hello from rhun\n" for Claude's "hi"): that content is written, "File created
+    successfully at: PATH ...", {type "create", ..., content the new text}; Claude is not told (it reported
+    "hi"). deny {"message":"User cancelled the edit","interrupt":true}: tool_result is_error with the
+    REJECTED text (36's Yb; our message does not appear), tool_use_result "User rejected tool use", user
+    text "[Request interrupted by user for tool use]", result error_during_execution aborted_tools with
+    permission_denials [{tool_name, tool_use_id, tool_input}]; the file's line has toolDenialKind
+    "user-rejected", toolDenialBeforeRun true (as finding 24's Write). An allow whose file changed on disk
+    before the answer (the request's input unchanged): is_error "File content has changed since it was last
+    read. This commonly happens when a linter or formatter run via Bash rewrites the file. Call Read on this
+    file to refresh, then retry the edit." (no <tool_use_error> tags), tool_use_result "Error: " + that, the
+    file untouched; the file gets attachment edited_text_file. CRLF: the CLI reads crlf.txt as LF (Read's
+    file.content and the Edit's originalFile "one\ntwo\n..."), so Edit strings are LF (Claude's were single
+    words, "two" -> "TWO"); allowed as asked the file stays CR LF: b"one\r\nTWO\r\nthree\r\nfour\r\nfive\r\n";
+    allowed with a whole-file updatedInput in LF only ("one\nTWO\nthree\n..." -> "one\nTWO\nTHREE\n..."):
+    applied, the file b"one\r\nTWO\r\nTHREE\r\nfour\r\nfive\r\n" (the CLI matches LF text against the CR LF
+    file and writes CR LF back). Not provoked: an Edit whose strings span lines in a CR LF file.
+50. The note (l). initialize with "appendSystemPrompt" (a short note of rhun's own, "# rhun Editor Context" with
+    the extension's link rules) and "systemPromptSnapshot":true: success, the answer's keys unchanged; without
+    systemPromptSnapshot: success too. "Give me a Markdown link to line 2 of notes.txt": the reply was
+    exactly "[notes.txt:2](notes.txt#L2)" (relative to the cwd, #L and the line).
+51. Without the server (m). The 17 processes started without sdkMcpServers and hooks (38 to 43, 49, 50) got no
+    mcp_message and no hook_callback. sdkMcpServers ["rhun"] that never answers (with
+    MCP_CONNECTION_NONBLOCKING=true): the CLI sent initialize again at 30 s (JSON-RPC id 104) and gave up at
+    60 s; the first prompt, written at once, waited: its system/init came 60.1 s after it, mcp_servers rhun
+    "failed", then a normal reply; mcp_status {name, status "failed", transport "sdk", scope "user", source
+    "sdk"}. MCP_CONNECTION_NONBLOCKING does not apply to an SDK server.
+
 Other things learned
 
 - Without --permission-mode the user's settings decide (C1 holds): with defaultMode auto there,
@@ -566,6 +756,16 @@ Files
   conversation's file and the agent's file), file-thinking.txt (the summarized thinking run); the
   file-*.txt shapes leave out system/stop_hook_summary, which only the maintainer's Stop hooks write.
   keys.txt is now the union of the phase 1 and 2 lines and every phase 3 recording's.
+- Phase 4 (made with tools/claude-shapes.py --cut-data, a line per record of BOTH directions: "DIR SHAPE", or
+  "DIR SHAPE JSON" for what rhun wrote, the CLI's requests and withdrawals, user records, tool_progress and the
+  echoes of rhun's mcp answers, base64 data cut to 16 characters, the run's folder written $CWD, its slug $SLUG,
+  the home folder ~; runs of one shape folded; a line starting "#" names the run that follows): 23-attach.txt
+  (the order run of 41 with the image alone, the opened file alone, inline_pastes and the documents; the
+  not-an-image run; the 3 MiB run), 24-sdk-mcp.txt (the server run: handshake, mcp_status, a call, an isError
+  call that Claude retried, a call held and interrupted), 25-sdk-hooks.txt (the hooks run from the Edit's stream
+  to the result: hook_0 and hook_1, can_use_tool, hook_2 with the context, the Write), 26-edit-answer.txt (the
+  edit run from its first Edit's stream: deny with interrupt, the stale allow, the two CR LF edits). keys.txt
+  and file-keys.txt gained every line of the 24 recordings and their conversation files.
 
 How they were made: a throwaway recorder (not kept) ran the real CLI in an empty temporary git
 repository with the pinned line, wrote each line the CLI sent as {"dir":"in","msg":...} and each line
@@ -591,3 +791,11 @@ wrote the user's settings: no update_settings; hooks, a deny rule and a custom c
 repositories' .claude/; ~/.claude/settings.json had the same SHA-256 before the first run and after the
 last. Left under ~/.claude by the CLI: session-env/<id> for each run and tasks/<id> of the task tools run
 (not deleted); the CLI's $TMPDIR/claude-UID/<slug> folders (task outputs, the stored image) were deleted.
+Phase 4: a recorder of the same kind (not kept), 24 processes, one temporary git repository each under the scratch
+folder, 34 model turns of one sentence on haiku (the image probes one process each, each size sent once); the
+in-process server was the recorder's own echo of a getDiagnostics tool (it touched nothing on disk). Nothing
+wrote the user's settings: no update_settings; hooks and the server only in initialize; ~/.claude/settings.json
+had the same SHA-256 before the first run and after the last. Afterwards the runs' folders under
+<config>/projects and the CLI's /private/tmp/claude-UID/<slug> folders (the stored images) were deleted. Left
+under ~/.claude by the CLI: session-env/<id> for each of the 24 runs and four backups/.claude.json.backup.N
+files written meanwhile (not deleted).

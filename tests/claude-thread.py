@@ -137,7 +137,7 @@ class EngineTest(ThreadCase):
     def test_a_resize_touches_no_row_out_of_view(self):
         self.open_seeded(turns(10000))
         for width in range(1280, 1080, -20):        # the panel narrows by 20 px a frame
-            self.command('resize %dx800' % width)
+            self.command('resize %d 800' % width)
             e = self.engine()
             self.assert_walked(e, width)
             self.assertLessEqual(e['resolved'], 2, (width, e))
@@ -156,11 +156,11 @@ class EngineTest(ThreadCase):
         self.assertEqual(parses(), up, 'scrolled back: nothing parsed again')
         self.wheel(-300)
         self.assertEqual(parses(), up, 'and up again')
-        self.command('resize 1100x800')
+        self.command('resize 1100 800')
         narrow = parses()
-        self.command('resize 1280x800')
+        self.command('resize 1280 800')
         self.assertEqual(parses(), narrow, 'a width change and back: nothing parsed again')
-        self.command('resize 1100x800')
+        self.command('resize 1100 800')
         self.assertEqual(parses(), narrow)
 
     def test_a_change_dirties_one_chunk(self):
@@ -251,13 +251,13 @@ class AnchorTest(ThreadCase):
         self.open_seeded(turns(200, 'a reply of some words that wraps when the panel is narrow, {0}'))
         self.wheel(-900)
         first, _ = self.top_row()
-        self.command('resize 1100x800')
+        self.command('resize 1100 800')
         self.assertEqual(self.top_row()[0], first, 'width')
         self.command('cmd agents_font_increase')
         self.command('print-frames')
         self.assertEqual(self.top_row()[0], first, 'font')
         self.command('cmd agents_font_reset')
-        self.command('resize 1280x800')
+        self.command('resize 1280 800')
         self.assertEqual(self.top_row()[0], first, 'back')
 
     def test_view_stays_through_a_resync(self):
@@ -342,7 +342,7 @@ class AnchorTest(ThreadCase):
         at_end('a row grew')
         self.command('agent-test-view')
         at_end('a view change')
-        self.command('resize 1100x800')
+        self.command('resize 1100 800')
         at_end('width')
         self.command('cmd agents_font_increase')
         self.command('print-frames')

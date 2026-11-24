@@ -1568,8 +1568,8 @@ class ThinkingTest(ThinkCase):
         self.assertEqual(parses, before + 1)
         for _ in range(3):
             self.command('print-frames')
-        self.command('resize 1100x800')
-        self.command('resize 1280x800')
+        self.command('resize 1100 800')
+        self.command('resize 1280 800')
         self.assertEqual(int(self.drawn(t['row'])[0]['parses']), parses)
         self.command('agent-row-click %d' % n)                       # closed and open again: kept
         self.command('agent-row-click %d' % n)

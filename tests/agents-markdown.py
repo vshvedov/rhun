@@ -325,7 +325,7 @@ class AgentsMarkdown(unittest.TestCase):
         self.start()
         self.open('s1')
         wide, _ = self.row(2)
-        self.command('resize 500x800')       # the editor keeps 240: the panel gives way
+        self.command('resize 500 800')       # the editor keeps 240: the panel gives way
         self.command('wait 50')
         narrow, _ = self.row(2)
         self.assertGreater(int(narrow['height']), int(wide['height']))

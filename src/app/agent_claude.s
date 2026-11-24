@@ -107,6 +107,8 @@ sh_ps: .long SH_PS              # the terminal's shell: PowerShell (Windows) or 
 cl_start:
     PROLOGUE 288
     mov rbx, rdi
+    mov rdi, rbx                # phase 4 task 10: nothing a former process waited for reaches this one
+    call claude_hooks_gone
     mov r12, [rbx + AL_as]
     lea rdi, [rbx + AL_report]
     call sb_clear
@@ -302,11 +304,8 @@ cl_start:
     lea rdi, [rip + cw]
     lea rsi, [rip + .Lv_initialize]
     call jw_cstr
-    lea rdi, [rip + cw]
-    lea rsi, [rip + .Lk_hooks]
-    call jw_key
-    lea rdi, [rip + cw]
-    call jw_null
+    lea rdi, [rip + cw]         # phase 4 task 10: the extension's three hooks (claude_hooks.s)
+    call claude_hooks_init
     lea rdi, [rip + cw]         # [claude] prompt_suggestions (finding 19)
     lea rsi, [rip + .Lk_suggestions]
     call jw_key
@@ -1242,8 +1241,11 @@ cl_stop:
     mov rdi, rbx
     call req_end
     test eax, eax
-    jnz 9f
+    jnz 8f
     and dword ptr [rbx + AL_flags], ~ALF_STOP_ASKED   # refused (the input queue is full): not asked
+    jmp 9f
+8:  mov rdi, rbx                # phase 4 task 10: the hook answers that wait are written now (their wait
+    call claude_hooks_flush     #   is the turn's)
 9:  EPILOGUE
 
 # cl_release(AL*): claude's input ends; it exits by itself, the stop sequence follows (agent_conn.s)
@@ -1636,6 +1638,7 @@ au_answer:
 FN claude_auth_tick
     PROLOGUE
     call claude_settings_tick
+    call claude_hooks_tick      # phase 4 task 10: hook answers that are due
     cmp dword ptr [rip + au_state], AU_ASKING
     jne 9f
     call time_ms
@@ -1648,8 +1651,17 @@ FN claude_auth_tick
 #   get_settings answer (claude_settings_timeout), whichever comes first; -1 when none runs
 FN claude_auth_timeout
     PROLOGUE
+    call claude_hooks_timeout   # phase 4 task 10: the nearest hook answer, with the settings' wait
+    mov r12d, eax
     call claude_settings_timeout
-    mov ebx, eax
+    test r12d, r12d
+    js 1f
+    test eax, eax
+    js 2f
+    cmp eax, r12d
+    jbe 1f
+2:  mov eax, r12d
+1:  mov ebx, eax
     mov eax, -1
     cmp dword ptr [rip + au_state], AU_ASKING
     jne 9f
@@ -2778,7 +2790,18 @@ h_request:
     mov rdx, r13
     call claude_mcp_request
     EPILOGUE
-11: # ---- end ----
+11: # ---- phase 4 task 10: rhun's hooks (claude_hooks.s) ----
+    mov rdi, r14
+    lea rsi, [rip + .Lv_hook_callback]
+    call json_is
+    test eax, eax
+    jz 12f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call claude_hook
+    EPILOGUE
+12: # ---- end ----
     mov rdi, rbx                # the dialog cards: one rhun shows waits as the others do
     mov rsi, r12
     mov rdx, r13
@@ -3761,6 +3784,11 @@ h_cancel:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    mov rdi, rbx                # phase 4 task 10: a hook's answer that waits goes, unanswered
+    mov rsi, r12
+    call claude_hooks_cancel
+    test eax, eax
+    jnz 9f
     lea rdi, [rip + tsb]
     call jw_begin
     mov rdi, r12
@@ -4061,6 +4089,8 @@ cl_close:
     PROLOGUE
     mov rbx, [rdi + CN_ctx]
     mov r12d, esi
+    mov rdi, rbx                # phase 4 task 10: no hook answer is written to it any more
+    call claude_hooks_gone
     test dword ptr [rbx + AL_flags], ALF_ENDING
     jnz 8f
     mov eax, [rbx + AL_state]
@@ -4477,6 +4507,7 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lv_lifecycle: .asciz "command_lifecycle"
 .Lv_can_use_tool: .asciz "can_use_tool"
 .Lv_mcp_message: .asciz "mcp_message"     # phase 4 task 9
+.Lv_hook_callback: .asciz "hook_callback"   # phase 4 task 10
 .Lv_tool_use: .asciz "tool_use"
 .Lv_tool_result: .asciz "tool_result"
 .Lv_set_mode: .asciz "set_permission_mode"

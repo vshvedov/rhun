@@ -3360,6 +3360,9 @@ timings: .quad .Lt_idle, g_drv_idle_ms, .Lt_term, g_conn_term_ms, .Lt_kill, g_co
     .quad .Lt_settings, g_settings_wait_ms      # the prompts' wait for get_settings (claude_session.s)
     .quad .Lt_spin, g_spin_ms                   # the spinner's tick, 0 held (agentspin.s)
     .quad .Lt_attach, g_att_wait_ms             # phase 4 task 2: between a file's look and its read
+    .quad .Lt_hooksave, g_hook_save_ms, .Lt_hookwait, g_hook_wait_ms    # phase 4 task 10 (claude_hooks.s)
     .quad 0, 0
+.Lt_hooksave: .asciz "hooksave"                 # phase 4 task 10
+.Lt_hookwait: .asciz "hookwait"
 .Lt_settings: .asciz "settings"
 .Lt_spin: .asciz "spin"

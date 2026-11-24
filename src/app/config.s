@@ -120,6 +120,9 @@ ts_seen: .long 1                        # cfg_agents_timestamps as the last read
 .globl cfg_agents_focus_view
 cfg_agents_focus_view: .long 0          # [agents] focus_view: runs of tool calls and thinking fold into a line
 fv_seen: .long 0                        # cfg_agents_focus_view as the last read left it
+# Claude chat phase 4 task 10
+.globl cfg_agents_autosave
+cfg_agents_autosave: .long 1            # [agents] autosave: an open file is saved before the agent reads or edits it
 # Claude chat phase 5: the bridge for terminal claude (ide_server.s) and terminal mode (claudeterm.s)
 .globl cfg_claude_ide, cfg_claude_use_terminal
 cfg_claude_ide: .long 1                 # [claude] ide: claude in rhun's terminal connects to rhun
@@ -1046,6 +1049,8 @@ g_settings:
     SETTING .Ls_agents, attach_selection, ST_BOOL, cfg_agents_attach_selection, 0, 1, 1, 0, "Attach the selection", "Send the lines selected in the editor with your next message. The chip above the box shows them first."
     SETTING .Ls_agents, attach_open_file, ST_BOOL, cfg_agents_attach_open_file, 0, 1, 1, 0, "Attach the open file", "Without a selection, send the open file's path with your next message."
     SETTING .Ls_agents, respect_gitignore, ST_BOOL, cfg_agents_respect_gitignore, 0, 1, 1, 0, "Leave out ignored files", "Files that .gitignore ignores are not offered by @ and their selected text is never sent."
+    # Claude chat phase 4 task 10
+    SETTING .Ls_agents, autosave, ST_BOOL, cfg_agents_autosave, 0, 1, 1, 0, "Save files before the agent reads or edits them", "An open file with unsaved changes is saved, as Ctrl+S saves it, before the agent reads or edits it."
     # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
     SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
     SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."

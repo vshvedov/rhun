@@ -27,6 +27,7 @@ idt: .zero SB_SIZE              # a request's id as JSON text
 calls: .quad 0                  # tools/call requests this transport handled
 asked: .quad 0                  # mcp_message requests answered
 took_us: .quad 0                # agent-mcp: how long the server took (print-agent-tools)
+tbase: .quad 0                  # agent-diag-base's base
 tsrc: .zero 8 * TEST_SOURCES    # agent-test-problem's sources
 ntsrc: .quad 0
 tpr: .zero PR_SIZE
@@ -586,6 +587,79 @@ c_test_many:
     xor eax, eax
     EPILOGUE
 
+# print-agent-hooks: the hooks' answers that wait (claude_hooks.s claude_hooks_dump)
+c_print_hooks:
+    PROLOGUE
+    call claude_hooks_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-diag-base PATH: the file's problems now kept as a base (as hook_0 keeps one), a former one freed;
+#   prints "base=1", or "base=0" for a file outside the project
+c_diag_base:
+    PROLOGUE
+    call c_set
+    mov rdi, [rip + tbase]
+    call edtool_diag_free
+    mov qword ptr [rip + tbase], 0
+    mov rdi, [rip + g_project]
+    call edtool_set_base
+    call c_arg
+    lea rdi, [rip + tpath]
+    call word_cstr
+    mov rdi, rax
+    call edtool_diag_base
+    mov [rip + tbase], rax
+    xor edi, edi
+    call edtool_set_base
+    mov rdi, [rip + c_out]
+    lea rsi, [rip + .Lw_base1]
+    cmp qword ptr [rip + tbase], 0
+    jne 1f
+    lea rsi, [rip + .Lw_base0]
+1:  call sb_push_cstr
+    xor eax, eax
+    EPILOGUE
+
+# agent-diag-new PATH: what is new in the file since agent-diag-base's base (as hook_2 finds it; the base is
+#   used up): "new=N", then the JSON the hook's context holds
+c_diag_new:
+    PROLOGUE
+    call c_set
+    mov rdi, [rip + g_project]
+    call edtool_set_base
+    call c_arg
+    lea rdi, [rip + tpath]
+    call word_cstr
+    lea rdi, [rip + mo]
+    call sb_clear
+    mov rdi, [rip + tbase]
+    mov qword ptr [rip + tbase], 0
+    mov rsi, [rip + tpath + SB_ptr]
+    lea rdx, [rip + mo]
+    call edtool_diag_new
+    mov ebx, eax
+    xor edi, edi
+    call edtool_set_base
+    mov rdi, [rip + c_out]
+    lea rsi, [rip + .Lw_new]
+    call sb_push_cstr
+    mov rdi, [rip + c_out]
+    mov esi, ebx
+    call sb_push_u64
+    mov rdi, [rip + c_out]
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, [rip + c_out]
+    mov rsi, [rip + mo + SB_ptr]
+    mov rdx, [rip + mo + SB_len]
+    call sb_push
+    mov rdi, [rip + c_out]
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    EPILOGUE
+
 # word_cstr(sb, ptr rax, len rdx) -> rax the sb's text: those bytes and a NUL
 word_cstr:
     PROLOGUE
@@ -682,11 +756,17 @@ c_test_clear:
 .Lw_key: .asciz "agent-test:"
 .Lw_kept: .asciz "kept\n"
 .Lw_kept_eq: .asciz "kept="
+.Lw_base1: .asciz "base=1\n"
+.Lw_base0: .asciz "base=0\n"
+.Lw_new: .asciz "new="
 .Lw_many: .asciz "/many/f"
 .Lw_dotc: .asciz ".c"
 .Lw_problem: .asciz "problem "
 .Lw_bulk: .asciz "bulk"
 .Lc_test_many: .asciz "agent-test-problems"
+.Lc_print_hooks: .asciz "print-agent-hooks"
+.Lc_diag_base: .asciz "agent-diag-base"
+.Lc_diag_new: .asciz "agent-diag-new"
 .Lw_dropped: .asciz "dropped\n"
 .Lsw_error: .asciz "error"
 .Lsw_warning: .asciz "warning"
@@ -718,6 +798,10 @@ note:
     .ascii "their permission mode allows edits.\n"
     .ascii "- The user's editor selection or open file may come with a message, marked with ide_selection "
     .ascii "or ide_opened_file tags; it may or may not be related to the request.\n"
+    .ascii "- Before you read or edit a file that has unsaved changes in rhun, rhun saves it, unless the user "
+    .ascii "turned that off.\n"
+    .ascii "- After you edit a file, the problems that are new in it are reported to you in ide_diagnostics "
+    .ascii "tags.\n"
 note_end:
 .p2align 3
 sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
@@ -728,4 +812,6 @@ claude_mcp_ctl:
     .quad .Lc_test_problem, c_test_problem
     .quad .Lc_test_clear, c_test_clear
     .quad .Lc_test_many, c_test_many
+    .quad .Lc_print_hooks, c_print_hooks                            # task 10
+    .quad .Lc_diag_base, c_diag_base, .Lc_diag_new, c_diag_new
     .quad 0, 0

@@ -1980,6 +1980,9 @@ FN claude_started
 #   the next start begins clean
 FN claude_ended
     and dword ptr [rdi + AL_cfg], ~CLP_RUN
+    push rdi                    # phase 4 task 10: the hook answers that wait for it go, unanswered
+    call claude_hooks_gone
+    pop rdi
     jmp dpicks_clear
 
 # starting_up(AL*) -> eax 1 while its start is under way with its program up (STARTING, connected): what

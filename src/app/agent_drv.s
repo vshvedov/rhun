@@ -285,6 +285,9 @@ FN agent_state_set
 live_free:
     PROLOGUE
     mov rbx, rdi
+    mov rdi, rbx                # phase 4 task 10: the driver lets go of what it kept for the record (DRV_ended:
+    mov rax, [rbx + AL_drv]     #   Claude's waiting hook answers): nothing names it once it is freed
+    call [rax + DRV_ended]
     mov rdi, [rbx + AL_as]      # a popup opened for its session closes (agentpop.s)
     call agentpop_gone
     mov rdi, rbx                # a dialog's wait on it ends (agentdlg.s)

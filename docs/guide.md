@@ -775,7 +775,30 @@ Link paths are relative to your working directory.
 - The tool mcp__rhun__getDiagnostics returns the errors, warnings and other problems rhun shows in its Problems list and in open files, for files in the project's folders. Many languages are checked only in open files: a missing file can mean it was not checked, not that it is clean.
 - The user sees each edit you propose and allows or refuses it before it is written, unless their permission mode allows edits.
 - The user's editor selection or open file may come with a message, marked with ide_selection or ide_opened_file tags; it may or may not be related to the request.
+- Before you read or edit a file that has unsaved changes in rhun, rhun saves it, unless the user turned that off.
+- After you edit a file, the problems that are new in it are reported to you in ide_diagnostics tags.
 ```
+
+Around Claude Code's reads and edits rhun runs three hooks, the VS Code extension's:
+
+- Before Claude Code reads or edits a file that is open in rhun with unsaved changes, rhun saves it, as
+  Ctrl+S does (format on save and the code actions on save included), and Claude Code waits for the
+  save, two minutes at most. A read-only file, one that changed on disk since it was opened, a file
+  outside the project or one that is not open is not saved. **Save files before the agent reads or
+  edits them** (`[agents] autosave`, on by default) turns this off.
+- Before an edit or a new file, rhun notes the file's problems; after it, the problems that are new in
+  it (not there before, as the extension compares them: the same message, severity, source, code and
+  columns, and lines that moved by no more than the edit added or removed) go back to Claude Code. rhun
+  first gives the editor time to check the edit: up to 1.5 seconds when the file is the active tab, up
+  to 1 second when it is open behind, none when it is not open or no file of its language ever showed a
+  problem in this window; the wait ends early once the file was read again and its problems changed.
+- The new problems appear in the conversation as a **Diagnostics** row ("Found 2 new problems"), whose
+  button opens them in a tab, "Diagnostics: Problems". Claude Code does not stream them back, so the
+  row is made from what rhun sent; when the conversation is opened again it comes from the line Claude
+  Code wrote in its file.
+
+Stop answers the hooks that still wait at once, and a hook's answer is never sent to a Claude Code
+process started after the one that asked.
 
 ### Claude Code in the terminal
 

@@ -102,6 +102,7 @@ for s in exit stderr spawnfail echo fill stop linger bigline biglinenl watchfull
 done
 # debugger: the JSON builder and parser
 check json build/json_test
+check sha1 build/sha1_test
 check images build/image_test $(ls tests/data/images/* | LC_ALL=C sort)
 python3 tests/image-fuzz.py 1 20 || fail=1
 check cpu build/cpu_test

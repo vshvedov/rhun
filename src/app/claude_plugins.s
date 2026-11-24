@@ -41,6 +41,7 @@
 .equ GA_TRUST, 20
 .equ GA_SOURCE, 21              # a source's page (arg: the marketplace's index)
 .equ GA_RETRY, 22
+.equ GA_RELOAD, 23               # Try again after the session could not reload its plugins
 .equ GW_LIST, 1                 # runs
 .equ GW_MKTS, 2
 .equ GW_AVAIL, 3
@@ -59,6 +60,8 @@
 .p2align 3
 g_tab: .quad 0                  # 0 Plugins, 1 Marketplaces
 g_restart: .quad 0              # the restart notice shows
+g_reload_failed: .quad 0        # the session could not reload its plugins (the extension's Reload plugins); 2
+                                #   asked again (Try again): the notice goes when it can
 g_avail: .quad 0                # the available list: 0 not read yet, 1 read, 2 failed
 g_after: .quad 0                # what follows the lists: 1 the link's install page
 g_id: .quad 0                   # owned cstr: the plugin (or marketplace) a page or a change is about
@@ -87,6 +90,7 @@ plg_open:
     PROLOGUE
     mov qword ptr [rip + g_tab], 0
     mov qword ptr [rip + g_restart], 0
+    mov qword ptr [rip + g_reload_failed], 0
     mov qword ptr [rip + g_avail], 0
     mov qword ptr [rip + g_after], 0
     lea rdi, [rip + .Lg_loading]
@@ -148,7 +152,7 @@ plg_send:
     jmp claude_dlg2_begin
 
 # plg_answer(rq, envelope): reload_plugins answered: when it could not (an error, or errors counted), the
-#   restart notice
+#   restart notice and "This session couldn't reload its plugins." with Try again and Restart
 plg_answer:
     PROLOGUE
     mov rbx, rsi
@@ -166,7 +170,13 @@ plg_answer:
     test rax, rax
     jle 2f
 1:  mov qword ptr [rip + g_restart], 1
-2:  call plg_build
+    mov qword ptr [rip + g_reload_failed], 1
+    jmp 3f
+2:  cmp qword ptr [rip + g_reload_failed], 2
+    jne 3f
+    mov qword ptr [rip + g_reload_failed], 0    # reloaded after Try again: nothing to restart for
+    mov qword ptr [rip + g_restart], 0
+3:  call plg_build
     EPILOGUE
 
 # reload(): a session running reloads its plugins; none running: the next start reads them
@@ -1531,7 +1541,15 @@ restart_rows:
     lea rdi, [rip + .Lg_restart_note]
     mov esi, DGF_MUTED
     call c2_text
-    lea rdi, [rip + .Lg_restart]
+    cmp qword ptr [rip + g_reload_failed], 0
+    je 1f
+    lea rdi, [rip + .Lg_reload_failed]  # the extension's Reload plugins: Try again, Restart
+    mov esi, DGF_ERROR
+    call c2_text
+    lea rdi, [rip + .Lg_try_again]
+    mov esi, GA_RELOAD
+    call c2_link
+1:  lea rdi, [rip + .Lg_restart]
     mov esi, GA_RESTART
     call c2_link
 9:  EPILOGUE
@@ -1923,6 +1941,8 @@ plg_act:
     je .Lga_source
     cmp r12d, GA_RESTART
     je .Lga_restart
+    cmp r12d, GA_RELOAD
+    je .Lga_reload
     cmp qword ptr [rip + c2_busy], 0
     jne 9f
     cmp r12d, GA_TAB
@@ -1994,8 +2014,13 @@ plg_act:
     mov rsi, [rip + fsb + SB_ptr]
     call links_ask_open
     jmp 9f
+.Lga_reload:
+    mov qword ptr [rip + g_reload_failed], 2
+    call reload
+    jmp 8f
 .Lga_restart:
     mov qword ptr [rip + g_restart], 0  # the process ends; the next message starts it with the plugins
+    mov qword ptr [rip + g_reload_failed], 0
     mov rdi, [rip + c2_as]
     test rdi, rdi
     jz 8f
@@ -3185,6 +3210,7 @@ note_words:                     # sBt (SBn)
 .Lg_https: .asciz "https://"
 .Lg_restart_note: .asciz "Restart Claude to apply plugin changes"
 .Lg_restart: .asciz "Restart"
+.Lg_reload_failed: .asciz "This session couldn't reload its plugins."
 .Lg_trust1: .asciz "Installing plugin"
 .Lg_trust2: .asciz "requires adding a new marketplace source:"
 .Lg_trust3: .asciz "Plugins from this source can run code on your computer, with access to your files and shell. Only continue if you trust it."

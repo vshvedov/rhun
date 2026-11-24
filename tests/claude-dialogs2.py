@@ -561,6 +561,27 @@ class PluginsTest(Case):
         self.assertIn(['plugin', 'uninstall', '--scope', 'project', '--keep-data', '--json', '--',
                        'doc-writer@fake-market'], [s[0] for s in self.subs()])
 
+    def test_a_failed_reload_offers_try_again(self):
+        """reload_plugins that counts an error: the restart notice with the extension's Reload plugins words; Try
+        again asks once more, and a reload that works takes the notice away."""
+        self.env['FAKE_CLAUDE_RELOAD_FAIL'] = '1'
+        self.panel()
+        self.open('mcp')                            # the conversation's process up (started quietly)
+        self.until_ready()
+        self.command('agent-dialog-close')
+        self.open('plugins')
+        self.until(lambda: any(l.startswith('head Available') for l in self.body()), 'available')
+        self.pick('lint-helper')
+        self.pick('Install for you')
+        body = self.until_body(lambda b: "text This session couldn't reload its plugins. error" in b, 'the failure')
+        self.assertEqual(body[:4], ['text Restart Claude to apply plugin changes',
+                                    "text This session couldn't reload its plugins. error",
+                                    'link[2] Try again', 'link[3] Restart'])
+        self.assertEqual(len(self.control('reload_plugins')), 1)
+        self.pick('Try again')
+        self.until(lambda: len(self.control('reload_plugins')) == 2, 'asked again')
+        self.until_body(lambda b: not any('Restart' in l for l in b), 'the notice gone')
+
     def test_a_failed_install_says_why(self):
         self.panel()
         self.open('plugins')

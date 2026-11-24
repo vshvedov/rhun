@@ -54,25 +54,27 @@ class ConfigTest(CfgCase):
                                 'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
                                 'claude.use_terminal', 'claude.ide', 'claude.spinner_verbs'])     # phase 5: two
         agents = [line for line in out.splitlines() if line.startswith('agents.')]
-        self.assertEqual(agents[-10:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
+        self.assertEqual(agents[-11:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
                                        'agents.focus_view', 'agents.archive_after_days',    # (phase 6)
                                        # phase 4 task 8: the selection chip's two, task 7's mentions
                                        'agents.attach_selection', 'agents.attach_open_file',
                                        'agents.respect_gitignore',
                                        'agents.autosave',           # phase 4 task 10
-                                       'agents.location'])          # phase 4 task 13: the last
+                                       'agents.location',           # phase 4 task 13
+                                       'agents.continue_after_restart'])    # phase 6 (p6b): the last
         self.command('cmd toggle_word_wrap')            # a setting changed: the exit writes the file
         self.quit()
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(chat.section(saved, 'claude')[3:], [
             'initial_mode =', 'allow_bypass_permissions = false', 'prompt_suggestions = true',
             'use_terminal = false', 'ide = true', 'spinner_verbs = append'])
-        self.assertEqual(chat.section(saved, 'agents')[-10:], [
+        self.assertEqual(chat.section(saved, 'agents')[-11:], [
             'ctrl_enter_sends = false', 'scroll_on_send = true', 'timestamps = true', 'focus_view = false',
             'archive_after_days = 14',
             'attach_selection = true', 'attach_open_file = true', 'respect_gitignore = true',
             'autosave = true',                          # phase 4 task 10
-            'location = panel'])                        # (phase 4 task 13: location last)
+            'location = panel',                         # (phase 4 task 13)
+            'continue_after_restart = true'])           # (phase 6, p6b: the last)
         # changed, they are written back as they are; the env pairs still follow the last [claude] row
         claude = self.claude_section('initial_mode = acceptEdits\nallow_bypass_permissions = true\n'
                                      'prompt_suggestions = false\nspinner_verb = Zooming\nspinner_verbs = replace\n'
@@ -92,10 +94,11 @@ class ConfigTest(CfgCase):
             'allow_bypass_permissions = true', 'prompt_suggestions = false', 'use_terminal = false', 'ide = true',
             'spinner_verbs = replace',
             'env.FOO = bar', 'spinner_verb = Zooming', 'spinner_verb = Whooshing'])
-        self.assertEqual(chat.section(saved, 'agents')[-10:-5], ['ctrl_enter_sends = true', 'scroll_on_send = false',
+        self.assertEqual(chat.section(saved, 'agents')[-11:-6], ['ctrl_enter_sends = true', 'scroll_on_send = false',
                                                                  'timestamps = false', 'focus_view = true',
                                                                  'archive_after_days = 14'])
-        self.assertEqual(chat.section(saved, 'agents')[-2:], ['autosave = false', 'location = panel'])
+        self.assertEqual(chat.section(saved, 'agents')[-3:], ['autosave = false', 'location = panel',
+                                                              'continue_after_restart = true'])
 
     def mode_passed(self, extra):
         self.start(self.claude_section(extra))
@@ -245,13 +248,15 @@ class ConfigTest(CfgCase):
         self.chat('hello')
         names = self.until(lambda: (lambda n: n if 'review' in n else None)(
             [c.split('\t')[0] for c in self.lines('cmd')]), 'the changed list')
-        self.assertEqual(names, ['compact', 'usage', 'review', 'resume', 'continue', 'clear', 'model', 'plan',
+        self.assertEqual(names, ['compact', 'usage', 'review', 'resume', 'continue',
+                                 'rewind', 'checkpoint', 'undo', 'export', 'clear', 'model', 'plan',
                                  'copy', 'login', 'logout', 'status', 'skills', 'help', 'memory', 'context',
                                  'btw', 'tasks', 'bashes', 'bookmarks', 'remote-control', 'rc', 'chrome', 'agents',
                                  'mcp', 'hooks', 'permissions', 'allowed-tools', 'sandbox', 'plugin', 'plugins',
                                  'marketplace'])
         # (resume, continue: phase 6's history; status to context: phase 7's dialogs; btw to agents: p7c's,
-        #   claude-panels.py; mcp to marketplace: p7b's configuration dialogs, claude-dialogs2.py)
+        #   claude-panels.py; mcp to marketplace: p7b's configuration dialogs, claude-dialogs2.py;
+        #   rewind to export: p6b's, claude-fork.py)
         self.assertIn('review\tSkill review\t-\t-\t-\tsend\tcli', self.lines('cmd'))
         text = self.state_file().read_text(encoding='utf-8')
         self.assertIn('cmd\treview\t', text)
@@ -591,8 +596,8 @@ class MenuTest(MenuCase):
         self.assertIn(('Slash Commands', '/plan', 'Turn on plan mode or view the plan', '[open|<description>]', '-'),
                       rows)
         slash = [r[1] for r in rows if r[0] == 'Slash Commands']
-        self.assertEqual(slash, ['/compact', '/context', '/usage', '/plan', '/copy',
-                                 '/btw', '/tasks', '/remote-control', '/chrome'])    # p7c's (claude-panels.py)
+        self.assertEqual(slash, ['/compact', '/context', '/usage', '/export', '/plan', '/copy',
+                                 '/btw', '/tasks', '/remote-control', '/chrome'])    # p7c's (claude-panels.py); /export p6b's
         self.assertNotIn('/clear', slash)                            # a target of its own: not listed twice
         self.assertIn('foot v2.1.330', self.menu())
         self.assertEqual([r for r in self.records() if r.get('stdin') and '"/' in r['stdin']], [])

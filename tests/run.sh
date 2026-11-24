@@ -175,6 +175,7 @@ python3 tests/claude-paste.py || fail=1    # the clipboard's files and images, l
 python3 tests/claude-mention.py || fail=1   # mentions, the selection chip, the commands that mention (phase 4 tasks 7, 8)
 python3 tests/claude-mcp.py || fail=1      # rhun's MCP server for the chat (phase 4 task 9)
 python3 tests/claude-hooks.py || fail=1    # its hooks: saving before, problems after (phase 4 task 10)
+python3 tests/claude-fork.py || fail=1   # fork from a message, rewind, export, a cut turn after a restart (p6b)
 python3 tests/ext-agents.py || fail=1
 python3 tests/ext-review.py || fail=1
 python3 tests/ext-tools.py || fail=1

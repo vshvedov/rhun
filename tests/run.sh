@@ -163,6 +163,7 @@ python3 tests/claude-bridge.py || fail=1   # claude in rhun's terminal: the brid
 python3 tests/claude-sessions.py || fail=1   # the session list and the chat header (phase 6)
 python3 tests/claude-dialogs.py || fail=1   # the dialog shell and the dialogs that show what Claude Code reports (phase 7)
 python3 tests/claude-attach.py || fail=1   # a message's parts: attachments, packs, chips, the + menu (phase 4 tasks 2, 3)
+python3 tests/claude-panels.py || fail=1   # side question, bookmarks, agent map, hand-off, Chrome, Remote Control (p7c)
 python3 tests/ext-agents.py || fail=1
 python3 tests/ext-review.py || fail=1
 python3 tests/ext-tools.py || fail=1

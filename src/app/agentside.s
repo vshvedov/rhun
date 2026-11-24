@@ -156,6 +156,7 @@ g_fh: .long 0
 g_sx: .long 0                   # Send
 g_sw: .long 0
 g_content: .long 0
+g_sicon: .long 0                # Send is an arrow (a narrow panel)
 
 .text
 
@@ -1016,27 +1017,41 @@ FN agside_split
     mov [rip + sp_rect + 12], edx
     jmp 8f
 5:  mov dword ptr [rip + sp_dock], 0
+    mov eax, [rbx + 8]
+    mov [rip + sp_rect + 8], eax
+    call geom                   # its title, its field, two lines of its body at least
+    mov r13d, [rip + g_head]
+    add r13d, [rip + g_foot]
+    mov rax, [rip + ag_fui]
+    mov eax, [rax + FACE_lineh]
+    lea r13d, [r13 + rax*2]
+    add r13d, [rip + g_pmt + 4*MI_12]
     mov eax, [rbx + 12]
     imul eax, [rip + sp_stack_pm]
     xor edx, edx
     mov ecx, 1000
     div ecx
-    PM ecx, MI_64               # 128 at 1x at least, the conversation 192 at least
-    shl ecx, 1
-    cmp eax, ecx
+    cmp eax, r13d
     jge 6f
-    mov eax, ecx
-6:  mov ecx, [rbx + 12]
+    mov eax, r13d
+6:  mov ecx, [rbx + 12]         # the conversation keeps 192 at 1x (its title, its box)
     PM edx, MI_64
     imul edx, edx, 3
     sub ecx, edx
     cmp eax, ecx
     jle 7f
     mov eax, ecx
-7:  cmp eax, 0                  # a panel too short for both: half each
-    jg 71f
-    mov eax, [rbx + 12]
-    shr eax, 1
+7:  cmp eax, r13d               # too short for both: the panel its least, at most three fifths
+    jge 71f
+    mov eax, r13d
+    mov ecx, [rbx + 12]
+    imul ecx, ecx, 3
+    xor edx, edx
+    mov r8d, 5
+    xchg eax, ecx
+    div r8d
+    cmp ecx, eax
+    cmovl eax, ecx
 71: mov ecx, [rbx]
     mov [rip + sp_rect], ecx
     mov ecx, [rbx + 4]
@@ -1084,13 +1099,26 @@ geom:
     PM ecx, MI_8
     lea edx, [rax + rcx*2]
     mov [rip + g_foot], edx
+    mov dword ptr [rip + g_sicon], 0
     mov rdi, [rip + ag_fui]
     lea rsi, [rip + .Lsend]
     mov edx, 4
     call text_width
     PM ecx, MI_12
     lea eax, [rax + rcx*2]
-    mov [rip + g_sw], eax
+    mov ecx, [rip + sp_rect + 8]    # the field narrower than 8 characters: Send is an arrow
+    sub ecx, [rip + g_pad]
+    sub ecx, [rip + g_pad]
+    sub ecx, eax
+    sub ecx, [rip + g_pmt + 4*MI_8]
+    mov rdx, [rip + ag_fui]
+    mov edx, [rdx + FACE_cellw]
+    shl edx, 3
+    cmp ecx, edx
+    jge 21f
+    mov dword ptr [rip + g_sicon], 1
+    PM eax, MI_28
+21: mov [rip + g_sw], eax
     mov ecx, [rip + sp_rect]
     add ecx, [rip + sp_rect + 8]
     sub ecx, [rip + g_pad]
@@ -2199,7 +2227,21 @@ side_foot:
     jz 2f
     mov dword ptr [rip + sp_keys], 1
     mov dword ptr [rip + g_focus], FOCUS_AGENTS
-2:  mov edi, ID_AGSIDE + SID_SEND
+2:  cmp dword ptr [rip + g_sicon], 0
+    je 21f
+    mov edi, ID_AGSIDE + SID_SEND   # narrow: an arrow ("Send side question")
+    mov esi, [rip + g_sx]
+    mov edx, [rip + g_fh]
+    sub edx, [rip + g_sw]
+    sar edx, 1
+    add edx, [rip + g_fy]
+    mov ecx, [rip + g_sw]
+    mov r8d, ecx
+    mov r9d, IC_ARROW_UP
+    call ag_icon_btn
+    mov r12d, eax
+    jmp 8f
+21: mov edi, ID_AGSIDE + SID_SEND
     mov esi, [rip + g_sx]
     mov edx, [rip + g_fy]
     mov ecx, [rip + g_sw]
@@ -2227,7 +2269,7 @@ side_foot:
     push rax
     call ui_text_center
     add rsp, 16
-    test r12d, UB_CLICK
+8:  test r12d, UB_CLICK
     jz 9f
     mov rdi, rbx
     call side_send
@@ -2932,13 +2974,38 @@ book_md:
 3:  mov rax, [rip + md_book]
     EPILOGUE
 
-# detail_h() -> eax the height under the rows: the hint, or the links line and the shown one's text
+# links_two() -> eax 1 when the links do not fit on one line (the longer first link, the gap, Remove)
+links_two:
+    PROLOGUE
+    lea rsi, [rip + .Ls_gone]
+    call cslen
+    mov rdi, [rip + ag_fsmall]
+    call text_width
+    mov ebx, eax
+    lea rsi, [rip + .Ls_remove]
+    call cslen
+    mov rdi, [rip + ag_fsmall]
+    call text_width
+    add ebx, eax
+    add ebx, [rip + g_pmt + 4*MI_12]
+    call body_w
+    cmp ebx, eax
+    setg al
+    movzx eax, al
+    EPILOGUE
+
+# detail_h() -> eax the height under the rows: the hint, or the links (a line or two) and the shown one's text
 detail_h:
     PROLOGUE
     mov rax, [rip + ag_fsmall]
     mov ebx, [rax + FACE_lineh]
     add ebx, [rip + g_pmt + 4*MI_8]
-    call shown_bm
+    call links_two
+    test eax, eax
+    jz 1f
+    mov rax, [rip + ag_fsmall]
+    add ebx, [rax + FACE_lineh]
+1:  call shown_bm
     test rax, rax
     jz 8f
     mov rdi, rax
@@ -2984,11 +3051,19 @@ detail_draw:
 1:  mov rax, [rip + ag_fsmall]
     mov eax, [rax + FACE_lineh]
     add eax, [rip + g_pmt + 4*MI_8]
-    mov [rsp + 12], eax         # the links line's height
+    mov [rsp + 12], eax         # the links' height
     mov [rip + link_h], eax
     mov eax, [rsp + 4]
     mov [rip + link_y], eax
-    mov rdi, rbx
+    call links_two
+    mov [rsp + 16], eax
+    test eax, eax
+    jz 11f
+    mov rax, [rip + ag_fsmall]  # two lines: Remove under the first
+    mov eax, [rax + FACE_lineh]
+    mov [rip + link_h], eax
+    add [rsp + 12], eax
+11: mov rdi, rbx
     mov rsi, r12
     call bm_row
     mov r13d, eax
@@ -3018,8 +3093,8 @@ detail_draw:
     mov r9, rdx
     mov rdi, [rip + ag_fsmall]
     mov esi, r14d
-    mov edx, [rsp + 4]
-    mov ecx, [rsp + 12]
+    mov edx, [rip + link_y]
+    mov ecx, [rip + link_h]
     COLOR r10d, T_MUTED
     mov r11d, [rsp + 8]
     push r11
@@ -3028,7 +3103,12 @@ detail_draw:
     add rsp, 16
     add r14d, r15d
 3:  add r14d, [rip + g_pmt + 4*MI_12]
-    lea rsi, [rip + .Ls_remove]
+    cmp dword ptr [rsp + 16], 0
+    je 31f
+    mov r14d, [rsp]             # its own line
+    mov eax, [rip + link_h]
+    add [rip + link_y], eax
+31: lea rsi, [rip + .Ls_remove]
     call cslen
     mov edi, ID_AGSIDE + SID_REMOVE
     mov ecx, r14d

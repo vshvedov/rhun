@@ -1,7 +1,7 @@
 # The agent map (generic, phase 7 part 3; ext-webview-ui.md 3.29, `/tasks`, `/bashes`): a dialog on the
 # shell of agentdlg.s listing the conversation ("This session": the tokens in its context, Working or Idle)
 # and the agents it spawned (its Agent calls: the description, "Spawned by This session", the tool calls
-# counted, the state), with " · click an agent for details" at the agents' heading. An agent's details: back
+# counted, the state), under "N agents · click an agent for details". An agent's details: back
 # arrow, "Spawned by", the state, "Prompt" (its text), "Tool calls (N)" (its children kept), "Open
 # transcript" (its row in the conversation, opened), and "Stop agent" while it runs (DRV_task AGK_STOP with
 # its id). Nothing here names an agent: the rows are the conversation's typed rows (AT) and its live record.
@@ -249,11 +249,43 @@ build:
     xor esi, esi
     lea rdx, [rip + .Lt_agents]
     call agentdlg_ctext
-    mov rdi, r12
-    mov esi, 2
-    lea rdx, [rip + .Lt_hint]
-    call agentdlg_ctext
-    xor r13d, r13d              # the row
+    xor r13d, r13d              # "N agent(s) · click an agent for details"
+    xor r14d, r14d
+0:  cmp r13, [rbx + AS_msgs + VEC_len]
+    jae 01f
+    mov rdi, r13
+    call at_of
+    inc r13
+    test rax, rax
+    jz 0b
+    inc r14d
+    jmp 0b
+01: test r14d, r14d
+    jz 02f
+    lea rdi, [rip + msb]
+    call sb_clear
+    lea rdi, [rip + msb]
+    mov esi, r14d
+    call sb_push_u64
+    lea rsi, [rip + .Lt_nagents]
+    cmp r14d, 1
+    jne 03f
+    lea rsi, [rip + .Lt_nagent]
+03: lea rdi, [rip + msb]
+    call sb_push_cstr
+    lea rdi, [rip + msb]
+    lea rsi, [rip + .Lt_hint]
+    call sb_push_cstr
+    mov edi, DGK_TEXT
+    mov esi, DGF_MUTED | DGF_SMALL
+    xor edx, edx
+    call agentdlg_row
+    mov rdi, rax
+    xor esi, esi
+    mov rdx, [rip + msb + SB_ptr]
+    mov rcx, [rip + msb + SB_len]
+    call agentdlg_text
+02: xor r13d, r13d              # the row
     xor r14d, r14d              # agents listed
 4:  cmp r13, [rbx + AS_msgs + VEC_len]
     jae 6f
@@ -596,6 +628,8 @@ map_ops: .quad map_act, map_free
 .Lt_tokens: .asciz " tokens in context"
 .Lt_agents: .asciz "Agents"
 .Lt_hint: .asciz " \302\267 click an agent for details"
+.Lt_nagents: .asciz " agents"
+.Lt_nagent: .asciz " agent"
 .Lt_spawned: .asciz "Spawned by This session"
 .Lt_dot: .asciz " \302\267 "
 .Lt_calls: .asciz " tool calls"

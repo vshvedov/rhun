@@ -233,7 +233,8 @@ class MapTest(PanelCase):
         self.command('agent-prompt /tasks')
         head = self.command('print-agent-dialog').splitlines()
         self.assertTrue(head[0].startswith('dialog=tasks title=Agent map'), head[0])
-        self.assertIn('head Agents hint  · click an agent for details', head)
+        self.assertIn('head Agents', head)
+        self.assertIn('text 1 agent · click an agent for details', head)
         items = [l for l in head if l.startswith('item')]
         self.assertTrue(items[0].startswith('item This session'), items)
         self.assertEqual(len(items), 2, items)

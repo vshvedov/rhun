@@ -2056,7 +2056,20 @@ act_names:                      # ACT_* by value
     # phase 7 (claude_dlg.s; claude-chat-p7): the dialogs' commands, ACT_STATUS (19) to ACT_INSTRUCT (25)
     .quad .La_status, .La_usage, .La_context, .La_ostyle, .La_skills, .La_memory, .La_instruct
     .quad .La_attach, .La_mention   # 26, 27: phase 4 task 3's (agentatt.s)
+    # p7c (agentside.s, agentmap.s, claude_side.s): ACT_BTW (28) to ACT_RC (37)
+    .quad .La_btw, .La_bookmarks, .La_tasks, .La_remote, .La_chrome, .La_sideq, .La_handoff, .La_handans
+    .quad .La_bashes, .La_rc
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
+.La_btw: .asciz "btw"
+.La_bookmarks: .asciz "bookmarks"
+.La_tasks: .asciz "tasks"
+.La_remote: .asciz "remote"
+.La_chrome: .asciz "chrome"
+.La_sideq: .asciz "sideq"
+.La_handoff: .asciz "handoff"
+.La_handans: .asciz "handans"
+.La_bashes: .asciz "bashes"
+.La_rc: .asciz "rc"
 .Lsuffix: .asciz ".agents-"
 .Lempty: .asciz ""
 .Lw_agentcfg: .asciz "agentcfg"

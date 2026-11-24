@@ -3553,15 +3553,16 @@ ENDSTRUCT ACH_SIZE
 .equ ACT_ATTACH, 26             # Attach file... (the path browser)
 .equ ACT_MENTION, 27            #   Mention file from this project... ("@" at the caret)
 # phase 7 part 3 (claude-chat-p7c: agentside.s, agentmap.s, claude_side.s): the side panels, the agent map,
-#   Remote Control, Claude in Chrome, the hand-off to the terminal. ACT_COUNT was 28: these need it past 49
-.equ ACT_BTW, 40                # /btw [QUESTION]: the side question (generic: agentside.s through agentpop_run)
-.equ ACT_BOOKMARKS, 41          # /bookmarks, the menu's Bookmarks: the bookmarks panel (generic)
-.equ ACT_TASKS, 42              # /tasks, /bashes: the agent map (generic: agentmap.s)
-.equ ACT_REMOTE, 43             # /remote-control, /rc: Remote Control of the conversation's program (DRV_action)
-.equ ACT_CHROME, 44             # /chrome, the menu's Claude in Chrome: its dialog (DRV_action)
-.equ ACT_SIDEQ, 45              # DRV_action(AL*, ACT_SIDEQ, question ptr, len) -> eax its request + 1, 0 not sent
-.equ ACT_HANDOFF, 46            # a command for the terminal's Claude Code (/agents): the hand-off card (DRV_action)
-.equ ACT_HANDANS, 47            # DRV_action(AL*, ACT_HANDANS, n): the hand-off card's option n (own_answer)
+#   Remote Control, Claude in Chrome, the hand-off to the terminal. They stay the last acts: claude_action
+#   passes every act from ACT_BTW to claude_side_action
+.equ ACT_BTW, 28                # /btw [QUESTION]: the side question (generic: agentside.s through agentpop_run)
+.equ ACT_BOOKMARKS, 29          # /bookmarks, the menu's Bookmarks: the bookmarks panel (generic)
+.equ ACT_TASKS, 30              # /tasks, /bashes: the agent map (generic: agentmap.s)
+.equ ACT_REMOTE, 31             # /remote-control, /rc: Remote Control of the conversation's program (DRV_action)
+.equ ACT_CHROME, 32             # /chrome, the menu's Claude in Chrome: its dialog (DRV_action)
+.equ ACT_SIDEQ, 33              # DRV_action(AL*, ACT_SIDEQ, question ptr, len) -> eax its request + 1, 0 not sent
+.equ ACT_HANDOFF, 34            # a command for the terminal's Claude Code (/agents): the hand-off card (DRV_action)
+.equ ACT_HANDANS, 35            # DRV_action(AL*, ACT_HANDANS, n): the hand-off card's option n (own_answer)
 .equ ID_AGSIDE, 0x9600          # the side panels' controls: + SID_* (agentside.s), to 0x97ff
 .equ AQK_HANDOFF, 9             # rhun's own card: Continue in Terminal (own_answer -> DRV_action ACT_HANDANS)
 .equ OA_SIDE_FIRST, 40          # agent_claude.s's answers from here are claude_side.s's (claude_side_answer)
@@ -3569,9 +3570,9 @@ ENDSTRUCT ACH_SIZE
 .equ OA_SIDE_CHROME, 41         #   get_chrome_dialog
 .equ OA_SIDE_REMOTE, 42         #   remote_control {enabled: true}
 .equ OA_SIDE_REMOTE_OFF, 43     #   remote_control {enabled: false}
-.equ ACT_BASHES, 48             # /bashes: /tasks under another name (not listed in the menu)
-.equ ACT_RC, 49                 # /rc: /remote-control under another name (not listed)
-.equ ACT_COUNT, 50
+.equ ACT_BASHES, 36             # /bashes: /tasks under another name (not listed in the menu)
+.equ ACT_RC, 37                 # /rc: /remote-control under another name (not listed)
+.equ ACT_COUNT, 38
 # the dialog shell (agentdlg.s): a row (DGR), its kinds and flags, a button's flags, a dialog's ops table
 .equ ID_AGDLG, 0x8e00           # the dialog's controls: + DID_* (agentdlg.s), to 0x8fff
 STRUCT

@@ -3290,6 +3290,7 @@ F AQ_sugglen, 8
 F AQ_card, 8            # CD* while its rich card exists (agentcard.s), or 0
 F AQ_dkind, 8           # owned cstr: a dialog's dialog_kind (AQK_DIALOG), or 0
 F AQ_tab, 8             # the plan tab's ctx (mdtab.s), or 0
+F AQ_offer, 8           # phase 4 task 11: its proposed change's id in the Review tab (agentoffer.s), or 0
 ENDSTRUCT AQ_SIZE
 .equ AQF_NOSAVE, 1              # suppress_always_allow_rule
 .equ AQF_DEFNO, 2               # default_to_no
@@ -3587,6 +3588,8 @@ F CD_lastw, 4           # the width it was last drawn at
 F CD_advto, 4           # the tab a single choice moves to once CD_advat comes
 F CD_qpx, 4             # the text size its previews were given (md_set_size)
 F CD_advat, 8           # time_ms of that move, 0 none waiting
+F CD_why, 4             # phase 4 task 11: where the answer came from (CDW_*): the card, or its Review tab
+F CD_whypad, 4
 ENDSTRUCT CD_SIZE
 .equ CDK_PERMISSION, 1
 .equ CDK_QUESTIONS, 2
@@ -3614,6 +3617,32 @@ ENDSTRUCT CD_SIZE
 .equ ID_AGCARD, 0x8300          # a rich card's controls: + CID_* (agentcard.s), to 0x87ff
 .equ CARD_LOCK_MS, 500          # a card's buttons and keys are dead this long after it shows
 .equ CARD_KEYED_MS, 500         # a card takes no keyboard from a box that had a key this recently
+# ---- phase 4 tasks 11 and 12: a proposed change offered in the Review tab (review.s, agentoffer.s) ----
+.equ OFFER_ACCEPT, 1            # an offer's outcome (RVO_done)
+.equ OFFER_REJECT, 2
+.equ OFFER_CLOSED, 3
+.equ OFFER_REVERTED, 4          #   accepted with every change taken out: the text before
+.equ OFF_NOREAD, 1              # ev_offer's flags: the file was not read (outside the project, unreadable)
+.equ OFF_PARTIAL, 2             #   the edit's old text is not in the file: the edit's texts alone
+.equ CDW_CARD, 0                # CD_why
+.equ CDW_TAB_ACCEPT, 1
+.equ CDW_TAB_REJECT, 2
+.equ CDW_TAB_CLOSED, 3
+.equ CDW_REVERTED, 4
+# RVO: an offer's owner (static): done(ctx, OFFER_*, text ptr, len, edited) -> eax 1 taken, 0 again later;
+#   locked(ctx) -> eax ms its card's lock still lasts (0: decisions may be taken)
+STRUCT
+F RVO_done, 8
+F RVO_locked, 8
+ENDSTRUCT RVO_SIZE
+# TX: two texts, before and after (review_offer copies them)
+STRUCT
+F TX_old, 8
+F TX_oldlen, 8
+F TX_new, 8
+F TX_newlen, 8
+ENDSTRUCT TX_SIZE
+# ---- end of tasks 11 and 12 ----
 .equ CARD_ADVANCE_MS, 300       # the question card: a single choice moves to the next question after this
 .equ CDQ_OPTS_MAX, 16           # the question card: options a question may have (more: not shown)
 .equ CDQ_MAX, 16                #   questions a card may have

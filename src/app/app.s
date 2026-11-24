@@ -2942,6 +2942,7 @@ timeout_fns:
     .quad newext_timeout          # New Extension: quick input events to take (newext.s)
     .quad submitext_timeout       # and Submit to Index's (submitext.s)
     .quad ide_timeout             # Claude chat phase 5: the bridge for terminal claude (ide_server.s)
+    .quad review_timeout          # phase 4 tasks 11, 12: offers' outcomes for their owners (review.s)
     .quad 0
 .text
 
@@ -2997,6 +2998,7 @@ FN app_tick
     call keys_tick              # a chord's pause (keys.s)
     call newext_tick            # New Extension's steps (newext.s)
     call submitext_tick         # Submit to Index's steps (submitext.s)
+    call review_tick            # phase 4 tasks 11, 12: offers' outcomes for their owners (review.s)
     EPILOGUE
 
 # ---------------- rendering ----------------

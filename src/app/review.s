@@ -38,11 +38,18 @@ F RVP_done, 4            # every file decided
 F RVP_gone, 4            # withdrawn: nothing more is said
 F RVP_pad, 4
 F RVP_waiter, 8          # tools.s: the rhun.propose call answered when it is done, or 0
-F RVP_owner, 8           # an offer's RVO (RVP_ext 0), or 0
-F RVP_ctx, 8             # its owner's context
-F RVP_closing, 4         # an offer's tab is closing: what is undecided is OFFER_CLOSED
-F RVP_pad2, 4
+# phase 4 tasks 11 and 12: an offer (review_offer): a proposal of rhun's own for an owner (an agent's request)
+F RVP_offer, 4           # 1: an offer: RVP_ext 0, one file, accepting applies nothing (its owner hears it)
+F RVP_pend, 4            # its outcome (OFFER_*) waiting for review_tick, 0 none
+F RVP_owner, 8           # RVO*, 0 once the owner withdrew it (nothing more is said)
+F RVP_ctx, 8
+F RVP_orig, 8            # the proposed text as offered (owned) and its length: what "edited" compares with
+F RVP_origlen, 8
+F RVP_scratch, 8         # task 12: its "Edit Proposed Text" document's DOC_id, 0 none
+F RVP_sver, 8            #   that document's version last taken, and when it last moved (time_ms)
+F RVP_sat, 8
 ENDSTRUCT RVP_SIZE
+.equ OFFER_HUNKS_MAX, 100        # an offer of more changes is one change (the extension's EVt)
 
 # a file of a proposal
 STRUCT
@@ -1018,6 +1025,10 @@ proposal_free:
     call mem_free
     mov rdi, [rbx + RVP_sid]
     call mem_free
+    mov rdi, [rbx + RVP_orig]
+    call mem_free
+    mov rdi, rbx                # task 12: its scratch document closes in the next tick
+    call scratch_orphan
     mov rdi, rbx
     call mem_free
     EPILOGUE
@@ -1515,12 +1526,12 @@ build_doc:
     lea rdi, [rip + line]
     lea rsi, [rip + .Ldot]
     call sb_push_cstr
-    mov rax, [rbx + RVP_owner]
-    test rax, rax
-    jz 2f
-    mov rsi, [rax + RVO_name]   # an offer: its owner's name
-    jmp 3f
-2:  mov rdi, [rbx + RVP_ext]
+    cmp dword ptr [rbx + RVP_offer], 0  # an offer has no extension: what is decided so far instead
+    je 0f
+    mov rdi, rbx
+    call offer_title
+    jmp 1f
+0:  mov rdi, [rbx + RVP_ext]
     call agentext_title
     mov rsi, rax
 3:  lea rdi, [rip + line]
@@ -1937,7 +1948,15 @@ FN review_decide
     mov r15d, ecx
     cmp dword ptr [rbx + RVP_done], 0
     jne 9f
-    mov rax, [rsp]
+    cmp dword ptr [rbx + RVP_offer], 0  # an offer: its owner decides what happens (offer_decide)
+    je 0f
+    mov rdi, rbx
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    mov ecx, r15d
+    call offer_decide
+    jmp 9f
+0:  mov rax, [rsp]
     test rax, rax
     jns 2f
     xor r12d, r12d
@@ -2469,15 +2488,29 @@ FN review_doc_gone
     PROLOGUE
     mov rbx, rdi
     mov qword ptr [rbx + RVP_doc], 0
-    mov dword ptr [rbx + RVP_closing], 1
-    cmp dword ptr [rbx + RVP_done], 0
+    cmp dword ptr [rbx + RVP_offer], 0  # an offer: closed, unless its outcome still waits to be told
+    je 0f
+    mov rdi, rbx
+    call offer_gone
+    test eax, eax
+    jnz 9f
+    jmp 2f
+0:  cmp dword ptr [rbx + RVP_done], 0
     jne 2f
     mov rdi, rbx
     mov rsi, -1
     mov rdx, -1
     xor ecx, ecx
     call review_decide
-2:  xor ecx, ecx
+2:  mov rdi, rbx
+    call forget
+9:  EPILOGUE
+
+# forget(RV*): out of the list, and freed
+forget:
+    PROLOGUE
+    mov rbx, rdi
+    xor ecx, ecx
 3:  cmp rcx, [rip + proposals + VEC_len]
     jae 5f
     mov rax, [rip + proposals + VEC_ptr]
@@ -2776,13 +2809,26 @@ FN review_line_extra
     mov rbx, rax
     cmp dword ptr [rbx + RVP_done], 0
     jne 9f
-    mov rax, [rsp + 8]
+    mov dword ptr [rip + btn_dim], 0
+    cmp dword ptr [rbx + RVP_offer], 0  # an offer's buttons are greyed while its card's lock lasts
+    je 0f
+    mov rdi, rbx
+    call offer_locked
+    test eax, eax
+    jz 0f
+    mov dword ptr [rip + btn_dim], 1
+    mov dword ptr [rip + dim_drawn], 1
+0:  mov rax, [rsp + 8]
     test rax, rax
     jnz 1f
     mov qword ptr [rsp + 24], -1    # the title: every file
     mov qword ptr [rsp + 32], -1
     lea r12, [rip + .Lb_accept_all]
     lea r13, [rip + .Lb_reject_all]
+    cmp dword ptr [rbx + RVP_offer], 0  # an offer: one file, its Accept and Reject on the title
+    je 5f
+    lea r12, [rip + .Lb_accept]
+    lea r13, [rip + .Lb_reject]
     jmp 5f
 1:  mov rdi, rbx
     mov rsi, rax
@@ -2797,6 +2843,8 @@ FN review_line_extra
     jne 9f
     test rdx, rdx
     js 2f
+    cmp dword ptr [rbx + RVP_offer], 0  # an offer's changes: decided one by one from task 12
+    jne 9f
     imul rcx, rdx, RVH_SIZE
     add rcx, [r14 + RVF_hunks + VEC_ptr]
     mov eax, [rcx + RVH_line]
@@ -2809,6 +2857,8 @@ FN review_line_extra
     jmp 5f
 2:  mov eax, [r14 + RVF_line]
     cmp rax, [rsp + 8]
+    jne 9f
+    cmp dword ptr [rbx + RVP_offer], 0  # an offer's file line: no second Accept and Reject
     jne 9f
     lea r12, [rip + .Lb_accept]
     lea r13, [rip + .Lb_reject]
@@ -2862,7 +2912,12 @@ button:
     mov eax, [rbp + 16 + 16]        # and y
     mov [rsp], eax
     sub r15d, r13d
-    # an id per visible line and button
+    mov dword ptr [rsp + 4], 0
+    cmp dword ptr [rip + btn_dim], 0    # greyed (an offer's card still locked): drawn, not pressed
+    je 0f
+    xor r12d, r12d
+    jmp 61f
+0:  # an id per visible line and button
     mov rax, [rbp + 16 + 8]
     and eax, 0x3f
     lea edi, [rax*4 + ID_AI_REVIEW]
@@ -2875,7 +2930,7 @@ button:
     sub r8d, [rip + g_mt + 4*MI_4]
     call ui_btn
     mov [rsp + 4], eax
-    COLOR r9d, T_BORDER
+61: COLOR r9d, T_BORDER
     COLOR eax, T_BG
     test dword ptr [rsp + 4], UB_HOVER
     jz 1f
@@ -2896,7 +2951,10 @@ button:
     call gfx_frame
     add rsp, 16
     COLOR eax, T_FG
-    test r12d, r12d
+    cmp dword ptr [rip + btn_dim], 0
+    je 63f
+    COLOR eax, T_MUTED
+63: test r12d, r12d
     jz 3f
     COLOR eax, T_ACCENT_FG
 3:  lea rdi, [rip + g_face_small]
@@ -3225,12 +3283,12 @@ FN review_dump
     mov rdi, r15
     mov esi, [rbx + RVP_done]
     call sb_push_u64
-    cmp qword ptr [rbx + RVP_owner], 0
-    je 21f
+    cmp dword ptr [rbx + RVP_offer], 0
+    je 0f
     mov rdi, r15
     lea rsi, [rip + .Ld_offer]
     call sb_push_cstr
-21: mov rdi, r15
+0:  mov rdi, r15
     mov esi, 10
     call sb_push_byte
     xor r12d, r12d
@@ -3361,6 +3419,682 @@ FN review_current
     jmp 1b
 9:  ret
 
+# ---------------- offers (phase 4 tasks 11 and 12) ----------------
+#
+# An offer is a proposal of rhun's own for an owner (an agent's request to edit one file, agentoffer.s): the
+# same tab, drawing and keys as an extension's proposal, but nothing is ever applied. Its outcome (accepted
+# with the text as it stands, rejected, the tab closed, everything taken out) goes to the owner (RVO_done)
+# from review_tick, after the frame, never from inside a drawing or a tab's closing; a close waits out the
+# card's lock (RVO_locked), every other decision is refused while it lasts. Once decided the tab stays, read
+# only, until the owner closes it (review_offer_close); the owner withdrawing it first is never told
+# anything. Its tab never takes the keyboard (offer_tab).
+#
+#   review_offer(RVO*, ctx, label, path or 0, TX*, show) -> rax id or 0
+#   review_offer_close(id); review_offers_close() -> eax n; review_offer_show(id)
+#   review_offer_text(id) -> rax ptr, rdx len, ecx edited, r8d reverted; review_offer_before(id) -> rax, rdx
+#   review_offer_dump(id, sb); review_tick(); review_timeout() -> eax ms or -1
+
+# FN review_offer(RVO*, ctx, label cstr, path cstr or 0, TX*, show) -> rax its id, or 0 when there is nothing
+#   to show (the two texts equal, or one over 4 MB). Its tab becomes the active one with show while the
+#   keyboard is not in the editor, and the keyboard stays where it was; otherwise it waits behind the active tab
+FN review_offer
+    PROLOGUE 48
+    mov [rsp], rdi
+    mov [rsp + 8], rsi
+    mov [rsp + 16], rdx
+    mov [rsp + 24], rcx
+    mov rbx, r8
+    mov [rsp + 32], r9d
+    xor eax, eax
+    cmp qword ptr [rbx + TX_oldlen], RVP_TEXT_MAX
+    ja 9f
+    cmp qword ptr [rbx + TX_newlen], RVP_TEXT_MAX
+    ja 9f
+    mov rcx, [rbx + TX_oldlen]
+    cmp rcx, [rbx + TX_newlen]
+    jne 1f
+    mov rdi, [rbx + TX_old]
+    mov rsi, [rbx + TX_new]
+    mov rdx, rcx
+    call memeq
+    test eax, eax
+    jz 1f
+    xor eax, eax
+    jmp 9f
+1:  mov edi, RVP_SIZE
+    call mem_alloc
+    mov r15, rax
+    mov dword ptr [r15 + RVP_offer], 1
+    mov rax, [rsp]
+    mov [r15 + RVP_owner], rax
+    mov rax, [rsp + 8]
+    mov [r15 + RVP_ctx], rax
+    mov rdi, [rsp + 16]
+    call strlen
+    mov rdi, [rsp + 16]
+    mov rsi, rax
+    call clean_label
+    mov [r15 + RVP_label], rax
+    mov rdi, [rbx + TX_new]
+    mov rsi, [rbx + TX_newlen]
+    call ai_dup
+    mov [r15 + RVP_orig], rax
+    mov rax, [rbx + TX_newlen]
+    mov [r15 + RVP_origlen], rax
+    # its one file
+    lea rdi, [rip + .Lrf_tmp]
+    mov ecx, RVF_SIZE
+    xor eax, eax
+    rep stosb
+    lea r12, [rip + .Lrf_tmp]
+    mov qword ptr [r12 + RVF_index], 1
+    mov rdi, [rsp + 24]
+    test rdi, rdi
+    jz 2f
+    call dup_cstr
+    mov [r12 + RVF_path], rax
+    mov rdi, rax
+    call path_basename_c
+    jmp 3f
+2:  mov rdi, [r15 + RVP_label]
+    call dup_cstr
+3:  mov [r12 + RVF_name], rax
+    mov rdi, [rbx + TX_old]
+    mov rsi, [rbx + TX_oldlen]
+    call ai_dup
+    mov [r12 + RVF_old], rax
+    mov rax, [rbx + TX_oldlen]
+    mov [r12 + RVF_oldlen], rax
+    mov rdi, [rbx + TX_new]
+    mov rsi, [rbx + TX_newlen]
+    call ai_dup
+    mov [r12 + RVF_new], rax
+    mov rax, [rbx + TX_newlen]
+    mov [r12 + RVF_newlen], rax
+    mov rdi, r12
+    call file_diff
+    mov rdi, r12
+    call offer_cap
+    lea rdi, [r15 + RVP_files]
+    mov esi, RVF_SIZE
+    call vec_push
+    mov rdi, rax
+    mov rsi, r12
+    mov edx, RVF_SIZE
+    call memcpy
+    inc qword ptr [rip + next_id]
+    mov rax, [rip + next_id]
+    mov [r15 + RVP_id], rax
+    lea rdi, [rip + proposals]
+    mov esi, 8
+    call vec_push
+    mov [rax], r15
+    mov rdi, r15
+    mov esi, [rsp + 32]
+    call offer_tab
+    mov rax, [r15 + RVP_id]
+9:  EPILOGUE
+
+# offer_cap(RF*): more than OFFER_HUNKS_MAX changes are one, from the first to the last
+offer_cap:
+    mov rax, [rdi + RVF_hunks + VEC_len]
+    cmp rax, OFFER_HUNKS_MAX
+    jbe 9f
+    mov rsi, [rdi + RVF_hunks + VEC_ptr]
+    imul rcx, rax, RVH_SIZE
+    lea rdx, [rsi + rcx - RVH_SIZE]
+    mov rcx, [rdx + RVH_ol]
+    add rcx, [rdx + RVH_oc]
+    sub rcx, [rsi + RVH_ol]
+    mov [rsi + RVH_oc], rcx
+    mov rcx, [rdx + RVH_nl]
+    add rcx, [rdx + RVH_nc]
+    sub rcx, [rsi + RVH_nl]
+    mov [rsi + RVH_nc], rcx
+    mov qword ptr [rdi + RVF_hunks + VEC_len], 1
+9:  ret
+
+# offer_tab(RV*, show): the offer's Review tab, after the active one (after the pinned ones). Never through
+#   app_add_tab (it activates the tab and gives the editor the keyboard): made active only with show, while
+#   the keyboard is outside the editor (the panel, its box, the terminal), and the keyboard put back; with
+#   the keyboard in the editor (a document, its find field, Settings, the Extensions page) it waits behind
+offer_tab:
+    PROLOGUE
+    mov rbx, rdi
+    mov r15d, esi
+    call doc_new
+    mov r12, rax
+    or dword ptr [r12 + DOC_flags], DF_READONLY
+    mov edi, DV_SIZE
+    call mem_alloc
+    mov r13, rax
+    mov [r12 + DOC_diff], rax
+    mov [r13 + DV_review], rbx
+    mov rdi, [rbx + RVP_label]
+    call dup_cstr
+    mov [r13 + DV_name], rax
+    mov [r12 + DOC_name], rax
+    mov [rbx + RVP_doc], r12
+    mov rdi, r12
+    call doc_language_refresh
+    lea rdi, [rip + g_tabs]
+    mov esi, TAB_SIZE
+    call vec_push               # zeroed: not pinned
+    mov qword ptr [rax + TAB_kind], TAB_DOC
+    mov [rax + TAB_doc], r12
+    mov r13, [rip + g_tabs + VEC_len]
+    dec r13
+    mov r14, [rip + g_tab_cur]
+    inc r14
+    call tabs_pinned
+    cmp r14, rax
+    cmovb r14, rax
+    mov rdi, r13
+    mov rsi, r14
+    call tab_move
+    mov rdi, rbx
+    call build_doc
+    mov rax, [rbx + RVP_files + VEC_ptr]
+    mov eax, [rax + RVF_line]
+    mov rdi, r12
+    mov rsi, rax
+    call doc_line_start
+    mov [r12 + DOC_cur], rax
+    mov [r12 + DOC_anchor], rax
+    cmp qword ptr [rip + g_tab_cur], 0
+    jl 2f                       # no active tab: it is the one
+    test r15d, r15d
+    jz 8f
+    mov eax, [rip + g_focus]
+    cmp eax, FOCUS_EDITOR
+    je 8f
+    cmp eax, FOCUS_FIND
+    je 8f
+    cmp eax, FOCUS_SETTINGS
+    je 8f
+    cmp eax, FOCUS_EXT_SEARCH
+    je 8f
+2:  mov r13d, [rip + g_focus]
+    mov rdi, r14
+    call app_activate_tab
+    mov [rip + g_focus], r13d
+8:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# offer_locked(RV*) -> eax ms its owner's lock still lasts, 0 none
+offer_locked:
+    mov rax, [rdi + RVP_owner]
+    test rax, rax
+    jz 1f
+    mov rdi, [rdi + RVP_ctx]
+    jmp [rax + RVO_locked]
+1:  xor eax, eax
+    ret
+
+# offer_decide(RV*, file, hunk, accept): the user's choice in an offer's tab: nothing while the card's lock
+#   lasts (and nothing kept for later); the file or everything: the offer is decided (offer_finish)
+offer_decide:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov r14d, ecx
+    mov rdi, rbx
+    call offer_locked
+    test eax, eax
+    jnz 9f
+    test r12, r12
+    js 1f
+    test r13, r13
+    jns 9f                      # a change of it: task 12
+1:  mov rdi, rbx
+    mov esi, r14d
+    call offer_finish
+9:  EPILOGUE
+
+# offer_finish(RV*, accept): decided: accepted (its text as it stands; the text before: reverted) or rejected;
+#   the outcome waits for review_tick, the tab shows it and its buttons go
+offer_finish:
+    PROLOGUE
+    mov rbx, rdi
+    mov r15d, OFFER_REJECT
+    mov r14d, RVS_REJECTED
+    mov r12, [rbx + RVP_files + VEC_ptr]
+    test esi, esi
+    jz 1f
+    mov r15d, OFFER_ACCEPT
+    mov r14d, RVS_ACCEPTED
+    mov rcx, [r12 + RVF_newlen]
+    cmp rcx, [r12 + RVF_oldlen]
+    jne 1f
+    mov rdi, [r12 + RVF_new]
+    mov rsi, [r12 + RVF_old]
+    mov rdx, rcx
+    call memeq
+    test eax, eax
+    jz 1f
+    mov r15d, OFFER_REVERTED
+    mov r14d, RVS_REJECTED
+1:  mov dword ptr [rbx + RVP_done], 1
+    mov [rbx + RVP_pend], r15d
+    mov [r12 + RVF_state], r14d
+    mov rdi, rbx
+    call build_doc
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# offer_gone(RV*) -> eax 1 when it stays for review_tick: its tab closed; undecided, that is its outcome
+offer_gone:
+    PROLOGUE
+    mov rbx, rdi
+    xor eax, eax
+    cmp qword ptr [rbx + RVP_owner], 0
+    je 9f
+    cmp dword ptr [rbx + RVP_done], 0
+    jne 1f
+    mov dword ptr [rbx + RVP_done], 1
+    mov dword ptr [rbx + RVP_pend], OFFER_CLOSED
+1:  xor eax, eax
+    cmp dword ptr [rbx + RVP_pend], 0
+    setne al
+9:  EPILOGUE
+
+# offer_title(RV*): the title line's part for an offer (line): "N changes", then its state once decided
+offer_title:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rbx + RVP_files + VEC_ptr]
+    lea rdi, [rip + line]
+    mov rsi, [r12 + RVF_hunks + VEC_len]
+    call sb_push_u64
+    lea rsi, [rip + .Lo_changes]
+    cmp qword ptr [r12 + RVF_hunks + VEC_len], 1
+    jne 1f
+    lea rsi, [rip + .Lo_change]
+1:  lea rdi, [rip + line]
+    call sb_push_cstr
+    cmp dword ptr [rbx + RVP_done], 0
+    je 9f
+    lea rdi, [rip + line]
+    lea rsi, [rip + .Ldot]
+    call sb_push_cstr
+    mov rdi, r12
+    call file_state_word
+    lea rdi, [rip + line]
+    mov rsi, rax
+    call sb_push_cstr
+9:  EPILOGUE
+
+# cur_offer() -> rax the offer the active tab shows, or 0
+cur_offer:
+    PROLOGUE
+    mov rdi, [rip + g_doc]
+    call review_of
+    test rax, rax
+    jz 9f
+    cmp dword ptr [rax + RVP_offer], 0
+    jne 9f
+    xor eax, eax
+9:  EPILOGUE
+
+# cur_text(RV*) -> rax ptr, rdx len of its proposed text as it stands, ecx 1 when it is not the text offered
+#   (edited), r8d 1 when it is the text before (reverted)
+cur_text:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rbx + RVP_files + VEC_ptr]
+    xor r13d, r13d
+    mov rcx, [r12 + RVF_newlen]
+    cmp rcx, [rbx + RVP_origlen]
+    jne 1f
+    mov rdi, [r12 + RVF_new]
+    mov rsi, [rbx + RVP_orig]
+    mov rdx, rcx
+    call memeq
+    test eax, eax
+    jnz 2f
+1:  mov r13d, 1
+2:  xor r14d, r14d
+    mov rcx, [r12 + RVF_newlen]
+    cmp rcx, [r12 + RVF_oldlen]
+    jne 3f
+    mov rdi, [r12 + RVF_new]
+    mov rsi, [r12 + RVF_old]
+    mov rdx, rcx
+    call memeq
+    mov r14d, eax
+3:  mov rax, [r12 + RVF_new]
+    mov rdx, [r12 + RVF_newlen]
+    mov ecx, r13d
+    mov r8d, r14d
+    EPILOGUE
+
+# offer_by_id(id) -> rax the offer, or 0
+offer_by_id:
+    PROLOGUE
+    call find_proposal
+    test rax, rax
+    jz 9f
+    cmp dword ptr [rax + RVP_offer], 0
+    jne 9f
+    xor eax, eax
+9:  EPILOGUE
+
+# FN review_offer_close(id): its owner withdraws it: nothing more is said, its tab closes
+FN review_offer_close
+    PROLOGUE
+    call offer_by_id
+    test rax, rax
+    jz 9f
+    mov rbx, rax
+    mov qword ptr [rbx + RVP_owner], 0
+    mov dword ptr [rbx + RVP_pend], 0
+    mov dword ptr [rbx + RVP_done], 1
+    mov rdi, rbx
+    call close_proposal
+9:  EPILOGUE
+
+# FN review_offers_close() -> eax how many offers were closed (their owners are not told)
+FN review_offers_close
+    PROLOGUE
+    xor r12d, r12d
+1:  xor ecx, ecx
+2:  cmp rcx, [rip + proposals + VEC_len]
+    jae 9f
+    mov rax, [rip + proposals + VEC_ptr]
+    mov rax, [rax + rcx*8]
+    inc rcx
+    cmp dword ptr [rax + RVP_offer], 0
+    je 2b
+    mov rdi, [rax + RVP_id]
+    call review_offer_close
+    inc r12d
+    jmp 1b
+9:  mov eax, r12d
+    EPILOGUE
+
+# FN review_offer_show(id): its tab becomes the active one after the frame (review_tick); the keyboard stays
+#   where it is
+FN review_offer_show
+    mov [rip + show_id], rdi
+    mov dword ptr [rip + g_dirty], 1
+    ret
+
+# offer_show_now(id)
+offer_show_now:
+    PROLOGUE
+    call offer_by_id
+    test rax, rax
+    jz 9f
+    mov rdi, [rax + RVP_doc]
+    test rdi, rdi
+    jz 9f
+    call doc_tab
+    test rax, rax
+    js 9f
+    mov ebx, [rip + g_focus]
+    mov rdi, rax
+    call app_activate_tab
+    mov [rip + g_focus], ebx
+9:  EPILOGUE
+
+# FN review_offer_text(id) -> rax ptr, rdx len of the proposed text as it stands, ecx 1 edited (not the text
+#   offered), r8d 1 reverted (the text before); rax 0 when there is no such offer
+FN review_offer_text
+    PROLOGUE
+    call offer_by_id
+    test rax, rax
+    jz 8f
+    mov rdi, rax
+    call cur_text
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    EPILOGUE
+
+# FN review_offer_before(id) -> rax ptr, rdx len of its text before (rax 0: no such offer)
+FN review_offer_before
+    PROLOGUE
+    call offer_by_id
+    test rax, rax
+    jz 8f
+    mov rax, [rax + RVP_files + VEC_ptr]
+    mov rdx, [rax + RVF_oldlen]
+    mov rax, [rax + RVF_old]
+    EPILOGUE
+8:  xor edx, edx
+    EPILOGUE
+
+# FN review_offer_dump(id, sb): "offer=ID file=PATH label=LABEL changes=N decided=N edited=0|1 scratch=0|1
+#   shown=0|1 done=0|1 locked=0|1", or "offer=none"
+FN review_offer_dump
+    PROLOGUE
+    mov r15, rsi
+    call offer_by_id
+    test rax, rax
+    jnz 1f
+    mov rdi, r15
+    lea rsi, [rip + .Lo_none]
+    call sb_push_cstr
+    EPILOGUE
+1:  mov rbx, rax
+    mov r12, [rbx + RVP_files + VEC_ptr]
+    mov rdi, r15
+    lea rsi, [rip + .Lo_offer]
+    call sb_push_cstr
+    mov rdi, r15
+    mov rsi, [rbx + RVP_id]
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lo_file]
+    call sb_push_cstr
+    mov rdi, r12
+    call show_path
+    mov rdi, r15
+    mov rsi, rax
+    call sb_push_cstr
+    mov rdi, r15
+    lea rsi, [rip + .Ld_label]
+    call sb_push_cstr
+    mov rdi, r15
+    mov rsi, [rbx + RVP_label]
+    call sb_push_cstr
+    mov rdi, r15
+    lea rsi, [rip + .Lo_changes_d]
+    call sb_push_cstr
+    mov rdi, r15
+    mov rsi, [r12 + RVF_hunks + VEC_len]
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lo_decided]
+    call sb_push_cstr
+    xor r13d, r13d              # changes decided
+    xor ecx, ecx
+2:  cmp rcx, [r12 + RVF_hunks + VEC_len]
+    jae 3f
+    imul rax, rcx, RVH_SIZE
+    add rax, [r12 + RVF_hunks + VEC_ptr]
+    inc rcx
+    cmp dword ptr [rax + RVH_state], RVS_PENDING
+    je 2b
+    inc r13
+    jmp 2b
+3:  mov rdi, r15
+    mov rsi, r13
+    call sb_push_u64
+    mov rdi, rbx
+    call cur_text
+    mov r13d, ecx
+    mov rdi, r15
+    lea rsi, [rip + .Lo_edited]
+    call sb_push_cstr
+    mov rdi, r15
+    mov esi, r13d
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lo_scratch]
+    call sb_push_cstr
+    xor esi, esi
+    cmp qword ptr [rbx + RVP_scratch], 0
+    je 4f
+    mov rdi, [rbx + RVP_scratch]
+    call extproto_doc
+    xor esi, esi
+    test rax, rax
+    setnz sil
+4:  mov rdi, r15
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lo_shown]
+    call sb_push_cstr
+    call cur_offer
+    xor esi, esi
+    cmp rax, rbx
+    sete sil
+    mov rdi, r15
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Ld_done]
+    call sb_push_cstr
+    mov rdi, r15
+    mov esi, [rbx + RVP_done]
+    call sb_push_u64
+    mov rdi, r15
+    lea rsi, [rip + .Lo_locked]
+    call sb_push_cstr
+    mov rdi, rbx
+    call offer_locked
+    xor esi, esi
+    test eax, eax
+    setnz sil
+    mov rdi, r15
+    call sb_push_u64
+    EPILOGUE
+
+# scratch_orphan(RV*): its "Edit Proposed Text" document closes in the next pass (task 12)
+scratch_orphan:
+    ret
+
+# FN review_tick(): outcomes decided since the last pass go to their owners (an owner that withdrew hears
+#   nothing; a close waits out the card's lock); a tab drawn greyed is drawn again once the lock is over
+FN review_tick
+    PROLOGUE
+    mov rdi, [rip + show_id]    # a card's "Review the change"
+    test rdi, rdi
+    jz 71f
+    mov qword ptr [rip + show_id], 0
+    call offer_show_now
+71: cmp dword ptr [rip + dim_drawn], 0
+    je 1f
+    call cur_offer
+    test rax, rax
+    jz 0f
+    mov rdi, rax
+    call offer_locked
+    test eax, eax
+    jnz 1f
+0:  mov dword ptr [rip + dim_drawn], 0
+    mov dword ptr [rip + g_dirty], 1
+1:  xor r12d, r12d
+2:  cmp r12, [rip + proposals + VEC_len]
+    jae 8f
+    mov rax, [rip + proposals + VEC_ptr]
+    mov rbx, [rax + r12*8]
+    inc r12
+    cmp dword ptr [rbx + RVP_pend], 0
+    je 2b
+    mov r13, [rbx + RVP_owner]
+    test r13, r13
+    jnz 3f
+    mov dword ptr [rbx + RVP_pend], 0     # withdrawn: nothing is said
+    cmp qword ptr [rbx + RVP_doc], 0
+    jne 2b
+    mov rdi, rbx
+    call forget
+    xor r12d, r12d
+    jmp 2b
+3:  cmp dword ptr [rbx + RVP_pend], OFFER_CLOSED
+    jne 4f
+    mov rdi, rbx
+    call offer_locked
+    test eax, eax
+    jnz 2b                      # a close waits for the card's lock to end
+4:  mov r14, [rbx + RVP_id]
+    mov r15d, [rbx + RVP_pend]
+    mov dword ptr [rbx + RVP_pend], 0
+    mov rdi, rbx
+    call cur_text
+    mov r8d, ecx
+    mov rcx, rdx
+    mov rdx, rax
+    mov esi, r15d
+    mov rdi, [rbx + RVP_ctx]
+    call [r13 + RVO_done]
+    mov ebx, eax
+    mov rdi, r14                # the owner may have closed it meanwhile
+    call find_proposal
+    test rax, rax
+    jz 7f
+    test ebx, ebx
+    jnz 5f
+    mov [rax + RVP_pend], r15d  # not taken: again in a later pass
+    jmp 8f
+5:  cmp qword ptr [rax + RVP_doc], 0
+    jne 7f
+    mov rdi, rax                # its tab is gone: so is it
+    call forget
+7:  xor r12d, r12d              # the list may have changed: from its start
+    jmp 2b
+8:  EPILOGUE
+
+# FN review_timeout() -> eax ms until review_tick has something to do, or -1
+FN review_timeout
+    PROLOGUE
+    mov r12d, -1
+    xor r13d, r13d
+1:  cmp r13, [rip + proposals + VEC_len]
+    jae 5f
+    mov rax, [rip + proposals + VEC_ptr]
+    mov rbx, [rax + r13*8]
+    inc r13
+    cmp dword ptr [rbx + RVP_pend], 0
+    je 1b
+    xor eax, eax
+    cmp qword ptr [rbx + RVP_owner], 0
+    je 3f
+    cmp dword ptr [rbx + RVP_pend], OFFER_CLOSED
+    jne 3f
+    mov rdi, rbx
+    call offer_locked
+3:  cmp r12d, -1
+    je 4f
+    cmp eax, r12d
+    jge 1b
+4:  mov r12d, eax
+    jmp 1b
+5:  cmp qword ptr [rip + show_id], 0
+    je 51f
+    xor r12d, r12d
+51: cmp dword ptr [rip + dim_drawn], 0
+    je 9f
+    call cur_offer
+    xor ecx, ecx
+    test rax, rax
+    jz 6f
+    mov rdi, rax
+    call offer_locked
+    mov ecx, eax
+6:  cmp r12d, -1
+    je 7f
+    cmp ecx, r12d
+    jge 9f
+7:  mov r12d, ecx
+9:  mov eax, r12d
+    EPILOGUE
+
+
 .section .rodata
 .Ltab_prefix: .asciz "Review: "
 .Ldot: .asciz "  \302\267  "
@@ -3394,6 +4128,7 @@ FN review_current
 .Ld_label: .asciz " label="
 .Ld_offer: .asciz " offer=1"
 .Ld_done: .asciz " done="
+.Ld_offer: .asciz " offer=1"
 .Ld_file: .asciz " file="
 .Ld_path: .asciz " path="
 .Ld_plus: .asciz " +"
@@ -3422,6 +4157,22 @@ hunk_words: .quad .Lw_pending, .Lh_accepted, .Lh_rejected, .Lh_stale
 event_words: .quad .Lw_pending, .Lw_accepted, .Lw_rejected, .Lw_stale, .Lw_partial
 dump_words: .quad .Lw_pending, .Lw_accepted, .Lw_rejected, .Lw_stale, .Lw_partial
 
+.Lo_change: .asciz " change"
+.Lo_changes: .asciz " changes"
+.Lo_none: .asciz "offer=none"
+.Lo_offer: .asciz "offer="
+.Lo_file: .asciz " file="
+.Lo_changes_d: .asciz " changes="
+.Lo_decided: .asciz " decided="
+.Lo_edited: .asciz " edited="
+.Lo_scratch: .asciz " scratch="
+.Lo_shown: .asciz " shown="
+.Lo_locked: .asciz " locked="
+
 .bss
 .p2align 3
 .Lrf_tmp: .zero RVF_SIZE
+btn_dim: .long 0                # button(): greyed and not pressed (an offer whose card's lock lasts)
+dim_drawn: .long 0              # an offer's tab was drawn greyed: drawn again when the lock is over
+.p2align 3
+show_id: .quad 0                # an offer whose tab is to be shown after the frame (review_offer_show)

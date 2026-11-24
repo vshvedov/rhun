@@ -75,6 +75,7 @@
 .globl claude_cw
 claude_cw:                      # (claude_cards.s writes its answers here too)
 cw: .zero SB_SIZE               # the message being written
+blk_sb: .zero SB_SIZE           # a part's text block being made (cl_send)
 ksb: .zero SB_SIZE              # an item key, a request id
 asb: .zero SB_SIZE              # the arguments built for argv
 psb: .zero SB_SIZE              # a transcript path
@@ -674,19 +675,54 @@ out_take:
     mov [rdx + 8], r8
 9:  ret
 
-# cl_send(AL*, ptr, len, uuid cstr or 0) -> eax 1 written: {"type":"user","message":{"role":"user",
-#   "content":[{"type":"text","text":T}]},"parent_tool_use_id":null,"session_id":"","uuid":U}: the uuid
-#   comes back in its command_lifecycle and its replay (finding 17). 0 when the connection refused it, or
-#   broke under the write (its close reported that: the state is not the caller's any more)
+# cl_send(AL*, ptr, len, uuid cstr or 0, AP* or 0) -> eax 1 written: {"type":"user","message":{"role":"user",
+#   "content":[BLOCKS]},"parent_tool_use_id":null,"session_id":"","uuid":U}: the uuid comes back in its
+#   command_lifecycle and its replay (finding 17). 0 when the connection refused it, or broke under the write
+#   (its close reported that: the state is not the caller's any more). Phase 4 task 2: with a pack the blocks
+#   go in the extension's order (Tje WV@3691058, findings 38 to 41): the selection or the open file as a text
+#   block, each file (an image {"type":"image","source":{"type":"base64","media_type":M,"data":B}}, a text
+#   {"type":"document","source":{"type":"text","media_type":"text/plain","data":T},"title":NAME}, a PDF
+#   {"type":"document","source":{"type":"base64","media_type":"application/pdf","data":B},"title":NAME}),
+#   each terminal's text, then the prompt's text block, left out when the text is blank and no other block is
+#   a text block; long pastes the prompt holds as "inline_pastes" beside the message (finding 43). The line's
+#   size is known before anything is built: one the connection's queue would refuse is refused here with a
+#   toast, nothing written. Base64 goes straight into cw, once; after a message over 1 MiB, cw gives its
+#   memory back. Locals: [rsp] a text block went, [rsp + 8] the part loop's index
 cl_send:
-    PROLOGUE
+    PROLOGUE 32
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
     mov r14, rcx
-    lea rdi, [rip + cw]
+    mov r15, r8
+    mov rdi, r15
+    call agatt_count
+    test rax, rax
+    jnz 1f
+    xor r15d, r15d              # no part: as before phase 4
+    jmp 2f
+1:  mov rdi, r15                # the line's size, before anything is built
+    mov rsi, r13
+    call line_size
+    mov rcx, [rbx + AL_cn + CN_wbuf + SB_len]
+    sub rcx, [rbx + AL_cn + CN_wpos]
+    add rcx, rax
+    mov edx, [rip + g_conn_queue_max]
+    cmp rcx, rdx
+    jbe 11f
+    lea rdi, [rip + .Lt_too_large]
+    call app_toast
+    xor eax, eax
+    jmp 9f
+11: mov [rsp + 16], rax
+2:  lea rdi, [rip + cw]
     call jw_begin
-    lea rdi, [rip + cw]
+    test r15, r15
+    jz 21f
+    lea rdi, [rip + cw]         # cw grows once
+    mov rsi, [rsp + 16]
+    call sb_reserve
+21: lea rdi, [rip + cw]
     call jw_obj
     lea rdi, [rip + cw]
     lea rsi, [rip + .Lk_type]
@@ -710,7 +746,30 @@ cl_send:
     call jw_key
     lea rdi, [rip + cw]
     call jw_arr
-    lea rdi, [rip + cw]
+    mov qword ptr [rsp], 0
+    test r15, r15
+    jz 3f
+    mov rdi, r15                # the context, the files, the terminals
+    mov esi, 1
+    call put_parts
+    or [rsp], rax
+    mov rdi, r15
+    mov esi, 2
+    call put_parts
+    mov rdi, r15
+    mov esi, 3
+    call put_parts
+    or [rsp], rax
+    xor ecx, ecx                # the prompt's own block: when its text is not blank, when there is no
+31: cmp rcx, r13                #   other block, or when another is a text block
+    jae 32f
+    cmp byte ptr [r12 + rcx], ' '
+    ja 3f
+    inc rcx
+    jmp 31b
+32: cmp qword ptr [rsp], 0
+    je 4f
+3:  lea rdi, [rip + cw]
     call jw_obj
     lea rdi, [rip + cw]
     lea rsi, [rip + .Lk_type]
@@ -727,7 +786,7 @@ cl_send:
     call jw_str
     lea rdi, [rip + cw]
     call jw_end_obj             # the text block
-    lea rdi, [rip + cw]
+4:  lea rdi, [rip + cw]
     call jw_end_arr
     lea rdi, [rip + cw]
     call jw_end_obj             # the message
@@ -752,10 +811,18 @@ cl_send:
     lea rdi, [rip + cw]
     mov rsi, r14
     call jw_cstr
-1:  lea rdi, [rip + cw]
+1:  mov rdi, r15
+    call put_pastes
+    lea rdi, [rip + cw]
     call jw_end_obj
     mov rdi, rbx
     call cl_write
+    mov r14d, eax
+    cmp qword ptr [rip + cw + SB_cap], 1 << 20  # a big message: cw gives its memory back
+    jbe 5f
+    lea rdi, [rip + cw]
+    call sb_free
+5:  mov eax, r14d
     test eax, eax
     jz 9f
     xor eax, eax                # the write broke the connection (its close ran, cl_close): not sent
@@ -763,6 +830,319 @@ cl_send:
     jne 9f
     inc qword ptr [rbx + AL_turns]
     mov eax, 1
+9:  EPILOGUE
+
+# line_size(AP*, text len) -> rax at most the bytes a user line with these parts takes (a text's bytes count six
+#   times: escaped, a byte can become \u00XX)
+line_size:
+    PROLOGUE
+    mov rbx, rdi
+    imul r12, rsi, 6
+    add r12, 1024
+    xor r13d, r13d
+1:  mov rdi, rbx
+    call agatt_count
+    cmp r13, rax
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r13
+    call agatt_part
+    mov r14, rax
+    inc r13
+    add r12, 512
+    mov rdi, [r14 + MP_name]
+    call strlen
+    imul rax, rax, 6
+    add r12, rax
+    mov rdi, [r14 + MP_path]
+    test rdi, rdi
+    jz 2f
+    call strlen
+    imul rax, rax, 6
+    add r12, rax
+2:  mov eax, [r14 + MP_kind]
+    cmp eax, MPK_IMAGE
+    je 3f
+    cmp eax, MPK_PDF
+    je 3f
+    imul rax, [r14 + MP_len], 6
+    add r12, rax
+    jmp 1b
+3:  mov rdi, [r14 + MP_len]
+    call b64_len
+    add r12, rax
+    jmp 1b
+9:  mov rax, r12
+    EPILOGUE
+
+# put_parts(AP*, which: 1 the selection and the open file, 2 the files, 3 the terminals) -> rax 1 when a text
+#   block was written: those parts as blocks into cw
+put_parts:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12d, esi
+    xor r13d, r13d
+    mov qword ptr [rsp], 0
+1:  mov rdi, rbx
+    call agatt_count
+    cmp r13, rax
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r13
+    call agatt_part
+    mov r14, rax
+    inc r13
+    mov eax, [r14 + MP_kind]
+    cmp r12d, 1
+    jne 2f
+    cmp eax, MPK_SELECTION
+    je 11f
+    cmp eax, MPK_OPENFILE
+    jne 1b
+11: mov rdi, r14
+    call put_context
+    mov qword ptr [rsp], 1
+    jmp 1b
+2:  cmp r12d, 2
+    jne 3f
+    cmp eax, MPK_IMAGE
+    jb 1b
+    cmp eax, MPK_TEXT
+    ja 1b
+    mov rdi, r14
+    call put_file
+    jmp 1b
+3:  cmp eax, MPK_TERMINAL
+    jne 1b
+    mov rdi, r14
+    call put_terminal
+    mov qword ptr [rsp], 1
+    jmp 1b
+9:  mov rax, [rsp]
+    EPILOGUE
+
+# text_block(ptr, len): {"type":"text","text":T} into cw
+text_block:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    lea rdi, [rip + cw]
+    call jw_obj
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_type]
+    call jw_key
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_text]
+    call jw_cstr
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lv_text]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, r12
+    mov rdx, r13
+    call jw_str
+    lea rdi, [rip + cw]
+    call jw_end_obj
+    EPILOGUE
+
+# put_context(MP*): the selection's or the open file's text block, in the extension's words
+put_context:
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rip + blk_sb]
+    call sb_clear
+    cmp dword ptr [rbx + MP_kind], MPK_SELECTION
+    jne 2f
+    lea rdi, [rip + blk_sb]
+    lea rsi, [rip + .Lc_sel1]
+    call sb_push_cstr
+    lea rdi, [rip + blk_sb]
+    mov esi, [rbx + MP_l0]
+    call sb_push_u64
+    lea rdi, [rip + blk_sb]
+    lea rsi, [rip + .Lc_sel2]
+    call sb_push_cstr
+    lea rdi, [rip + blk_sb]
+    mov esi, [rbx + MP_l1]
+    call sb_push_u64
+    lea rdi, [rip + blk_sb]
+    lea rsi, [rip + .Lc_sel3]
+    call sb_push_cstr
+    call path_into_blk
+    lea rdi, [rip + blk_sb]
+    lea rsi, [rip + .Lc_sel4]
+    call sb_push_cstr
+    mov rsi, [rbx + MP_data]
+    test rsi, rsi
+    jz 1f
+    lea rdi, [rip + blk_sb]
+    mov rdx, [rbx + MP_len]
+    call sb_push
+1:  lea rdi, [rip + blk_sb]
+    lea rsi, [rip + .Lc_sel5]
+    call sb_push_cstr
+    jmp 8f
+2:  lea rdi, [rip + blk_sb]
+    lea rsi, [rip + .Lc_open1]
+    call sb_push_cstr
+    call path_into_blk
+    lea rdi, [rip + blk_sb]
+    lea rsi, [rip + .Lc_open2]
+    call sb_push_cstr
+8:  mov rdi, [rip + blk_sb + SB_ptr]
+    mov rsi, [rip + blk_sb + SB_len]
+    call text_block
+    EPILOGUE
+
+# path_into_blk(): the part's path (rbx MP*) after what blk_sb holds
+path_into_blk:
+    sub rsp, 8
+    mov rsi, [rbx + MP_path]
+    test rsi, rsi
+    jz 1f
+    lea rdi, [rip + blk_sb]
+    call sb_push_cstr
+1:  add rsp, 8
+    ret
+
+# put_terminal(MP*): <terminal name="NAME">\nTEXT\n</terminal> as a text block (WGt WV@3689862)
+put_terminal:
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rip + blk_sb]
+    call sb_clear
+    lea rdi, [rip + blk_sb]
+    lea rsi, [rip + .Lc_term1]
+    call sb_push_cstr
+    lea rdi, [rip + blk_sb]
+    mov rsi, [rbx + MP_name]
+    call sb_push_cstr
+    lea rdi, [rip + blk_sb]
+    lea rsi, [rip + .Lc_term2]
+    call sb_push_cstr
+    mov rsi, [rbx + MP_data]
+    test rsi, rsi
+    jz 1f
+    lea rdi, [rip + blk_sb]
+    mov rdx, [rbx + MP_len]
+    call sb_push
+1:  lea rdi, [rip + blk_sb]
+    lea rsi, [rip + .Lc_term3]
+    call sb_push_cstr
+    mov rdi, [rip + blk_sb + SB_ptr]
+    mov rsi, [rip + blk_sb + SB_len]
+    call text_block
+    EPILOGUE
+
+# put_file(MP*): an image or a document block; base64 written straight into cw (b64_encode)
+put_file:
+    PROLOGUE
+    mov rbx, rdi
+    cmp qword ptr [rbx + MP_data], 0
+    je 9f                       # (no bytes: never written; a held pack's are gone only after its write)
+    lea rdi, [rip + cw]
+    call jw_obj
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_type]
+    call jw_key
+    lea rsi, [rip + .Lv_document]
+    cmp dword ptr [rbx + MP_kind], MPK_IMAGE
+    jne 1f
+    lea rsi, [rip + .Lv_image]
+1:  lea rdi, [rip + cw]
+    call jw_cstr
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_source]
+    call jw_key
+    lea rdi, [rip + cw]
+    call jw_obj
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_type]
+    call jw_key
+    lea rsi, [rip + .Lv_base64]
+    cmp dword ptr [rbx + MP_kind], MPK_TEXT
+    jne 2f
+    lea rsi, [rip + .Lv_text]
+2:  lea rdi, [rip + cw]
+    call jw_cstr
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_media_type]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, [rbx + MP_mime]
+    call jw_cstr
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_data]
+    call jw_key
+    cmp dword ptr [rbx + MP_kind], MPK_TEXT
+    jne 3f
+    lea rdi, [rip + cw]         # a text: its own characters
+    mov rsi, [rbx + MP_data]
+    mov rdx, [rbx + MP_len]
+    call jw_str
+    jmp 4f
+3:  lea rdi, [rip + cw]         # bytes: base64, which needs no escaping
+    lea rsi, [rip + .Lquote]
+    mov edx, 1
+    call jw_rawn
+    lea rdi, [rip + cw]
+    mov rsi, [rbx + MP_data]
+    mov rdx, [rbx + MP_len]
+    call b64_encode
+    lea rdi, [rip + cw]
+    mov esi, '"'
+    call sb_push_byte
+4:  lea rdi, [rip + cw]
+    call jw_end_obj             # the source
+    cmp dword ptr [rbx + MP_kind], MPK_IMAGE
+    je 5f
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_title]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, [rbx + MP_name]
+    call jw_cstr
+5:  lea rdi, [rip + cw]
+    call jw_end_obj
+9:  EPILOGUE
+
+# put_pastes(AP* or 0): "inline_pastes":[TEXT, ...]: the long pastes the prompt holds (finding 43), when any
+put_pastes:
+    PROLOGUE
+    mov rbx, rdi
+    xor r13d, r13d              # one written
+    xor r12d, r12d
+1:  mov rdi, rbx
+    call agatt_count
+    cmp r12, rax
+    jae 8f
+    mov rdi, rbx
+    mov rsi, r12
+    call agatt_part
+    mov r14, rax
+    inc r12
+    cmp dword ptr [r14 + MP_kind], MPK_PASTE
+    jne 1b
+    test r13d, r13d
+    jnz 2f
+    mov r13d, 1
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_pastes]
+    call jw_key
+    lea rdi, [rip + cw]
+    call jw_arr
+2:  lea rdi, [rip + cw]
+    mov rsi, [r14 + MP_data]
+    mov rdx, [r14 + MP_len]
+    test rsi, rsi
+    jnz 3f
+    lea rsi, [rip + .Lempty]
+3:  call jw_str
+    jmp 1b
+8:  test r13d, r13d
+    jz 9f
+    lea rdi, [rip + cw]
+    call jw_end_arr
 9:  EPILOGUE
 
 # cl_stop(AL*): Stop: {"type":"control_request","request_id":"rN","request":{"subtype":"interrupt"}}, once
@@ -3669,7 +4049,7 @@ task_answer:
 .p2align 3
 .globl claude_drv
 claude_drv:
-    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST | DRVC_QUEUE | DRVC_MODES | DRVC_MODELS | DRVC_EFFORT | DRVC_THINKING
+    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST | DRVC_QUEUE | DRVC_MODES | DRVC_MODELS | DRVC_EFFORT | DRVC_THINKING | DRVC_PARTS | DRVC_CONTEXT | DRVC_MENTIONS
     .quad .Lname, cl_start, cl_send, cl_stop, cl_answer, cl_release, cl_held, cl_auth, cl_terminal
     .quad claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra
     .quad claude_set_thinking, claude_reply, claude_action
@@ -3680,6 +4060,10 @@ claude_drv:
     .quad claude_verb_list      # DRV_verbs: the spinner's (claudecfg.s: the built-in and the user's)
     .quad claude_tips           # DRV_tips: the empty conversation's (claude_session.s)
     .quad cl_task               # DRV_task (phase 3 task 11)
+    .quad cl_words              # DRV_words (phase 4)
+    .long 0, 0                  # DRV_glyph (phase 4 task 13)
+cl_words:                       # DW_*: the driver's words in generic places (phase 4)
+    .quad .Lw_unfocus, .Lw_mention_refused
 cl_types:
     .quad .Lv_stream_event, h_stream, .Lv_assistant, h_assistant, .Lv_system, h_system
     .quad .Lv_result, h_result, .Lv_control_request, h_request, .Lv_control_response, h_response
@@ -3759,6 +4143,28 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lk_nested: .asciz "forwardNestedSubagentToolCalls"
 .Lk_timestamp: .asciz "timestamp"
 .Lk_uuid: .asciz "uuid"
+.Lk_source: .asciz "source"     # phase 4 task 2: a message's parts as content blocks (findings 38 to 43)
+.Lk_media_type: .asciz "media_type"
+.Lk_data: .asciz "data"
+.Lk_title: .asciz "title"
+.Lk_pastes: .asciz "inline_pastes"
+.Lv_image: .asciz "image"
+.Lv_document: .asciz "document"
+.Lv_base64: .asciz "base64"
+.Lquote: .asciz "\""
+.Lc_sel1: .asciz "<ide_selection>The user selected the lines "
+.Lc_sel2: .asciz " to "
+.Lc_sel3: .asciz " from "
+.Lc_sel4: .asciz ":\n"
+.Lc_sel5: .asciz "\n\nThis may or may not be related to the current task.</ide_selection>"
+.Lc_open1: .asciz "<ide_opened_file>The user opened the file "
+.Lc_open2: .asciz " in the IDE. This may or may not be related to the current task.</ide_opened_file>"
+.Lc_term1: .asciz "<terminal name=\""
+.Lc_term2: .asciz "\">\n"
+.Lc_term3: .asciz "\n</terminal>"
+.Lw_unfocus: .asciz "to focus or unfocus Claude"
+.Lw_mention_refused: .asciz "This path can't be @-mentioned, because Claude Code would read it as a different mention: "
+.Lt_too_large: .asciz "This message is too large to send: remove an attachment."
 .Lk_message: .asciz "message"
 .Lk_model: .asciz "model"
 .Lk_role: .asciz "role"

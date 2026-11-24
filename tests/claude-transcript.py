@@ -1927,6 +1927,19 @@ class UserRowTest(TaskEightCase):
         self.command('wait 50')
         self.assertIn(' active=main.c line=12 ', self.command('print-state'))
 
+    def test_a_name_with_a_control_byte_makes_no_chip(self):
+        """A recorded file's name may hold a tab or another control byte: it makes no chip (the chips text is a
+        line a chip, TAB-separated: such a name could make chips of its own), and nothing else of the row's."""
+        odd = self.project / 'a\tx\x7fb.c'
+        odd.write_text('x\n', encoding='utf-8')
+        opened = '<ide_opened_file>The user opened the file %s in the IDE. This may or may not be related to ' \
+                 'the current task.</ide_opened_file>' % odd
+        self.seed_lines([blocks_line(opened, 'explain it')])
+        self.start()
+        self.open_listed()
+        self.assertEqual(self.prompt(0)['chips'], '0')
+        self.assertEqual([p for p in self.rows_of('content')[0][1] if p.startswith('chip ')], [])
+
     def test_an_image_prompt_is_a_chip_and_no_meta_row(self):
         self.seed_lines([blocks_line('what is this', image=True),
                          user_line('[Image: source: /tmp/claude/images/1.png]', isMeta=True), reply('a dot')])

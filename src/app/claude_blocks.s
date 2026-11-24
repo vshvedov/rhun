@@ -2631,7 +2631,8 @@ path_ok:
 
 # push_chip(label ptr, len, target ptr, len, kind byte): a chip into pchips, "KIND\tLABEL\tTARGET" (agentatt.s's
 #   chips text: i image, d document, s selection, f opened file, t terminal, b browser tab; a line feed before it
-#   when there are chips already; 16 at most)
+#   when there are chips already; 16 at most; control bytes in the label and the target are blanks, the target
+#   is cut at CHIP_PATH_MAX)
 push_chip:
     PROLOGUE 16
     mov r12, rdi
@@ -2669,17 +2670,41 @@ push_chip:
 4:  lea rdi, [rip + pchips]
     mov esi, 9
     call sb_push_byte
-    test r15, r15
+    cmp r15, CHIP_PATH_MAX      # the target: at most CHIP_PATH_MAX bytes, a control byte a blank (a file's
+    jbe 5f                      #   name may hold a line feed or a tab: it would make a chip of its own)
+    mov r15, CHIP_PATH_MAX
+5:  xor ebx, ebx
+6:  cmp rbx, r15
+    jae 9f
+    movzx esi, byte ptr [r14 + rbx]
+    inc rbx
+    cmp esi, ' '
+    jb 61f
+    cmp esi, 0x7f
+    jne 62f
+61: mov esi, ' '
+62: lea rdi, [rip + pchips]
+    call sb_push_byte
+    jmp 6b
+9:  EPILOGUE
+
+# place_hash(): ":HASH" after a place in t3 when the line being read has one (agents_line_hash)
+place_hash:
+    PROLOGUE
+    mov rbx, [rip + agents_line_hash]
+    test rbx, rbx
     jz 9f
-    lea rdi, [rip + pchips]
-    mov rsi, r14
-    mov rdx, r15
-    call sb_push
+    lea rdi, [rip + t3]
+    mov esi, ':'
+    call sb_push_byte
+    lea rdi, [rip + t3]
+    mov rsi, rbx
+    call sb_push_u64
 9:  EPILOGUE
 
 # media_chip(AS*, block, type jv): an image block of a prompt is the chip "[Image]" whose target is its place,
-#   "@OFF:LEN:N" (the record's line in the session's file, its n-th image: agentimg.s reads the picture again
-#   from it; "-" without a place), a document its title, else "Document"; any other block nothing
+#   "@OFF:LEN:N:HASH" (the record's line in the session's file, its n-th image, the line's hash: agentimg.s reads
+#   the picture again from it when the line read again is the same; "-" without a place), a document its title, else "Document"; any other block nothing
 media_chip:
     PROLOGUE
     mov rbx, rdi

@@ -80,6 +80,7 @@ slot_ser: .zero 4 * SLOTS       #   and the frame it was drawn in last (0: free)
 tab_key: .zero 8 * TABS_KEPT    # the tabs opened from a row's text: (session path, call id, part) hashed,
 tab_doc: .zero 4 * TABS_KEPT    #   and the document's DOC_id
 tab_next: .long 0
+rw_chips: .long 0               # phase 4 task 7: rw_wrap draws a prompt's mention chips (agents_line_chips)
 lr_mode: .long 0                # tr_lay's: its mode, the unit's slot, the row's left and top
 lr_slot: .long 0
 lr_x: .long 0
@@ -1401,7 +1402,20 @@ rw_wrap:
     jle 9f
     cmp eax, [rbx + RW_bot]
     jge 9f
-    mov rdx, [rbx + RW_face]
+    cmp dword ptr [rip + rw_chips], 0   # phase 4 task 7: a prompt's mention chips behind the line (agents.s)
+    je 86f
+    push rax
+    push rax
+    mov rdi, [rbx + RW_text]
+    mov rsi, r13
+    mov rdx, [rsp + 16 + 8]
+    mov ecx, [rbx + RW_x]
+    mov r8d, eax
+    mov r9d, [rbx + RW_lh]
+    call agents_line_chips
+    pop rax
+    pop rax
+86: mov rdx, [rbx + RW_face]
     add eax, [rdx + FACE_ascent]
     mov [rsp + 36], eax         # the baseline
     mov eax, [rbx + RW_x]
@@ -7109,8 +7123,14 @@ prompt_lay:
     mov edx, SELP_PROMPT
     mov r8d, [rsp + 44]
     call agsel_plain
-    lea rdi, [rsp + 96]
+    test r12, r12               # phase 4 task 7: its mentions as chips (a queued one's drawn as text)
+    js 41f
+    mov rdi, r12
+    call agents_chips_begin
+    mov dword ptr [rip + rw_chips], 1
+41: lea rdi, [rsp + 96]
     call rw_wrap
+    mov dword ptr [rip + rw_chips], 0
     cmp dword ptr [rsp + 48], 0 # cut: a fade over its last pixels
     je 4f
     test dword ptr [r13 + AM_flags], AMF_OPEN

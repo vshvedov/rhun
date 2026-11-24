@@ -39,6 +39,8 @@ md_parses: .quad 0              # replies parsed (print-agent-row)
 pend_link: .quad 0              # a link clicked in a reply, followed after the frame (owned cstr), or 0
 pend_cwd: .quad 0               # and the checkout it was in (owned), or 0
 pend_who: .quad 0               # a web link's: who asks to open it (links_ask_open), or 0
+chip_id: .long 0                # (phase 4 task 7) the prompt drawn: its chips' first id and their count
+chip_n: .long 0
 chip_tip: .zero SB_SIZE         # (phase 4 task 7) a mention chip's tip, its link
 ff_last: .long 0, 0             # (phase 4 task 7) follow_file: a range's last line, 0 none
 cn_serial: .long 0              #   the mention chips drawn in a frame (print-agent-bubble-chips)
@@ -6705,10 +6707,8 @@ F WR_draw, 4
 F WR_top, 4
 F WR_bot, 4
 F WR_mute, 8            # the byte drawn muted from on (a prompt's truncation marker), -1 none
-F WR_chips, 4           # (phase 4 task 7) 1: the text's mention chips are drawn as chips (a prompt's bubble)
-F WR_id, 4              #   their first id (ID_AG_MD's range of the row: a prompt has no Markdown)
-F WR_n, 4               #   the chips drawn so far
-F WR_pad, 4
+F WR_id, 4              # (phase 4 task 7) a prompt's mention chips: their first id (ID_AG_MD's range of
+F WR_n, 4               #   the row: a prompt has no Markdown), the chips drawn so far (bubble_chips)
 ENDSTRUCT WR_SIZE
 
 wrap:
@@ -6787,18 +6787,7 @@ wrap:
     jl 5f
     cmp eax, [rbx + WR_bot]
     jg 5f
-    cmp dword ptr [rbx + WR_chips], 0   # (phase 4 task 7) the line's mention chips behind its text
-    je 50f
-    push rax
-    push rax
-    mov rdi, rbx
-    mov rsi, r13
-    mov rdx, [rsp + 8 + 16]
-    mov ecx, eax
-    call bubble_chips
-    pop rax
-    pop rax
-50: mov rdx, [rbx + WR_face]
+    mov rdx, [rbx + WR_face]
     add eax, [rdx + FACE_ascent]
     mov edx, eax
     mov rdi, [rbx + WR_face]
@@ -7273,7 +7262,6 @@ msg_doc:
 # so a message wraps the same in both.
 wr_setup:
     mov qword ptr [rdi + WR_mute], -1
-    mov dword ptr [rdi + WR_chips], 0
     mov dword ptr [rdi + WR_n], 0
     mov rax, [rbx + AM_text]
     mov [rdi + WR_text], rax
@@ -8387,20 +8375,6 @@ draw_msg:
     mov [rsp + WR_mute], rax
 33: mov rax, [rsp + WR_mute]    # (print-agent-row muted=)
     mov [rbx + AM_mute], rax
-    cmp dword ptr [rbx + AM_role], R_USER   # (phase 4 task 7) a prompt's mentions are chips
-    jne 34f
-    mov rcx, [rip + th_as]
-    mov rax, rbx
-    sub rax, [rcx + AS_msgs + VEC_ptr]
-    xor edx, edx
-    mov ecx, AM_SIZE
-    div rcx
-    and eax, 255
-    shl eax, 12
-    add eax, ID_AG_MD
-    mov [rsp + WR_id], eax
-    mov dword ptr [rsp + WR_chips], 1
-34:
     mov dword ptr [rsp + WR_draw], 1
     mov eax, [rip + g_cv + CV_cy0]
     mov [rsp + WR_top], eax
@@ -8945,6 +8919,37 @@ link_scheme:
 
 # ---- phase 4 task 7: a prompt's mention chips ----
 
+# FN agents_chips_begin(row): the prompt of row (of the open conversation) is about to be drawn: its mention
+#   chips' ids from ID_AG_MD's range of the row, counted from 0 (agentrows.s's prompt_lay)
+FN agents_chips_begin
+    mov eax, edi
+    and eax, 255
+    shl eax, 12
+    add eax, ID_AG_MD
+    mov [rip + chip_id], eax
+    mov dword ptr [rip + chip_n], 0
+    ret
+
+# FN agents_line_chips(text, line start, line end, x, top, line h): a line of that prompt's bubble drawn at
+#   (x, top): its mention chips behind its text (bubble_chips; agentrows.s's rw_wrap, face ag_fui)
+FN agents_line_chips
+    PROLOGUE WR_SIZE + 16
+    mov [rsp + WR_text], rdi
+    mov rax, [rip + ag_fui]
+    mov [rsp + WR_face], rax
+    mov [rsp + WR_x], ecx
+    mov [rsp + WR_lh], r9d
+    mov eax, [rip + chip_id]
+    mov [rsp + WR_id], eax
+    mov eax, [rip + chip_n]
+    mov [rsp + WR_n], eax
+    mov ecx, r8d
+    lea rdi, [rsp]
+    call bubble_chips
+    mov eax, [rsp + WR_n]
+    mov [rip + chip_n], eax
+    EPILOGUE
+
 # bubble_chips(WR*, line start, line end, top): the mention chips of a line of a prompt's bubble (agentmention.s:
 #   a path, or a terminal) as T_BG boxes behind their text; the first 16 of the prompt are buttons, a path's
 #   (tip "Open PATH") opening its file at its lines after the frame (the thread's pending link), a terminal's
@@ -9342,9 +9347,9 @@ follow_file:
     jne .Lff_open
     inc rdi
     cmp byte ptr [rdi], 'L'
-    jne 42f
+    jne 43f
     inc rdi
-42: mov esi, 12
+43: mov esi, 12
     call parse_u64
     test rdx, rdx
     jz .Lff_open

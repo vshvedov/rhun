@@ -1657,10 +1657,11 @@ class Phase4(Base):
             fake.send({'type': 'control_request', 'request_id': 'r2-%d' % attempt, 'request': {'subtype': 'mcp_status'}})
             status = self.until_served(fake, lambda r: r.get('type') == 'control_response'
                                        and r['response'].get('request_id') == 'r2-%d' % attempt)
-            if status['response']['response']['mcpServers']:
+            sdk = [m for m in status['response']['response']['mcpServers'] if m.get('source') == 'sdk']
+            if sdk:                             # (the configured servers come first: p7b's)
                 break
             time.sleep(0.05)
-        self.assertEqual(status['response']['response']['mcpServers'],
+        self.assertEqual(sdk,
                          [{'name': 'rhun', 'status': 'connected', 'serverInfo': {'name': 'rhun', 'version': '0.19.2'},
                            'transport': 'sdk', 'scope': 'dynamic', 'source': 'sdk',
                            'tools': [{'name': 'getDiagnostics', 'annotations': {'readOnly': True}}]}])

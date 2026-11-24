@@ -496,7 +496,7 @@ class QueueTest(CfgCase):
         self.assertEqual(start['env']['CLAUDE_CODE_QUESTION_PREVIEW_FORMAT'], 'markdown')
         self.assertEqual(self.initialize(), [{'promptSuggestions': True, 'supportedDialogKinds': DIALOG_KINDS,
                                              'perTaskStopAffordance': True,       # phase 3 task 4
-                                             'forwardNestedSubagentToolCalls': True, 'hooks': AUTOSAVE_HOOKS}])
+                                             'forwardNestedSubagentToolCalls': True}])
         # the project's choices, the remembered default mode and the bypass setting at the next start
         self.command('agent-cfg-set model sonnet')
         self.command('agent-cfg-set effort low')
@@ -535,7 +535,7 @@ class QueueTest(CfgCase):
         self.chat('hello')
         self.assertEqual(self.initialize(), [{'promptSuggestions': False, 'supportedDialogKinds': DIALOG_KINDS,
                                              'perTaskStopAffordance': True,       # phase 3 task 4
-                                             'forwardNestedSubagentToolCalls': True, 'hooks': AUTOSAVE_HOOKS}])
+                                             'forwardNestedSubagentToolCalls': True}])
 
 
 SECTIONS = ['Context', 'Model', 'Customize', 'Settings', 'Support', 'Slash Commands']
@@ -2434,7 +2434,6 @@ class UserSettingsScanTest(unittest.TestCase):
         self.assertNotIn('update_settings', SCANNED)
 
 
-AUTOSAVE_HOOKS = {'PreToolUse': [{'matcher': 'Edit|Write|Read', 'hookCallbackIds': ['hook_1']}]}   # p8
 
 
 class SeamWordsTest(unittest.TestCase):

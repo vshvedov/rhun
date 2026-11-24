@@ -245,9 +245,11 @@ class ConfigTest(CfgCase):
             [c.split('\t')[0] for c in self.lines('cmd')]), 'the changed list')
         self.assertEqual(names, ['compact', 'usage', 'review', 'resume', 'continue', 'clear', 'model', 'plan',
                                  'copy', 'login', 'logout', 'status', 'skills', 'help', 'memory', 'context',
-                                 'btw', 'tasks', 'bashes', 'bookmarks', 'remote-control', 'rc', 'chrome', 'agents'])
+                                 'btw', 'tasks', 'bashes', 'bookmarks', 'remote-control', 'rc', 'chrome', 'agents',
+                                 'mcp', 'hooks', 'permissions', 'allowed-tools', 'sandbox', 'plugin', 'plugins',
+                                 'marketplace'])
         # (resume, continue: phase 6's history; status to context: phase 7's dialogs; btw to agents: p7c's,
-        #   claude-panels.py)
+        #   claude-panels.py; mcp to marketplace: p7b's configuration dialogs, claude-dialogs2.py)
         self.assertIn('review\tSkill review\t-\t-\t-\tsend\tcli', self.lines('cmd'))
         text = self.state_file().read_text(encoding='utf-8')
         self.assertIn('cmd\treview\t', text)

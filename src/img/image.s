@@ -245,6 +245,141 @@ FN image_decode
     mov eax, -1
     EPILOGUE
 
+# FN image_size(ptr, len, fmt) -> eax width, edx height from the header alone (nothing allocated, nothing
+#   decoded); 0, 0 when the header does not say (cut short, a format without a fixed header: PNM)
+FN image_size
+    mov r8, rdi
+    mov r9, rsi
+    cmp edx, IMF_PNG
+    je .Lsz_png
+    cmp edx, IMF_JPEG
+    je .Lsz_jpeg
+    cmp edx, IMF_GIF
+    je .Lsz_gif
+    cmp edx, IMF_BMP
+    je .Lsz_bmp
+    cmp edx, IMF_QOI
+    je .Lsz_qoi
+    cmp edx, IMF_TGA
+    je .Lsz_tga
+    cmp edx, IMF_ICO
+    je .Lsz_ico
+    jmp .Lsz_none
+.Lsz_png:                       # IHDR: width and height, big-endian, at 16 and 20
+    cmp r9, 24
+    jb .Lsz_none
+    mov eax, [r8 + 16]
+    bswap eax
+    mov edx, [r8 + 20]
+    bswap edx
+    jmp .Lsz_check
+.Lsz_qoi:
+    cmp r9, 14
+    jb .Lsz_none
+    mov eax, [r8 + 4]
+    bswap eax
+    mov edx, [r8 + 8]
+    bswap edx
+    jmp .Lsz_check
+.Lsz_gif:                       # the logical screen
+    cmp r9, 10
+    jb .Lsz_none
+    movzx eax, word ptr [r8 + 6]
+    movzx edx, word ptr [r8 + 8]
+    jmp .Lsz_check
+.Lsz_tga:
+    cmp r9, 18
+    jb .Lsz_none
+    movzx eax, word ptr [r8 + 12]
+    movzx edx, word ptr [r8 + 14]
+    jmp .Lsz_check
+.Lsz_ico:                       # the first entry: 0 is 256
+    cmp r9, 22
+    jb .Lsz_none
+    movzx eax, byte ptr [r8 + 6]
+    movzx edx, byte ptr [r8 + 7]
+    test eax, eax
+    jnz 1f
+    mov eax, 256
+1:  test edx, edx
+    jnz .Lsz_check
+    mov edx, 256
+    jmp .Lsz_check
+.Lsz_bmp:
+    cmp r9, 26
+    jb .Lsz_none
+    cmp dword ptr [r8 + 14], 12
+    jne 1f
+    movzx eax, word ptr [r8 + 18]
+    movzx edx, word ptr [r8 + 20]
+    jmp .Lsz_check
+1:  mov eax, [r8 + 18]
+    mov edx, [r8 + 22]
+    test edx, edx               # top-down: a negative height
+    jns .Lsz_check
+    neg edx
+    jmp .Lsz_check
+.Lsz_jpeg:                      # the first start-of-frame segment's lines and samples per line
+    mov ecx, 2
+1:  lea rax, [rcx + 9]
+    cmp rax, r9
+    ja .Lsz_none
+    cmp byte ptr [r8 + rcx], 0xff
+    jne .Lsz_none
+    movzx eax, byte ptr [r8 + rcx + 1]
+    cmp eax, 0xff               # fill bytes
+    jne 2f
+    inc rcx
+    jmp 1b
+2:  cmp eax, 0xd8               # markers without a length
+    je 3f
+    cmp eax, 0x01
+    je 3f
+    mov edx, eax
+    and edx, 0xf8
+    cmp edx, 0xd0
+    je 3f
+    cmp eax, 0xd9               # the end, or the scan before any frame
+    je .Lsz_none
+    cmp eax, 0xda
+    je .Lsz_none
+    cmp eax, 0xc0
+    jb 4f
+    cmp eax, 0xcf
+    ja 4f
+    cmp eax, 0xc4               # DHT, JPG, DAC are not frames
+    je 4f
+    cmp eax, 0xc8
+    je 4f
+    cmp eax, 0xcc
+    je 4f
+    movzx eax, word ptr [r8 + rcx + 5]
+    rol ax, 8
+    movzx edx, ax
+    movzx eax, word ptr [r8 + rcx + 7]
+    rol ax, 8
+    movzx eax, ax
+    jmp .Lsz_check
+3:  add rcx, 2
+    jmp 1b
+4:  movzx eax, word ptr [r8 + rcx + 2]
+    rol ax, 8
+    movzx eax, ax
+    cmp eax, 2
+    jb .Lsz_none
+    lea rcx, [rcx + rax + 2]
+    jmp 1b
+.Lsz_check:
+    test eax, eax
+    jle .Lsz_none
+    test edx, edx
+    jle .Lsz_none
+    ret
+.Lsz_none:
+    xor eax, eax
+    xor edx, edx
+    ret
+
 # image_free(IMG*)
 FN image_free
     push rbx

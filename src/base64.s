@@ -1,8 +1,9 @@
 # Base64 (RFC 4648, the standard alphabet, padded, no line breaks): an encoder that writes straight into a
 # byte buffer, grown once. Generic: an agent's attachments are written with it, and a WebSocket handshake can
-# use it. The decoder is snippetbase64.s's.
+# use it. b64_decode has no size limit of its own (snippetbase64.s's decoder is the snippets').
 #
 #   b64_len(n) -> rax                   the characters n bytes make (padding included)
+#   b64_decode(sb, ptr, len) -> eax 1   the bytes of a Base64 text appended (0: not Base64)
 #   b64_encode(sb, ptr, len)            appends them (the sb grows once, sb_reserve first); g_b64_out counts
 #                                       every character written since start (print-agent-attachments encoded=)
 .include "rhun.inc"
@@ -101,5 +102,95 @@ FN b64_encode
     add [rip + g_b64_out], r14
     EPILOGUE
 
+
+# FN b64_decode(sb, ptr, len) -> eax 1 with the bytes appended to sb (grown once), 0 when the text is not Base64
+#   (a character outside the alphabet, padding before the end, a stray last character). Blanks are skipped;
+#   padding may be left out
+FN b64_decode
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov rax, r13                # at most 3 bytes per 4 characters
+    shr rax, 2
+    imul rax, rax, 3
+    add rax, 3
+    mov rsi, rax
+    mov rdi, rbx
+    call sb_reserve             # rax: where the bytes go
+    mov rdi, rax
+    lea r8, [rip + .Lunalpha]
+    xor ecx, ecx                # characters read
+    xor r9d, r9d                # bits gathered
+    xor r10d, r10d              # how many characters in them (0-3)
+    xor r11d, r11d              # padding seen
+1:  cmp rcx, r13
+    jae 5f
+    movzx eax, byte ptr [r12 + rcx]
+    inc rcx
+    movzx edx, byte ptr [r8 + rax]
+    cmp edx, 254
+    je 1b                       # a blank
+    cmp eax, '='
+    je 4f
+    test r11d, r11d
+    jnz 8f                      # a character after padding
+    cmp edx, 64
+    jae 8f
+    shl r9d, 6
+    or r9d, edx
+    inc r10d
+    cmp r10d, 4
+    jb 1b
+    mov eax, r9d                # four characters: three bytes
+    shr eax, 16
+    mov [rdi], al
+    mov eax, r9d
+    shr eax, 8
+    mov [rdi + 1], al
+    mov eax, r9d
+    mov [rdi + 2], al
+    add rdi, 3
+    xor r9d, r9d
+    xor r10d, r10d
+    jmp 1b
+4:  inc r11d
+    jmp 1b
+5:  cmp r10d, 1                 # the tail: two or three characters make one or two bytes
+    je 8f
+    cmp r10d, 2
+    jne 6f
+    mov eax, r9d
+    shr eax, 4
+    mov [rdi], al
+    inc rdi
+    jmp 7f
+6:  cmp r10d, 3
+    jne 7f
+    mov eax, r9d
+    shr eax, 10
+    mov [rdi], al
+    mov eax, r9d
+    shr eax, 2
+    mov [rdi + 1], al
+    add rdi, 2
+7:  mov byte ptr [rdi], 0
+    sub rdi, [rbx + SB_ptr]
+    mov [rbx + SB_len], rdi
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
 .section .rodata
 .Lalpha: .ascii "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+
+.Lunalpha:
+    .byte 255, 255, 255, 255, 255, 255, 255, 255, 255, 254, 254, 255, 255, 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255
+    .byte 254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 62, 255, 255, 255, 63, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 255, 255, 255, 255, 255, 255
+    .byte 255, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 255, 255, 255, 255, 255
+    .byte 255, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 255, 255, 255, 255, 255
+    .byte 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255
+    .byte 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255
+    .byte 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255
+    .byte 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255

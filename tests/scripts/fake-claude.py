@@ -180,7 +180,8 @@ if fake_claude_config.is_subcommand(ARGS):
 
 
 VALUED = {'--output-format', '--input-format', '--permission-prompt-tool', '--setting-sources',
-          '--max-thinking-tokens', '--resume', '--session-id', '--permission-mode', '--model', '--effort', '--thinking'}
+          '--max-thinking-tokens', '--resume', '--session-id', '--permission-mode', '--model', '--effort', '--thinking',
+          '--resume-session-at'}      # p6b: a fork from a message (finding 102)
 SWITCHES = {'-p', '--print', '--verbose', '--include-partial-messages', '--fork-session', '--replay-user-messages',
             '--allow-dangerously-skip-permissions', '--include-hook-events'}
 SOURCES = ('user', 'project', 'local')
@@ -510,21 +511,47 @@ TRANSCRIPT = os.path.join(PROJECTS, SID + '.jsonl')
 FORK_DUE = [RESUME is not None and FORK]    # a copy whose file is not written yet
 
 
+RESUME_AT = option('--resume-session-at')   # p6b: the last entry a copy keeps (finding 102)
+
+
 def fork_copy():
-    """A copy: the source's records under the new id (07b-fork's transcript holds the whole history)."""
+    """A copy: the source's records under the new id (07b-fork's transcript holds the whole history). p6b: with
+    --resume-session-at=ID the history up to and including the entry ID (lines without a uuid, the bookkeeping,
+    after it too, as 2.1.330 copied the file-history snapshots), and the next line's parent is ID."""
     if not FORK_DUE[0]:
         return
     FORK_DUE[0] = False
     os.makedirs(PROJECTS, exist_ok=True)
+    past = False
     with open(os.path.join(PROJECTS, RESUME + '.jsonl'), encoding='utf-8') as src, \
             open(TRANSCRIPT, 'a', encoding='utf-8') as dst:
         for line in src:
             if not line.strip():
                 continue
             record = json.loads(line)
+            if past and 'uuid' in record:
+                continue
             if 'sessionId' in record:
                 record['sessionId'] = SID
             dst.write(json.dumps(record, ensure_ascii=False) + '\n')
+            if RESUME_AT is not None and record.get('uuid') == RESUME_AT:
+                past = True
+    if RESUME_AT is not None and 'CHAIN' in globals():
+        CHAIN[0] = RESUME_AT
+
+
+if RESUME is not None and FORK and RESUME_AT is not None:     # p6b: an entry the source does not have (finding 102)
+    with open(os.path.join(PROJECTS, RESUME + '.jsonl'), encoding='utf-8') as _src:
+        _found = any(json.loads(line).get('uuid') == RESUME_AT for line in _src if line.strip())
+    if not _found:
+        emit({'type': 'result', 'subtype': 'error_during_execution', 'duration_ms': 0, 'duration_api_ms': 0,
+              'is_error': True, 'num_turns': 0, 'stop_reason': None, 'session_id': SID,
+              'total_cost_usd': 0, 'usage': usage(), 'modelUsage': {}, 'permission_denials': [],
+              'uuid': str(uuid.uuid4()), 'errors': ['No message found with message.uuid of: ' + RESUME_AT]})
+        sys.stderr.write('No message found with message.uuid of: %s\n' % RESUME_AT)
+        sys.stdout.flush()
+        log(exit=1)
+        sys.exit(1)
 
 
 if not ENV.get('FAKE_CLAUDE_FORK_LATE'):
@@ -563,6 +590,17 @@ register()
 
 
 CHAIN = [None]                      # the uuid of the file's last message line: the next line's parentUuid
+if RESUME is not None and FORK and RESUME_AT is not None:   # p6b: a copy goes on from the entry it keeps
+    CHAIN[0] = RESUME_AT
+elif RESUME is not None and os.path.exists(TRANSCRIPT):     # p6b: a resumed one from its last line
+    with open(TRANSCRIPT, encoding='utf-8') as _file:
+        for _line in _file:
+            try:
+                _uid = json.loads(_line).get('uuid') if _line.strip() else None
+            except ValueError:
+                _uid = None
+            if isinstance(_uid, str):
+                CHAIN[0] = _uid
 CALL_LINES = {}                     # tool_use id -> the uuid of the file line with the call
 BLOCK_INDEX = {}                    # message id -> the next block's apiBlockIndex
 LAST_ASSISTANT = [None]             # the last assistant record sent (FAKE_CLAUDE_PRESERVED sends it again)
@@ -4654,6 +4692,305 @@ def handle(message):                        # noqa: F811 (the dialogs' requests 
     _handle_before_dialogs(message)
 # ---- end of phase 7's dialogs ----
 
+
+
+# ---- p6b (claude-chat-p6b): fork from a message, rewind, export, a cut turn run again (README findings 102 to
+# 106). CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true: each model turn's prompt line gets a file-history-snapshot
+# line (the files touched so far, as they were when the turn began; a file first touched in the turn is added to
+# it with isSnapshotUpdate, its backup taken before the write), backups in <config>/file-history/<id>/ named
+# sha256(path)[:16]@vN, as 2.1.330 does; a resumed or copied conversation reads its snapshots back.
+# rewind_files {user_message_id, dry_run} answers as 2.1.330 did (canRewind, filesChanged, insertions, deletions;
+# skippedLinks 0 for a real one; "File rewinding is not enabled." without the variable; "No file checkpoint found
+# for this message."). export_conversation answers {text, default_filename} ("\n❯ PROMPT" and "\n⏺ REPLY" lines,
+# the file name from the start's local time and the first prompt). CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1 with
+# --resume: when the file's last message line is the user's and younger than ..._MAX_AGE_MS (default an hour),
+# the turn runs again by itself after initialize: lifecycle started, system/init, requesting, then the reply as
+# 2.1.330's re-run had it (the assistant record whole, no stream events, and the result, both with
+# user_message_uuid the cut prompt's line uuid and resume_reason "interrupted_turn"). FAKE_CLAUDE_EXPORT_FAIL:
+# export_conversation is answered with that error (unrecorded).
+import calendar
+import difflib
+import hashlib
+
+CKPT = ENV.get('CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING') == 'true'
+SNAPSHOTS = {}                      # message uuid -> {path: content or None}
+SNAP_ORDER = []                     # the message uuids in the file's order
+TRACKED = []                        # every path touched, in order
+TURN_SNAP = [None]                  # the snapshot of the turn that runs
+
+
+def ckpt_backup(path, content, version):
+    if content is None:
+        return None
+    name = hashlib.sha256(path.encode('utf-8')).hexdigest()[:16] + '@v%d' % version
+    folder = os.path.join(config_dir(), 'file-history', SID)
+    os.makedirs(folder, exist_ok=True)
+    with open(os.path.join(folder, name), 'w', encoding='utf-8') as stream:
+        stream.write(content)
+    return name
+
+
+def ckpt_read(path):
+    try:
+        with open(path, encoding='utf-8') as stream:
+            return stream.read()
+    except OSError:
+        return None
+
+
+def ckpt_line(mid, update):
+    backups = {}
+    for path in TRACKED:
+        if path in SNAPSHOTS[mid]:
+            version = SNAP_ORDER.index(mid) + 1
+            backups[path] = {'backupFileName': ckpt_backup(path, SNAPSHOTS[mid][path], version), 'version': version,
+                             'backupTime': now_iso()}
+    fork_copy()
+    os.makedirs(os.path.dirname(TRANSCRIPT), exist_ok=True)
+    with open(TRANSCRIPT, 'a', encoding='utf-8') as stream:
+        stream.write(json.dumps({'type': 'file-history-snapshot', 'messageId': mid, 'snapshot': {
+            'messageId': mid, 'trackedFileBackups': backups, 'timestamp': now_iso()}, 'isSnapshotUpdate': update},
+            ensure_ascii=False) + '\n')
+
+
+def ckpt_load(path, source_sid):
+    """The snapshots a file holds (a resumed conversation's, a copy's source's)."""
+    try:
+        lines = open(path, encoding='utf-8').read().splitlines()
+    except OSError:
+        return
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        if record.get('type') != 'file-history-snapshot':
+            continue
+        mid = record.get('messageId')
+        if mid not in SNAPSHOTS:
+            SNAPSHOTS[mid] = {}
+            SNAP_ORDER.append(mid)
+        for name, backup in (record.get('snapshot', {}).get('trackedFileBackups') or {}).items():
+            if name not in TRACKED:
+                TRACKED.append(name)
+            file_ = backup.get('backupFileName')
+            SNAPSHOTS[mid][name] = None if file_ is None else ckpt_read(
+                os.path.join(config_dir(), 'file-history', source_sid, file_))
+
+
+if RESUME is not None:
+    ckpt_load(os.path.join(PROJECTS, RESUME + '.jsonl'), RESUME)
+
+
+def ckpt_touch(path, before):
+    """A file is written in the turn: the first time, its state before the write joins the turn's snapshot."""
+    mid = TURN_SNAP[0]
+    if not CKPT or mid is None or not isinstance(path, str):
+        return
+    if path in TRACKED and path in SNAPSHOTS[mid]:
+        return
+    if path not in TRACKED:
+        TRACKED.append(path)
+    SNAPSHOTS[mid][path] = before
+    ckpt_line(mid, True)
+
+
+_p6b_prompt_line = p4_prompt_line
+_p6b_write_outcome = write_outcome
+_p6b_edit_outcome = edit_outcome
+
+
+def p4_prompt_line(entry, prompt):       # noqa: F811 (p6b: a model turn's snapshot after its prompt line)
+    _p6b_prompt_line(entry, prompt)
+    TURN_SNAP[0] = None
+    if CKPT and CHAIN[0]:
+        mid = CHAIN[0]
+        SNAPSHOTS[mid] = {path: ckpt_read(path) for path in TRACKED}
+        SNAP_ORDER.append(mid)
+        TURN_SNAP[0] = mid
+        ckpt_line(mid, False)
+
+
+def write_outcome(path, content, old=None):     # noqa: F811
+    ckpt_touch(path, old)
+    return _p6b_write_outcome(path, content, old)
+
+
+def edit_outcome(path, text_, old, new, replace_all=False):     # noqa: F811
+    if old in text_:
+        ckpt_touch(path, text_)
+    return _p6b_edit_outcome(path, text_, old, new, replace_all)
+
+
+def ckpt_target(mid):
+    """{path: content or None} of every tracked file at mid's checkpoint: its snapshot's, else the first later
+    snapshot's backup (the file as it was before the turn that first touched it)."""
+    target = dict(SNAPSHOTS[mid])
+    later = SNAP_ORDER[SNAP_ORDER.index(mid) + 1:]
+    for path in TRACKED:
+        if path in target:
+            continue
+        for other in later:
+            if path in SNAPSHOTS.get(other, {}):
+                target[path] = SNAPSHOTS[other][path]
+                break
+    return target
+
+
+def rewind_files(rid, request):
+    mid = request.get('user_message_id')
+    if not CKPT:
+        respond(rid, {'canRewind': False, 'error': 'File rewinding is not enabled.'})
+        return
+    if mid not in SNAPSHOTS:
+        respond(rid, {'canRewind': False, 'error': 'No file checkpoint found for this message.'})
+        return
+    changed, insertions, deletions = [], 0, 0
+    target = ckpt_target(mid)
+    for path, want in target.items():
+        now = ckpt_read(path)
+        if now == want:
+            continue
+        changed.append(path)
+        for line in difflib.ndiff((now or '').splitlines(), (want or '').splitlines()):
+            if line.startswith('+ '):
+                insertions += 1
+            elif line.startswith('- '):
+                deletions += 1
+    if request.get('dry_run') is True:
+        respond(rid, {'canRewind': True, 'filesChanged': changed, 'insertions': insertions, 'deletions': deletions})
+        return
+    for path in changed:
+        if target[path] is None:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        else:
+            with open(path, 'w', encoding='utf-8') as stream:
+                stream.write(target[path])
+    log(rewound={'id': mid, 'files': changed})
+    respond(rid, {'canRewind': True, 'skippedLinks': 0})
+
+
+def export_text():
+    """The conversation as /export renders it (its file's prompts and replies)."""
+    out, first = '', None
+    try:
+        lines = open(TRANSCRIPT, encoding='utf-8').read().splitlines()
+    except OSError:
+        lines = []
+    for line in lines:
+        try:
+            record = json.loads(line)
+        except ValueError:
+            continue
+        content = record.get('message', {}).get('content') if isinstance(record.get('message'), dict) else None
+        if record.get('type') == 'user' and not record.get('isMeta') and isinstance(content, list) \
+                and all(isinstance(b, dict) and b.get('type') == 'text' for b in content):
+            said = '\n'.join(b.get('text', '') for b in content)
+            first = first or said
+            out += '\n❯ ' + said
+        elif record.get('type') == 'assistant' and isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get('type') == 'text':
+                    out += '\n\n⏺ ' + block.get('text', '')
+    slug = '-'.join(re.findall(r'[a-z0-9]+', (first or 'conversation').lower()))[:50] or 'conversation'
+    return out, time.strftime('%Y-%m-%d-%H%M%S', time.localtime(START)) + '-' + slug + '.txt'
+
+
+def export_conversation(rid, request):
+    if ENV.get('FAKE_CLAUDE_EXPORT_FAIL'):
+        respond_error(rid, ENV['FAKE_CLAUDE_EXPORT_FAIL'])
+        return
+    text_, name = export_text()
+    respond(rid, {'text': text_, 'default_filename': name})
+
+
+P7C_REQUESTS.update({'rewind_files': rewind_files, 'export_conversation': export_conversation})
+
+
+def cut_prompt():
+    """(the line, its text) of the prompt the file ends with when its turn never got a reply, else None."""
+    if os.environ.get('CLAUDE_CODE_RESUME_INTERRUPTED_TURN') != '1' or RESUME is None or FORK:
+        return None
+    try:
+        lines = [json.loads(line) for line in open(TRANSCRIPT, encoding='utf-8') if line.strip()]
+    except (OSError, ValueError):
+        return None
+    last = None
+    for record in lines:
+        if record.get('type') in ('user', 'assistant') and not record.get('isMeta'):
+            last = record
+    if last is None or last.get('type') != 'user':
+        return None
+    content = last.get('message', {}).get('content')
+    if not isinstance(content, list) or not all(isinstance(b, dict) and b.get('type') == 'text' for b in content):
+        return None
+    age = int(ENV.get('CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS', '3600000')) / 1000
+    try:
+        when = calendar.timegm(time.strptime(last.get('timestamp', '')[:19], '%Y-%m-%dT%H:%M:%S'))
+    except ValueError:
+        return None
+    if time.time() - when > age:
+        return None
+    return last, '\n'.join(b.get('text', '') for b in content)
+
+
+RERUN = [cut_prompt()]
+
+
+def rerun_turn(entry):
+    """The cut turn again (finding 105): no prompt line, no replay; the reply whole, stamped."""
+    line = entry['rerun']
+    command = str(uuid.uuid4())
+    lifecycle(command, 'started')
+    TURN_UUID[0] = line['uuid']
+    system_init()
+    status('requesting')
+    said = 'ok: ' + entry['text']
+    mid = 'msg_fake' + uuid.uuid4().hex[:16]
+    record = {'type': 'assistant', 'message': {
+        'id': mid, 'model': current_model(), 'role': 'assistant', 'stop_reason': 'end_turn', 'stop_sequence': None,
+        'type': 'message', 'usage': usage(), 'content': [{'type': 'text', 'text': said}]},
+        'parent_tool_use_id': None, 'session_id': SID, 'uuid': str(uuid.uuid4()),
+        'user_message_uuid': line['uuid'], 'resume_reason': 'interrupted_turn'}
+    emit(record)
+    transcript({'type': 'assistant', 'message': {'id': mid, 'model': current_model(),
+                                                 'content': [{'type': 'text', 'text': said}]}})
+    emit({'duration_api_ms': 10, 'stop_reason': 'end_turn', 'session_id': SID, 'total_cost_usd': 0.0,
+          'usage': usage(), 'modelUsage': model_usage(), 'permission_denials': [], 'terminal_reason': 'completed',
+          'fast_mode_state': FAST[0], 'is_error': False, 'num_turns': 1, 'subtype': 'success', 'result': said,
+          'type': 'result', 'duration_ms': 20, 'uuid': str(uuid.uuid4()), 'user_message_uuid': line['uuid'],
+          'resume_reason': 'interrupted_turn'})
+    lifecycle(command, 'completed')
+    log(rerun=line['uuid'])
+    return True
+
+
+_p6b_turn = turn
+
+
+def turn(entry):                         # noqa: F811
+    if entry.get('rerun'):
+        return rerun_turn(entry)
+    return _p6b_turn(entry)
+
+
+_p6b_handle = handle
+
+
+def handle(message):                     # noqa: F811 (p6b: after initialize's answer, the cut turn runs again)
+    _p6b_handle(message)
+    if message.get('type') == 'control_request' and message.get('request', {}).get('subtype') == 'initialize' \
+            and RERUN[0] is not None:
+        line, said = RERUN[0]
+        RERUN[0] = None
+        with COND:
+            QUEUE.append({'text': said, 'uuid': None, 'content': line['message']['content'], 'pastes': None,
+                          'rerun': line})
+            COND.notify_all()
+# ---- end of p6b ----
 
 threading.Thread(target=worker, daemon=True).start()
 for raw in sys.stdin:

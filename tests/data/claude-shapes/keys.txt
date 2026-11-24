@@ -145,3 +145,9 @@ user:tool_result:Write top=type,message,parent_tool_use_id,session_id,uuid,times
 user:tool_result:Write:error top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=type,content,is_error,tool_use_id
 user:tool_result:mcp__rhun__getDiagnostics top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=tool_use_id,type,content
 user:tool_result:mcp__rhun__getDiagnostics:error top=type,message,parent_tool_use_id,session_id,uuid,timestamp,tool_use_result,tool_result_meta message=role,content message.content.0=type,content,is_error,tool_use_id
+assistant:text top=type,message,parent_tool_use_id,session_id,uuid,timestamp,error,is_api_error_message,user_message_uuid,user_message_uuids,resume_reason message=diagnostics,id,container,model,role,stop_details,stop_reason,stop_sequence,type,usage,content,context_management message.content.0=type,text
+control_response/success:canRewind top=type,response response=subtype,request_id,response response.response=canRewind,error
+control_response/success:canRewind top=type,response response=subtype,request_id,response response.response=canRewind,filesChanged,insertions,deletions
+control_response/success:canRewind top=type,response response=subtype,request_id,response response.response=canRewind,skippedLinks
+control_response/success:text top=type,response response=subtype,request_id,response response.response=text,default_filename
+result/success top=duration_api_ms,stop_reason,session_id,total_cost_usd,usage,modelUsage,permission_denials,terminal_reason,fast_mode_state,fast_mode_disabled_reason,subagent_stats,safety_stops,is_error,num_turns,subtype,api_error_status,result,type,duration_ms,uuid,begun_message_ids,user_message_uuid,user_message_uuids,resume_reason,queued_turn_count,result_index,model_usage_since_last_result

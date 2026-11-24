@@ -17,6 +17,7 @@ import tempfile
 import threading
 import time
 import unittest
+import uuid as uuid_mod
 
 ROOT = Path(__file__).resolve().parents[1]
 FAKE = ROOT / 'tests/scripts/fake-claude.py'
@@ -1149,7 +1150,7 @@ class Phase2(Base):
 FILE_RECORDED = (SHAPES / 'file-keys.txt').read_text(encoding='utf-8').splitlines()
 # what the CLI writes to the file beside the records a reader reads (finding 27): the fake writes none of the
 # bookkeeping, and every type it writes is one the CLI wrote
-FILE_TYPES = {'user', 'assistant', 'system', 'attachment'}
+FILE_TYPES = {'user', 'assistant', 'system', 'attachment', 'file-history-snapshot'}   # (p6b: checkpoints)
 
 
 def file_faults(records):
@@ -1950,6 +1951,119 @@ DIAG = json.dumps([{'uri': 'file:///p/a.py', 'linesInFile': 10, 'diagnostics': [
 def logged(path):
     """The fake's log lines."""
     return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines()]
+
+
+
+class Phase6b(Base):
+    """Fork from a message, rewind, export, a cut turn run again (README findings 102 to 106; claude-chat-p6b)."""
+
+    def lines(self, sid):
+        return [json.loads(line) for line in self.transcript(sid).read_text(encoding='utf-8').splitlines()]
+
+    def prompt_lines(self, sid):
+        return [r for r in self.lines(sid) if r.get('type') == 'user' and isinstance(r['message']['content'], list)
+                and r['message']['content'][0].get('type') == 'text']
+
+    def chat(self, *prompts, args=(), **env):
+        fake = self.fake(*args, base=REPLAY, **env)
+        fake.initialize()
+        sid = None
+        for prompt in prompts:
+            fake.prompt(prompt, str(uuid_mod.uuid4()))
+            sid = fake.until(is_type('system', 'init'))['session_id']
+            fake.until(is_type('result'))
+        fake.finish()
+        return sid
+
+    def test_fork_keeps_the_source_up_to_an_entry(self):
+        sid = self.chat('one', 'two')
+        parent = self.prompt_lines(sid)[1]['parentUuid']
+        self.assertEqual(parent, [r for r in self.lines(sid) if r.get('type') == 'assistant'][0]['uuid'])
+        new = '0b5e1c4e-2f1a-4b5e-9d1c-3a2b1c0d9e8f'
+        copy = self.fake('--resume', sid, '--fork-session', '--session-id', new, '--resume-session-at', parent,
+                         base=REPLAY)
+        copy.initialize()
+        copy.prompt('three', str(uuid_mod.uuid4()))
+        copy.until(is_type('result'))
+        copy.finish()
+        texts = [r['message']['content'][0].get('text') for r in self.lines(new) if r.get('type') in ('user', 'assistant')]
+        self.assertEqual(texts, ['one', 'ok: one', 'three', 'ok: three'])
+        self.assertEqual(self.prompt_lines(new)[1]['parentUuid'], parent)
+        gone = self.fake('--resume', sid, '--fork-session', '--session-id', '1b5e1c4e-2f1a-4b5e-9d1c-3a2b1c0d9e8f',
+                         '--resume-session-at', '99999999-0000-4000-8000-000000000000', base=REPLAY)
+        record = gone.until(is_type('result'))
+        self.assertEqual(record['errors'], ['No message found with message.uuid of: '
+                                            '99999999-0000-4000-8000-000000000000'])
+        self.assertEqual(gone.process.wait(10), 1)
+
+    def test_rewind_files_and_checkpoints(self):
+        on = {'CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING': 'true'}
+        target = self.project / 'a.txt'
+        sid = self.chat('write a.txt one', 'write a.txt two\nthree', args=('--permission-mode', 'acceptEdits'), **on)
+        self.assertEqual(target.read_text(), 'two\nthree')
+        first, second = [r['uuid'] for r in self.prompt_lines(sid)]
+        snaps = [r for r in self.lines(sid) if r.get('type') == 'file-history-snapshot']
+        self.assertEqual([(r['messageId'], r['isSnapshotUpdate']) for r in snaps],
+                         [(first, False), (first, True), (second, False)])
+        fake = self.fake('--resume', sid, base=REPLAY, **on)
+        fake.initialize()
+        check = fake.request('r2', 'rewind_files', user_message_id=second, dry_run=True)['response']['response']
+        self.assertEqual(check, {'canRewind': True, 'filesChanged': [str(target)], 'insertions': 1, 'deletions': 2})
+        self.assertEqual(target.read_text(), 'two\nthree')
+        self.assertEqual(fake.request('r3', 'rewind_files', user_message_id='nope')['response']['response'],
+                         {'canRewind': False, 'error': 'No file checkpoint found for this message.'})
+        self.assertEqual(fake.request('r4', 'rewind_files', user_message_id=second)['response']['response'],
+                         {'canRewind': True, 'skippedLinks': 0})
+        self.assertEqual(target.read_text(), 'one')
+        fake.request('r5', 'rewind_files', user_message_id=first)
+        self.assertFalse(target.exists())
+        fake.finish()
+        off = self.fake('--resume', sid, base=REPLAY, CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING='false')
+        off.initialize()
+        self.assertEqual(off.request('r2', 'rewind_files', user_message_id=second)['response']['response'],
+                         {'canRewind': False, 'error': 'File rewinding is not enabled.'})
+        off.finish()
+        self.assertEqual(file_faults(self.lines(sid)), [])
+
+    def test_export(self):
+        sid = self.chat('hello there', 'again')
+        fake = self.fake('--resume', sid, base=REPLAY)
+        fake.initialize()
+        answer = fake.request('r2', 'export_conversation')['response']['response']
+        self.assertEqual(answer['text'], '\n❯ hello there\n\n⏺ ok: hello there\n❯ again\n\n⏺ ok: again')
+        self.assertRegex(answer['default_filename'], r'^\d{4}-\d\d-\d\d-\d{6}-hello-there\.txt$')
+        fake.finish()
+
+    def test_a_cut_turn_runs_again(self):
+        first = self.fake(base=REPLAY)
+        first.initialize()
+        first.prompt('linger 30', str(uuid_mod.uuid4()))
+        sid = first.until(is_type('system', 'init'))['session_id']
+        first.until(lambda r: r.get('type') == 'user' and r.get('isReplay'))
+        time.sleep(0.3)
+        first.process.send_signal(signal.SIGTERM)
+        first.process.wait(10)
+        cut = self.prompt_lines(sid)[-1]['uuid']
+        quiet = self.fake('--resume', sid, base=REPLAY, CLAUDE_CODE_RESUME_INTERRUPTED_TURN='0')
+        quiet.initialize()
+        time.sleep(0.5)
+        quiet.finish()
+        self.assertFalse([r for r in quiet.records if r.get('type') in ('assistant', 'result')])
+        again = self.fake('--resume', sid, base=REPLAY, CLAUDE_CODE_RESUME_INTERRUPTED_TURN='1',
+                          CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS='3600000')
+        again.initialize()
+        reply = again.until(is_type('assistant'))
+        result = again.until(is_type('result'))
+        self.assertEqual((reply['resume_reason'], reply['user_message_uuid']), ('interrupted_turn', cut))
+        self.assertEqual((result['resume_reason'], result['user_message_uuid'], result['result']),
+                         ('interrupted_turn', cut, 'ok: linger 30'))
+        again.finish()
+        self.assertFalse([r for r in again.records if r.get('type') == 'user' and r.get('isReplay')])
+        done = self.fake('--resume', sid, base=REPLAY, CLAUDE_CODE_RESUME_INTERRUPTED_TURN='1')
+        done.initialize()
+        time.sleep(0.5)
+        done.finish()
+        self.assertFalse([r for r in done.records if r.get('type') == 'assistant'])
 
 
 if __name__ == '__main__':

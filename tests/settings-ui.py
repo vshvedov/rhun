@@ -38,8 +38,9 @@ BOOLS = {
                'semantic_highlighting'),
     'files': 'trim_trailing_whitespace final_newline format_on_save restore_session restore_project',
     'agents': ('claude codex grok opencode ctrl_enter_sends scroll_on_send timestamps focus_view '
-               'attach_selection attach_open_file respect_gitignore autosave'),     # phase 4 tasks 7, 8, 10
-    'claude': 'chat allow_bypass_permissions prompt_suggestions use_terminal ide',   # phase 5: the last two
+               'attach_selection attach_open_file respect_gitignore autosave continue_after_restart'),   # phase 4 tasks
+    'claude': ('chat allow_bypass_permissions prompt_suggestions use_terminal ide '   #   7, 8, 10; p6b; phase 5:
+               'disable_login_prompt python_env'),                                   #   use_terminal, ide; p8
     'git': 'enabled', 'updates': 'check',
     'testing': 'gutter',
     'debug': 'show_on_start keys_in_terminal',
@@ -118,7 +119,7 @@ class SettingsUI(unittest.TestCase):
             k + ' = ' + v + '\n' for k, v in values.items()) for s, values in data.items()),
             encoding='utf-8')
 
-    def run_editor(self, actions, height=9000, width=1400):   # the whole page: every row (the merged lines' rows)
+    def run_editor(self, actions, height=9800, width=1400):   # the whole page: every row (the merged lines' rows)
         script = self.work / 'actions.rsc'
         script.write_text('\n'.join(['cmd settings', *actions, 'quit']) + '\n', encoding='utf-8')
         result = subprocess.run([str(EXE), self.work.as_posix(), '--headless', f'{width}x{height}',
@@ -168,14 +169,14 @@ class SettingsUI(unittest.TestCase):
                 self.configure(section, key, 'original')
                 y = self.compact_row_y(section, key)
                 self.run_editor([f'click 240 {y}', f'key {MOD}+a', 'type ' + value,
-                                 'key Return'], width=480, height=14000)
+                                 'key Return'], width=480, height=15000)
                 self.assertEqual(self.value(section, key), value)
         for (section, key), choices in CHOICES.items():
             for index, value in enumerate(choices):
                 with self.subTest(setting=f'{section}.{key}', value=value):
                     self.configure()
                     y = self.compact_row_y(section, key) + index * 32
-                    self.run_editor([f'click 240 {y}'], width=480, height=14000)
+                    self.run_editor([f'click 240 {y}'], width=480, height=15000)
                     self.assertEqual(self.value(section, key), value)
 
     def test_inventory_requires_cases_for_every_setting(self):

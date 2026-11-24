@@ -52,7 +52,9 @@ class ConfigTest(CfgCase):
         rows = [line for line in out.splitlines() if line.startswith('claude.')]
         self.assertEqual(rows, ['claude.chat', 'claude.executable', 'claude.wrapper', 'claude.initial_mode',
                                 'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
-                                'claude.use_terminal', 'claude.ide', 'claude.spinner_verbs'])     # phase 5: two
+                                'claude.use_terminal', 'claude.ide',     # phase 5: two
+                                'claude.disable_login_prompt', 'claude.python_env',    # p8: two
+                                'claude.spinner_verbs'])
         agents = [line for line in out.splitlines() if line.startswith('agents.')]
         self.assertEqual(agents[-11:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
                                        'agents.focus_view', 'agents.archive_after_days',    # (phase 6)
@@ -67,7 +69,8 @@ class ConfigTest(CfgCase):
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(chat.section(saved, 'claude')[3:], [
             'initial_mode =', 'allow_bypass_permissions = false', 'prompt_suggestions = true',
-            'use_terminal = false', 'ide = true', 'spinner_verbs = append'])
+            'use_terminal = false', 'ide = true', 'disable_login_prompt = false', 'python_env = true',
+            'spinner_verbs = append'])
         self.assertEqual(chat.section(saved, 'agents')[-11:], [
             'ctrl_enter_sends = false', 'scroll_on_send = true', 'timestamps = true', 'focus_view = false',
             'archive_after_days = 14',
@@ -83,7 +86,7 @@ class ConfigTest(CfgCase):
                            'focus_view = true\nautosave = false\n')
         out = self.command('print-settings')
         rows = [line for line in out.splitlines() if line.startswith('claude.')]
-        self.assertEqual(rows[-5:], ['claude.ide', 'claude.spinner_verbs',
+        self.assertEqual(rows[-5:], ['claude.python_env', 'claude.spinner_verbs',     # p8: python_env
                                      'claude.env.FOO=(set)', 'claude.spinner_verb=Zooming',
                                      'claude.spinner_verb=Whooshing'])
         self.command('cmd toggle_word_wrap')
@@ -92,6 +95,7 @@ class ConfigTest(CfgCase):
         self.assertEqual(chat.section(saved, 'claude'), [
             'chat = true', f'executable = {chat.FAKE}', f'wrapper = {chat.PYTHON}', 'initial_mode = acceptEdits',
             'allow_bypass_permissions = true', 'prompt_suggestions = false', 'use_terminal = false', 'ide = true',
+            'disable_login_prompt = false', 'python_env = true',     # p8
             'spinner_verbs = replace',
             'env.FOO = bar', 'spinner_verb = Zooming', 'spinner_verb = Whooshing'])
         self.assertEqual(chat.section(saved, 'agents')[-11:-6], ['ctrl_enter_sends = true', 'scroll_on_send = false',
@@ -492,7 +496,7 @@ class QueueTest(CfgCase):
         self.assertEqual(start['env']['CLAUDE_CODE_QUESTION_PREVIEW_FORMAT'], 'markdown')
         self.assertEqual(self.initialize(), [{'promptSuggestions': True, 'supportedDialogKinds': DIALOG_KINDS,
                                              'perTaskStopAffordance': True,       # phase 3 task 4
-                                             'forwardNestedSubagentToolCalls': True}])
+                                             'forwardNestedSubagentToolCalls': True, 'hooks': AUTOSAVE_HOOKS}])
         # the project's choices, the remembered default mode and the bypass setting at the next start
         self.command('agent-cfg-set model sonnet')
         self.command('agent-cfg-set effort low')
@@ -531,7 +535,7 @@ class QueueTest(CfgCase):
         self.chat('hello')
         self.assertEqual(self.initialize(), [{'promptSuggestions': False, 'supportedDialogKinds': DIALOG_KINDS,
                                              'perTaskStopAffordance': True,       # phase 3 task 4
-                                             'forwardNestedSubagentToolCalls': True}])
+                                             'forwardNestedSubagentToolCalls': True, 'hooks': AUTOSAVE_HOOKS}])
 
 
 SECTIONS = ['Context', 'Model', 'Customize', 'Settings', 'Support', 'Slash Commands']
@@ -2428,6 +2432,9 @@ class UserSettingsScanTest(unittest.TestCase):
         self.assertIn('apply_flag_settings', SCANNED)
         self.assertIn('set_max_thinking_tokens', SCANNED)
         self.assertNotIn('update_settings', SCANNED)
+
+
+AUTOSAVE_HOOKS = {'PreToolUse': [{'matcher': 'Edit|Write|Read', 'hookCallbackIds': ['hook_1']}]}   # p8
 
 
 class SeamWordsTest(unittest.TestCase):

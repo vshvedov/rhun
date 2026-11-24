@@ -3083,8 +3083,11 @@ def respond_error(rid, text_):
 def prompt_text(message):
     """The text of a user message."""
     content = message.get('message', {}).get('content')
+    # p8: the editor's context blocks before the prompt ([agents] attach_selection, attach_open_file) are not
+    # the prompt's text, so they never change which scenario runs
     return content if isinstance(content, str) else ''.join(
-        block.get('text', '') for block in content or [] if isinstance(block, dict) and block.get('type') == 'text')
+        block.get('text', '') for block in content or [] if isinstance(block, dict) and block.get('type') == 'text'
+        and not block.get('text', '').startswith(('<ide_selection>', '<ide_opened_file>')))
 
 
 def lifecycle(uid, state):

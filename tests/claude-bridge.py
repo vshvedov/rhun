@@ -758,13 +758,13 @@ class TerminalModeTest(BridgeCase):
         self.command(f'key {MOD}+Escape')
         self.until(lambda: len(self.terminals()) == 2, 'a second terminal: one each time, as the extension')
 
-    def test_without_it_the_key_moves_the_keyboard_to_the_panel_and_back(self):
+    def test_without_it_the_key_moves_the_keyboard_to_the_box_and_back(self):
         self.start('[agents]\nclaude = false\ncodex = false\ngrok = false\nopencode = false\n')
 
         def focus():
             return int(re.search(r' focus=(\d+) ', self.command('print-state')).group(1))
         self.command(f'key {MOD}+Escape')
-        self.assertEqual(focus(), 6)                    # FOCUS_AGENTS
+        self.assertEqual(focus(), 56)                   # FOCUS_AGENT_INPUT (phase 4 task 8: the message box)
         self.command(f'key {MOD}+Escape')
         self.assertEqual(focus(), 0)                    # FOCUS_EDITOR
         self.assertEqual(self.terminals(), [])

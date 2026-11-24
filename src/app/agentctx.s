@@ -27,7 +27,7 @@
 #   agctx_mention(sb) -> eax 1          the active file's mention with its selection's lines; 0 none or refused
 #   agctx_deliver(ptr, len)             a mention into the box (len 0: the box focused only)
 #   agctx_dump(sb)                      print-agent-context
-#   cmd_agents_insert_mention, cmd_agents_focus_input, cmd_agents_add_to_chat, agctx_add_explorer (the
+#   cmd_agents_insert_mention, agctx_focus_input, cmd_agents_add_to_chat, agctx_add_explorer (the
 #   explorer's menu), agctx_chat_on() -> eax, agctx_cmd_hidden(CMD*) -> eax 1 (the palette leaves it out)
 .include "rhun.inc"
 
@@ -1128,12 +1128,10 @@ FN cmd_agents_insert_mention
     call agctx_deliver
 9:  EPILOGUE
 
-# FN cmd_agents_focus_input(): Ctrl+Esc (Cmd+Esc): from a conversation's panel or box the keys go back to the
-#   editor; from anywhere else the box gets them, the editor's selection's mention inserted first. With
-#   [claude] use_terminal: claude in a new terminal instead (claudeterm.s), as the extension's useTerminal
-FN cmd_agents_focus_input
-    cmp dword ptr [rip + cfg_claude_use_terminal], 0
-    jne cmd_claude_open_terminal
+# FN agctx_focus_input(): Ctrl+Esc (Cmd+Esc), cmd_agents_focus_input's chat side (claudeterm.s keeps the
+#   terminal's): from a conversation's panel or box the keys go back to the editor; from anywhere else the box
+#   gets them, the editor's selection's mention inserted first
+FN agctx_focus_input
     PROLOGUE
     call agctx_chat_on
     test eax, eax

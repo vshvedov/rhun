@@ -519,11 +519,14 @@ title_of:
 status_of:
     PROLOGUE
     mov rbx, rdi
-    mov eax, ST_WAIT
     cmp dword ptr [rbx + AS_state], AGS_WAITING
     jne 1f
-    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    je 9f
+    mov rdi, rbx                # p8: a source that keeps its own state, or a live record, says so
+    call agent_src_flags
+    mov ecx, eax
+    mov eax, ST_WAIT
+    test ecx, SRCF_STATE
+    jnz 9f
     cmp qword ptr [rbx + AS_live], 0
     jne 9f
 1:  mov rdi, rbx
@@ -1983,13 +1986,9 @@ meta_line:
     add esi, [rip + g_pmt + 4*MI_32]
     mov edx, [rsp + 4]
     add edx, [rip + g_pmt + 4*MI_28]
-    cmp edi, AS_KIND_EXT
-    jne 1f
-    mov rdi, r14
-    call agents_ext_badge
-    jmp 2f
-1:  call agents_badge
-2:  mov [rsp + 16], eax         # the right edge so far
+    mov rdi, r14                # p8: its source's badge, else its kind's
+    call agents_src_badge
+    mov [rsp + 16], eax         # the right edge so far
     mov rdi, [r14 + AS_worktree]
     test rdi, rdi
     jz 3f
@@ -4268,12 +4267,9 @@ lv_dump:
     mov rdi, r15
     lea rsi, [rip + .Ld_kind]
     call sb_push_cstr
-    mov edi, [r14 + AS_kind]
-    call agent_kind_name
-    cmp dword ptr [r14 + AS_kind], AS_KIND_EXT
-    jne 7f
-    lea rax, [rip + .Lw_ext]
-7:  mov rdi, r15
+    mov rdi, r14                # p8: its kind's word, "ext" for another source
+    call agent_src_word
+    mov rdi, r15
     mov rsi, rax
     call sb_push_cstr
     mov rdi, r15

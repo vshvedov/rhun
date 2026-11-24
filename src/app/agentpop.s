@@ -2161,8 +2161,10 @@ FN agentpop_slash
     jz 8f
     mov [rsp], edx
     jmp 12f
-0:  cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    je 8f
+0:  mov rdi, rbx                # p8: a session of no built-in kind has no commands of a kind
+    call agent_src_flags
+    test eax, SRCF_OWN
+    jnz 8f
     mov eax, [rbx + AS_kind]
     mov [rsp], eax
 12: cmp r13, 2

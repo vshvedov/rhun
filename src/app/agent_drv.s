@@ -3959,6 +3959,257 @@ ext_held:
     mov eax, HOLDER_NONE
     ret
 
+# ---- p8: a session's source, through its driver's table (DRV_src ... DRV_rows): the session model and the
+#   list ask these, never which kind a session is ----
+#
+#   agent_src_flags(AS*) -> eax SRCF_*      0: a built-in kind's conversation, read from its file
+#   agent_src_open(AS*)                     the conversation opened: its source asked for what it lacks
+#   agent_src_name(AS*) -> rax cstr or 0    the source's own name (its row's label and badge); 0: the kind's
+#   agent_src_word(AS*) -> rax cstr         its kind in the dumps: the kind's word, "ext" for another source
+#   agent_src_key(AS*, sb) -> eax 1 written its key in rhun's state file (agentgroups.s): "x:" and the
+#                                           source's id; KIND ":" and its file (a Claude Code file's id: its
+#                                           name without ".jsonl", the same in every worktree's folder); 0
+#                                           none yet (a new conversation before its file is named)
+#   agent_src_loading(AS*) -> eax 1         while its source fetches its messages
+#   agent_src_icon(AS*, x, y, size)         its source's icon
+#   agent_src_rows(cb)                      cb(AS*) for every row the pushing sources list now
+
+# src_drv(AS*) -> rax the driver table that answers for its listing (the extension driver for an extension's
+#   session whether or not its extension takes prompts now; a built-in kind's driver when available), or 0
+src_drv:
+    xor eax, eax
+    test rdi, rdi
+    jz 1f
+    mov edi, [rdi + AS_kind]
+    cmp edi, AS_KIND_EXT
+    jne agent_drv_for_kind
+    lea rax, [rip + ext_drv]
+1:  ret
+
+# FN agent_src_flags(AS*) -> eax SRCF_*
+FN agent_src_flags
+    sub rsp, 8
+    call src_drv
+    add rsp, 8
+    test rax, rax
+    jz 1f
+    mov eax, [rax + DRV_src]
+1:  ret
+
+# FN agent_src_open(AS*)
+FN agent_src_open
+    push rbx
+    mov rbx, rdi
+    call src_drv
+    test rax, rax
+    jz 1f
+    mov rax, [rax + DRV_open]
+    test rax, rax
+    jz 1f
+    mov rdi, rbx
+    call rax
+1:  pop rbx
+    ret
+
+# FN agent_src_name(AS*) -> rax the source's name, or 0
+FN agent_src_name
+    push rbx
+    mov rbx, rdi
+    call src_drv
+    test rax, rax
+    jz 1f
+    mov rax, [rax + DRV_src_name]
+    test rax, rax
+    jz 1f
+    mov rdi, rbx
+    call rax
+1:  pop rbx
+    ret
+
+# FN agent_src_word(AS*) -> rax its kind's word for the dumps
+FN agent_src_word
+    push rbx
+    mov rbx, rdi
+    call agent_src_flags
+    test eax, SRCF_OWN
+    jz 1f
+    lea rax, [rip + .Lw_ext]
+    pop rbx
+    ret
+1:  mov edi, [rbx + AS_kind]
+    pop rbx
+    jmp agent_kind_name
+
+# FN agent_src_loading(AS*) -> eax 1 while its messages are fetched
+FN agent_src_loading
+    push rbx
+    mov rbx, rdi
+    call src_drv
+    test rax, rax
+    jz 1f
+    mov rax, [rax + DRV_loading]
+    test rax, rax
+    jz 1f
+    mov rdi, rbx
+    call rax
+    pop rbx
+    ret
+1:  xor eax, eax
+    pop rbx
+    ret
+
+# FN agent_src_rows(cb): cb(AS*) for each row of a pushing source (the extension driver's)
+FN agent_src_rows
+    lea rax, [rip + ext_drv]
+    jmp [rax + DRV_rows]
+
+# FN agent_src_key(AS*, sb) -> eax 1 when its key was written into sb (cleared first)
+FN agent_src_key
+    PROLOGUE
+    mov rbx, rdi
+    mov r14, rsi
+    mov rdi, r14
+    call sb_clear
+    test rbx, rbx
+    jz 8f
+    mov rdi, rbx
+    call src_drv
+    test rax, rax
+    jz 1f
+    mov rax, [rax + DRV_key]
+    test rax, rax
+    jz 1f
+    mov rdi, rbx
+    mov rsi, r14
+    call rax
+    EPILOGUE
+1:  mov r12, [rbx + AS_path]    # a kind read from its file: KIND ":" and the file
+    test r12, r12
+    jz 8f
+    mov edi, [rbx + AS_kind]
+    call agent_kind_name
+    mov rdi, r14
+    mov rsi, rax
+    call sb_push_cstr
+    mov rdi, r14
+    mov esi, ':'
+    call sb_push_byte
+    mov rdi, r12
+    call strlen
+    mov r13, rax
+    cmp dword ptr [rbx + AS_kind], AG_CLAUDE
+    jne 3f
+    mov rdi, r12                # Claude Code: the conversation's id, its file's name without ".jsonl"
+    mov rsi, r13                # (the same in every worktree's folder)
+    call path_basename
+    mov r12, rax
+    mov r13, rdx
+    cmp r13, 6
+    jb 3f
+    lea rdi, [r12 + r13 - 6]
+    lea rsi, [rip + .Ljsonl]
+    mov edx, 6
+    call memeq
+    test eax, eax
+    jz 3f
+    sub r13, 6
+3:  mov rdi, r14
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# FN agent_src_icon(AS*, x, y, size): its source's icon (a source of no built-in kind: agents.s's badge)
+FN agent_src_icon
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov r14d, ecx
+    call src_drv
+    test rax, rax
+    jz 9f
+    mov rax, [rax + DRV_icon]
+    test rax, rax
+    jz 9f
+    mov rdi, rbx
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    call rax
+9:  EPILOGUE
+
+# ext_icon(AS*, x, y, size): its extension's badge square
+ext_icon:
+    mov rax, [rdi + AS_ext]
+    mov edi, esi
+    mov esi, edx
+    mov edx, ecx
+    mov rcx, rax
+    jmp badge
+
+# ext_src_name(AS*) -> rax the name its extension's sessions show
+ext_src_name:
+    mov rdi, [rdi + AS_ext]
+    jmp agentext_title
+
+# ext_key(AS*, sb) -> eax 1: "x:" and its session id; 0 without one
+ext_key:
+    PROLOGUE
+    mov r12, [rdi + AS_sid]
+    mov rbx, rsi
+    xor eax, eax
+    test r12, r12
+    jz 9f
+    mov rdi, rbx
+    lea rsi, [rip + .Lx_key]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, r12
+    call sb_push_cstr
+    mov eax, 1
+9:  EPILOGUE
+
+# ext_loading(AS*) -> eax 1 while its agent-transcript request is in flight
+ext_loading:
+    xor eax, eax
+    cmp qword ptr [rdi + AS_req], 0
+    setne al
+    ret
+
+# ext_rows(cb): cb(AS*) for every row of the extensions whose sessions are switched on, each listed for the
+#   project (AXF_MATCH)
+ext_rows:
+    PROLOGUE
+    mov r15, rdi
+    xor r12d, r12d
+1:  cmp r12, [rip + g_exts + VEC_len]
+    jae 9f
+    imul rdi, r12, EXT_SIZE
+    add rdi, [rip + g_exts + VEC_ptr]
+    inc r12
+    call ai_ext
+    mov r13, rax
+    cmp dword ptr [r13 + AX_agents], 0
+    je 1b
+    cmp dword ptr [r13 + AX_hidden], 0
+    jne 1b
+    xor r14d, r14d
+2:  cmp r14, [r13 + AX_rows + VEC_len]
+    jae 1b
+    mov rax, [r13 + AX_rows + VEC_ptr]
+    mov rbx, [rax + r14*8]
+    inc r14
+    test dword ptr [rbx + AS_xflags], AXF_MATCH
+    jz 2b
+    mov rdi, rbx
+    call r15
+    jmp 2b
+9:  EPILOGUE
+
 # FN agent_ingest(AS*, record jv, ING_*) -> eax 1 taken: a record of a conversation (a line of its file, or a
 #   record of the stream) given to its kind's reader (readers: no driver needed, so it works with the chat off
 #   and in a remote window); 0: the kind has no reader or it left the record to the caller
@@ -4026,6 +4277,8 @@ ext_drv:
     .quad ext_none              # DRV_task: no tasks
     .quad 0                     # DRV_words: the generic words (phase 4)
     .long 0, 0                  # DRV_glyph: none
+    .long SRCF_PUSHED | SRCF_STATE | SRCF_OWN, 0    # p8: DRV_src: its extension sends its rows and messages
+    .quad agentext_open, ext_src_name, ext_key, ext_loading, ext_rows, ext_icon
 # the readers of the kinds that have one, by AS_kind: {kind, ingest, text, kids, image}, then 0 (agent_ingest,
 #   agent_reader; the one place above the drivers that names a kind's reader)
 readers:
@@ -4058,6 +4311,9 @@ opts_failed: .quad .Lo_terminal
 .Lconversation: .asciz "conversation"
 .Lcopy_failed: .asciz "The copy could not be made."
 .Lext_name: .asciz "extension"
+.Lw_ext: .asciz "ext"            # p8: a session of no built-in kind in the dumps
+.Ljsonl: .ascii ".jsonl"
+.Lx_key: .asciz "x:"
 .Lk_claude: .asciz "claude"
 .Lk_codex: .asciz "codex"
 .Lk_grok: .asciz "grok"

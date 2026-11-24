@@ -4435,6 +4435,8 @@ claude_drv:
     .quad cl_task               # DRV_task (phase 3 task 11)
     .quad cl_words              # DRV_words (phase 4)
     .long 0, 0                  # DRV_glyph (phase 4 task 13)
+    .long 0, 0                  # p8: DRV_src: listed from its files
+    .quad 0, 0, 0, 0, 0, 0      #   DRV_open, DRV_src_name, DRV_key, DRV_loading, DRV_rows, DRV_icon
 cl_words:                       # DW_*: the driver's words in generic places (phase 4)
     .quad .Lw_unfocus, .Lw_mention_refused
     .quad .Lw_seltip                # phase 4 task 8: the selection chip's tip (jFn WV@5793400)

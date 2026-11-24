@@ -74,8 +74,6 @@ fcount: .quad 0
 .Lw_open: .asciz "open"
 .Lw_group: .asciz "group"
 .Lw_s: .asciz "s"
-.Lx: .asciz "x:"
-.Ljsonl: .ascii ".jsonl"
 .Ld_loaded: .asciz "loaded="
 .Ld_file: .asciz " file="
 .Ld_filter: .asciz " filter="
@@ -94,77 +92,11 @@ fcount: .quad 0
 #   it has none yet (a new conversation before its file is named)
 FN agst_key
     PROLOGUE
-    mov rbx, rdi
-    lea rdi, [rip + ksb]
-    call sb_clear
-    test rbx, rbx
-    jz 8f
-    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    jne 1f
-    mov r12, [rbx + AS_sid]     # an extension's session: its id
-    test r12, r12
-    jz 8f
-    lea rdi, [rip + ksb]
-    lea rsi, [rip + .Lx]
-    call sb_push_cstr
-    lea rdi, [rip + ksb]
-    mov rsi, r12
-    call sb_push_cstr
-    jmp 9f
-1:  mov r12, [rbx + AS_path]
-    test r12, r12
-    jz 8f
-    mov edi, [rbx + AS_kind]
-    call agent_kind_name
-    lea rdi, [rip + ksb]
-    mov rsi, rax
-    call sb_push_cstr
-    lea rdi, [rip + ksb]
-    mov esi, ':'
-    call sb_push_byte
-    mov rdi, r12
-    call strlen
-    mov r13, rax
-    cmp dword ptr [rbx + AS_kind], AG_CLAUDE
-    jne 3f
-    mov rdi, r12                # Claude Code: the conversation's id, its file's name without ".jsonl"
-    mov rsi, r13                # (the same in every worktree's folder)
-    call path_basename
-    mov r12, rax
-    mov r13, rdx
-    cmp r13, 6
-    jb 3f
-    lea rdi, [r12 + r13 - 6]
-    mov esi, 6
-    lea rdx, [rip + .Ljsonl]
-    call str_eq_cstr6
-    test eax, eax
-    jz 3f
-    sub r13, 6
-3:  lea rdi, [rip + ksb]
-    mov rsi, r12
-    mov rdx, r13
-    call sb_push
-9:  mov rax, [rip + ksb + SB_ptr]
+    lea rsi, [rip + ksb]        # p8: its source says (agent_drv.s)
+    call agent_src_key
+    mov rax, [rip + ksb + SB_ptr]
     mov rdx, [rip + ksb + SB_len]
     EPILOGUE
-8:  lea rax, [rip + ksb]
-    xor edx, edx
-    EPILOGUE
-
-# str_eq_cstr6(ptr, 6, ".jsonl" bytes) -> eax 1 when the 6 bytes are equal
-str_eq_cstr6:
-    xor eax, eax
-    xor ecx, ecx
-1:  cmp ecx, esi
-    jae 2f
-    mov r8b, [rdi + rcx]
-    cmp r8b, [rdx + rcx]
-    jne 3f
-    inc ecx
-    jmp 1b
-2:  mov eax, 1
-3:  ret
 
 # find(ptr, len, hash) -> rax EN* or 0, rdx the slot it is in or would go to
 find:

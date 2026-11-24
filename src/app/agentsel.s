@@ -1574,9 +1574,12 @@ FN agsel_bar_h
 # works(AS*) -> eax 1 while its turn runs: a conversation rhun drives with a prompt whose turn has not ended, an
 #   extension's that says it works or waits
 works:
-    xor eax, eax
-    cmp dword ptr [rdi + AS_kind], AS_KIND_EXT
-    jne 1f
+    push rdi                    # p8: a source that keeps its state says (agent_drv.s)
+    call agent_src_flags
+    pop rdi
+    test eax, SRCF_STATE
+    mov eax, 0
+    jz 1f
     mov ecx, [rdi + AS_state]
     cmp ecx, AGS_WORKING
     je 8f

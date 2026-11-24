@@ -3410,7 +3410,21 @@ F DRV_task, 8           # (AL*, esi AGK_*, rdx id cstr) -> eax 1 asked: stop a t
 F DRV_words, 8          # phase 4: cstr*: the driver's words for generic places, by DW_*; 0: the generic words
 F DRV_glyph, 4          #   its icon (IC_*), 0 none
 F DRV_pad, 4
+# ---- phase 8 (p8): how a driver's sessions are listed and opened (agent_src_*, agent_drv.s); all 0: its
+#   kind's files are read ----
+F DRV_src, 4            # SRCF_*
+F DRV_src_pad, 4
+F DRV_open, 8           # (AS*): the conversation opened: its source is asked for what it does not have yet
+F DRV_src_name, 8       # (AS*) -> rax cstr: the source's name, its row's kind label and badge
+F DRV_key, 8            # (AS*, sb) -> eax 1 when its key in rhun's state file was written
+F DRV_loading, 8        # (AS*) -> eax 1 while its messages are being fetched
+F DRV_rows, 8           # (cb): cb(AS*) for each row its sources list now
+F DRV_icon, 8           # (AS*, x, y, size): its source's icon in its row's badge
+# ---- end p8 ----
 ENDSTRUCT DRV_SIZE
+.equ SRCF_PUSHED, 1             # p8: its source sends its rows and messages: no file read, stamped or watched
+.equ SRCF_STATE, 2              #   AS_state is its source's: live while it works or waits, without a record
+.equ SRCF_OWN, 4                #   no built-in kind: no lists, menus or side panels of a kind
 # AMD: a permission mode (a driver's static table)
 STRUCT
 F AMD_id, 8             # cstr

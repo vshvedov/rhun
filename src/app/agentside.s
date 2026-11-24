@@ -246,9 +246,12 @@ viewed:
     call agents_viewed
     test rax, rax
     jz 9f
-    cmp dword ptr [rax + AS_kind], AS_KIND_EXT
-    jne 9f
-    xor eax, eax
+    mov rbx, rax                # p8: a session of no built-in kind has no side panels (agent_drv.s)
+    mov rdi, rax
+    call agent_src_flags
+    test eax, SRCF_OWN
+    mov eax, 0
+    cmovz rax, rbx
 9:  EPILOGUE
 
 # shown_as() -> rax the conversation the open panel serves now, 0 none (none open; or a side question on a

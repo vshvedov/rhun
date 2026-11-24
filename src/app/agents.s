@@ -818,9 +818,12 @@ apply_page:
     cmp ebx, 50
     jae 18f
     mov rax, [rip + sessions + VEC_ptr]
+    mov rdi, [rax + rbx*8]
+    call agent_src_flags        # p8: a session its source sends has no folder to watch
+    test eax, SRCF_PUSHED
+    jnz 17f
+    mov rax, [rip + sessions + VEC_ptr]
     mov rax, [rax + rbx*8]
-    cmp dword ptr [rax + AS_kind], AS_KIND_EXT
-    je 17f                      # an extension's session has no folder to watch
     mov r13, [rax + AS_path]
     mov rdi, r13
     call strlen
@@ -2694,8 +2697,9 @@ FN agent_grok_title
 FN session_update
     PROLOGUE 16
     mov rbx, rdi
-    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    je 9f                       # its extension sends its messages (agentext.s)
+    call agent_src_flags        # p8: its source sends its messages (agent_drv.s)
+    test eax, SRCF_PUSHED
+    jnz 9f
     mov rax, [rbx + AS_live]    # rhun drives it: while its program runs or is about to, its rows come
     test rax, rax               # from the stream and the file it writes is not read as well
     jz 16f                      # (agents_resync reads it again once the program is gone)
@@ -2917,8 +2921,10 @@ agents_poll_prefetch:
 poll_session:
     cmp dword ptr [r12 + AS_kind], 4
     je 9f
-    cmp dword ptr [r12 + AS_kind], AS_KIND_EXT
-    je 9f                      # an extension says when its sessions change                      # the worker owns OpenCode snapshot replacement and database recency
+    mov rdi, r12                # p8: a source that sends its sessions says when they change
+    call agent_src_flags
+    test eax, SRCF_PUSHED
+    jnz 9f
     mov rdi, [r12 + AS_path]
     call vfs_stamp
     cmp rax, [r12 + AS_stamp]
@@ -3231,11 +3237,9 @@ open_session:
     mov rdi, rbx
     call agentext_opened        # AI (D4): it replaces a new session being written; the box is its
     mov dword ptr [rbx + AS_loaded], 1
-    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    jne 1f
+    mov rdi, rbx                # p8: its source is asked for the messages it does not have (agent_drv.s)
+    call agent_src_open
     mov rdi, rbx
-    call agentext_open          # its extension is asked for the messages
-1:  mov rdi, rbx
     call observe_session
     mov rdi, rbx
     call session_update
@@ -3281,10 +3285,12 @@ FN agents_dump
 2:  cmp dword ptr [r12 + AS_kind], 4
     jne 24f
     lea rsi, [rip + .Lopencode_name]
-24: cmp dword ptr [r12 + AS_kind], AS_KIND_EXT
-    jne 26f
-    mov rdi, [r12 + AS_ext]
-    call agentext_title
+24: mov [rsp], rsi               # p8: a source's own name
+    mov rdi, r12
+    call agent_src_name
+    mov rsi, [rsp]
+    test rax, rax
+    jz 26f
     mov rsi, rax
 26: mov rdi, r15
     call sb_push_cstr
@@ -3860,8 +3866,10 @@ FN agents_ext_rows
     jae 4f
     mov rax, [rip + sessions + VEC_ptr]
     mov r15, [rax + r12*8]
-    cmp dword ptr [r15 + AS_kind], AS_KIND_EXT
-    jne 3f
+    mov rdi, r15                # p8: a row a source sends (agent_drv.s)
+    call agent_src_flags
+    test eax, SRCF_PUSHED
+    jz 3f
     cmp r12, [rip + page_count]
     jae 21f
     inc r14
@@ -3885,35 +3893,10 @@ FN agents_ext_rows
     mov rax, [rip + ext_listed]
     sub [rip + total_count], rax
     mov qword ptr [rip + ext_listed], 0
-    # the rows each extension lists, when shown
-    xor r12d, r12d
-5:  cmp r12, [rip + g_exts + VEC_len]
-    jae 7f
-    imul rdi, r12, EXT_SIZE
-    add rdi, [rip + g_exts + VEC_ptr]
-    inc r12
-    call ai_ext
-    mov r13, rax
-    cmp dword ptr [r13 + AX_agents], 0
-    je 5b
-    cmp dword ptr [r13 + AX_hidden], 0
-    jne 5b
-    xor r14d, r14d
-6:  cmp r14, [r13 + AX_rows + VEC_len]
-    jae 5b
-    mov rax, [r13 + AX_rows + VEC_ptr]
-    mov r15, [rax + r14*8]
-    inc r14
-    test dword ptr [r15 + AS_xflags], AXF_MATCH
-    jz 6b
-    lea rdi, [rip + sessions]
-    mov esi, 8
-    call vec_push
-    mov [rax], r15
-    inc qword ptr [rip + page_count]
-    inc qword ptr [rip + ext_listed]
-    jmp 6b
-7:  mov rax, [rip + ext_listed]
+    # the rows the sources list now (p8: agent_src_rows, agent_drv.s)
+    lea rdi, [rip + src_row]
+    call agent_src_rows
+    mov rax, [rip + ext_listed]
     add [rip + total_count], rax
     xor r12d, r12d
 8:  cmp r12, [rip + ext_pinned + VEC_len]
@@ -3949,6 +3932,18 @@ FN agents_ext_rows
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
+# src_row(AS*): a row a source lists joins the page (agents_ext_rows)
+src_row:
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rip + sessions]
+    mov esi, 8
+    call vec_push
+    mov [rax], rbx
+    inc qword ptr [rip + page_count]
+    inc qword ptr [rip + ext_listed]
+    EPILOGUE
+
 # FN agents_open_as(AS*): open that session when the page lists it (a new extension session)
 FN agents_open_as
     xor eax, eax
@@ -3962,21 +3957,6 @@ FN agents_open_as
 3:  mov rdi, rax
     jmp open_session
 2:  ret
-
-# FN agents_ext_open() -> rax the extension session the panel shows, or 0
-FN agents_ext_open
-    xor eax, eax
-    mov rcx, [rip + view]
-    test rcx, rcx
-    js 1f
-    cmp rcx, [rip + sessions + VEC_len]
-    jae 1f
-    mov rdx, [rip + sessions + VEC_ptr]
-    mov rdx, [rdx + rcx*8]
-    cmp dword ptr [rdx + AS_kind], AS_KIND_EXT
-    jne 1f
-    mov rax, rdx
-1:  ret
 
 # FN agents_ext_is_open(AS*) -> eax 1 when it is the conversation the panel shows
 FN agents_ext_is_open
@@ -4070,12 +4050,29 @@ FN agents_back
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
-# FN agents_badge(kind, x, y) -> eax its right edge; agents_ext_badge(AS*, x, y); agents_worktree_badge(name,
-#   x, y, max width): the row's badges, as the list draws them
+# FN agents_badge(kind, x, y) -> eax its right edge; agents_src_badge(AS*, x, y) (p8: its source's badge when it
+#   has no built-in kind, else its kind's); agents_worktree_badge(name, x, y, max width): the row's badges, as
+#   the list draws them
 FN agents_badge
     jmp agent_badge
-FN agents_ext_badge
-    jmp ext_badge
+FN agents_src_badge
+    push rbx
+    push r12
+    push r13
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    call agent_src_flags
+    mov rdi, rbx
+    mov esi, r12d
+    mov edx, r13d
+    pop r13
+    pop r12
+    pop rbx
+    test eax, SRCF_OWN
+    jnz ext_badge
+    mov edi, [rdi + AS_kind]
+    jmp agent_badge
 FN agents_worktree_badge
     jmp worktree_badge
 
@@ -5012,16 +5009,19 @@ FN agents_ext_msg
     mov [rbx + AS_changed], rax
     EPILOGUE
 
-# ext_badge(AS*, x, y) -> right edge: the badge of an extension's session: its icon and the source's
-#   name, as agent_badge draws the built-in ones
+# ext_badge(AS*, x, y) -> right edge: the badge of a session of another source (p8: an extension's): its
+#   icon and the source's name, as agent_badge draws the built-in ones
 ext_badge:
     PROLOGUE 16
     mov r12d, esi
     mov r13d, edx
-    mov rbx, [rdi + AS_ext]
-    mov rdi, rbx
-    call agentext_title
+    mov rbx, rdi
+    call agent_src_name
     mov r15, rax
+    test rax, rax
+    jnz 1f
+    lea r15, [rip + .Lempty]
+1:
     COLOR edi, T_PANEL
     COLOR esi, T_MUTED
     mov edx, 48
@@ -5049,8 +5049,11 @@ ext_badge:
     mov esi, r13d
     add esi, [rip + g_pmt + 4*MI_3]
     PM edx, MI_14
-    mov rcx, rbx
-    call badge
+    mov ecx, edx
+    mov edx, esi
+    mov esi, edi
+    mov rdi, rbx
+    call agent_src_icon
     mov rdi, [rip + ag_fsmall]
     mov esi, r12d
     add esi, [rip + g_pmt + 4*MI_6]
@@ -5302,8 +5305,9 @@ rel_time:
 is_live:
     push rbx
     mov rbx, rdi
-    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    je 4f
+    call agent_src_flags        # p8: a source that keeps its state (agent_drv.s)
+    test eax, SRCF_STATE
+    jnz 4f
     cmp qword ptr [rbx + AS_live], 0
     je 3f
 4:  mov eax, [rbx + AS_state]   # an extension's or a driven session is live while it works or waits
@@ -7648,8 +7652,10 @@ thread_draw:
     xor eax, eax                # a panel shorter than its header: no area (nothing drawn outside it)
 40: mov [rsp + 24], eax         # area h
     mov dword ptr [rsp + 160], 0
-    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    je 44f
+    mov rdi, rbx                # p8: a source that keeps its state has its card and box (agent_drv.s)
+    call agent_src_flags
+    test eax, SRCF_STATE
+    jnz 44f
     mov rdi, rbx                # a session with a driver too (agent_drv.s)
     call agent_drv_of
     test rax, rax
@@ -8004,10 +8010,14 @@ empty_draw:
     PROLOGUE 16
     mov rbx, rdi
     mov r12, rsi
-    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    jne 1f
-    cmp qword ptr [rbx + AS_req], 0
-    je 3f
+    mov rdi, rbx                # p8: a source's conversation: "Loading..." while it fetches the messages
+    call agent_src_flags
+    test eax, SRCF_PUSHED
+    jz 1f
+    mov rdi, rbx
+    call agent_src_loading
+    test eax, eax
+    jz 3f
     lea r13, [rip + .Lloading_thread]
     jmp 4f
 1:  mov rdi, rbx
@@ -10894,8 +10904,9 @@ line_model:
 observe_session:
     PROLOGUE
     mov rbx, rdi
-    cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
-    je 1f
+    call agent_src_flags        # p8: a source that sends its messages has no file (agent_drv.s)
+    test eax, SRCF_PUSHED
+    jnz 1f
     mov rdi, [rbx + AS_path]
     call vfs_stamp
     cmp rax, [rbx + AS_stamp]

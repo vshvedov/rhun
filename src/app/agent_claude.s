@@ -1695,11 +1695,17 @@ FN claude_auth_end
 #   to use the same profile as this conversation's program (claude_term_env: its CLAUDE_CONFIG_DIR, else
 #   an env.HOME pair's HOME, when the terminal's differs); never anything else (values may be keys, and
 #   the line ends up in the shell's history). For the shell rhun's terminal starts: a POSIX shell,
-#   PowerShell on Windows
+#   PowerShell on Windows; a remote window's terminal is its host's POSIX shell, on any system
 cl_terminal:
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, rdi
     mov r12d, esi
+    mov eax, [rip + sh_ps]
+    mov [rsp], eax
+    cmp dword ptr [rip + g_remote], 0
+    je 6f
+    mov dword ptr [rip + sh_ps], 0
+6:
     xor r14d, r14d              # the conversation's folder, without fixing it (live_dir would): its own,
     mov rdi, [rbx + AL_cdir]    #   or where its file is (an existing one)
     test rdi, rdi
@@ -1754,7 +1760,9 @@ cl_terminal:
     jnz 9f
     lea rdi, [rip + .Lr_prompt_busy]
     call app_toast
-9:  EPILOGUE
+9:  mov eax, [rsp]
+    mov [rip + sh_ps], eax
+    EPILOGUE
 
 # sh_word(sb, cstr, head): the word for the terminal's shell (sh_ps: PowerShell, else a POSIX shell). POSIX:
 #   as it is when it has only letters, digits and / . _ - + ~ : , @, else in single quotes (a quote in it as

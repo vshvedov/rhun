@@ -1835,11 +1835,11 @@ enter:
     test dword ptr [rbx + PR_flags], APRF_ON
     jz 12f
     lea r15, [rip + .Lw_off]
-12: cmp dword ptr [rip + pop_typed], 0
+12: mov r14, [rip + pop_owner]   # (claude-chat-p7b: read before the token goes: set_box lets go of it)
+    cmp dword ptr [rip + pop_typed], 0
     je 2f
     call cut_token
-2:  mov r14, [rip + pop_owner]
-    mov eax, [rip + pop_dkind]
+2:  mov eax, [rip + pop_dkind]
     mov [rsp], eax
     xor ecx, ecx
     xor r8d, r8d

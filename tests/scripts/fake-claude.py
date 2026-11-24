@@ -172,6 +172,13 @@ if ARGS[:2] == ['auth', 'status']:
     sys.exit(1 if MODE_AUTH == 'out' else 0)
 
 
+# claude-chat-p7b: the configuration's subcommands (mcp, plugin, edit-hook, edit-permission-rules,
+#   edit-sandbox-settings) and control requests, in tests/scripts/fake_claude_config.py
+import fake_claude_config  # noqa: E402
+if fake_claude_config.is_subcommand(ARGS):
+    sys.exit(fake_claude_config.subcommand(ARGS, config_dir(), log))
+
+
 VALUED = {'--output-format', '--input-format', '--permission-prompt-tool', '--setting-sources',
           '--max-thinking-tokens', '--resume', '--session-id', '--permission-mode', '--model', '--effort', '--thinking'}
 SWITCHES = {'-p', '--print', '--verbose', '--include-partial-messages', '--fork-session', '--replay-user-messages',
@@ -4361,10 +4368,15 @@ def handle(message):
             stop_task(rid, request.get('task_id'))
         elif sub == 'background_tasks':
             to_background(rid, request.get('tool_use_id'))
-        elif sub == 'mcp_status':           # phase 4 (44, 51): the SDK servers
-            respond(rid, {'mcpServers': p4_status()})
+        elif sub == 'mcp_status':           # phase 4 (44, 51): the SDK servers, after p7b's configured ones
+            got = {}
+            fake_claude_config.control(rid, sub, request, lambda _rid, obj: got.update(obj), respond_error, CWD,
+                                       config_dir())
+            respond(rid, dict(got, mcpServers=list(got.get('mcpServers') or []) + p4_status()))
         elif sub in P7C_REQUESTS:           # p7c: the side question, Chrome, Remote Control
             P7C_REQUESTS[sub](rid, request)
+        elif fake_claude_config.handles(sub):     # claude-chat-p7b: the configuration's requests
+            fake_claude_config.control(rid, sub, request, respond, respond_error, CWD, config_dir())
         else:
             respond_error(rid, 'Unsupported control request subtype: %s' % sub)
     elif kind == 'control_response':

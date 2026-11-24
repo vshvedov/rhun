@@ -281,8 +281,23 @@ mkt_change:
     call go_change
     EPILOGUE
 
-# plg_ran(what, code)
+# plg_ran(what, code): its end (plg_ran1), then an act that waited for it
 plg_ran:
+    PROLOGUE
+    call plg_ran1
+    call c2_running
+    test eax, eax
+    jnz 9f
+    mov rdi, [rip + g_defer]
+    test rdi, rdi
+    jz 9f
+    mov qword ptr [rip + g_defer], 0
+    mov rsi, [rip + g_defer_arg]
+    xor edx, edx
+    call plg_act
+9:  EPILOGUE
+
+plg_ran1:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
@@ -392,7 +407,11 @@ plg_ran:
     jnz 5f
     call done_f                 # done: its notice; plugins reloaded; the lists again
     call c2_msg_fsb
-    mov rax, [rip + c2_page]
+    cmp qword ptr [rip + c2_busy_act], GA_MKTADD
+    jne 40f
+    lea rdi, [rip + g_tf_mkt]   # (the marketplace added: its field emptied)
+    call tf_clear
+40: mov rax, [rip + c2_page]
     cmp rax, PG_MKT
     je 41f
     cmp rax, PG_MKTREMOVE
@@ -895,6 +914,8 @@ plg_build:
     mov [rsp], rax
     mov rcx, [rip + g_tab]
     mov [rax + DGR_val], rcx
+    xor ecx, 1                  # (the row's own act, as a pick: the other tab)
+    mov [rax + DGR_arg], rcx
     call f_clr
     lea rdi, [rip + .Lg_tab_plugins]
     call f_c
@@ -1032,6 +1053,17 @@ plg_build:
     inc r14d
     mov [rsp + 16], esi
     mov rdi, rbx
+    call json_at
+    mov r15, rax
+    mov rdi, rax                # installed already (the extension leaves those out)
+    call is_installed
+    test eax, eax
+    jnz 6b
+    lea rdi, [rip + c2_doc3]    # (parsed again: is_installed parsed the installed list)
+    call c2_parse
+    mov rbx, rax
+    mov rdi, rax
+    mov esi, [rsp + 16]
     call json_at
     mov r15, rax
     mov edi, DGK_ITEM
@@ -1748,6 +1780,44 @@ avail_order:
     jmp 2b
 9:  EPILOGUE
 
+# is_installed(available entry) -> eax 1 when its pluginId is an installed plugin's id (c2_doc parsed:
+#   the entry's own parse is dead after)
+is_installed:
+    PROLOGUE
+    lea rsi, [rip + .Lk_pluginId]
+    call c2_jstr
+    mov rdi, rax
+    mov rsi, rdx
+    call mem_dup
+    mov r12, rax
+    lea rdi, [rip + c2_doc]
+    call c2_parse
+    mov rbx, rax
+    xor r13d, r13d
+    xor r14d, r14d
+1:  mov rdi, rbx
+    call json_len
+    cmp r13d, eax
+    jae 8f
+    mov rdi, rbx
+    mov esi, r13d
+    call json_at
+    inc r13d
+    mov rdi, rax
+    lea rsi, [rip + .Lk_id]
+    call c2_jstr
+    mov rdi, rax
+    mov rsi, rdx
+    mov rdx, r12
+    call str_eq_cstr
+    test eax, eax
+    jz 1b
+    mov r14d, 1
+8:  mov rdi, r12
+    call mem_free
+    mov eax, r14d
+    EPILOGUE
+
 # link_install(): a link's plugin, its marketplace added: its install page (found among the available), else
 #   why not
 link_install:
@@ -1859,7 +1929,15 @@ plg_act:
     je .Lga_back
     cmp r12d, GA_RETRY
     je .Lga_retry
-    mov [rip + c2_busy_act], r12
+    cmp r12d, GA_CHOICE         # (a choice starts no run)
+    je .Lga_choice
+    call c2_running             # a list still being read: the act waits for it (g_defer)
+    test eax, eax
+    jz 10f
+    mov [rip + g_defer], r12
+    mov [rip + g_defer_arg], r13
+    jmp 9f
+10: mov [rip + c2_busy_act], r12
     cmp r12d, GA_TOGGLE
     je .Lga_toggle
     cmp r12d, GA_OPTIONS
@@ -2776,6 +2854,53 @@ FN claude_dlg2_install_link
 8:  xor eax, eax
 9:  EPILOGUE
 
+# FN c2_c_link(out, rest, len) -> rax 0 or -1: agent-plugin-link PLUGIN SOURCE: Manage Plugins on a link's
+#   plugin for the box's conversation (a draft becomes one), as the rhun://claude/install-plugin link will
+FN c2_c_link
+    PROLOGUE 16
+    mov rbx, rsi
+    mov r12, rdx
+    xor ecx, ecx
+1:  cmp rcx, r12
+    jae 8f
+    cmp byte ptr [rbx + rcx], ' '
+    je 2f
+    inc rcx
+    jmp 1b
+2:  mov [rsp], rcx
+    mov rdi, rbx
+    mov rsi, rcx
+    call mem_dup
+    mov r13, rax                # PLUGIN
+    mov rcx, [rsp]
+    lea rdi, [rbx + rcx + 1]
+    mov rsi, r12
+    sub rsi, rcx
+    dec rsi
+    call c2_trim
+    mov rdi, rax
+    mov rsi, rdx
+    call mem_dup
+    mov r14, rax                # SOURCE
+    call agentext_box_owner
+    test rax, rax
+    jnz 3f
+    call agentext_draft_own
+3:  mov rdi, rax
+    mov rsi, r13
+    mov rdx, r14
+    call claude_dlg2_install_link
+    mov r15d, eax
+    mov rdi, r13
+    call mem_free
+    mov rdi, r14
+    call mem_free
+    xor eax, eax
+    test r15d, r15d
+    jnz 9f
+8:  mov rax, -1
+9:  EPILOGUE
+
 # resolve_link(): `plugin marketplace add --from-link --resolve-only -- SOURCE`
 resolve_link:
     PROLOGUE
@@ -2862,6 +2987,8 @@ plain_source:
 .p2align 3
 c2_busy_act: .quad 0            # the act a change runs for (its button's words, its notice)
 g_turn_on: .quad 0              # the toggle turns it on
+g_defer: .quad 0                # an act that waits for the run going on (0 none), its arg
+g_defer_arg: .quad 0
 tmp_n: .quad 0
 
 .bss
@@ -2871,6 +2998,8 @@ counts: .zero 8 * ORDER_MAX
 tmp_doc: .zero SB_SIZE
 
 .section .rodata
+.globl c2_n_link
+c2_n_link: .asciz "agent-plugin-link"
 .p2align 3
 scope_ids: .quad .Lv_user, .Lv_project, .Lv_local
 install_ids: .quad .Lv_user, .Lv_project, .Lv_local
@@ -3001,7 +3130,7 @@ note_words:                     # sBt (SBn)
 .Lg_load_failed: .asciz "Your plugins and marketplaces couldn't be loaded."
 .Lg_try_again: .asciz "Try again"
 .Lg_tab_plugins: .asciz "Plugins"
-.Lg_tab_sep: .asciz "\tMarketplaces"
+.Lg_tab_sep: .asciz "\037Marketplaces"
 .Lg_none: .asciz "No plugins available. Add a marketplace to discover plugins."
 .Lg_search: .asciz "Search plugins\342\200\246"
 .Lg_installed: .asciz "Installed"

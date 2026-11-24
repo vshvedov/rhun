@@ -12,7 +12,7 @@
 #     caret can go no further; Tab, Escape, Page Up and Page Down stay the shell's
 #   OPTION: a choice of a group: a round mark (filled with DGF_ON), t1, t2 under it (wrapped); Enter, Space or
 #     a click is DGR_act (the shell's)
-#   TABS: t1 the labels joined by tab characters, DGR_val the one shown; Left and Right (round), Space and
+#   TABS: t1 the labels joined by 0x1f (a tab would become a space in a row's text), DGR_val the one shown; Left and Right (round), Space and
 #     Enter (the next) and a click on a tab are DGR_act with the tab's index as its arg
 #
 #   agentdlg2_row_h(DR*, tw) -> eax, agentdlg2_draw_row(DR*, y, x, w, focus) -> eax 1 when an act ran,
@@ -429,7 +429,7 @@ FN agentdlg2_draw_row
 21: movzx eax, byte ptr [rdi + rcx]
     test eax, eax
     jz 22f
-    cmp eax, 9
+    cmp eax, 31
     je 22f
     inc rcx
     jmp 21b
@@ -443,19 +443,19 @@ FN agentdlg2_draw_row
     cmp eax, [rsp + 36]
     jle 23f
     mov eax, [rsp + 36]
-23: mov [rsp + 44], eax         # its width
+23: mov [rsp + 52], eax         # its width
     lea edi, [r14 + ID_AGDLG + ID_TAB]
     mov esi, r13d
     mov edx, [rsp]
     mov ecx, eax
     mov r8d, [rsp + 28]
     call ui_btn
-    mov [rsp + 48], eax
+    mov [rsp + 56], eax
     test eax, UB_HOVER
     jz 24f
     mov edi, r13d
     mov esi, [rsp]
-    mov edx, [rsp + 44]
+    mov edx, [rsp + 52]
     mov ecx, [rsp + 28]
     PM r8d, MI_RADIUS
     COLOR r9d, T_HOVER
@@ -467,12 +467,12 @@ FN agentdlg2_draw_row
     mov esi, [rsp]
     add esi, [rsp + 28]
     sub esi, [rip + g_pmt + 4*MI_2]
-    mov edx, [rsp + 44]
+    mov edx, [rsp + 52]
     PM ecx, MI_2
     COLOR r8d, T_ACCENT
     call gfx_fill
     COLOR r9d, T_FG
-25: mov eax, [rsp + 44]
+25: mov eax, [rsp + 52]
     PM ecx, MI_12
     sub eax, ecx
     sub eax, ecx
@@ -487,7 +487,7 @@ FN agentdlg2_draw_row
     mov r8, [rsp + 16 + 40]
     call agentdlg_x_fit
     add rsp, 16
-    test dword ptr [rsp + 48], UB_CLICK
+    test dword ptr [rsp + 56], UB_CLICK
     jz 26f
     mov edi, [rsp + 12]         # a click: the focus, the tab's act
     cmp edi, -1
@@ -501,9 +501,9 @@ FN agentdlg2_draw_row
     call agentdlg_x_act
     mov eax, 1
     EPILOGUE
-26: add r13d, [rsp + 44]
+26: add r13d, [rsp + 52]
     add r15, [rsp + 40]
-    cmp byte ptr [r15], 9
+    cmp byte ptr [r15], 31
     jne 27f
     inc r15
 27: inc r14d
@@ -521,7 +521,7 @@ tab_count:
     test ecx, ecx
     jz 9f
     inc rdi
-    cmp ecx, 9
+    cmp ecx, 31
     jne 1b
     inc eax
     cmp eax, TABS_MAX
@@ -889,7 +889,7 @@ FN agentdlg2_dump_row
     push rsi
     push rcx
     mov esi, eax
-    cmp esi, 9
+    cmp esi, 31
     jne 2f
     mov esi, '|'
 2:  mov rdi, rbx
@@ -940,7 +940,87 @@ stars:
     jmp 1b
 9:  EPILOGUE
 
+# FN agentdlg2_c_setfield(out, rest, len) -> rax 0 or -1: agent-dialog-field N TEXT: the N-th field (from 1, in
+#   the rows' order) holds TEXT ("\n" in it a line end; a one-line field's line ends become spaces)
+FN agentdlg2_c_setfield
+    PROLOGUE 16
+    mov rbx, rdx                # the rest: N, a blank, TEXT
+    mov r12, rsi
+    xor ecx, ecx
+1:  cmp rcx, rbx
+    jae 8f
+    cmp byte ptr [r12 + rcx], ' '
+    je 2f
+    inc rcx
+    jmp 1b
+2:  mov [rsp], rcx
+    mov rdi, r12
+    mov rsi, rcx
+    call parse_u64
+    mov r13, rax                # N
+    test r13, r13
+    jz 8f
+    mov rcx, [rsp]
+    lea r14, [r12 + rcx + 1]
+    mov r15, rbx
+    sub r15, rcx
+    dec r15
+    lea rdi, [rip + xsb]        # TEXT with its \n made line ends
+    call sb_clear
+    xor ecx, ecx
+3:  cmp rcx, r15
+    jae 5f
+    movzx esi, byte ptr [r14 + rcx]
+    inc rcx
+    cmp esi, 92
+    jne 4f
+    cmp rcx, r15
+    jae 4f
+    cmp byte ptr [r14 + rcx], 'n'
+    jne 4f
+    inc rcx
+    mov esi, 10
+4:  mov [rsp + 8], rcx
+    lea rdi, [rip + xsb]
+    call sb_push_byte
+    mov rcx, [rsp + 8]
+    jmp 3b
+5:  call agentdlg_x_nrows       # the N-th field
+    mov rbx, rax
+    xor r12d, r12d
+6:  cmp r12, rbx
+    jae 8f
+    mov rdi, r12
+    inc r12
+    call agentdlg_x_row
+    cmp dword ptr [rax + DGR_kind], DGK_FIELD
+    jne 6b
+    dec r13
+    jnz 6b
+    mov r12, rax
+    mov rdi, [r12 + DGR_val]
+    test rdi, rdi
+    jz 8f
+    call tf_clear
+    mov rdi, [r12 + DGR_val]
+    mov rsi, [rip + xsb + SB_ptr]
+    mov rdx, [rip + xsb + SB_len]
+    test dword ptr [r12 + DGR_flags], DGF_MULTI
+    jz 7f
+    call ta_insert
+    jmp 71f
+7:  call tf_insert
+71: lea rdi, [rip + xsb]
+    call sb_clear
+    mov dword ptr [rip + g_dirty], 1
+    xor eax, eax
+    EPILOGUE
+8:  mov rax, -1
+    EPILOGUE
+
 .section .rodata
+.globl agentdlg2_n_setfield
+agentdlg2_n_setfield: .asciz "agent-dialog-field"
 .globl agentdlg2_n_field, agentdlg2_n_option, agentdlg2_n_tabs
 agentdlg2_n_field: .asciz "field"
 agentdlg2_n_option: .asciz "option"

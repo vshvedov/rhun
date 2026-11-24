@@ -3319,6 +3319,9 @@ ai_ctl:
     .quad .Lc_filelist_test, c_filelist_test, .Lc_print_agent_bubble_chips, c_print_agent_bubble_chips
     .quad .Lc_print_agent_context, c_print_agent_context, .Lc_agent_context, c_agent_context   # task 8
     .quad .Lc_agent_mention, c_agent_mention
+    # claude-chat-p7b: a form field's text (agent-dialog-field N TEXT, \n a line end; agentdlg2.s), a link's
+    #   plugin (agent-plugin-link PLUGIN SOURCE; claude_plugins.s)
+    .quad agentdlg2_n_setfield, agentdlg2_c_setfield, c2_n_link, c2_c_link
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

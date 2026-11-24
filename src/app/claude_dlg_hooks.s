@@ -42,7 +42,7 @@
 .equ FD_key, 0                  # a field: key, label, placeholder, TF* (0: a check or the shell), kind, the
 .equ FD_label, 8                #   types it belongs to (bits: command 1, prompt 2, agent 4, http 8,
 .equ FD_ph, 16                  #   mcp_tool 16, all 31), required
-.equ FD_tf, 24
+.equ FD_tf, 24                  #   (tf_of)
 .equ FD_kind, 32
 .equ FD_mask, 36
 .equ FD_req, 40
@@ -146,6 +146,17 @@ free_q:
     mov qword ptr [rbx], 0
     pop rbx
     ret
+
+# tf_of(FD*) -> rax its TF, 0 none
+tf_of:
+    mov rax, [rdi + FD_tf]
+    test rax, rax
+    jz 1f
+    dec rax
+    imul rax, rax, TF_SIZE
+    lea rcx, [rip + h_tfs]
+    add rax, rcx
+1:  ret
 
 # fd(i) -> rax the i-th field's descriptor
 fd:
@@ -1549,8 +1560,11 @@ edit_rows:
     mov r8, [r13 + FD_ph]
     xor r9d, r9d
     call c2_crow
-    mov rcx, [r13 + FD_tf]
-    mov [rax + DGR_val], rcx
+    mov [rsp + 16], rax
+    mov rdi, r13
+    call tf_of
+    mov rcx, [rsp + 16]
+    mov [rcx + DGR_val], rax
     jmp 6f
 51: lea rax, [rip + h_checks]   # a check: a switch
     xor esi, esi
@@ -1863,7 +1877,9 @@ fill_one:
     mov rsi, rax
     lea rdi, [rip + tsb]
     call sb_push
-8:  mov rdi, [r13 + FD_tf]
+8:  mov rdi, r13
+    call tf_of
+    mov rdi, rax
     test rdi, rdi
     jz 9f
     mov rsi, [rip + tsb + SB_ptr]
@@ -2305,7 +2321,9 @@ field_write:
     mov rsi, [r13 + FD_key]
     call kv
     jmp .Lfw_ok
-2:  mov rdi, [r13 + FD_tf]
+2:  mov rdi, r13
+    call tf_of
+    mov rdi, rax
     call tf_text
     mov [rsp], rax
     mov [rsp + 8], rdx
@@ -2874,38 +2892,39 @@ ept_f:
 
 .section .rodata
 .p2align 3
-fields:                         # key, label, placeholder, TF*, kind, types, required (Lle, then Rle)
-    .quad .Lf_command, .Lf_command_l, 0, h_tfs + 0 * TF_SIZE
+fields:                         # key, label, placeholder, its TF's index + 1 (0: none; a TF_SIZE in a data
+                                #   expression is the last STRUCT's size on macOS), kind, types, required
+    .quad .Lf_command, .Lf_command_l, 0, 1
     .long FK_AREA, 1, 1, 0
-    .quad .Lf_args, .Lf_args_l, 0, h_tfs + 1 * TF_SIZE
+    .quad .Lf_args, .Lf_args_l, 0, 2
     .long FK_JSONA, 1, 0, 0
     .quad .Lf_shell, .Lf_shell_l, 0, 0
     .long FK_SHELL, 1, 0, 0
     .quad .Lf_async, .Lf_async_l, 0, 0
     .long FK_CHECK, 1, 0, 0
-    .quad .Lf_prompt, .Lf_prompt_l, 0, h_tfs + 4 * TF_SIZE
+    .quad .Lf_prompt, .Lf_prompt_l, 0, 5
     .long FK_AREA, 6, 1, 0
-    .quad .Lf_model, .Lf_model_l, 0, h_tfs + 5 * TF_SIZE
+    .quad .Lf_model, .Lf_model_l, 0, 6
     .long FK_TEXT, 6, 0, 0
     .quad .Lf_continue, .Lf_continue_l, 0, 0
     .long FK_CHECK, 2, 0, 0
-    .quad .Lf_url, .Lf_url_l, .Lf_url_ph, h_tfs + 7 * TF_SIZE
+    .quad .Lf_url, .Lf_url_l, .Lf_url_ph, 8
     .long FK_TEXT, 8, 1, 0
-    .quad .Lf_headers, .Lf_headers_l, 0, h_tfs + 8 * TF_SIZE
+    .quad .Lf_headers, .Lf_headers_l, 0, 9
     .long FK_HDR, 8, 0, 0
-    .quad .Lf_envvars, .Lf_envvars_l, 0, h_tfs + 9 * TF_SIZE
+    .quad .Lf_envvars, .Lf_envvars_l, 0, 10
     .long FK_LINES, 8, 0, 0
-    .quad .Lf_server, .Lf_server_l, 0, h_tfs + 10 * TF_SIZE
+    .quad .Lf_server, .Lf_server_l, 0, 11
     .long FK_TEXT, 16, 1, 0
-    .quad .Lf_tool, .Lf_tool_l, 0, h_tfs + 11 * TF_SIZE
+    .quad .Lf_tool, .Lf_tool_l, 0, 12
     .long FK_TEXT, 16, 1, 0
-    .quad .Lf_input, .Lf_input_l, 0, h_tfs + 12 * TF_SIZE
+    .quad .Lf_input, .Lf_input_l, 0, 13
     .long FK_JSONO, 16, 0, 0
-    .quad .Lf_if, .Lf_if_l, .Lf_if_ph, h_tfs + 13 * TF_SIZE
+    .quad .Lf_if, .Lf_if_l, .Lf_if_ph, 14
     .long FK_TEXT, 31, 0, 0
-    .quad .Lf_timeout, .Lf_timeout_l, 0, h_tfs + 14 * TF_SIZE
+    .quad .Lf_timeout, .Lf_timeout_l, 0, 15
     .long FK_NUM, 31, 0, 0
-    .quad .Lf_status, .Lf_status_l, 0, h_tfs + 15 * TF_SIZE
+    .quad .Lf_status, .Lf_status_l, 0, 16
     .long FK_TEXT, 31, 0, 0
 type_ids: .quad .Lv_command, .Lv_prompt, .Lv_agent, .Lv_http, .Lv_mcp_tool
 types: .quad .Lt_command, .Lt_command_d, .Lt_prompt, .Lt_prompt_d, .Lt_agent, .Lt_agent_d, .Lt_http

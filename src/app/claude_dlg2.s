@@ -83,6 +83,7 @@
 .equ MW_ADD, 1
 .equ MW_REMOVE, 2
 .equ SCOPES_N, 6
+.equ SIDX_MAX, 512              # a scope's servers sorted at most
 
 .data
 .p2align 3
@@ -107,6 +108,7 @@ c2_eout: .zero SB_SIZE
 c2_in: .zero SB_SIZE            # what the next run gets on its stdin
 fsb: .zero SB_SIZE              # a text being made
 csb: .zero SB_SIZE              # c2_clean's
+esb: .zero SB_SIZE              # c2_errout's
 asb: .zero SB_SIZE              # a run's arguments, NUL-separated
 aoff: .zero 8 * ARGS_MAX        # their offsets in asb
 an: .quad 0                     # their count
@@ -141,6 +143,8 @@ m_tf_env: .zero TF_SIZE
 m_tf_url: .zero TF_SIZE
 m_tf_hdr: .zero TF_SIZE
 m_tf_cb: .zero TF_SIZE          # the redirect URL pasted
+sidx: .zero 4 * SIDX_MAX        # scope_sorted's
+sidx_n: .quad 0
 
 .text
 
@@ -378,6 +382,7 @@ FN c2_frow
     PROLOGUE
     call agentdlg_row
     mov rbx, rax
+    mov rdi, rax
     xor esi, esi
     call c2_fset
     mov rax, rbx
@@ -1327,15 +1332,15 @@ FN c2_errout
     mov r13, rdx
 6:  test r13, r13
     jz 7f
-    lea rdi, [rip + csb]        # (fsb's own bytes: through csb)
+    lea rdi, [rip + esb]        # (fsb's own bytes: through esb)
     call sb_clear
-    lea rdi, [rip + csb]
+    lea rdi, [rip + esb]
     mov rsi, r12
     mov rdx, r13
     call sb_push
     call f_clr
-    mov rdi, [rip + csb + SB_ptr]
-    mov rsi, [rip + csb + SB_len]
+    mov rdi, [rip + esb + SB_ptr]
+    mov rsi, [rip + esb + SB_len]
     mov edx, CLEAN_MAX
     call f_cl
     EPILOGUE
@@ -1878,7 +1883,7 @@ mcp_build:
 #   gives is kept, as both sort), its heading "Label (N)"; others: every server whose scope is none of
 #   scope_order's, a group per scope in the order they first come
 mcp_group:
-    PROLOGUE 48
+    PROLOGUE 48                 # ([rsp + 32]: a row's server index)
     mov rbx, rdi
     mov r12, rsi
     mov [rsp + 40], edx
@@ -1966,27 +1971,25 @@ mcp_group:
     xor esi, esi
     xor edx, edx
     call c2_frow
-    xor r14d, r14d              # the rows
-6:  mov rdi, rbx
-    call json_len
-    cmp r14d, eax
+    mov rdi, rbx                # the rows, by name (the extension sorts each scope's)
+    mov rsi, r12
+    call scope_sorted
+    xor r14d, r14d
+6:  cmp r14, [rip + sidx_n]
     jae 9f
+    lea rax, [rip + sidx]
+    mov esi, [rax + r14*4]
+    inc r14d
+    mov [rsp + 32], esi
     mov rdi, rbx
-    mov esi, r14d
     call json_at
     mov r15, rax
-    inc r14d
-    mov rdi, rax
-    mov rsi, r12
-    call has_scope
-    test eax, eax
-    jz 6b
     mov edi, DGK_ITEM
     mov esi, DGF_FILTER
     mov edx, MA_SERVER
     call agentdlg_row
     mov r13, rax
-    lea eax, [r14 - 1]
+    mov eax, [rsp + 32]
     mov [r13 + DGR_arg], rax
     mov rdi, r15
     lea rsi, [rip + .Lk_name]
@@ -2004,6 +2007,93 @@ mcp_group:
     call c2_fset
     jmp 6b
 9:  EPILOGUE
+
+# scope_sorted(root, scope cstr): sidx = the indexes of that scope's servers by name (ASCII case ignored, as
+#   localeCompare mostly is), SIDX_MAX at most
+scope_sorted:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov qword ptr [rip + sidx_n], 0
+    xor r13d, r13d
+1:  mov rdi, rbx
+    call json_len
+    cmp r13d, eax
+    jae 9f
+    cmp qword ptr [rip + sidx_n], SIDX_MAX
+    jae 9f
+    mov rdi, rbx
+    mov esi, r13d
+    call json_at
+    mov r14, rax
+    inc r13d
+    mov rdi, rax
+    mov rsi, r12
+    call has_scope
+    test eax, eax
+    jz 1b
+    mov rdi, r14                # its name
+    lea rsi, [rip + .Lk_name]
+    call c2_jstr
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    mov r15, [rip + sidx_n]     # into place among those before
+2:  test r15, r15
+    jz 3f
+    lea rax, [rip + sidx]
+    mov esi, [rax + r15*4 - 4]
+    mov rdi, rbx
+    call json_at
+    mov rdi, rax
+    lea rsi, [rip + .Lk_name]
+    call c2_jstr
+    mov rdi, rax                # before's name > this one's: it moves on
+    mov rsi, rdx
+    mov rdx, [rsp]
+    mov rcx, [rsp + 8]
+    call ci_cmp
+    test eax, eax
+    jle 3f
+    lea rax, [rip + sidx]
+    mov ecx, [rax + r15*4 - 4]
+    mov [rax + r15*4], ecx
+    dec r15
+    jmp 2b
+3:  lea rax, [rip + sidx]
+    lea ecx, [r13 - 1]
+    mov [rax + r15*4], ecx
+    inc qword ptr [rip + sidx_n]
+    jmp 1b
+9:  EPILOGUE
+
+# ci_cmp(a, alen, b, blen) -> eax <0, 0, >0 (ASCII case ignored)
+ci_cmp:
+    xor r8d, r8d
+1:  cmp r8, rsi
+    jae 3f
+    cmp r8, rcx
+    jae 4f
+    movzx eax, byte ptr [rdi + r8]
+    movzx r9d, byte ptr [rdx + r8]
+    lea r10d, [rax - 'A']
+    cmp r10d, 25
+    ja 11f
+    or eax, 0x20
+11: lea r10d, [r9 - 'A']
+    cmp r10d, 25
+    ja 12f
+    or r9d, 0x20
+12: sub eax, r9d
+    jnz 9f
+    inc r8
+    jmp 1b
+3:  xor eax, eax
+    cmp r8, rcx
+    je 9f
+    mov eax, -1
+    ret
+4:  mov eax, 1
+9:  ret
 
 # known_scope(ptr, len) -> eax 1 for one of scope_order's
 known_scope:

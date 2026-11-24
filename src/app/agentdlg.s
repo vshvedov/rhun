@@ -2993,9 +2993,15 @@ FN agentdlg_x_move
 FN agentdlg_x_act
     jmp do_act
 
-# FN agentdlg_x_row(i) -> rax the i-th row (DR*)
+# FN agentdlg_x_row(i) -> rax the i-th row (DR*); agentdlg_x_nrows() -> rax the rows (0 closed)
 FN agentdlg_x_row
     jmp row_at
+FN agentdlg_x_nrows
+    xor eax, eax
+    cmp dword ptr [rip + dg_open], 0
+    je 1f
+    mov rax, [rip + dg_rows + VEC_len]
+1:  ret
 
 # FN agentdlg_x_touch(): the rows changed (laid out again)
 FN agentdlg_x_touch
@@ -3951,7 +3957,9 @@ fit_sizes: .long 8, 13, 32
 dlg_names:                      # agent-dialog's names and their commands
     .quad .Ln_status, ACT_STATUS, .Ln_usage, ACT_USAGE, .Ln_context, ACT_CONTEXT
     .quad .Ln_ostyle, ACT_OSTYLE, .Ln_skills, ACT_SKILLS, .Ln_memory, ACT_MEMORY
-    .quad .Ln_instruct, ACT_INSTRUCT, 0, 0
+    .quad .Ln_instruct, ACT_INSTRUCT
+    .quad .Ln2_mcp, ACT_MCP, .Ln2_hooks, ACT_HOOKS, .Ln2_perms, ACT_PERMS   # claude-chat-p7b (claude_dlg2.s)
+    .quad .Ln2_sandbox, ACT_SANDBOX, .Ln2_plugins, ACT_PLUGINS, 0, 0
 .globl agentdlg_n_open, agentdlg_n_pick, agentdlg_n_press, agentdlg_n_filter, agentdlg_n_close
 .globl agentdlg_n_print
 agentdlg_n_open: .asciz "agent-dialog"
@@ -3968,6 +3976,11 @@ agentdlg_n_print: .asciz "print-agent-dialog"
 .Ln_skills: .asciz "skills"
 .Ln_memory: .asciz "memory"
 .Ln_instruct: .asciz "instructions"
+.Ln2_mcp: .asciz "mcp"                 # claude-chat-p7b
+.Ln2_hooks: .asciz "hooks"
+.Ln2_perms: .asciz "permissions"
+.Ln2_sandbox: .asciz "sandbox"
+.Ln2_plugins: .asciz "plugins"
 .Ls_loading: .asciz "loading"
 .Ls_ready: .asciz "ready"
 .Ls_error: .asciz "error"

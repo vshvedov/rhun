@@ -3645,7 +3645,7 @@ ENDSTRUCT DGR_SIZE
 # claude-chat-p7b (agentdlg2.s): the form rows. FIELD: t1 its label, t2 its placeholder, t3 a hint under it
 #   (DGF_ERROR: an error), DGR_val its TF (the dialog's, kept across rebuilds), DGR_act what Enter does in a
 #   one-line field (0: the focus moves on); OPTION: a choice of a group (t1, t2 a description under it,
-#   DGF_ON the one chosen); TABS: t1 the tabs' labels joined by tabs, DGR_val the one shown, DGR_act gets the
+#   DGF_ON the one chosen); TABS: t1 the tabs' labels joined by 0x1f, DGR_val the one shown, DGR_act gets the
 #   tab picked as its arg
 .equ DGK_FIELD, 10
 .equ DGK_OPTION, 11

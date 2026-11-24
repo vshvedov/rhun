@@ -3041,8 +3041,8 @@ FN agentext_bottom_h
 1:  mov eax, r13d
     EPILOGUE
 
-# box_keep(AS*, w) -> eax the room the prompt box and its footer keep (the bands and the card are cut
-#   first); 0 without a driver
+# box_keep(AS*, w) -> eax the room the prompt box, the chips above it and its footer keep (the bands and the
+#   card are cut first); 0 without a driver
 box_keep:
     PROLOGUE
     mov rbx, rdi
@@ -3055,6 +3055,10 @@ box_keep:
     mov rsi, rbx
     call input_h
     mov r13d, eax
+    mov rdi, rbx                # phase 4 task 3: the chips row above the box (agentatt.s)
+    mov esi, r12d
+    call agatt_h
+    add r13d, eax
     mov rdi, rbx
     mov esi, r12d
     call foot_h
@@ -3475,7 +3479,25 @@ FN agentext_bottom_draw
     mov rdi, rbx                # the old owner keeps its text, the box takes this one's
     xor esi, esi
     call composer_owner
-1:  mov edi, [rsp]
+1:  mov edi, -1                  # phase 4 task 3: in an area cut shorter than the box, its chips and its
+    call agatt_room             #   footer keep, the chips get what the box and the footer leave
+    mov rdi, rbx
+    mov esi, [rsp + 8]
+    call box_keep
+    cmp eax, [rsp + 12]
+    jle 11f
+    mov edi, [rsp + 8]
+    mov rsi, rbx
+    call input_h
+    mov [rsp + 44], eax
+    mov rdi, rbx
+    mov esi, [rsp + 8]
+    call foot_h
+    add eax, [rsp + 44]
+    mov edi, [rsp + 12]
+    sub edi, eax
+    call agatt_room
+11: mov edi, [rsp]
     mov esi, [rsp + 4]
     mov edx, [rsp + 8]
     PM ecx, MI_1
@@ -3569,7 +3591,20 @@ FN agentext_bottom_draw
     call ui_text_v_fit
     add rsp, 16
     jmp 9f
-3:  # the box (box_fit: Send beside it, or under it in a narrow panel), its frame in the mode's colour
+3:  mov rdi, rbx                # phase 4 task 3: the chips above the box (agentatt.s)
+    mov esi, [rsp + 8]
+    call agatt_h
+    test eax, eax
+    jz 30f
+    mov [rsp + 44], eax
+    mov rdi, rbx
+    mov esi, [rsp]
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 8]
+    call agatt_draw
+    mov eax, [rsp + 44]
+    add [rsp + 16], eax
+30: # the box (box_fit: Send beside it, or under it in a narrow panel), its frame in the mode's colour
     mov edi, [rsp + 8]
     mov rsi, rbx
     call input_h
@@ -3747,7 +3782,9 @@ FN agentext_bottom_draw
     jmp 9f
 8:  mov rdi, rbx
     call agent_stop
-9:  EPILOGUE
+9:  mov edi, -1                 # (the chips' room is this draw's only)
+    call agatt_room
+    EPILOGUE
 
 # card_draw(AS*, x, y, w, h): the card's prompt and its options as buttons (1 to 9 pick)
 card_draw:
@@ -4048,6 +4085,10 @@ FN agentext_new_draw
     xor esi, esi
     call input_h
     mov [rsp + 16], eax
+    xor edi, edi                # phase 4 task 3: the chips above it
+    mov esi, [rsp + 8]
+    call agatt_h
+    add [rsp + 16], eax
     xor edi, edi                # and its footer (a built-in driver's draft has one)
     mov esi, [rsp + 8]
     call foot_h

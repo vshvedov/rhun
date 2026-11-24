@@ -192,6 +192,37 @@ limit · resets at 3:45 PM", "You've hit your weekly limit · resets Tue, Nov 24
 Web links that come from Claude Code (in replies, bands and cards) ask before they open: "Claude
 Code wants to open HOST in your browser: URL" with **Open**, **Copy Link** and **Cancel**.
 
+### Attaching files and images
+
+**+** at the left of the row under the box opens a menu: **Upload from computer** opens rhun's path
+browser as "Attach File", in the conversation's folder: Enter attaches the file picked and closes
+it, Shift+Enter attaches it and stays open for another, a folder is entered as in Open File.
+**Add context** puts `@` in the box. The command menu has the same two as **Attach file…** and
+**Mention file from this project…**. Each file attached shows as a chip above the box: its icon,
+its name (cut to 24 characters) with the whole name as its tip, and a × that takes it off. With
+many chips three rows show and the wheel over them shows the rest. Each conversation keeps its own
+chips, as it keeps its text, and a prompt with chips and no text sends too. A message sent goes
+with its chips, which its row keeps; a queued message keeps them, and one that comes back into the
+box (refused, dropped, or its process ended) brings them back.
+
+What a file is comes from its bytes, then its name, as in the VS Code extension: a PNG, JPEG, GIF
+or WebP goes to Claude as an image, a PDF as a document Claude reads, and a text file (a name the
+extension counts as text, such as `.py`, `.md`, `Makefile` or `LICENSE`, or any other UTF-8 file
+without a NUL byte) as a document with its name. Anything else is not attached: a band says
+"Unsupported file type: NAME. Supported types: images (PNG, JPG, GIF, WebP), text files, and PDFs.
+…", naming the first three of several. An empty file is skipped, and a folder becomes a mention
+(`@src/`). Claude Code makes a large picture smaller itself before it sends it on.
+
+rhun's limits, for one message: 20 files and 10 MB together; an image or a PDF at most 10 MB, a
+text file at most 256 KB (a text of 1 MB is more than Claude Code takes in one message). A file is
+looked at before it is read: something that is not a regular file (a pipe, a device) is "NAME is
+not a file · not attached", one too large "NAME is larger than 10 MB · not attached" (256 KB for a
+text), and the others "These files are more than 10 MB together · NAME was not attached", "A
+message takes 20 attachments · NAME was not attached" and "NAME could not be read · not attached".
+A message whose attachments would not fit in the program's input is not sent: "This message is too
+large to send: remove an attachment." A message written while Claude works keeps only the paths of
+its files (they are read again if it comes back) and at most 10 MB of pasted pictures.
+
 ### Modes, model and the command menu
 
 The row under the box holds the permission mode, the model, then at the right the context

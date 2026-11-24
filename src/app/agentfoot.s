@@ -56,6 +56,7 @@
 .equ FOOT_FAST, 3               #   the fast mark
 .equ FOOT_CTX, 4                #   the context pie
 .equ FOOT_CACHE, 5              #   the prompt cache's clock
+.equ FOOT_ADD, 6                #   the "+" (phase 4 task 3: a driver that takes parts)
 .equ BAND_LINK, 8               # ID_AGBAND + BAND_LINK + kind: a band's link
 
 .data
@@ -113,6 +114,12 @@ fd_pill: .long 0
 fd_pill_y: .long 0
 fd_fast: .long 0
 fd_fast_y: .long 0
+fd_add: .long 0                 # phase 4 task 3: the "+" as drawn last (its centre)
+fd_add_y: .long 0
+fl_ax: .long 0                  #   layout(): the "+"'s x, width (0: none), y from the footer's top (at
+fl_aw: .long 0                  #   stage 2 it is on the pill's row, before the pill), and which row the pass
+fl_ay: .long 0                  #   puts it on (1, 2)
+fl_arow: .long 0
 .p2align 3
 pill_name: .quad 0              # the name pill_drv found (cstr), or 0
 psb2: .zero SB_SIZE             # the pill's text
@@ -746,7 +753,8 @@ FN bands_dump
 10: EPILOGUE
 
 # foot_drv(AS* or 0) -> rax the driver of the box's conversation (0: the box's draft) when it has permission
-#   modes, else 0
+#   modes, parts or the editor's context (phase 4 task 3: a footer with only the "+"), else 0; edx its DRVC_*
+#   bits as the UI is told them (agent-test-caps)
 foot_drv:
     PROLOGUE
     test rdi, rdi
@@ -762,9 +770,14 @@ foot_drv:
     call agent_drv_for_kind
 2:  test rax, rax
     jz 9f
-    test dword ptr [rax + DRV_caps], DRVC_MODES
+    mov edx, [rax + DRV_caps]
+    mov ecx, [rip + g_att_test_caps]
+    cmp ecx, -1
+    cmovne edx, ecx
+    test edx, DRVC_MODES | DRVC_PARTS | DRVC_CONTEXT
     jnz 9f
 8:  xor eax, eax
+    xor edx, edx
 9:  EPILOGUE
 
 # foot_cur(AS* or 0) -> rax the current mode (the driver's AMD) or 0, edx how many are offered, rcx the list
@@ -773,6 +786,8 @@ foot_cur:
     mov rbx, rdi
     call foot_drv
     test rax, rax
+    jz 8f
+    test edx, DRVC_MODES        # (phase 4 task 3: a footer without modes)
     jz 8f
     mov qword ptr [rsp], 0
     mov rdi, rbx
@@ -855,6 +870,25 @@ mode_label:
 #   then the pie's. Without room for the dot and two characters' worth of label the dot goes. lsb: the
 #   label as shown, psb2: the pill's whole text, psb3: as shown
 layout:
+    PROLOGUE
+    mov rbx, rdi                # phase 4 task 3: the "+" on the first row; at stage 2 on the pill's row
+    mov r12d, esi
+    mov dword ptr [rip + fl_arow], 1
+    call layout_pass
+    cmp dword ptr [rip + fl_stage], 2
+    jne 9f
+    cmp dword ptr [rip + fl_aw], 0
+    je 9f
+    cmp dword ptr [rip + fl_pw], 0
+    je 9f
+    mov dword ptr [rip + fl_arow], 2
+    mov rdi, rbx
+    mov esi, r12d
+    call layout_pass
+9:  EPILOGUE
+
+# layout_pass(AS* or 0, w): layout with the "+" on row fl_arow (2: the stage is 2, the "+" before the pill)
+layout_pass:
     PROLOGUE 48
     mov rbx, rdi
     mov r12d, esi
@@ -903,8 +937,56 @@ layout:
     sub ecx, edx
     sub ecx, [rip + g_pmt + 4*MI_4]
 4:  mov [rsp + 28], ecx         # xr0
-    PM r14d, MI_12              # the mode button's left
-    mov [rip + fl_mx], r14d
+    PM r14d, MI_12              # the mode button's left (after the "+", phase 4 task 3)
+    mov dword ptr [rip + fl_ax], 0
+    mov dword ptr [rip + fl_aw], 0
+    mov rdi, rbx
+    call foot_drv
+    mov [rsp + 32], edx         # (the driver's bits as the UI is told them)
+    test rax, rax
+    jnz 40f
+    mov [rip + fl_nx], eax      # no footer at all (no modes, parts or context): nothing of it
+    mov [rip + fl_nw], eax
+    mov dword ptr [rsp + 32], 0
+40: test edx, DRVC_PARTS
+    jz 41f
+    mov [rip + fl_ax], r14d     # the "+": MI_20 wide, MI_4 before the mode button (or the pill)
+    mov eax, [rip + g_pmt + 4*MI_20]
+    mov [rip + fl_aw], eax
+    mov dword ptr [rip + fl_ay], 0
+    cmp dword ptr [rip + fl_arow], 2
+    je 43f
+    add r14d, eax
+    add r14d, [rip + g_pmt + 4*MI_4]
+    jmp 41f
+43: mov eax, [rip + fl_row]     # (on the pill's row)
+    add eax, [rip + g_pmt + 4*MI_4]
+    mov [rip + fl_ay], eax
+41: test dword ptr [rsp + 32], DRVC_MODES
+    jnz 42f
+    xor eax, eax                # no modes: no mode button, label, pill, fast mark, pie or clock
+    mov [rip + fl_mx], eax
+    mov [rip + fl_mw], eax
+    mov [rip + fl_lw], eax
+    mov [rip + fl_dot], eax
+    mov [rip + fl_pw], eax
+    mov [rip + fl_px], eax
+    mov [rip + fl_py], eax
+    mov [rip + fl_fx], eax
+    mov [rip + fl_fw], eax
+    mov [rip + fl_ix], eax
+    mov [rip + fl_iw], eax
+    mov [rip + fl_cx], eax
+    mov [rip + fl_cw], eax
+    mov [rip + fl_stage], eax
+    mov [rip + fl_hfast], eax
+    mov [rip + fl_hctx], eax
+    lea rdi, [rip + lsb]
+    call sb_clear
+    lea rdi, [rip + psb3]
+    call sb_clear
+    EPILOGUE
+42: mov [rip + fl_mx], r14d
     mov rdi, rbx
     call foot_cur
     mov rdi, rax
@@ -944,7 +1026,14 @@ layout:
     sub ecx, r14d
     mov dword ptr [rip + fl_stage], 0
     mov r13d, [rsp + 12]
-    cmp eax, ecx
+    cmp dword ptr [rip + fl_arow], 2    # (the second pass: stage 2 already decided)
+    jne 60f
+    mov dword ptr [rip + fl_cw], 0
+    mov dword ptr [rip + fl_stage], 2
+    mov ecx, [rsp + 24]
+    sub ecx, r14d
+    jmp 7f
+60: cmp eax, ecx
     jle .Lly_mode
     mov dword ptr [rip + fl_cw], 0      # the clock goes
     mov dword ptr [rip + fl_stage], 1
@@ -1041,6 +1130,11 @@ layout:
     add eax, [rip + g_pmt + 4*MI_4]
     mov [rip + fl_py], eax
     mov eax, r14d
+    cmp dword ptr [rip + fl_arow], 2    # (after the "+" on that row)
+    jne 131f
+    add eax, [rip + fl_aw]
+    add eax, [rip + g_pmt + 4*MI_4]
+131:
     mov edx, [rip + fl_nx]      # that row ends where the menu button does
     add edx, [rip + fl_nw]
     sub edx, eax
@@ -1364,6 +1458,12 @@ FN foot_draw
     call layout
     mov eax, [rip + fl_stage]
     mov [rip + fd_stage], eax
+    mov rdi, rbx                # phase 4 task 3: the "+"
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    call add_draw
+    cmp dword ptr [rip + fl_mw], 0
+    je .Lfd_menu                # a footer without modes: the "+" and the menu's button
     mov rdi, rbx
     call foot_cur
     mov r15, rax                # the current mode, or 0
@@ -1468,6 +1568,7 @@ FN foot_draw
     mov edx, [rsp + 4]
     call clock_draw
     # the command menu's button
+.Lfd_menu:
     mov r12d, [rsp]
     add r12d, [rip + fl_nx]
     mov edi, ID_AGFOOT + FOOT_MENU
@@ -1481,7 +1582,9 @@ FN foot_draw
     shr ecx, 1
     lea eax, [r12 + rcx]
     mov [rip + fd_menu], eax
-    mov eax, [rip + fd_mode_y]
+    mov eax, [rip + fl_row]
+    shr eax, 1
+    add eax, [rsp + 4]
     mov [rip + fd_menu_y], eax
     mov edi, APP_MENU
     mov esi, r13d
@@ -1516,6 +1619,72 @@ FN foot_draw
     jz 9f
     mov edi, APP_MENU
     call toggle
+9:  EPILOGUE
+
+# add_draw(AS* or 0, x, y): the "+" where layout put it (none: fl_aw 0): an icon, lit while hovered, tip "Add";
+#   a click opens its menu above it (agatt_plus_menu: Upload from computer, Add context). Phase 4 task 3
+add_draw:
+    PROLOGUE 16
+    mov dword ptr [rip + fd_add], 0
+    mov dword ptr [rip + fd_add_y], 0
+    cmp dword ptr [rip + fl_aw], 0
+    je 9f
+    mov r12d, esi
+    add r12d, [rip + fl_ax]
+    mov r13d, edx
+    add r13d, [rip + fl_ay]
+    mov edi, ID_AGFOOT + FOOT_ADD
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, [rip + fl_aw]
+    mov r8d, [rip + fl_row]
+    call ui_btn
+    mov r14d, eax
+    mov ecx, [rip + fl_aw]
+    shr ecx, 1
+    lea eax, [r12 + rcx]
+    mov [rip + fd_add], eax
+    mov eax, [rip + fl_row]
+    shr eax, 1
+    add eax, r13d
+    mov [rip + fd_add_y], eax
+    test r14d, UB_HOVER
+    jz 1f
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, [rip + fl_aw]
+    mov ecx, [rip + fl_row]
+    PM r8d, MI_RADIUS
+    COLOR r9d, T_HOVER
+    call gfx_round_rect
+1:  PM ecx, MI_16               # the icon, centred
+    mov esi, [rip + fl_aw]
+    sub esi, ecx
+    sar esi, 1
+    add esi, r12d
+    mov edx, [rip + fl_row]
+    sub edx, ecx
+    sar edx, 1
+    add edx, r13d
+    mov edi, IC_PLUS
+    COLOR r8d, T_MUTED
+    test r14d, UB_HOVER
+    jz 2f
+    COLOR r8d, T_FG
+2:  call icon_draw
+    mov edi, ID_AGFOOT + FOOT_ADD
+    mov esi, r12d
+    mov edx, r13d
+    add edx, [rip + fl_row]
+    mov ecx, [rip + fl_aw]
+    mov r8d, r14d
+    lea r9, [rip + .Lt_add]
+    call tip_note_text
+    test r14d, UB_CLICK
+    jz 9f
+    mov edi, r12d
+    mov esi, r13d
+    call agatt_plus_menu
 9:  EPILOGUE
 
 # pill_draw(AS* or 0, x, y): the model pill where layout put it (none: fl_pw 0): its text as layout cut it,
@@ -2222,6 +2391,10 @@ FN foot_dump
     lea rsi, [rip + .Ld_cache_at]
     lea rdx, [rip + fd_cache]
     call put_at
+    mov rdi, rbx                # phase 4 task 3
+    lea rsi, [rip + .Ld_add_at]
+    lea rdx, [rip + fd_add]
+    call put_at
     mov rdi, rbx
     lea rsi, [rip + .Ld_fast]
     call sb_push_cstr
@@ -2423,6 +2596,19 @@ FN foot_dump
     lea rsi, [rip + .Ld_cache_h]
     mov edx, [rip + fl_row]
     call put_num
+    lea rsi, [rip + .Ld_add_x]  # phase 4 task 3: the "+"
+    mov edx, [rip + fl_ax]
+    call put_num
+    lea rsi, [rip + .Ld_add_y]
+    mov edx, [rsp + 28]
+    add edx, [rip + fl_ay]
+    call put_num
+    lea rsi, [rip + .Ld_add_w]
+    mov edx, [rip + fl_aw]
+    call put_num
+    lea rsi, [rip + .Ld_add_h]
+    mov edx, [rip + fl_row]
+    call put_num
     lea rsi, [rip + .Ld_stage]
     mov edx, [rip + fl_stage]
     call put_num
@@ -2530,6 +2716,12 @@ band_tips: .quad .Lt_error, .Lt_warning, .Lt_warning, .Lt_warning, .Lt_notice
 .Lt_dot: .asciz ". "
 .Lt_mode: .asciz "Click to change, or press Shift+Tab to cycle."
 .Lt_menu: .asciz "Show command menu (/)"
+.Lt_add: .asciz "Add"
+.Ld_add_at: .asciz " add_at="
+.Ld_add_x: .asciz " add_x="
+.Ld_add_y: .asciz " add_y="
+.Ld_add_w: .asciz " add_w="
+.Ld_add_h: .asciz " add_h="
 .Lmodel: .asciz "Model"
 .Lsep: .asciz " \302\267 "
 .Lultra: .asciz " \302\267 Ultracode"

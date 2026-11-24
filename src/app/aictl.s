@@ -470,6 +470,17 @@ c_print_agent_bufs:
     xor eax, eax
     EPILOGUE
 
+# print-agent-attachments-fit: the chips' layout at every panel size and width with 1, 5 and 20 parts
+#   (agatt_fit_dump)
+c_print_agent_attachments_fit:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agatt_fit_dump
+    xor eax, eax
+    EPILOGUE
+
 # agent-test-caps MASK|off: the UI is told the box's driver has exactly these DRVC_* bits (a driver with parts
 #   but no modes exists in no other way yet); off: the driver's own
 c_agent_test_caps:
@@ -3030,6 +3041,7 @@ c_agent_card_uncomment:
 .Lc_print_agent_row_chips: .asciz "print-agent-row-chips"
 .Lc_print_agent_bufs: .asciz "print-agent-bufs"
 .Lc_agent_test_caps: .asciz "agent-test-caps"
+.Lc_print_agent_attachments_fit: .asciz "print-agent-attachments-fit"
 .Lw_bytes: .asciz "bytes:"
 .Lw_image: .asciz "Image"
 .Lr_no_parts: .asciz "this agent takes no attachments\n"
@@ -3143,6 +3155,7 @@ ai_ctl:
     .quad .Lc_print_agent_attachments, c_print_agent_attachments
     .quad .Lc_print_agent_row_chips, c_print_agent_row_chips, .Lc_print_agent_bufs, c_print_agent_bufs
     .quad .Lc_agent_test_caps, c_agent_test_caps
+    .quad .Lc_print_agent_attachments_fit, c_print_agent_attachments_fit   # task 3
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

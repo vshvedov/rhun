@@ -1567,7 +1567,7 @@ class ModeTest(ModeCase):
             r, label, _ = foot_line(line)
             what = line
             rects = {name: (r[name + '_x'], r[name + '_y'], r[name + '_w'], r[name + '_h'])
-                     for name in ('send', 'mode', 'menu')}
+                     for name in ('send', 'mode', 'menu', 'add')}
             for name, (x, y, w, h) in rects.items():
                 self.assertGreater(w, 0, what)
                 self.assertGreater(h, 0, what)
@@ -1945,7 +1945,7 @@ class ModelTest(ModelCase):
         for line in lines:
             r, _, _ = foot_line(line)
             rects = {name: (r[name + '_x'], r[name + '_y'], r[name + '_w'], r[name + '_h'])
-                     for name in ('send', 'mode', 'menu', 'pill', 'fast') if r[name + '_w'] > 0}
+                     for name in ('send', 'mode', 'menu', 'pill', 'fast', 'add') if r[name + '_w'] > 0}
             fast += 'fast' in rects
             for name, (x, y, w, h) in rects.items():
                 self.assertGreater(h, 0, line)
@@ -1985,7 +1985,7 @@ class ModelTest(ModelCase):
             self.assertGreater(r['label'], 0, line)
 
 
-FOOT_RECTS = ('send', 'mode', 'menu', 'pill', 'fast', 'ctx', 'cache')
+FOOT_RECTS = ('send', 'mode', 'menu', 'pill', 'fast', 'ctx', 'cache', 'add')     # add: the "+" (phase 4 task 3)
 WINDOW = 1000000 - 20000 - 13000        # the fake's contextWindow, less min(maxOutputTokens, 20000) and 13000
 
 
@@ -2242,7 +2242,7 @@ class NoticeTest(NoticeCase):
         self.until(lambda: '/compact' in self.prompts(), '/compact written at once')
 
     def test_cache_clock_warm_then_cold(self):
-        self.start()
+        self.start(extra='[ui]\nagents_width = 480\n')     # (room for the clock beside the "+": phase 4)
         self.chat('hello')
         self.assertEqual(self.live_word('cache'), '-')               # no cache written: no clock
         self.assertEqual(self.foot()['cache_at'], '0,0')
@@ -2267,7 +2267,7 @@ class NoticeTest(NoticeCase):
         self.assertEqual(self.foot()['clock'], 'cold')
 
     def test_notices_add_no_timer(self):
-        self.start()
+        self.start(extra='[ui]\nagents_width = 480\n')     # (room for the clock beside the "+": phase 4)
         self.chat('hello')                                           # a conversation without a cache
         self.command('move 1 1')
         time.sleep(1.5)                                              # what the turn left settles
@@ -2386,8 +2386,8 @@ class NoticeTest(NoticeCase):
             self.assertEqual(r['stage'], 0, (size, r))
         r, _, _ = at[7, 32, 240]                                     # the narrowest, largest: two rows
         self.assertEqual(r['stage'], 2, r)
-        r, _, _ = at[0, 13, 380]                                     # no extras at the default size
-        self.assertLessEqual(r['stage'], 1, r)
+        r, _, _ = at[0, 13, 440]                                     # no extras at the default size (the
+        self.assertLessEqual(r['stage'], 1, r)                       #   "+" of phase 4 takes 24 px: 380 is 2)
         # the pill's own row is room the footer takes: more than one row's at the same size
         for size in range(8, 33):
             rows = {r['stage'] == 2: r['h'] - r['mode_y'] for (c, s_, w), (r, _, _) in at.items() if s_ == size}

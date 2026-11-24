@@ -2006,7 +2006,9 @@ scan_cb:
 # ---- path browser ----
 
 # browse_open(folder): Open File (0) or Open Folder (1), starting in the project folder; 2 is Add
-#   Folder to Workspace (workspace.s), which adds the folder picked instead of opening it
+#   Folder to Workspace (workspace.s), which adds the folder picked instead of opening it; 3 is Attach File
+#   (phase 4 task 3): a file picked is attached to the agents box's message (agatt_attach_paths; Enter closes,
+#   Shift+Enter stays for another), starting in that conversation's checkout
 FN browse_open_kind
 browse_open:
     PROLOGUE
@@ -2018,13 +2020,22 @@ browse_open:
     lea rax, [rip + .Lph_open_file]
     test ebx, ebx
     jz 1f
+    lea rax, [rip + .Lph_attach]
+    cmp ebx, 3
+    je 1f
     lea rax, [rip + .Lph_open_folder]
     cmp ebx, 2
     jne 1f
     lea rax, [rip + .Lph_add_folder]
 1:  mov [rip + pal_label], rax
-    # the field: the project folder, the home folder as ~, and a '/'
-    mov rsi, [rip + g_project]
+    # the field: the project folder (Attach File: the conversation's checkout), the home folder as ~, and a '/'
+    cmp ebx, 3
+    jne 11f
+    call agatt_browse_dir
+    mov rsi, rax
+    test rsi, rsi
+    jnz 2f
+11: mov rsi, [rip + g_project]
     test rsi, rsi
     jnz 2f
     call vfs_home               # the host's in a remote window
@@ -2236,8 +2247,10 @@ browse_load:
     call vfs_is_dir
     test eax, eax
     jz 9f
-    xor ebx, ebx                # items before the sorted ones
+    xor ebx, ebx                # items before the sorted ones (none when files are picked)
     cmp dword ptr [rip + brw_kind], 0
+    je 1f
+    cmp dword ptr [rip + brw_kind], 3
     je 1f
     lea rdi, [rip + strings]
     lea rsi, [rip + .Lopen_here]
@@ -2315,6 +2328,8 @@ browse_cb:
     test r13d, r13d
     jnz 1f
     cmp dword ptr [rip + brw_kind], 0
+    je 1f
+    cmp dword ptr [rip + brw_kind], 3   # (Attach File lists files too)
     jne 9f
 1:  mov rax, [rip + strings + SB_len]
     mov [rsp], rax
@@ -3538,6 +3553,8 @@ palette_accept:
     # a folder: the browser goes into it; picking a folder, Ctrl+Enter opens it
     cmp dword ptr [rip + brw_kind], 0
     je 1f
+    cmp dword ptr [rip + brw_kind], 3
+    je 1f
     test dword ptr [rip + pal_mods], MOD_CTRL
     jnz 2f
 1:  mov rdi, r12
@@ -3579,7 +3596,21 @@ palette_accept:
     mov rsi, [r12 + IT_label]
     call path_join
     mov r13, rax
+    cmp dword ptr [rip + brw_kind], 3
+    jne 1f
+    mov rdi, r13                # Attach File: the box's message gets it (Shift+Enter: the browser stays)
+    call strlen
+    lea rsi, [rax + 1]
+    mov rdi, r13
+    call agatt_attach_paths
+    mov rdi, r13
+    call mem_free
+    test dword ptr [rip + pal_mods], MOD_SHIFT
+    jnz .Lpa_ret
     call palette_close
+    mov dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
+    jmp .Lpa_ret
+1:  call palette_close
     mov rdi, r13
     call app_open_path
     mov rdi, r13
@@ -4256,6 +4287,7 @@ hint_text:
 .Lhint_new_file: .asciz "Enter creates the file, Esc cancels"
 .Lhint_new_folder: .asciz "Enter creates the folder, Esc cancels"
 .Lhint_rename: .asciz "Enter renames, Esc cancels"
+.Lph_attach: .asciz "Attach File"
 .Lph_open_file: .asciz "Open a file"
 .Lph_open_folder: .asciz "Open a folder"
 .Lopen_here: .asciz "Open "

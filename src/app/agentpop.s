@@ -2192,6 +2192,10 @@ FN agentpop_run
     call aghead_resume
     EPILOGUE
 0:
+    cmp r13d, ACT_ATTACH        # phase 4 task 3: the path browser as Attach File; "@" at the box's caret
+    je .Lr_attach
+    cmp r13d, ACT_MENTION
+    je .Lr_mention
     cmp r13d, ACT_CLEAR
     je .Lr_new
     cmp r13d, ACT_NEW
@@ -2265,6 +2269,12 @@ FN agentpop_run
 .Lr_new:
     mov edi, r12d
     call agentext_new_kind
+    EPILOGUE
+.Lr_attach:
+    call agatt_upload
+    EPILOGUE
+.Lr_mention:
+    call agatt_add_context
     EPILOGUE
 .Lr_models:
     mov edi, APP_MODELS

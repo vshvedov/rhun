@@ -610,5 +610,283 @@ class HostileTest(AttachCase):
         self.assertEqual(self.blocks()[0]['title'], 'a b c d.txt')
 
 
+def rect(text):
+    return tuple(int(v) for v in text.split(','))
+
+
+def overlap(a, b):
+    ax, ay, aw, ah = a
+    bx, by, bw, bh = b
+    return not (ax + aw <= bx or bx + bw <= ax or ay + ah <= by or by + bh <= ay)
+
+
+class ChipsTest(AttachCase):
+    """The chips above the box (task 3): drawn from a layout made when the pack or the width changed, each with
+    its x; the footer's "+" and its menu; Attach File; the command menu's two entries."""
+
+    PARTS = 4096
+    CONTEXT = 8192
+    MENTIONS = 16384
+    MODES = 64
+
+    def chips_at(self):
+        """Each chip's rect and its x's, as drawn last."""
+        out = []
+        for line in self.att()['parts']:
+            at = rect(re.search(r' at=(\S+)', line).group(1))
+            x = rect(re.search(r' x=(\S+)', line).group(1))
+            out.append((at, x))
+        return out
+
+    def foot(self):
+        first = self.command('print-agents-foot').splitlines()[0]
+        head = first.split(' label=', 1)[0]
+        return dict(word.split('=', 1) for word in head.split(' '))
+
+    def three(self):
+        return [self.put('a.png', png()), self.put('notes.txt', 'n\n'), self.put('two.pdf', PDF)]
+
+    def test_chips_row_above_the_box(self):
+        self.start()
+        self.chat('hello')
+        self.attach(*self.three())
+        self.command('wait 50')
+        chips = self.chips_at()
+        self.assertEqual(len(chips), 3)
+        add_y = int(self.foot()['add_at'].split(',')[1])
+        for at, x in chips:
+            self.assertGreater(at[2], 0)
+            self.assertLess(at[1] + at[3], add_y - 30)           # above the box, which is above the footer
+            self.assertGreaterEqual(x[0], at[0])                 # its x inside it, at least MI_16 square
+            self.assertLessEqual(x[0] + x[2], at[0] + at[2])
+            self.assertGreaterEqual(x[2], 16)
+            self.assertGreaterEqual(x[3], 16)
+        for i, (a, _) in enumerate(chips):
+            for b, _ in chips[i + 1:]:
+                self.assertFalse(overlap(a, b), chips)
+
+    def test_remove_with_its_x(self):
+        self.start()
+        self.chat('hello')
+        self.attach(*self.three())
+        self.command('wait 50')
+        _, x = self.chips_at()[1]
+        self.command(f'click {x[0] + x[2] // 2} {x[1] + x[3] // 2}')
+        self.command('wait 50')
+        self.assertEqual([p.split(' ')[2] for p in self.att()['parts']], ['name=a.png', 'name=two.pdf'])
+
+    def test_a_removed_chip_is_not_sent(self):
+        self.start()
+        self.chat('hello')
+        self.attach(*self.three())
+        self.command('wait 50')
+        _, x = self.chips_at()[0]
+        self.command(f'click {x[0] + x[2] // 2} {x[1] + x[3] // 2}')
+        self.command('agent-prompt echoblocks')
+        self.ready()
+        self.assertEqual([b.get('title') for b in self.blocks()], ['notes.txt', 'two.pdf', None])
+        sent = [r['stdin'] for r in self.records() if 'stdin' in r]
+        self.assertFalse(any('image/png' in line for line in sent))
+
+    def test_twenty_chips_at_240_keep_the_box_and_footer(self):
+        self.start(extra='[ui]\nagents_width = 240\n')
+        self.chat('hello')
+        self.attach(*[self.put(f'file-number-{n}.txt', f'{n}\n') for n in range(20)])
+        self.command('wait 50')
+        chips = self.chips_at()
+        self.assertEqual(len(chips), 20)
+        shown = [c for c in chips if c[0][2] > 0]
+        self.assertLess(len(shown), 20)                          # three rows show, the rest scroll
+        foot = self.foot()
+        self.assertNotEqual(foot['add_at'], '0,0')
+        self.assertNotEqual(foot['menu_at'], '0,0')
+        top = min(c[0][1] for c in shown)
+        before = [c[0] for c in chips]
+        self.command(f'move {shown[0][0][0] + 5} {top + 5}')
+        self.command('scroll 3')
+        self.command('wait 50')
+        after = [c[0] for c in self.chips_at()]
+        self.assertNotEqual(before, after)                       # the wheel over them shows others
+        self.assertNotEqual(self.foot()['add_at'], '0,0')
+
+    def test_chips_are_measured_on_change_only(self):
+        self.start()
+        self.chat('hello')
+        self.attach(*self.three())
+        self.command('wait 50')
+        before = self.att()['tail']['measures']
+        for _ in range(30):
+            self.command('print-frames')
+            self.command('wait 5')
+        self.command('agent-type typing does not measure the chips')
+        self.command('wait 50')
+        self.assertEqual(self.att()['tail']['measures'], before)
+        self.command('agent-attach-remove 0')
+        self.command('wait 50')
+        self.assertEqual(self.att()['tail']['measures'], before + 1)
+
+    def test_chips_fit_every_size_and_width(self):
+        self.start()
+        self.chat('hello')
+        lines = self.command('print-agent-attachments-fit').splitlines()
+        self.assertEqual(len(lines), 25 * 34 * 3)
+        for line in lines:
+            head = dict(w.split('=') for w in line.split(' c=')[0].split())
+            w, n, mi16 = int(head['w']), int(head['n']), int(head['mi16'])
+            chips = [tuple(int(v) for v in c.split(',')) for c in line.split(' c=')[1:]]
+            self.assertEqual(len(chips), n, line)
+            boxes = []
+            for cx, cy, cw, ch, xx, xy in chips:
+                self.assertGreaterEqual(cx, 0, line)
+                self.assertLessEqual(cx + cw, w, line)
+                self.assertGreaterEqual(xx, cx, line)            # its x inside it, MI_16 square
+                self.assertLessEqual(xx + mi16, cx + cw, line)
+                self.assertGreaterEqual(xy, cy, line)
+                self.assertLessEqual(xy + mi16, cy + ch, line)
+                boxes.append((cx, cy, cw, ch))
+            for i, a in enumerate(boxes):
+                for b in boxes[i + 1:]:
+                    self.assertFalse(overlap(a, b), line)
+            self.assertGreater(int(head['h']), 0, line)
+
+    def test_chips_follow_the_conversation(self):
+        self.start()
+        self.command('cmd focus_agents')
+        self.chat('a')
+        first = self.sid()
+        self.attach(self.put('a.txt', 'a\n'))
+        self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        self.chat('b')
+        self.command('wait 50')
+        self.assertEqual(self.att()['parts'], [])
+        self.attach(self.put('b.txt', 'b\n'))
+        self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        rows = [line for line in self.command('print-agents').splitlines() if line.startswith('Claude')]
+        for n in range(1, len(rows) + 1):
+            self.command(f'print-agents {n}')
+            if self.sid() == first:
+                break
+            self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')
+        self.command('wait 50')
+        parts = self.att()['parts']
+        self.assertEqual([p.split(' ')[2] for p in parts], ['name=a.txt'])
+        self.assertGreater(self.chips_at()[0][0][2], 0)          # drawn in this conversation's box
+
+    def test_plus_and_its_menu(self):
+        self.start()
+        self.chat('hello')
+        add = rect(self.foot()['add_at'])
+        self.command(f'click {add[0]} {add[1]}')
+        self.assertEqual(self.command('print-menu').splitlines(), ['Upload from computer', 'Add context'])
+        self.command('menu-pick Add context')
+        self.assertEqual(self.box(), '@')
+        self.assertIn('focus=1', self.command('print-agent-input'))
+        self.command(f'agent-test-caps {self.PARTS | self.MODES}')      # without mentions: Upload only
+        self.command('wait 50')
+        add = rect(self.foot()['add_at'])
+        self.command(f'click {add[0]} {add[1]}')
+        self.assertEqual(self.command('print-menu').splitlines(), ['Upload from computer'])
+
+    def test_no_plus_without_the_capability(self):
+        self.start()
+        self.chat('hello')
+        self.command(f'agent-test-caps {self.MODES}')
+        self.command('wait 50')
+        self.assertEqual(self.foot()['add_at'], '0,0')
+        lines = self.command('print-agents-foot').splitlines()[1:]
+        self.assertTrue(all(' add_w=0 ' in line for line in lines))
+
+    def test_upload_opens_the_browser_in_the_checkout(self):
+        self.start()
+        self.chat('hello')
+        self.put('inside.txt', 'i\n')
+        add = rect(self.foot()['add_at'])
+        self.command(f'click {add[0]} {add[1]}')
+        self.command('menu-pick Upload from computer')
+        self.command('wait 50')
+        palette = self.command('print-palette').splitlines()
+        self.assertEqual(palette[0], 'field=~/project/')        # the conversation's checkout (HOME is the test's)
+        self.assertTrue(any(line.strip(' >') == 'inside.txt' for line in palette[1:]), palette)
+
+    def test_enter_attaches_and_closes_shift_enter_stays(self):
+        self.start()
+        self.chat('hello')
+        self.put('alpha.txt', 'a\n')
+        self.put('beta.txt', 'b\n')
+        self.command('agent-menu')
+        self.command('agent-type Attach file')
+        self.command('key Return')
+        self.assertNotEqual(self.command('print-palette').splitlines()[0], 'none')
+        self.command('type alpha')
+        self.command('key shift+Return')
+        self.assertEqual([p.split(' ')[2] for p in self.att()['parts']], ['name=alpha.txt'])
+        self.assertNotEqual(self.command('print-palette').splitlines()[0], 'none')     # it stays
+        for _ in range(5):
+            self.command('key BackSpace')
+        self.command('type beta')
+        self.command('key Return')
+        self.assertEqual([p.split(' ')[2] for p in self.att()['parts']], ['name=alpha.txt', 'name=beta.txt'])
+        self.assertTrue(self.command('print-palette').startswith('none'))             # it closed
+
+    def test_command_menu_has_attach_and_mention(self):
+        self.start()
+        self.chat('hello')
+        self.command('agent-menu')
+        lines = self.command('print-agent-menu').splitlines()
+        rows = [l.split(' ', 2)[2].split('\t')[:2] for l in lines if l.startswith('row ')]
+        self.assertEqual(rows[:3], [['Attach file…', 'Upload a file to include in conversation'],
+                                    ['Mention file from this project…', 'Reference a project file with @mention'],
+                                    ['Clear conversation', 'Start a new conversation']])
+        section = [l for l in lines if l.startswith('section ')][0]
+        self.assertEqual(section, 'section Context')
+        self.command('agent-type Mention')
+        self.command('key Return')
+        self.assertEqual(self.box(), '@')
+
+    def test_a_slash_command_keeps_the_chips(self):
+        self.start()
+        self.chat('hello')
+        self.attach(self.put('a.txt', 'a\n'))
+        self.command('agent-prompt /model')
+        self.command('wait 50')
+        self.assertEqual(self.att()['head']['parts'], 1)
+        self.assertEqual(len(self.users()), 1)
+
+    def test_footer_fit_with_the_plus(self):
+        self.start()
+        self.chat('hello')
+        lines = self.command('print-agents-foot').splitlines()[1:]
+        self.assertEqual(len(lines), 25 * 34)
+        for line in lines:
+            numbers = {k: int(v) for k, v in (f.split('=') for f in line.split(' label=')[0].split())}
+            rects = {name: (numbers[name + '_x'], numbers[name + '_y'], numbers[name + '_w'], numbers[name + '_h'])
+                     for name in ('add', 'mode', 'menu', 'pill', 'send') if numbers[name + '_w'] > 0}
+            self.assertIn('add', rects, line)
+            for name, (x, y, w, h) in rects.items():
+                self.assertGreaterEqual(x, 0, line)
+                self.assertLessEqual(x + w, numbers['w'], line)
+            names = list(rects)
+            for i, a in enumerate(names):
+                for b in names[i + 1:]:
+                    self.assertFalse(overlap(rects[a], rects[b]), f'{a} and {b}: {line}')
+
+    def test_a_footer_without_modes(self):
+        self.start()
+        self.chat('hello')
+        self.command(f'agent-test-caps {self.PARTS | self.CONTEXT}')
+        self.command('wait 50')
+        foot = self.foot()
+        self.assertNotEqual(foot['add_at'], '0,0')
+        lines = self.command('print-agents-foot').splitlines()[1:]
+        for line in lines:
+            self.assertIn(' mode_w=0 ', line)
+            self.assertIn(' pill_w=0 ', line)
+            self.assertNotIn(' add_w=0 ', line)
+        self.command('agent-test-caps 0')                    # neither: no footer, as an extension's session
+        self.command('wait 50')
+        lines = self.command('print-agents-foot').splitlines()[1:]
+        self.assertTrue(all(' add_w=0 ' in line and ' menu_w=0 ' in line for line in lines), lines[0])
+
+
 if __name__ == '__main__':
     unittest.main()

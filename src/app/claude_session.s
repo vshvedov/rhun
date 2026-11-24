@@ -3957,6 +3957,14 @@ effort_labels:
 # the local slash table (ext-webview-ui.md 1.24, 1.25): name, description, argument hint, act
 # the command menu's actions (ext-webview-ui.md 1.24): section, act, label, description, kind, flags, rule
 menu_tbl:
+    .long APS_CONTEXT, ACT_ATTACH       # phase 4 task 3: Attach file…, Mention file from this project…
+    .quad .Lm_attach, .Lm_attach_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CONTEXT, ACT_MENTION
+    .quad .Lm_mention, .Lm_mention_d
+    .long APK_ROW, 0
+    .quad 0
     .long APS_CONTEXT, ACT_CLEAR
     .quad .Lm_clear, .Lm_clear_d
     .long APK_ROW, 0
@@ -4078,6 +4086,10 @@ local_cmds:
 .Ld_login: .asciz "Log in with a different account"
 .Ln_logout: .asciz "logout"
 .Ld_logout: .asciz "Sign out of Claude on this computer"
+.Lm_attach: .asciz "Attach file\xe2\x80\xa6"
+.Lm_attach_d: .asciz "Upload a file to include in conversation"
+.Lm_mention: .asciz "Mention file from this project\xe2\x80\xa6"
+.Lm_mention_d: .asciz "Reference a project file with @mention"
 .Lm_clear: .asciz "Clear conversation"
 .Lm_clear_d: .asciz "Start a new conversation"
 .Lm_new: .asciz "New conversation"

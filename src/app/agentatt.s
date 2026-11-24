@@ -96,6 +96,7 @@ ch_lsb: .zero SB_SIZE
 .globl g_att_wait_ms, g_att_test_caps
 g_att_wait_ms: .long 0
 g_att_test_caps: .long -1       # agent-test-caps: the DRVC_* bits the UI is told, -1 the driver's own
+ch_room: .long -1               # the room the bottom area leaves the chips (agatt_room), -1 any
 
 .text
 
@@ -1791,16 +1792,845 @@ FN agatt_dump
     call sb_push_byte
     EPILOGUE
 
-# ---- the chips row (task 3) ----
+# ---- the chips row above the box (task 3): laid out when the pack, the width or the panel's size changed
+#   (ch_* below, measures= counts the layouts), drawn every frame from that ----
 
-# FN agatt_measures() -> rax the chips' layouts since start
-FN agatt_measures
+# ch_key(AP*, w) -> eax 1 when the layout in ch_* is for that pack as it is now, at that width and size
+ch_key:
+    xor eax, eax
+    cmp rdi, [rip + ch_pack]
+    jne 1f
+    mov rcx, [rip + g_att_gen]
+    cmp rcx, [rip + ch_gen]
+    jne 1f
+    cmp esi, [rip + ch_w]
+    jne 1f
+    mov ecx, [rip + g_pmt + 4*MI_32]
+    cmp ecx, [rip + ch_px]
+    jne 1f
+    mov rcx, [rip + ag_fsmall]
+    cmp rcx, [rip + ch_face]
+    jne 1f
+    inc eax
+1:  ret
+
+# chip_w(label width) -> eax a chip's width: MI_8, the icon (MI_16), MI_6, the label, MI_4, the x (MI_16), MI_6
+chip_w:
+    mov eax, edi
+    add eax, [rip + g_pmt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_16]
+    add eax, [rip + g_pmt + 4*MI_6]
+    add eax, [rip + g_pmt + 4*MI_4]
+    add eax, [rip + g_pmt + 4*MI_16]
+    add eax, [rip + g_pmt + 4*MI_6]
+    ret
+
+# ch_layout(AP* or 0, w): the chips of that pack across the panel's width w (from MI_12 in to MI_12 before the
+#   right edge), left to right, wrapping; a label is the part's name, cut to 24 characters with "…", and further
+#   when the chip would be wider than the row. Nothing when ch_key says the layout is current
+ch_layout:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12d, esi
+    call ch_key
+    test eax, eax
+    jnz 9f
+    inc qword ptr [rip + ch_measures]
+    mov [rip + ch_pack], rbx
+    mov rax, [rip + g_att_gen]
+    mov [rip + ch_gen], rax
+    mov [rip + ch_w], r12d
+    mov eax, [rip + g_pmt + 4*MI_32]
+    mov [rip + ch_px], eax
+    mov rax, [rip + ag_fsmall]
+    mov [rip + ch_face], rax
+    lea rdi, [rip + ch_lsb]
+    call sb_clear
+    mov dword ptr [rip + ch_n], 0
+    mov dword ptr [rip + ch_rows], 0
+    mov dword ptr [rip + ch_drawn], 0
+    mov eax, r12d               # the row's room
+    sub eax, [rip + g_pmt + 4*MI_12]
+    sub eax, [rip + g_pmt + 4*MI_12]
+    mov ecx, 1
+    cmp eax, ecx
+    cmovl eax, ecx
+    mov [rsp + 16], eax         # avail
+    mov dword ptr [rsp + 20], 0 # x
+    mov dword ptr [rsp + 24], 0 # y
+    xor r13d, r13d
+1:  mov rdi, rbx
+    call agatt_count
+    cmp r13, rax
+    jae 8f
+    cmp r13, AP_MAX_PARTS
+    jae 8f
+    mov rdi, rbx
+    mov rsi, r13
+    call agatt_part
+    mov r14, rax
+    mov rdi, [r14 + MP_name]    # the label: at most 24 characters, else 23 and "…"
+    call strlen
+    mov r15, rax                # its bytes
+    mov rdi, [r14 + MP_name]
+    mov rsi, rax
+    mov edx, 24
+    call char_bytes
+    mov [rsp], rax              # the bytes of its first 24 characters
+    xor ecx, ecx
+    cmp rax, r15
+    je 2f
+    mov rdi, [r14 + MP_name]
+    mov rsi, r15
+    mov edx, 23
+    call char_bytes
+    mov [rsp], rax
+    mov ecx, 1
+2:  mov [rsp + 8], ecx          # with "…"
+3:  mov rdi, [rip + ag_fsmall]  # its width; past the row: one character less
+    mov rsi, [r14 + MP_name]
+    mov rdx, [rsp]
+    call text_width
+    mov [rsp + 28], eax
+    cmp dword ptr [rsp + 8], 0
+    je 31f
+    mov rdi, [rip + ag_fsmall]
+    lea rsi, [rip + .Lellipsis]
+    mov edx, 3
+    call text_width
+    add [rsp + 28], eax
+31: mov edi, [rsp + 28]
+    call chip_w
+    cmp eax, [rsp + 16]
+    jle 4f
+    cmp qword ptr [rsp], 0
+    je 4f
+    mov rdi, [r14 + MP_name]    # one character less
+    mov rsi, [rsp]
+    call char_back
+    mov [rsp], rax
+    mov dword ptr [rsp + 8], 1
+    jmp 3b
+4:  mov [rsp + 32], eax         # the chip's width
+    mov ecx, [rsp + 20]         # wraps unless it is the row's first
+    test ecx, ecx
+    jz 5f
+    add ecx, eax
+    cmp ecx, [rsp + 16]
+    jle 5f
+    mov dword ptr [rsp + 20], 0
+    mov eax, [rip + g_pmt + 4*MI_32]
+    add eax, [rip + g_pmt + 4*MI_6]
+    add [rsp + 24], eax
+5:  lea rcx, [rip + ch_x]
+    mov eax, [rsp + 20]
+    mov [rcx + r13*4], eax
+    lea rcx, [rip + ch_y]
+    mov eax, [rsp + 24]
+    mov [rcx + r13*4], eax
+    lea rcx, [rip + ch_cw]
+    mov eax, [rsp + 32]
+    mov [rcx + r13*4], eax
+    mov eax, [rsp + 32]
+    add eax, [rip + g_pmt + 4*MI_6]
+    add [rsp + 20], eax
+    lea rcx, [rip + ch_lo]      # the label as shown, in ch_lsb
+    mov rax, [rip + ch_lsb + SB_len]
+    mov [rcx + r13*4], eax
+    lea rdi, [rip + ch_lsb]
+    mov rsi, [r14 + MP_name]
+    mov rdx, [rsp]
+    call sb_push
+    cmp dword ptr [rsp + 8], 0
+    je 6f
+    lea rdi, [rip + ch_lsb]
+    lea rsi, [rip + .Lellipsis]
+    call sb_push_cstr
+6:  mov rax, [rip + ch_lsb + SB_len]
+    lea rcx, [rip + ch_lo]
+    sub eax, [rcx + r13*4]
+    lea rcx, [rip + ch_ll]
+    mov [rcx + r13*4], eax
+    inc r13
+    jmp 1b
+8:  mov [rip + ch_n], r13d
+    test r13d, r13d
+    jz 9f
+    mov eax, [rsp + 24]         # the rows
+    xor edx, edx
+    mov ecx, [rip + g_pmt + 4*MI_32]
+    add ecx, [rip + g_pmt + 4*MI_6]
+    div ecx
+    inc eax
+    mov [rip + ch_rows], eax
+    mov eax, [rip + ch_scroll]  # the scroll stays inside what there is
+    call ch_clamp
+9:  EPILOGUE
+
+# ch_clamp(): ch_scroll within 0 and the rows hidden, a whole number of rows
+ch_clamp:
+    mov eax, [rip + ch_scroll]
+    test eax, eax
+    jle 0f
+    mov ecx, [rip + g_pmt + 4*MI_32]
+    add ecx, [rip + g_pmt + 4*MI_6]
+    xor edx, edx
+    div ecx
+    imul eax, ecx
+0:  push rax
+    call vis_rows
+    mov r8d, eax
+    pop rax
+    mov ecx, [rip + ch_rows]
+    sub ecx, r8d
+    jg 1f
+    xor eax, eax
+    jmp 2f
+1:  imul ecx, [rip + g_pmt + 4*MI_32]
+    mov edx, [rip + ch_rows]
+    sub edx, r8d
+    imul edx, [rip + g_pmt + 4*MI_6]
+    add ecx, edx
+    cmp eax, ecx
+    cmovg eax, ecx
+    test eax, eax
+    jns 2f
+    xor eax, eax
+2:  mov [rip + ch_scroll], eax
+    ret
+
+# char_bytes(ptr, len, n) -> rax the bytes of the first n characters (all when it has fewer)
+char_bytes:
+    xor eax, eax
+1:  cmp rax, rsi
+    jae 9f
+    test edx, edx
+    jz 9f
+    dec edx
+2:  inc rax                     # past the character's first byte and its continuation bytes
+    cmp rax, rsi
+    jae 9f
+    movzx ecx, byte ptr [rdi + rax]
+    and ecx, 0xc0
+    cmp ecx, 0x80
+    je 2b
+    jmp 1b
+9:  ret
+
+# char_back(ptr, len) -> rax the length without its last character
+char_back:
+    mov rax, rsi
+1:  test rax, rax
+    jz 9f
+    dec rax
+    movzx ecx, byte ptr [rdi + rax]
+    and ecx, 0xc0
+    cmp ecx, 0x80
+    je 1b
+9:  ret
+
+# vis_rows() -> eax the chips' rows shown at most: CH_ROWS, fewer (one at least) when they would take more than a
+#   quarter of the window's height (a large panel font in a low window: the rest scroll)
+vis_rows:
+    mov eax, [rip + g_cv + CV_h]
+    shr eax, 2
+    mov ecx, [rip + g_pmt + 4*MI_32]
+    add ecx, [rip + g_pmt + 4*MI_6]
+    xor edx, edx
+    div ecx
+    mov ecx, CH_ROWS
+    cmp eax, ecx
+    cmova eax, ecx
+    mov ecx, 1
+    cmp eax, ecx
+    cmovb eax, ecx
+    mov ecx, [rip + ch_room]    # and what fits the room the box and its footer leave (none: 0)
+    test ecx, ecx
+    js 9f
+    push rax
+    mov eax, ecx
+    sub eax, [rip + g_pmt + 4*MI_8]
+    add eax, [rip + g_pmt + 4*MI_6]
+    jns 1f
+    xor eax, eax
+1:  mov ecx, [rip + g_pmt + 4*MI_32]
+    add ecx, [rip + g_pmt + 4*MI_6]
+    xor edx, edx
+    div ecx
+    pop rcx
+    cmp eax, ecx
+    cmova eax, ecx
+9:  ret
+
+# FN agatt_room(room): the bottom area's room for the chips row (its height less the prompt row's and the
+#   footer's): the rows shown are what fits; a panel too low for one shows none
+FN agatt_room
+    mov [rip + ch_room], edi
+    ret
+
+# vis_h() -> eax the chips area's height for ch_rows (at most vis_rows shown): MI_8 above, the rows, MI_6
+#   between them; 0 without chips
+vis_h:
+    xor eax, eax
+    cmp dword ptr [rip + ch_rows], 0
+    je 9f
+    call vis_rows
+    mov ecx, [rip + ch_rows]
+    cmp ecx, eax
+    jbe 1f
+    mov ecx, eax
+1:  test ecx, ecx
+    jnz 2f
     xor eax, eax
     ret
+2:  mov eax, [rip + g_pmt + 4*MI_32]
+    imul eax, ecx
+    dec ecx
+    imul ecx, [rip + g_pmt + 4*MI_6]
+    add eax, ecx
+    add eax, [rip + g_pmt + 4*MI_8]
+9:  ret
 
-# agatt_dump_geom(sb, i): " at=X,Y,W,H x=X,Y,W,H" of chip i as drawn last (task 3)
-agatt_dump_geom:
+# FN agatt_h(AS* or 0, w) -> eax the chips row's room above the prompt row (0 without chips): the box's pack,
+#   laid out only when it or the width changed
+FN agatt_h
+    sub rsp, 8
+    mov rdi, [rip + bx_pack]
+    call ch_layout
+    call vis_h
+    add rsp, 8
     ret
+
+# FN agatt_draw(AS* or 0, x, y, w): the box's chips (agatt_h's room at y): each its icon, its label and its
+#   x ("Remove"); its name as its tip; a click on an x removes that part; a wheel over them scrolls them
+#   when there are more rows than CH_ROWS. Locals: [rsp] x, [rsp+4] y, [rsp+8] w, [rsp+12] the area's h,
+#   [rsp+16] the part to remove (-1), [rsp+20] i, [rsp+24] the chip's x, [rsp+28] its y, [rsp+32] UB of
+#   its body, [rsp+36] UB of its x
+FN agatt_draw
+    PROLOGUE 48
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
+    mov dword ptr [rsp + 16], -1
+    mov rdi, [rip + bx_pack]
+    mov esi, ecx
+    call ch_layout
+    call vis_h
+    test eax, eax
+    jz 9f
+    mov [rsp + 12], eax
+    mov edi, [rsp]              # the wheel over them, when some are hidden
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    mov ecx, eax
+    call ui_in
+    test eax, eax
+    jz 1f
+    call vis_rows
+    cmp [rip + ch_rows], eax
+    jbe 1f
+    mov eax, [rip + g_scroll_y] # a row at a time: a chip shows whole or not at all
+    test eax, eax
+    jz 1f
+    mov dword ptr [rip + g_scroll_y], 0
+    mov ecx, [rip + g_pmt + 4*MI_32]
+    add ecx, [rip + g_pmt + 4*MI_6]
+    test eax, eax
+    jns 11f
+    neg ecx
+11: add [rip + ch_scroll], ecx
+    call ch_clamp
+1:  mov edi, [rsp]
+    mov esi, [rsp + 4]
+    add esi, [rip + g_pmt + 4*MI_8]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 12]
+    sub ecx, [rip + g_pmt + 4*MI_8]
+    call gfx_clip_push
+    mov eax, [rip + ch_n]
+    mov [rip + ch_drawn], eax
+    mov dword ptr [rsp + 20], 0
+2:  mov ebx, [rsp + 20]
+    cmp ebx, [rip + ch_n]
+    jae 8f
+    mov rdi, [rip + bx_pack]
+    mov esi, ebx
+    call agatt_part
+    mov r15, rax
+    lea rcx, [rip + ch_x]
+    mov eax, [rcx + rbx*4]
+    add eax, [rsp]
+    add eax, [rip + g_pmt + 4*MI_12]
+    mov [rsp + 24], eax
+    lea rcx, [rip + ch_y]
+    mov eax, [rcx + rbx*4]
+    add eax, [rsp + 4]
+    add eax, [rip + g_pmt + 4*MI_8]
+    sub eax, [rip + ch_scroll]
+    mov [rsp + 28], eax
+    mov ecx, [rsp + 4]          # scrolled out of the area: not drawn, nothing to press
+    add ecx, [rip + g_pmt + 4*MI_8]
+    cmp eax, ecx
+    jl 51f
+    add eax, [rip + g_pmt + 4*MI_32]
+    mov ecx, [rsp + 4]
+    add ecx, [rsp + 12]
+    cmp eax, ecx
+    jg 51f
+    lea rcx, [rip + ch_cw]
+    mov r12d, [rcx + rbx*4]     # its width
+    PM r13d, MI_32              # its height
+    lea rcx, [rip + at_x]       # as drawn (print-agent-attachments)
+    mov eax, [rsp + 24]
+    mov [rcx + rbx*4], eax
+    lea rcx, [rip + at_y]
+    mov eax, [rsp + 28]
+    mov [rcx + rbx*4], eax
+    mov r14d, [rsp + 24]        # its x: MI_16 square, MI_6 from its right
+    add r14d, r12d
+    sub r14d, [rip + g_pmt + 4*MI_6]
+    sub r14d, [rip + g_pmt + 4*MI_16]
+    lea rcx, [rip + xb_x]
+    mov [rcx + rbx*4], r14d
+    lea edi, [rbx*2 + ID_AG_CHIP]   # its body (all but the x)
+    mov esi, [rsp + 24]
+    mov edx, [rsp + 28]
+    mov ecx, r14d
+    sub ecx, [rsp + 24]
+    mov r8d, r13d
+    call ui_btn
+    mov [rsp + 32], eax
+    lea edi, [rbx*2 + ID_AG_CHIP + 1]
+    mov esi, r14d
+    mov edx, r13d
+    sub edx, [rip + g_pmt + 4*MI_16]
+    sar edx, 1
+    add edx, [rsp + 28]
+    lea rcx, [rip + xb_y]
+    mov [rcx + rbx*4], edx
+    PM ecx, MI_16
+    mov r8d, ecx
+    call ui_btn
+    mov [rsp + 36], eax
+    COLOR r9d, T_BORDER         # the chip: a frame, lit while hovered
+    COLOR eax, T_POPUP
+    test dword ptr [rsp + 32], UB_HOVER
+    jz 3f
+    COLOR eax, T_HOVER
+3:  mov edi, [rsp + 24]
+    mov esi, [rsp + 28]
+    mov edx, r12d
+    mov ecx, r13d
+    PM r8d, MI_RADIUS
+    push rax
+    push rax
+    call gfx_frame
+    add rsp, 16
+    mov eax, [r15 + MP_kind]    # its icon
+    mov edi, IC_FILE
+    cmp eax, MPK_IMAGE
+    jne 31f
+    mov edi, IC_F_IMAGE
+31: cmp eax, MPK_PDF
+    jne 32f
+    mov edi, IC_F_PDF
+32: mov esi, [rsp + 24]
+    add esi, [rip + g_pmt + 4*MI_8]
+    PM ecx, MI_16
+    mov edx, r13d
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 28]
+    COLOR r8d, T_MUTED
+    call icon_draw
+    mov rdi, [rip + ag_fsmall]  # its label as the layout cut it
+    mov esi, [rsp + 24]
+    add esi, [rip + g_pmt + 4*MI_8]
+    add esi, [rip + g_pmt + 4*MI_16]
+    add esi, [rip + g_pmt + 4*MI_6]
+    mov edx, [rsp + 28]
+    mov ecx, r13d
+    lea rax, [rip + ch_lo]
+    mov r8d, [rax + rbx*4]
+    add r8, [rip + ch_lsb + SB_ptr]
+    lea rax, [rip + ch_ll]
+    mov r9d, [rax + rbx*4]
+    COLOR eax, T_FG
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    test dword ptr [rsp + 36], UB_HOVER     # the x: lit while hovered
+    jz 4f
+    PM ecx, MI_16
+    mov edi, r14d
+    lea rax, [rip + xb_y]
+    mov esi, [rax + rbx*4]
+    mov edx, ecx
+    PM r8d, MI_RADIUS
+    COLOR r9d, T_HOVER
+    call gfx_round_rect
+4:  PM ecx, MI_12
+    mov edi, IC_CLOSE
+    mov esi, r14d
+    add esi, [rip + g_pmt + 4*MI_2]
+    lea rax, [rip + xb_y]
+    mov edx, [rax + rbx*4]
+    add edx, [rip + g_pmt + 4*MI_2]
+    COLOR r8d, T_MUTED
+    test dword ptr [rsp + 36], UB_HOVER
+    jz 41f
+    COLOR r8d, T_FG
+41: call icon_draw
+    lea edi, [rbx*2 + ID_AG_CHIP]   # the tips: its name, "Remove"
+    mov esi, [rsp + 24]
+    mov edx, [rsp + 28]
+    add edx, r13d
+    mov ecx, r14d
+    sub ecx, [rsp + 24]
+    mov r8d, [rsp + 32]
+    mov r9, [r15 + MP_name]
+    call tip_note_text
+    lea edi, [rbx*2 + ID_AG_CHIP + 1]
+    mov esi, r14d
+    lea rax, [rip + xb_y]
+    mov edx, [rax + rbx*4]
+    add edx, [rip + g_pmt + 4*MI_16]
+    PM ecx, MI_16
+    mov r8d, [rsp + 36]
+    lea r9, [rip + .Lt_remove]
+    call tip_note_text
+    test dword ptr [rsp + 36], UB_CLICK
+    jz 5f
+    mov [rsp + 16], ebx
+    jmp 5f
+51: lea rcx, [rip + at_x]       # (not drawn)
+    mov dword ptr [rcx + rbx*4], 0
+    lea rcx, [rip + at_y]
+    mov dword ptr [rcx + rbx*4], 0
+5:  inc dword ptr [rsp + 20]
+    jmp 2b
+8:  call gfx_clip_pop
+    movsxd rsi, dword ptr [rsp + 16]    # a click on an x: that part goes (after the loop)
+    test rsi, rsi
+    js 9f
+    mov rdi, [rip + bx_pack]
+    call agatt_remove
+    call agatt_tidy
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# FN agatt_measures() -> rax the chips' layouts since start (print-agent-attachments measures=)
+FN agatt_measures
+    mov rax, [rip + ch_measures]
+    ret
+
+# agatt_dump_geom(sb, i): " at=X,Y,W,H x=X,Y,W,H": chip i and its x as drawn last (0s: not drawn)
+agatt_dump_geom:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    xor r13d, r13d              # x, y, w, h
+    xor r14d, r14d
+    xor r15d, r15d
+    cmp r12d, [rip + ch_drawn]
+    jae 1f
+    lea rax, [rip + at_x]
+    mov r13d, [rax + r12*4]
+    lea rax, [rip + at_y]
+    mov r14d, [rax + r12*4]
+    lea rax, [rip + ch_cw]
+    mov r15d, [rax + r12*4]
+    mov eax, r13d               # (scrolled out: not drawn)
+    or eax, r14d
+    jnz 1f
+    xor r15d, r15d
+1:  mov rdi, rbx
+    lea rsi, [rip + .Ld_at]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r13d
+    mov edx, r14d
+    mov ecx, r15d
+    xor r8d, r8d
+    test r15d, r15d
+    jz 2f
+    mov r8d, [rip + g_pmt + 4*MI_32]
+2:  call push_rect
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_x]
+    call sb_push_cstr
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    test r15d, r15d
+    jz 3f
+    lea rax, [rip + xb_x]
+    mov esi, [rax + r12*4]
+    lea rax, [rip + xb_y]
+    mov edx, [rax + r12*4]
+    mov ecx, [rip + g_pmt + 4*MI_16]
+    mov r8d, ecx
+3:  mov rdi, rbx
+    call push_rect
+    EPILOGUE
+
+# push_rect(sb, x, y, w, h): "X,Y,W,H"
+push_rect:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, edx
+    mov r13d, ecx
+    mov r14d, r8d
+    movsxd rsi, esi
+    call push_int
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    mov rdi, rbx
+    movsxd rsi, r12d
+    call push_int
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, r13d
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, r14d
+    call sb_push_u64
+    EPILOGUE
+
+# push_int(sb, value): a signed number
+push_int:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    test r12, r12
+    jns 1f
+    mov esi, '-'
+    call sb_push_byte
+    neg r12
+1:  mov rdi, rbx
+    mov rsi, r12
+    call sb_push_u64
+    EPILOGUE
+
+# FN agatt_fit_dump(sb): print-agent-attachments-fit: for every panel size 8 to 32 and width 240 to 900 (step
+#   20), with 1, 5 and 20 parts of names short and long, the chips' layout: "size=S w=W n=N h=H rows=R
+#   mi16=M" then " c=X,Y,W,H,XX,XY" a chip each (from the panel's left and the area's top; XX, XY its x's
+#   square of MI_16). The panel's size is the user's again after it
+FN agatt_fit_dump
+    PROLOGUE 32
+    mov rbx, rdi
+    mov eax, [rip + cfg_agents_font_size]
+    mov [rsp], eax
+    call agatt_new              # 20 parts, names from fit_names
+    mov r15, rax
+    xor r12d, r12d
+1:  lea rax, [rip + fit_names]
+    mov ecx, r12d
+    and ecx, 7
+    mov rdx, [rax + rcx*8]
+    mov rdi, r15
+    mov esi, MPK_TEXT
+    mov rcx, 0
+    lea r8, [rip + .Lfit_byte]
+    mov r9d, 1
+    call agatt_add_bytes
+    inc r12d
+    cmp r12d, AP_MAX_PARTS
+    jb 1b
+    mov r12d, 8
+2:  cmp r12d, 32
+    ja 8f
+    mov [rip + cfg_agents_font_size], r12d
+    call agents_metrics
+    mov r13d, 240
+3:  cmp r13d, 900
+    ja 7f
+    lea rax, [rip + fit_counts]
+    mov dword ptr [rsp + 4], 0
+4:  mov ecx, [rsp + 4]
+    lea rax, [rip + fit_counts]
+    mov r14d, [rax + rcx*4]
+    test r14d, r14d
+    jz 6f
+    mov [r15 + AP_parts + VEC_len], r14 # (the first n parts)
+    inc qword ptr [rip + g_att_gen]
+    mov rdi, r15
+    mov esi, r13d
+    call ch_layout
+    mov rdi, rbx
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    call fit_line
+    inc dword ptr [rsp + 4]
+    jmp 4b
+6:  add r13d, 20
+    jmp 3b
+7:  inc r12d
+    jmp 2b
+8:  mov qword ptr [r15 + AP_parts + VEC_len], AP_MAX_PARTS
+    mov rdi, r15
+    call agatt_free
+    inc qword ptr [rip + g_att_gen]
+    mov qword ptr [rip + ch_pack], 0
+    mov eax, [rsp]
+    mov [rip + cfg_agents_font_size], eax
+    call agents_metrics
+    EPILOGUE
+
+# fit_line(sb, size, w, n): one line of agatt_fit_dump from ch_*
+fit_line:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov r14d, ecx
+    lea rsi, [rip + .Lf_size]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r12d
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lf_w]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r13d
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lf_n]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r14d
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lf_h]
+    call sb_push_cstr
+    call vis_h
+    mov rdi, rbx
+    mov esi, eax
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lf_rows]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + ch_rows]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lf_mi16]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + g_pmt + 4*MI_16]
+    call sb_push_u64
+    xor r15d, r15d
+1:  cmp r15d, [rip + ch_n]
+    jae 9f
+    mov rdi, rbx
+    lea rsi, [rip + .Lf_c]
+    call sb_push_cstr
+    lea rax, [rip + ch_x]
+    mov esi, [rax + r15*4]
+    add esi, [rip + g_pmt + 4*MI_12]
+    lea rax, [rip + ch_y]
+    mov edx, [rax + r15*4]
+    add edx, [rip + g_pmt + 4*MI_8]
+    lea rax, [rip + ch_cw]
+    mov ecx, [rax + r15*4]
+    mov r8d, [rip + g_pmt + 4*MI_32]
+    mov rdi, rbx
+    call push_rect
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    lea rax, [rip + ch_x]       # its x's square
+    mov esi, [rax + r15*4]
+    add esi, [rip + g_pmt + 4*MI_12]
+    lea rax, [rip + ch_cw]
+    add esi, [rax + r15*4]
+    sub esi, [rip + g_pmt + 4*MI_6]
+    sub esi, [rip + g_pmt + 4*MI_16]
+    mov rdi, rbx
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    lea rax, [rip + ch_y]
+    mov esi, [rax + r15*4]
+    add esi, [rip + g_pmt + 4*MI_8]
+    mov eax, [rip + g_pmt + 4*MI_32]
+    sub eax, [rip + g_pmt + 4*MI_16]
+    sar eax, 1
+    add esi, eax
+    mov rdi, rbx
+    call sb_push_u64
+    inc r15d
+    jmp 1b
+9:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    EPILOGUE
+
+# ---- the "+" menu and Attach File (task 3) ----
+
+# FN agatt_plus_menu(x, y): the footer's "+" was clicked (its top-left at x, y): its menu above it: "Upload from
+#   computer" (the path browser as Attach File), and, with DRVC_MENTIONS, "Add context" ("@" at the caret)
+FN agatt_plus_menu
+    PROLOGUE
+    mov r12d, edi
+    mov r13d, esi
+    call agatt_caps
+    lea rdi, [rip + plus_items2]
+    mov ebx, 2
+    test eax, DRVC_MENTIONS
+    jnz 1f
+    lea rdi, [rip + plus_items1]
+    mov ebx, 1
+1:  imul ecx, ebx, 4            # its height: MI_12 and MI_32 an item (the context menu's, explorer.s)
+    mov eax, [rip + g_mt + 4*MI_32]
+    imul eax, ebx
+    add eax, [rip + g_mt + 4*MI_12]
+    mov edx, r13d
+    sub edx, eax
+    jns 2f
+    xor edx, edx
+2:  mov esi, r12d
+    call ctx_menu_open
+    EPILOGUE
+
+# FN agatt_upload(): "Upload from computer", "Attach file…": the path browser as Attach File
+FN agatt_upload
+    mov edi, 3
+    jmp browse_open_kind
+
+# FN agatt_add_context(): "Add context", "Mention file from this project…": the box gets the keys and "@" at
+#   its caret (the mention menu opens on it: task 7)
+FN agatt_add_context
+    sub rsp, 8
+    mov dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
+    lea rdi, [rip + .Lat]
+    mov esi, 1
+    xor edx, edx
+    call composer_insert
+    add rsp, 8
+    ret
+
+# FN agatt_browse_dir() -> rax the folder Attach File starts in: the box's conversation's checkout, else 0 (the
+#   browser's own: the project, else the home folder)
+FN agatt_browse_dir
+    sub rsp, 8
+    call agentext_box_owner
+    add rsp, 8
+    test rax, rax
+    jz 1f
+    mov rax, [rax + AS_cwd]
+1:  ret
 
 # ---- later tasks' hooks (agentext_send calls them; they fill them in their own files) ----
 
@@ -1890,6 +2720,8 @@ chip_kinds: .ascii "-iddsftp"
 .p2align 3
 fit_names: .quad .Lfit0, .Lfit1, .Lfit2, .Lfit3, .Lfit4, .Lfit5, .Lfit6, .Lfit7
 fit_counts: .long 1, 5, 20, 0
+plus_items1: .quad .Lm_upload, agatt_upload, 0, 0
+plus_items2: .quad .Lm_upload, agatt_upload, .Lm_context, agatt_add_context, 0, 0
 kind_words: .quad .Lk_none, .Lk_image, .Lk_pdf, .Lk_text, .Lk_selection, .Lk_openfile, .Lk_terminal, .Lk_paste
 tx_bare: .quad .Lx_license, .Lx_readme, .Lx_changelog, .Lx_authors, .Lx_contributors, .Lx_copying, 0
 # the extension's text names (Eje, WV@3688316, 2.1.328), sorted for a binary search

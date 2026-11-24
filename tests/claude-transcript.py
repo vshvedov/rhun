@@ -2515,6 +2515,13 @@ class SelectTest(SelectCase):
         self.assertEqual((sel['row'], sel['text']), (str(a), REPLY10), sel)
         self.command('key ' + chat.MOD + '+c')
         self.assertEqual(self.clip(), REPLY10)
+        out = '\\n'.join('o%d' % i for i in range(6))
+        self.tool('c9 name=Bash second=x in=ls out=%s state=ok' % out)
+        t = self.base + 3
+        self.command('print-frames')
+        self.command('agent-select %d 1 2 out' % t)          # a call's: the part with the selection, whole
+        self.command('key ' + chat.MOD + '+a')
+        self.assertEqual(self.selection()['text'], out.replace('\\n', '\n'))
 
     def test_copy_message_of_each_kind(self):
         md = 'Some **bold** and `code`.'

@@ -34,6 +34,7 @@
 .equ KEY_MENU, 0xff67
 .equ RESP_KEPT, 8
 .equ HIDDEN_PASSED, 8           # agsel_bar_h: hidden calls after a reply looked past, at most
+.equ DIFF_ALL, 0x7fffffff00000000   # a place after a diff's last line
 
 # SW: the layout of agentrows.s's RW (rw_wrap's record); keep the two alike
 STRUCT
@@ -1470,7 +1471,25 @@ select_row:
     mov r15, [r13 + AM_len]
     jmp 6f
 .Lsr_call:
-    mov rcx, [r13 + AM_x]
+    cmp [rip + sel_row], r12    # the part with the selection, whole
+    jne 50f
+    cmp [rip + sel_as], rbx
+    jne 50f
+    mov r14d, [rip + sel_part]
+    cmp r14d, PART_DIFF
+    jne 51f
+    mov r15, DIFF_ALL           # (a diff's every line: agdiff_text stops at its last)
+    jmp 6f
+51: cmp r14d, PART_OUT
+    je 52f
+    cmp r14d, PART_IN
+    jne 50f
+52: mov rdi, r13
+    mov esi, r14d
+    call plain_of
+    mov r15, rdx
+    jmp 6f
+50: mov rcx, [r13 + AM_x]
     mov r14d, PART_IN
     mov r15, [rcx + AT_in + SB_len]
     test r15, r15
@@ -1547,15 +1566,24 @@ FN agsel_bar_h
 8:  mov eax, [rip + g_pmt + 4*MI_28]
 9:  ret
 
-# works(AS*) -> eax 1 while its turn runs (a conversation rhun drives with a prompt whose turn has not ended)
+# works(AS*) -> eax 1 while its turn runs: a conversation rhun drives with a prompt whose turn has not ended, an
+#   extension's that says it works or waits
 works:
     xor eax, eax
-    mov rcx, [rdi + AS_live]
+    cmp dword ptr [rdi + AS_kind], AS_KIND_EXT
+    jne 1f
+    mov ecx, [rdi + AS_state]
+    cmp ecx, AGS_WORKING
+    je 8f
+    cmp ecx, AGS_WAITING
+    je 8f
+    ret
+1:  mov rcx, [rdi + AS_live]
     test rcx, rcx
     jz 9f
     cmp qword ptr [rcx + AL_turns], 0
     je 9f
-    mov eax, 1
+8:  mov eax, 1
 9:  ret
 
 # FN agsel_bar_draw(AS*, row, x, y): a reply's Copy response at the left of its line (agsel_bar_h): on the

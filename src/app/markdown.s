@@ -5296,11 +5296,14 @@ FN md_layout
     jne 1f
     mov eax, [rbx + MD_height]
     EPILOGUE
-1:  mov [rbx + MD_width], esi
+1:  mov eax, [rbx + MD_sel]     # (task 10: kept when the same items come again at the same width, below)
+    cmp [rbx + MD_width], esi
+    je 2f
+    xor eax, eax
+2:  mov [rip + keep_sel], eax
+    mov [rbx + MD_width], esi
     mov eax, [rip + g_face_gen]
     mov [rbx + MD_gen], eax
-    mov eax, [rbx + MD_sel]     # (task 10: kept when the same items come again, below)
-    mov [rip + keep_sel], eax
     mov rax, [rbx + MD_items + VEC_len]
     mov [rip + keep_n], rax
     mov dword ptr [rbx + MD_sel], 0     # the items change: no selection
@@ -5505,8 +5508,8 @@ FN md_layout
     mov eax, [rip + lay_y]
     mov [rbx + MD_height], eax
     cmp dword ptr [rip + keep_sel], 0   # phase 3 task 10: a selection stays when the document is laid out
-    je 9f                               #   again into as many items (the same words, wrapped anew: a
-    mov rax, [rip + keep_n]             #   row measured again, a face made again, the width)
+    je 9f                               #   again at its width into as many items (a row measured again, a
+    mov rax, [rip + keep_n]             #   face made again; a new width drops it)
     cmp rax, [rbx + MD_items + VEC_len]
     jne 9f
     mov dword ptr [rbx + MD_sel], 1

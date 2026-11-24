@@ -523,8 +523,9 @@ archive_after_days = 14
   and Ctrl+Enter (Cmd+Enter on macOS) sends.
 - `scroll_on_send` (**Scroll to the end on send**, on by default): sending a prompt moves the
   conversation to its end.
-- `archive_after_days` (**Archive sessions after**: 0 never, 1, 2, 7 or 14, the default): a
-  conversation nothing was written to for that many days goes to **Archived sessions** in the list
+- `archive_after_days` (**Archive sessions after**, 14 by default, 0 to 365): a conversation
+  nothing was written to for that many days goes to **Archived sessions** in the list; 0 never moves
+  one there
   (see [The list of conversations](#the-list-of-conversations)).
 
 Otherwise Claude Code gets your environment: rhun's own when rhun was started from a terminal or

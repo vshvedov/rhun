@@ -18,7 +18,7 @@
 
 .equ ID_AGL, 0x740000           # + (entry & 0x7fff): a row or a header of the panel's list
 .equ IDX_DROP, 0x10000          # the dropdown's ids: + this
-.equ IDR_ACT, 0x8000            # + ((entry & 0x1fff) << 2) + k: a row's hover actions (k 0 rename, 1 archive),
+.equ IDR_ACT, 0x8000            # + ((entry & 0xfff) << 2) + k: a row's hover actions (k 0 rename, 1 archive),
                                 #   a group header's menu (k 2)
 .equ IDT_FIELD, 0xf000          # the search field
 .equ IDT_CLEAR, 0xf001
@@ -235,13 +235,10 @@ dot_words: .quad .Lw_idle, .Lw_running, .Lw_waiting, .Lw_unread
 .Lw_running: .asciz "running"
 .Lw_waiting: .asciz "waiting"
 .Lw_unread: .asciz "unread"
-archive_days: .long 0, 1, 2, 7, 14
-.globl aglist_archive_opts
-aglist_archive_opts: .asciz "0", "Never", "1", "1 day", "2", "2 days", "7", "7 days", "14", "14 days", ""
 .data
 .p2align 2
 .globl cfg_agents_archive_days
-cfg_agents_archive_days: .long 4    # [agents] archive_after_days: an index of archive_days (14 days)
+cfg_agents_archive_days: .long 14   # [agents] archive_after_days: days of quiet before a session is archived
 drop_gid: .long -1              # the header a dragged row is over this frame: a group's id, 0 Ungrouped, -1 none
 .text
 
@@ -352,8 +349,19 @@ FN aglist_opened
     mov dword ptr [rip + drop_open], 0
     mov dword ptr [rip + restored], 1     # (one opened now replaces what a restart would open)
     mov qword ptr [rip + breaker], 0
-    mov rdi, rbx
-    xor esi, esi
+    xor r12d, r12d              # one archived for its age stays listed once resumed
+    call days
+    test eax, eax
+    jz 1f
+    imul rax, rax, 86400
+    mov r13, rax
+    call time_now
+    sub rax, [rbx + AS_mtime]
+    cmp rax, r13
+    jle 1f
+    mov r12d, SF_KEPT
+1:  mov rdi, rbx
+    mov esi, r12d
     mov edx, SF_UNREAD | SF_ARCH
     call agst_mark
     lea rax, [rip + lv_panel]
@@ -580,11 +588,6 @@ archived:
 # days() -> eax [agents] archive_after_days in days (0: never)
 days:
     mov eax, [rip + cfg_agents_archive_days]
-    cmp eax, 4
-    jbe 1f
-    mov eax, 4
-1:  lea rcx, [rip + archive_days]
-    mov eax, [rcx + rax*4]
     ret
 
 # held_by_other(AS*) -> eax 1 when another program has it open (agent_store.s, as of the last poll)
@@ -2143,7 +2146,7 @@ row_actions:
     mov r12, rsi
     mov [rsp], ecx
     mov [rsp + 4], r8d
-    and edx, 0x1fff
+    and edx, 0xfff
     shl edx, 2
     add edx, [rbx + LV_id]
     add edx, IDR_ACT
@@ -2534,7 +2537,7 @@ draw_header:
     jz 21f
     PM r13d, MI_28
     mov edi, [rsp]
-    and edi, 0x1fff
+    and edi, 0xfff
     shl edi, 2
     add edi, [rbx + LV_id]
     add edi, IDR_ACT + 2

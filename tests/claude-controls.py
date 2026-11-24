@@ -53,16 +53,17 @@ class ConfigTest(CfgCase):
                                 'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
                                 'claude.use_terminal', 'claude.ide', 'claude.spinner_verbs'])     # phase 5: two
         agents = [line for line in out.splitlines() if line.startswith('agents.')]
-        self.assertEqual(agents[-4:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
-                                      'agents.focus_view'])
+        self.assertEqual(agents[-5:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
+                                      'agents.focus_view', 'agents.archive_after_days'])    # (phase 6: the last)
         self.command('cmd toggle_word_wrap')            # a setting changed: the exit writes the file
         self.quit()
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(chat.section(saved, 'claude')[3:], [
             'initial_mode =', 'allow_bypass_permissions = false', 'prompt_suggestions = true',
             'use_terminal = false', 'ide = true', 'spinner_verbs = append'])
-        self.assertEqual(chat.section(saved, 'agents')[-4:], [
-            'ctrl_enter_sends = false', 'scroll_on_send = true', 'timestamps = true', 'focus_view = false'])
+        self.assertEqual(chat.section(saved, 'agents')[-5:], [
+            'ctrl_enter_sends = false', 'scroll_on_send = true', 'timestamps = true', 'focus_view = false',
+            'archive_after_days = 14'])
         # changed, they are written back as they are; the env pairs still follow the last [claude] row
         claude = self.claude_section('initial_mode = acceptEdits\nallow_bypass_permissions = true\n'
                                      'prompt_suggestions = false\nspinner_verb = Zooming\nspinner_verbs = replace\n'
@@ -82,8 +83,9 @@ class ConfigTest(CfgCase):
             'allow_bypass_permissions = true', 'prompt_suggestions = false', 'use_terminal = false', 'ide = true',
             'spinner_verbs = replace',
             'env.FOO = bar', 'spinner_verb = Zooming', 'spinner_verb = Whooshing'])
-        self.assertEqual(chat.section(saved, 'agents')[-4:], ['ctrl_enter_sends = true', 'scroll_on_send = false',
-                                                              'timestamps = false', 'focus_view = true'])
+        self.assertEqual(chat.section(saved, 'agents')[-5:], ['ctrl_enter_sends = true', 'scroll_on_send = false',
+                                                              'timestamps = false', 'focus_view = true',
+                                                              'archive_after_days = 14'])
 
     def mode_passed(self, extra):
         self.start(self.claude_section(extra))
@@ -233,8 +235,8 @@ class ConfigTest(CfgCase):
         self.chat('hello')
         names = self.until(lambda: (lambda n: n if 'review' in n else None)(
             [c.split('\t')[0] for c in self.lines('cmd')]), 'the changed list')
-        self.assertEqual(names, ['compact', 'usage', 'review', 'clear', 'model', 'plan', 'copy', 'login',
-                                 'logout'])
+        self.assertEqual(names, ['compact', 'usage', 'review', 'resume', 'continue', 'clear', 'model', 'plan',
+                                 'copy', 'login', 'logout'])    # (resume, continue: phase 6's history)
         self.assertIn('review\tSkill review\t-\t-\t-\tsend\tcli', self.lines('cmd'))
         text = self.state_file().read_text(encoding='utf-8')
         self.assertIn('cmd\treview\t', text)

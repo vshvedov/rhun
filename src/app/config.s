@@ -1036,7 +1036,7 @@ g_settings:
     SETTING .Ls_agents, scroll_on_send, ST_BOOL, cfg_agents_scroll_on_send, 0, 1, 1, 0, "Scroll to the end on send", "Sending a prompt scrolls the conversation to its end."
     SETTING .Ls_agents, timestamps, ST_BOOL, cfg_agents_timestamps, 0, 1, 1, 0, "Timestamps", "Show the time on prompts and replies, and a line where the day changes."
     SETTING .Ls_agents, focus_view, ST_BOOL, cfg_agents_focus_view, 0, 1, 1, 0, "Focus view", "Show only your prompts and the replies; tool calls and thinking fold into one line."
-    SETTING .Ls_agents, archive_after_days, ST_CHOICE, cfg_agents_archive_days, 0, 4, 1, 0, "Archive sessions after", "Sessions with no activity for this long move to Archived sessions.", aglist_archive_opts
+    SETTING .Ls_agents, archive_after_days, ST_INT, cfg_agents_archive_days, 0, 365, 1, 0, "Archive sessions after", "Days without activity before a session moves to Archived sessions. 0 never moves one."
     # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
     SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
     SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."

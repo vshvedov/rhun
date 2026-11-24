@@ -304,6 +304,66 @@ class Marks(ListCase):
         self.assertIn('filter=4', self.state()[0])
 
 
+class Lifetimes(ListCase):
+    def test_held_elsewhere_rings_and_renamed_elsewhere_keeps_the_selection(self):
+        sid = self.session('Shared', age=60)
+        self.session('Alone', age=120)
+        self.open_list()
+        self.assertNotIn(' ring', self.row('Shared'))
+        records = self.work / '.claude/sessions'
+        records.mkdir(parents=True, exist_ok=True)
+        domain = 'darwin' if sys.platform == 'darwin' else 'linux'
+        (records / f'{os.getpid()}.json').write_text(json.dumps(
+            {'pid': os.getpid(), 'sessionId': sid, 'pidDomain': domain}), encoding='utf-8')
+        self.until(lambda: ' ring' in self.row('Shared'), 'the ring')
+        self.command('key Down')
+        self.assertIn(' sel=Shared ', self.head())
+        with (self.folder() / (sid + '.jsonl')).open('a', encoding='utf-8') as f:
+            f.write(json.dumps({'type': 'custom-title', 'customTitle': 'Named in a terminal', 'sessionId': sid}) + '\n')
+        self.command('click 1258 60')              # the list's refresh
+        self.command('wait-agents')
+        self.until(lambda: 'Named in a terminal' in self.rows(), 'the new title')
+        self.assertIn(' sel=Named_in_a_terminal ', self.head())
+        (records / f'{os.getpid()}.json').unlink()
+        self.until(lambda: ' ring' not in self.row('Named in a terminal'), 'the ring to go')
+
+    def test_a_selected_grouped_session_that_goes(self):
+        sid = self.session('Leaving', age=60)
+        self.session('Staying', age=120)
+        self.open_list()
+        self.command('agent-list new-group')
+        self.command('key Return')
+        self.command('agent-list drag Leaving -> New group')
+        self.command('agent-list select Leaving ctrl')
+        self.command('agent-list select Staying ctrl')
+        self.assertIn(' multi=2 ', self.head())
+        (self.folder() / (sid + '.jsonl')).unlink()
+        self.command('click 1258 60')              # the list's refresh
+        self.command('wait-agents')
+        self.until(lambda: self.rows() == ['Staying'], 'the row to go')
+        self.assertIn(' multi=1 ', self.head())
+        self.assertEqual(self.listed()[1], 'group New group (0)')
+        self.command('agent-list menu Staying')
+        self.assertIn('Archive session\n', self.command('print-menu'))
+
+    def test_a_row_dragged_onto_a_group_with_the_mouse(self):
+        self.session('Top', age=60)
+        self.session('Bottom', age=120)
+        self.open_list()
+        self.command('agent-list new-group')
+        self.command('key Return')
+        # 1280x800, the panel alone at x 900 to 1280: its header to y 80, then the group's header (32), Ungrouped
+        # (32), then rows of 56: Bottom's at 200 to 256
+        self.assertEqual(self.rows(), ['Top', 'Bottom'])
+        self.command('move 1100 228')
+        self.command('down')
+        self.command('move 1100 180')
+        self.command('move 1100 96')
+        self.command('up')
+        self.assertEqual([re.sub(r' kind=.*', '', l) for l in self.listed()[1:4]],
+                         ['group New group (1)', '  row Bottom', 'ungrouped (1)'])
+
+
 class Rename(ListCase):
     def test_rename_writes_claudes_own_title_line(self):
         sid = self.session('Before', age=60)
@@ -379,6 +439,17 @@ class Header(ListCase):
         self.command('agent-menu')
         self.command('type Resume')
         self.assertIn('Resume conversation', self.command('print-agent-menu'))
+
+    def test_slash_resume_opens_the_history(self):
+        self.session('Earlier', age=3600)
+        self.open_list()
+        self.command('agent-new claude')
+        self.command('agent-prompt hello')
+        self.command('wait-agent ready 10000')
+        self.command('agent-prompt /resume')
+        self.until(lambda: ' drop=1' in self.head('drop'), 'the dropdown')
+        self.assertIn('Earlier', self.rows('drop'))
+        self.assertEqual(self.command('print-agent-cfg claude').count('\tresume\t'), 2)   # /resume, /continue
 
     def test_header_title_click_renames(self):
         sid = self.session('Header title', age=60)

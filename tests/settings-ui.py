@@ -56,6 +56,7 @@ INTS = {
     ('terminal', 'scrollback'): (0, 100000, 1000), ('terminal', 'height'): (80, 2000, 10),
     ('debug', 'console_lines'): (1000, 100000, 1000),
     ('agents', 'idle_stop_minutes'): (0, 240, 5),
+    ('agents', 'archive_after_days'): (0, 365, 1),      # phase 6: the session list's
 }
 # Steppers with steps of their own: (initial, direction, expected). The agents panel's size: 0
 # follows the interface (13 here), + from it goes past the interface's size, - from 8 back to it.

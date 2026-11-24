@@ -165,6 +165,7 @@ python3 tests/claude-thread.py || fail=1   # the thread's engine: heights, the v
 python3 tests/claude-bridge.py || fail=1   # claude in rhun's terminal: the bridge, its tools, terminal mode (phase 5)
 python3 tests/claude-sessions.py || fail=1   # the session list and the chat header (phase 6)
 python3 tests/claude-dialogs.py || fail=1   # the dialog shell and the dialogs that show what Claude Code reports (phase 7)
+python3 tests/claude-dialogs2.py || fail=1  # the dialogs that change Claude Code's configuration (p7b)
 python3 tests/claude-attach.py || fail=1   # a message's parts: attachments, packs, chips, the + menu (phase 4 tasks 2, 3)
 python3 tests/claude-panels.py || fail=1   # side question, bookmarks, agent map, hand-off, Chrome, Remote Control (p7c)
 python3 tests/claude-paste.py || fail=1    # the clipboard's files and images, long pastes, drops (phase 4 tasks 4, 5)

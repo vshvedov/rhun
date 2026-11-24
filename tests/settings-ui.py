@@ -83,7 +83,8 @@ CHOICES = {('editor', 'multi_cursor_paste'): ('spread', 'full'),
            ('extensions', 'secrets'): ('system', 'memory', 'file'),
            # the first is the CLI's own default, written as an empty value
            ('claude', 'initial_mode'): ('', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'),
-           ('claude', 'spinner_verbs'): ('append', 'replace')}
+           ('claude', 'spinner_verbs'): ('append', 'replace'),
+           ('agents', 'location'): ('panel', 'tab')}       # phase 4 task 13
 
 
 # Theme shows without Follow system dark mode, the dark and light mode's themes with it.
@@ -241,7 +242,8 @@ class SettingsUI(unittest.TestCase):
                   ('updates', 'extensions'): (67, 84, 45),
                   ('extensions', 'secrets'): (76, 70, 44),
                   ('claude', 'initial_mode'): (166, 58, 141, 50, 50, 141),
-                  ('claude', 'spinner_verbs'): (190, 106)}
+                  ('claude', 'spinner_verbs'): (190, 106),
+                  ('agents', 'location'): (78, 76)}      # "Side panel", "Editor tab"
         for (section, key), options in CHOICES.items():
             for index, option in enumerate(options):
                 with self.subTest(setting=f'{section}.{key}', option=option):

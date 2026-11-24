@@ -26,6 +26,7 @@
 .equ ID_PAL_ROW, 0x200000         # + row: a range of its own, as results run to MAXFILES
 .equ ID_PAL_FIELD, 0x3fff
 .equ MAXFILES, 200000
+.equ KEYS_CACHE_N, 512            # built-in commands whose shortcut labels are kept (g_commands has 258)
 .equ GREP_MAX, 5000             # results
 .equ GREP_FILE_MAX, 8 << 20     # bytes per file
 .equ GREP_TOTAL_MAX, 256 << 20
@@ -1653,7 +1654,7 @@ load_commands:
     call palette_ext_keys_reset
     xor ebx, ebx
 .Llc_reset:
-    cmp ebx, 256
+    cmp ebx, KEYS_CACHE_N
     jae .Llc_reset_done
     lea rax, [rip + keys_cache]
     mov rdi, [rax + rbx*8]
@@ -1681,14 +1682,18 @@ load_commands:
     mov ecx, CMD_SIZE
     div rcx
     mov r14, rax
+    cmp r14, KEYS_CACHE_N       # past the cache (more commands than it holds): formatted each time
+    jae 31f
     lea rcx, [rip + keys_cache]
     mov rax, [rcx + r14*8]
     test rax, rax
     jnz 3f
-    mov rdi, rbx
+31: mov rdi, rbx
     call keys_for
     test rax, rax
     jz 3f
+    cmp r14, KEYS_CACHE_N
+    jae 3f
     mov rdi, rax
     push rax
     call strlen
@@ -4267,7 +4272,7 @@ hint_text:
 .Lpp_sel: .asciz "> "
 .bss
 .p2align 3
-keys_cache: .zero 8 * 256
+keys_cache: .zero 8 * KEYS_CACHE_N
 ext_keys_cache: .zero VEC_SIZE  # the extensions' shortcut labels, one slot per command
 .globl g_ed_h_lines
 g_ed_h_lines: .long 0

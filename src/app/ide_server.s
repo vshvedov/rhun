@@ -858,7 +858,11 @@ on_conn:
     je 9f
     mov r13d, READS
 1:  mov rax, [rbx + IC_rbuf + SB_len]
-    cmp rax, MSG_MAX + 65536
+    cmp dword ptr [rbx + IC_state], ICS_HANDSHAKE
+    jne 2f
+    cmp rax, HS_MAX             # a request is read no further than its cap: handshake refuses it
+    jae 3f
+2:  cmp rax, MSG_MAX + 65536
     jae .Loc_full
     lea rdi, [rbx + IC_rbuf]
     mov esi, READ_STEP

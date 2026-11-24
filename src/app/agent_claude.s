@@ -238,9 +238,27 @@ cl_start:
     lea rax, [r14 + rcx]
     mov [r13 + 16], rax
     add r13, 16
+    cmp byte ptr [rbx + AL_forkat], 0   # p6b: a fork from a message keeps its source up to that entry
+    je 51f                              #   (--resume-session-at=ID, README finding 102)
+    lea rdi, [rip + fork_at_arg]
+    lea rsi, [rip + .La_fork_at]
+    call cstr_copy
+    lea rdi, [rip + fork_at_arg]
+    call strlen
+    lea rdi, [rip + fork_at_arg]
+    add rdi, rax
+    lea rsi, [rbx + AL_forkat]
+    call cstr_copy
+    lea rax, [rip + fork_at_arg]
+    mov [r13 + 8], rax
+    add r13, 8
 51: mov qword ptr [r13 + 8], 0
+    mov rdi, rbx                # p6b: a start that re-runs the turn quitting cut off (claude_fork.s)
+    call claude_fork_rerun
+    mov [rip + claude_rerun_env], eax
     mov rdi, rbx
     call start_env
+    mov dword ptr [rip + claude_rerun_env], 0
     mov [rsp + 224], rax
     lea rax, [rip + cl_line]
     mov [rbx + AL_cn + CN_on_line], rax
@@ -2002,7 +2020,12 @@ cl_line:
 4:  mov rdi, [rsp]
     mov rsi, rcx
     call agents_stamp
+    cmp rbx, [rip + claude_rerun_al]    # p6b: a start that re-runs a cut turn reads its records first
+    jne 5f                              #   (claude_fork.s)
     mov rdi, rbx
+    mov rsi, r14
+    call claude_fork_record
+5:  mov rdi, rbx
     mov rsi, r14
     call [r12 + 8]              # handler(AL*, record)
     mov rdi, [rsp]              # (a handler may free the live record, never the conversation)
@@ -3909,7 +3932,15 @@ h_response:
     mov rdi, rbx
     mov rsi, rax
     call out_take
-    cmp eax, OA_SIDE_FIRST      # p7c: the side question, Chrome, Remote Control (claude_side.s)
+    cmp eax, OA_FORK_FIRST      # p6b: rewind_files, export_conversation (claude_fork.s)
+    jb 30f
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, eax
+    mov rcx, r15
+    call claude_fork_answer
+    jmp 9f
+30: cmp eax, OA_SIDE_FIRST      # p7c: the side question, Chrome, Remote Control (claude_side.s)
     jb 31f
     mov rdi, rbx
     mov rsi, r12
@@ -4378,13 +4409,18 @@ FN claude_side_req
     EPILOGUE
 .bss
 cl_extra_tmp: .quad 0
+.globl claude_rerun_env, claude_rerun_al
+claude_rerun_env: .long 0       # p6b: 1 while start_env makes a re-run's environment (claudecfg.s)
+.p2align 3
+claude_rerun_al: .quad 0        # p6b: the live record whose start re-runs a cut turn (claude_fork.s)
+fork_at_arg: .zero 64           # p6b: "--resume-session-at=ID"
 .text
 
 .section .rodata
 .p2align 3
 .globl claude_drv
 claude_drv:
-    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST | DRVC_QUEUE | DRVC_MODES | DRVC_MODELS | DRVC_EFFORT | DRVC_THINKING | DRVC_PARTS | DRVC_CONTEXT | DRVC_MENTIONS
+    .long AG_CLAUDE, DRVC_NEW | DRVC_RESUME | DRVC_FORK | DRVC_TRUST | DRVC_QUEUE | DRVC_MODES | DRVC_MODELS | DRVC_EFFORT | DRVC_THINKING | DRVC_PARTS | DRVC_CONTEXT | DRVC_MENTIONS | DRVC_REWIND
     .quad .Lname, cl_start, cl_send, cl_stop, cl_answer, cl_release, cl_held, cl_auth, cl_terminal
     .quad claude_modes, claude_set_mode, claude_set_model, claude_set_effort, claude_set_ultra
     .quad claude_set_thinking, claude_reply, claude_action
@@ -4440,6 +4476,7 @@ cl_flags:
 .La_sid: .asciz "--session-id="
 .La_resume: .asciz "--resume="
 .La_fork: .asciz "--fork-session"
+.La_fork_at: .asciz "--resume-session-at="
 .La_auth: .asciz "auth"
 .La_status: .asciz "status"
 .La_json: .asciz "--json"

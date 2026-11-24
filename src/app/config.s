@@ -113,6 +113,8 @@ cfg_claude_allow_bypass: .long 0        # [claude] allow_bypass_permissions: rhu
 cfg_claude_prompt_suggestions: .long 1  # [claude] prompt_suggestions: initialize asks for them
 cfg_agents_ctrl_enter_sends: .long 0    # [agents] ctrl_enter_sends: Enter a new line, Ctrl+Enter sends
 cfg_agents_scroll_on_send: .long 1      # [agents] scroll_on_send: sending scrolls to the end
+.globl cfg_agents_continue
+cfg_agents_continue: .long 1            # p6b: [agents] continue_after_restart: a turn quitting cut off goes on
 .globl cfg_agents_timestamps, cfg_claude_spinner_verbs
 cfg_agents_timestamps: .long 1          # [agents] timestamps: prompts and replies show their time, days a pill
 cfg_claude_spinner_verbs: .long 0       # [claude] spinner_verbs: 0 the spinner_verb lines are added, 1 they replace
@@ -1055,6 +1057,7 @@ g_settings:
     SETTING .Ls_agents, autosave, ST_BOOL, cfg_agents_autosave, 0, 1, 1, 0, "Save files before the agent reads or edits them", "An open file with unsaved changes is saved, as Ctrl+S saves it, before the agent reads or edits it."
     # phase 4 task 13: where Agents: Open and new conversations go (agenttab.s)
     SETTING .Ls_agents, location, ST_CHOICE, cfg_agents_location, 0, 1, 1, 0, "Open conversations in", "Where Agents: Open and new conversations show. Follows your last Open in New Tab or Open in Side Panel.", agtab_loc_opts
+    SETTING .Ls_agents, continue_after_restart, ST_BOOL, cfg_agents_continue, 0, 1, 1, 0, "Continue after a restart", "A step Claude was taking when rhun quit goes on when its conversation opens again within an hour."
     # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
     SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
     SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."

@@ -2704,6 +2704,7 @@ FN agentext_input_key
     jnz 8f
 0:  cmp r12d, KEY_ESCAPE
     jne 1f
+    call agfork_box_escape      # p6b: from an empty box, a second Escape opens Rewind (agentfork.s)
 7:  mov dword ptr [rip + g_focus], FOCUS_AGENTS
     cmp r12d, KEY_ESCAPE
     jne 9f

@@ -81,7 +81,7 @@ dir_checked: .long 0            # claude_dir_moved looked once the login environ
 .p2align 3
 dir_pin: .quad 0                # claude_dir_pin's folder, or 0
 pin_pair: .zero SB_SIZE         # claude_env_dir's "CLAUDE_CONFIG_DIR=..."
-pin_forced: .zero 8 * 5         # forced's entries, then pin_pair's text, 0
+pin_forced: .zero 8 * 8         # forced's entries (p6b: and a re-run's two), then pin_pair's text, 0
 rpath: .zero 4096 + 16          # a resolved working directory
 
 .text
@@ -548,7 +548,10 @@ FN claude_env
     mov rdx, rax
     mov rdi, rbx
     lea rsi, [rip + forced]
-    call env_lists
+    cmp dword ptr [rip + claude_rerun_env], 0   # p6b: a re-run of a cut turn (claude_fork.s)
+    je 1f
+    lea rsi, [rip + forced_rerun]
+1:  call env_lists
     mov r12, rax
     mov rdi, rbx
     call mem_free
@@ -653,9 +656,19 @@ FN claude_env_dir
     mov [rcx + 8], rax
     lea rax, [rip + .Lf_preview]
     mov [rcx + 16], rax
-    mov rax, [rip + pin_pair + SB_ptr]
+    lea rax, [rip + .Lf_ckpt]   # p6b: file checkpoints (rewind_files)
     mov [rcx + 24], rax
-    mov qword ptr [rcx + 32], 0
+    add rcx, 32
+    cmp dword ptr [rip + claude_rerun_env], 0   # p6b: a re-run of a cut turn (claude_fork.s)
+    je 1f
+    lea rax, [rip + .Lf_rerun]
+    mov [rcx], rax
+    lea rax, [rip + .Lf_rerun_age]
+    mov [rcx + 8], rax
+    add rcx, 16
+1:  mov rax, [rip + pin_pair + SB_ptr]
+    mov [rcx], rax
+    mov qword ptr [rcx + 8], 0
     call pairs_list
     mov rbx, rax
     mov rdi, rax
@@ -1274,7 +1287,8 @@ claude_ctl:
     .quad .Lc_print_claude_path, c_print_claude_path
     .quad 0, 0
 # rhun's forced values (they win over the env pairs) and the variables a surrounding Claude Code sets
-forced: .quad .Lf_entry, .Lf_mcp, .Lf_preview, 0
+forced: .quad .Lf_entry, .Lf_mcp, .Lf_preview, .Lf_ckpt, 0
+forced_rerun: .quad .Lf_entry, .Lf_mcp, .Lf_preview, .Lf_ckpt, .Lf_rerun, .Lf_rerun_age, 0   # p6b
 unsets: .quad .Lu_claudecode, .Lu_child, .Lu_traceparent, .Lu_tracestate, 0
 unsets_dir: .quad .Lu_claudecode, .Lu_child, .Lu_traceparent, .Lu_tracestate, .Lconfig_dir, 0
 
@@ -1304,6 +1318,9 @@ host_places:
 .Lf_entry: .asciz "CLAUDE_CODE_ENTRYPOINT=rhun"
 .Lf_mcp: .asciz "MCP_CONNECTION_NONBLOCKING=true"
 .Lf_preview: .asciz "CLAUDE_CODE_QUESTION_PREVIEW_FORMAT=markdown"
+.Lf_ckpt: .asciz "CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING=true"     # p6b: rewind_files (finding 103)
+.Lf_rerun: .asciz "CLAUDE_CODE_RESUME_INTERRUPTED_TURN=1"             # p6b: a cut turn runs again (finding 105)
+.Lf_rerun_age: .asciz "CLAUDE_CODE_RESUME_INTERRUPTED_TURN_MAX_AGE_MS=3600000"
 .Lu_claudecode: .asciz "CLAUDECODE"
 .Lu_child: .asciz "CLAUDE_CODE_CHILD_SESSION"
 .Lu_traceparent: .asciz "TRACEPARENT"

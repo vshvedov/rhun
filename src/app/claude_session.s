@@ -2676,7 +2676,11 @@ shows_fast:
 #   ACT_SETTINGS (Settings at Claude Code's rows), ACT_HELP (the extension's help docs, open_help in
 #   extension.js @3355805, asked before they open); anything else 0
 FN claude_action
-    cmp esi, ACT_BTW            # p7c: the side panels', Chrome's, Remote Control's, the hand-off's
+    cmp esi, ACT_REWIND         # p6b: fork, rewind, export, a cut turn (claude_fork.s)
+    jb 0f
+    cmp esi, ACT_OPENED
+    jbe claude_fork_action
+0:  cmp esi, ACT_BTW            # p7c: the side panels', Chrome's, Remote Control's, the hand-off's
     jae claude_side_action      #   (claude_side.s)
     PROLOGUE
     mov rbx, rdi
@@ -4084,6 +4088,15 @@ menu_tbl:
     .quad aghead_m_resume, aghead_m_resume_d
     .long APK_ROW, APRF_FILTERONLY
     .quad 0
+    # p6b (claude_fork.s): Rewind, Export conversation (1.24's Context entries)
+    .long APS_CONTEXT, ACT_REWIND
+    .quad .Lm_rewind, .Lm_rewind_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CONTEXT, ACT_EXPORT
+    .quad .Lm_export, .Lm_export_d
+    .long APK_ROW, 0
+    .quad 0
     # p7c (claude_side.s, agentside.s): Bookmarks, Claude in Chrome
     .long APS_CONTEXT, ACT_BOOKMARKS
     .quad .Lm_bookmarks, .Lm_bookmarks_d
@@ -4098,6 +4111,11 @@ local_cmds:
     .quad aghead_n_resume, aghead_d_resume, .Lempty, ACT_RESUME
     .quad aghead_n_continue, aghead_d_resume, .Lempty, ACT_RESUME
     # (end of phase 6's block)
+    # p6b (claude_fork.s): /rewind and its aliases (the extension's dialog shortcuts), /export [filename]
+    .quad .Ln_rewind, .Lm_rewind_d, .Lempty, ACT_REWIND
+    .quad .Ln_checkpoint, .Lm_rewind_d, .Lempty, ACT_REWIND
+    .quad .Ln_undo, .Lm_rewind_d, .Lempty, ACT_REWIND
+    .quad .Ln_export, .Ld_export, .Lh_export, ACT_EXPORT
     .quad .Ln_clear, .Ld_clear, .Lempty, ACT_CLEAR
     .quad .Ln_model, .Ld_model, .Lempty, ACT_MODEL
     .quad .Ln_plan, .Ld_plan, .Lh_plan, ACT_PLAN
@@ -4133,6 +4151,16 @@ local_cmds:
     .quad .Ln2_market, .Lm2_plugins_d, .Lempty, ACT_PLUGINS
     .quad 0, 0, 0, 0
 .Ln_btw: .asciz "btw"
+.Lm_rewind: .asciz "Rewind"             # p6b (claude_fork.s)
+.Lm_rewind_d: .asciz "Restore code and conversation to an earlier point"
+.Lm_export: .asciz "Export conversation"
+.Lm_export_d: .asciz "Copy the conversation as plain text or save it to a file"
+.Ln_rewind: .asciz "rewind"
+.Ln_checkpoint: .asciz "checkpoint"
+.Ln_undo: .asciz "undo"
+.Ln_export: .asciz "export"
+.Ld_export: .asciz "Export this session to a file or clipboard"
+.Lh_export: .asciz "[filename]"
 .Ld_btw: .asciz "Ask a quick side question without interrupting the main conversation"
 .Lh_btw: .asciz "[question]"
 .Ln_tasks: .asciz "tasks"

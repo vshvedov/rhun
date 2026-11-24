@@ -3310,6 +3310,7 @@ F AL_dpicks, 288        #   4 x {request number 8, cstr 64}: models asked of the
 F AL_dwait, 8           #   time_ms the prompts held for its first settings answer go anyway
 F AL_dseen, 8           # the driver's own (one mem_alloc'd block, freed with the live record): Claude's
                         #   table of the record uuids the stream gave
+F AL_forkat, 40         # phase 6 (p6b): cstr, a copy's last kept entry (the driver's id), empty: its whole source
 ENDSTRUCT AL_SIZE
 .equ TE_DONE, 0                 # ev_turn_end's reasons
 .equ TE_ERROR, 1
@@ -3610,7 +3611,25 @@ ENDSTRUCT ACH_SIZE
 .equ OA_SIDE_REMOTE_OFF, 43     #   remote_control {enabled: false}
 .equ ACT_BASHES, 41             # /bashes: /tasks under another name (not listed in the menu)
 .equ ACT_RC, 42                 # /rc: /remote-control under another name (not listed)
-.equ ACT_COUNT, 43
+# ---- phase 6 (claude-chat-p6b: agentfork.s, claude_fork.s): fork from a message, rewind, export, a turn cut off by
+#   quitting continued after a restart. The acts are the driver's (DRV_action), claude_action passes them to
+#   claude_fork_action ----
+.equ ACT_REWIND, 43             # Rewind, /rewind, /checkpoint, /undo, Escape twice on an empty box: the picker
+.equ ACT_EXPORT, 44             # Export conversation, /export [NAME] (a name: straight to the file)
+.equ ACT_MSGACT, 45             # DRV_action(AL*, ACT_MSGACT, row, MSG_*): a prompt row's action (its context menu)
+.equ ACT_CUT, 46                # DRV_action(AL*, ACT_CUT): its turn is cut off by rhun quitting (agent_drv_shutdown)
+.equ ACT_OPENED, 47             # DRV_action(AL*, ACT_OPENED): its conversation was opened (a cut turn may go on)
+.equ MSG_FORK, 0                # ACT_MSGACT's actions: Fork conversation from here
+.equ MSG_REWIND, 1              #   Rewind code to here
+.equ MSG_BOTH, 2                #   Fork conversation and rewind code
+.equ DRVC_REWIND, 32768         # forks from a message, rewinds files, exports (ACT_REWIND .. ACT_MSGACT)
+.equ ALF_RERUN, 65536           # this start continues the turn rhun's quitting cut off (the driver's)
+.equ OA_FORK_FIRST, 60          # agent_claude.s's answers from here are claude_fork.s's (claude_fork_answer)
+.equ OA_FORK_CHECK, 60          #   rewind_files dry_run
+.equ OA_FORK_REWIND, 61         #   rewind_files
+.equ OA_FORK_EXPORT, 62         #   export_conversation
+.equ ACT_COUNT, 48
+# (end of phase 6's p6b block)
 # the dialog shell (agentdlg.s): a row (DGR), its kinds and flags, a button's flags, a dialog's ops table
 .equ ID_AGDLG, 0x8e00           # the dialog's controls: + DID_* (agentdlg.s), to 0x8fff
 STRUCT

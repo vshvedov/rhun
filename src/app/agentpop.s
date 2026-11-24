@@ -836,6 +836,8 @@ build_menu:
     je 1f
     cmp dword ptr [r13 + ACM_act], ACT_REMOTE
     je 1f
+    cmp dword ptr [r13 + ACM_act], ACT_EXPORT   # p6b: /export [filename] (/rewind is a shortcut: not listed)
+    je 1f
     cmp dword ptr [r13 + ACM_act], ACT_CHROME
     jne .Lbm_cmd
 1:  lea rdi, [rip + .Lslash]

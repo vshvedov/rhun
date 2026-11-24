@@ -3245,6 +3245,8 @@ open_session:
     mov rdi, -1                 # no row focused in it yet
     call agrow_focus_set
     call agrow_think_reset      # its thinking rows closed
+    mov rdi, rbx                # p6b: its driver hears of it (a turn cut off by quitting goes on: agentfork.s)
+    call agfork_opened
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
@@ -3596,6 +3598,11 @@ FN agents_key
     call agctx_passes
     test eax, eax
     jnz 98f
+    mov edi, r12d               # p6b: Escape twice from an empty box opens Rewind (agentfork.s)
+    mov esi, r14d
+    call agfork_panel_key
+    test eax, eax
+    jnz 5f
     mov edi, r12d               # p7c: then a side panel with the keyboard (agentside.s)
     mov esi, r13d
     mov edx, r14d

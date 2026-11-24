@@ -3379,6 +3379,8 @@ ai_ctl:
     .quad .Lc_print_agent_images, c_print_agent_images, .Lc_agent_images_hold, c_agent_images_hold  # task 6
     .quad .Lc_agent_image_open, c_agent_image_open
     .quad agtab_n_print, agtab_c_print     # phase 4 task 13: print-agent-tabs (agenttab.s)
+    # p6b (claude_fork.s): print-agent-fork
+    .quad claude_fork_n_print, claude_fork_c_print, agfork_n_msg, agfork_c_msg   # agent-msg-action ROW WORD
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

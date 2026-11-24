@@ -2112,6 +2112,8 @@ FN agent_new
 
 # new_as(kind, cwd, title cstr, id cstr) -> rax a new AS of that kind, or 0: its path is the transcript
 #   Claude Code writes for that id in cwd's folder, AS_cwd is cwd, now its time (not yet adopted)
+.globl agent_new_as             # p6b: a fork from a message (agentfork.s)
+agent_new_as:
 new_as:
     PROLOGUE 16
     mov ebx, edi
@@ -3595,6 +3597,8 @@ FN agent_drv_shutdown
     call agside_flush           # p7c: the bookmarks and side questions to theirs (agentside.s)
     call claude_auth_end        # the sign-in question, if it runs
     mov dword ptr [rip + trust_answered], 0     # another project is asked again
+    lea rdi, [rip + lives]      # p6b: the turns that run are cut off: their drivers hear of it (agentfork.s)
+    call agfork_quit
 1:  mov rcx, [rip + lives + VEC_len]
     test rcx, rcx
     jz 9f

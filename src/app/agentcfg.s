@@ -2061,6 +2061,7 @@ act_names:                      # ACT_* by value
     # p7c (agentside.s, agentmap.s, claude_side.s): ACT_BTW (33) to ACT_RC (42)
     .quad .La_btw, .La_bookmarks, .La_tasks, .La_remote, .La_chrome, .La_sideq, .La_handoff, .La_handans
     .quad .La_bashes, .La_rc
+    .quad .La_rewind, .La_export, .La_msgact, .La_cut, .La_opened   # p6b, ACT_REWIND (43) to ACT_OPENED (47) (claude_fork.s)
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .La_btw: .asciz "btw"
 .La_bookmarks: .asciz "bookmarks"
@@ -2072,6 +2073,11 @@ fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .La_handans: .asciz "handans"
 .La_bashes: .asciz "bashes"
 .La_rc: .asciz "rc"
+.La_rewind: .asciz "rewind"
+.La_export: .asciz "export"
+.La_msgact: .asciz "msgact"
+.La_cut: .asciz "cut"
+.La_opened: .asciz "opened"
 .Lsuffix: .asciz ".agents-"
 .Lempty: .asciz ""
 .Lw_agentcfg: .asciz "agentcfg"

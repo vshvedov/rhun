@@ -78,7 +78,7 @@ lines: .zero SB_SIZE            # (start, end) u32 pairs of the unit wrapped las
 copy_sb: .zero SB_SIZE               # a copy's text
 ws: .zero SB_SIZE               # a part's whole text
 sw: .zero SW_SIZE               # a wrap's record, copied
-menu_items: .zero 16 * 4 + 16
+menu_items: .zero 16 * 7 + 16   # (p6b: a prompt's three, agentfork.s)
 sel_part: .long 0
 sel_drag: .long 0               # the press goes on: a drag extends sel_b
 sel_moved: .long 0              # the press's drag (or a double click) selected text
@@ -1263,7 +1263,12 @@ menu_open_at:
     lea rax, [rip + m_link]
     mov [r12 + 8], rax
     add r12, 16
-2:  mov qword ptr [r12], 0
+2:  mov rdi, r12                # p6b: a prompt's Fork and Rewind entries (agentfork.s)
+    mov rsi, [rip + menu_as]
+    mov rdx, [rip + menu_row]
+    call agfork_menu
+    mov r12, rax
+    mov qword ptr [r12], 0
     mov qword ptr [r12 + 8], 0
     lea rdi, [rip + menu_items]
     mov esi, [rsp]

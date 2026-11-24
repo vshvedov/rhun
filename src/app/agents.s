@@ -1953,11 +1953,17 @@ FN ingest_line
     call json_is
     test eax, eax
     jnz .Lil_assist
+    mov rdi, r13                # phase 4 task 10: an attachment line (a hook's context): the kind's reader
+    lea rsi, [rip + .Lattachment]   #   takes the one it shows and leaves the rest
+    call json_is
+    test eax, eax
+    jnz .Lil_system
     mov rdi, r13
     lea rsi, [rip + .Lsystem]
     call json_is
     test eax, eax
     jz .Lil_ret
+.Lil_system:
     cmp dword ptr [rsp], 0      # a system line: its kind's reader, when it has one
     je .Lil_ret
     mov rdi, rbx
@@ -10054,6 +10060,7 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .LcustomTitle: .asciz "customTitle"
 .LisMeta: .asciz "isMeta"
 .Lsystem: .asciz "system"
+.Lattachment: .asciz "attachment"     # phase 4 task 10
 .Ltimestamp: .asciz "timestamp"
 .Lmark_stop: .asciz "[Request interrupted by user]"
 .Lmark_tool: .asciz "[Request interrupted by user for tool use]"

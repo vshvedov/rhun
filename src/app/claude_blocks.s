@@ -43,6 +43,11 @@
 .equ US_CHIP, 2
 .equ CHIP_PATH_MAX, 4096        # a chip's path (the bundle's AD: at most 4096 characters)
 .equ ECHO_NAME_MAX, 200          # a command echo's name
+.equ DG_SCAN, 256               # phase 4 task 10: the last rows a diagnostics row is looked for among
+.equ DG_OPEN_LEN, 17            # "<ide_diagnostics>"
+.equ DG_NAME_LEN, 11
+.equ DG_TAIL_LEN, 8
+.equ DG_TITLE_LEN, 21
 
 .data
 .p2align 2
@@ -540,7 +545,16 @@ FN claude_ingest
     jmp 9f
 2:  cmp r13d, ING_REPLAY
     je 9f
-    mov rdi, r14
+    mov rdi, r14                # phase 4 task 10: a hook's context, in the file only (finding 48)
+    lea rsi, [rip + .Ldg_attachment]
+    call json_is
+    test eax, eax
+    jz 3f
+    mov rdi, rbx
+    mov rsi, r12
+    call ing_attach
+    jmp 9f
+3:  mov rdi, r14
     lea rsi, [rip + .Lv_system]
     call json_is
     test eax, eax
@@ -550,6 +564,455 @@ FN claude_ingest
     call ing_system
 9:  mov eax, 1
     EPILOGUE
+
+# ---- phase 4 task 10: the diagnostics row ----
+# ing_attach(AS*, record): an attachment line of the file: only a hook's context that holds <ide_diagnostics>
+#   (finding 48: hook_additional_context, after the call's result) is read, into the call's diagnostics row
+#   (claude_diag_row: once, whether rhun's own answer made it already or not); every other attachment is left
+ing_attach:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov rdi, rsi
+    lea rsi, [rip + .Ldg_attachment]
+    call json_get
+    mov r12, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lk_type]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Ldg_context_type]
+    call json_is
+    test eax, eax
+    jz 9f
+    mov rdi, r12
+    lea rsi, [rip + .Ldg_tool_use_id]
+    call jstr
+    test rdx, rdx
+    jz 9f
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    mov rdi, r12
+    lea rsi, [rip + .Lk_content]
+    call json_get
+    mov r13, rax
+    xor r14d, r14d
+1:  mov rdi, r13
+    call json_len
+    cmp r14d, eax
+    jae 9f
+    mov rdi, r13
+    mov esi, r14d
+    call json_at
+    inc r14d
+    mov rdi, rax
+    call json_str
+    test rax, rax
+    jz 1b
+    mov rdi, rax                # <ide_diagnostics>JSON</ide_diagnostics>
+    mov rsi, rdx
+    call dg_inside
+    test rax, rax
+    jz 1b
+    mov rcx, rax
+    mov r8, rdx
+    mov rdi, rbx
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call claude_diag_row
+9:  EPILOGUE
+
+# dg_inside(ptr, len) -> rax, rdx the text between "<ide_diagnostics>" and "</ide_diagnostics>", or 0
+dg_inside:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    lea rdx, [rip + .Ldg_open]
+    mov ecx, DG_OPEN_LEN
+    call str_find               # -> rax index or -1
+    test rax, rax
+    js 8f
+    lea r13, [rax + DG_OPEN_LEN]
+    lea rdi, [rbx + r13]
+    mov rsi, r12
+    sub rsi, r13
+    lea rdx, [rip + .Ldg_close]
+    mov ecx, DG_OPEN_LEN + 1
+    call str_find
+    test rax, rax
+    js 8f
+    mov rdx, rax
+    lea rax, [rbx + r13]
+    EPILOGUE
+8:  xor eax, eax
+    xor edx, edx
+    EPILOGUE
+
+# FN claude_diag_row(AS*, call id ptr, len, JSON ptr, len): the call's diagnostics row, made once (its id the
+#   call's and "#diagnostics"; nothing when that row is among the last DG_SCAN rows): the extension's
+#   (WV@5485510): name "Diagnostics", tail "Problems", the note "Found N new problem(s)" a button that opens
+#   the text in a tab titled "Diagnostics: Problems", a warning dot. The text is the extension's JAn: "PATH:"
+#   a file, then "  ✖ [Line L:C] MESSAGE [CODE] (Severity)" a problem (✖ error, ⚠ warning, ℹ info, • any
+#   other), a blank line after each file. JSON: the array of {filePath, line, column, message, code,
+#   severity} that went (or went into the file) inside <ide_diagnostics>. It parses: the caller keeps
+#   nothing of the arena
+FN claude_diag_row
+    PROLOGUE 48
+    mov rbx, rdi
+    mov [rsp], rsi
+    mov [rsp + 8], rdx
+    mov [rsp + 16], rcx
+    mov [rsp + 24], r8
+    lea rdi, [rip + t1]         # the row's id
+    call sb_clear
+    lea rdi, [rip + t1]
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call sb_push
+    lea rdi, [rip + t1]
+    lea rsi, [rip + .Ldg_suffix]
+    call sb_push_cstr
+    lea rdi, [rip + t1]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, rbx                # there already
+    call dg_found
+    test eax, eax
+    jnz 9f
+    lea rdi, [rip + t3]         # the JSON copied out of the arena, then parsed
+    call sb_clear
+    lea rdi, [rip + t3]
+    mov rsi, [rsp + 16]
+    mov rdx, [rsp + 24]
+    call sb_push
+    mov rdi, [rip + t3 + SB_ptr]
+    mov rsi, [rip + t3 + SB_len]
+    call json_parse
+    mov r12, rax
+    mov rdi, rax
+    call json_len
+    test eax, eax
+    jz 9f
+    mov [rsp + 32], rax         # N
+    lea rdi, [rip + t2]
+    call sb_clear
+    mov rdi, r12
+    call dg_text
+    mov rdi, rbx                # the row
+    mov rsi, [rip + t1 + SB_ptr]
+    mov rdx, [rip + t1 + SB_len]
+    dec rdx
+    xor ecx, ecx
+    xor r8d, r8d
+    call agrow_tool
+    test rax, rax
+    jz 9f
+    mov r13, rax
+    mov qword ptr [r13 + AT_uoff], -1   # no place in a file: its text is kept whole (agrow_set)
+    mov qword ptr [r13 + AT_ulen], 0
+    mov rdi, r13
+    mov esi, ATX_NAME
+    lea rdx, [rip + .Ldg_name]
+    mov ecx, DG_NAME_LEN
+    call agrow_set
+    mov rdi, r13
+    mov esi, ATX_TAIL
+    lea rdx, [rip + .Ldg_tail]
+    mov ecx, DG_TAIL_LEN
+    call agrow_set
+    mov rdi, r13
+    mov esi, ATX_TITLE
+    lea rdx, [rip + .Ldg_title]
+    mov ecx, DG_TITLE_LEN
+    call agrow_set
+    lea rdi, [rip + t3]         # "Found N new problem(s)"
+    call sb_clear
+    lea rdi, [rip + t3]
+    lea rsi, [rip + .Ldg_found]
+    call sb_push_cstr
+    lea rdi, [rip + t3]
+    mov rsi, [rsp + 32]
+    call sb_push_u64
+    lea rdi, [rip + t3]
+    lea rsi, [rip + .Ldg_new]
+    call sb_push_cstr
+    cmp qword ptr [rsp + 32], 1
+    je 1f
+    lea rdi, [rip + t3]
+    mov esi, 's'
+    call sb_push_byte
+1:  mov rdi, r13
+    mov esi, ATX_NOTE
+    mov rdx, [rip + t3 + SB_ptr]
+    mov rcx, [rip + t3 + SB_len]
+    call agrow_set
+    mov rdi, r13
+    mov esi, ATX_OUT
+    mov rdx, [rip + t2 + SB_ptr]
+    mov rcx, [rip + t2 + SB_len]
+    call agrow_set
+    mov rdi, r13                # the warning dot
+    mov esi, ATV_STATE
+    mov edx, ATS_DENIED
+    call agrow_num
+    mov rdi, rbx
+    mov rsi, r13
+    call agrow_ready
+    mov rdi, rbx
+    mov rsi, r13
+    call agrow_done
+    mov qword ptr [r13 + AT_roff], -1
+    mov qword ptr [r13 + AT_rlen], 0
+    mov rdi, rbx
+    mov rsi, r13
+    call agrow_touch
+9:  EPILOGUE
+
+# dg_found(AS*) -> eax 1 when a tool row of the last DG_SCAN rows has t1's id
+dg_found:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, [rbx + AS_msgs + VEC_len]
+    xor r13d, r13d
+1:  test r12, r12
+    jz 8f
+    cmp r13d, DG_SCAN
+    jae 8f
+    dec r12
+    inc r13d
+    imul rax, r12, AM_SIZE
+    add rax, [rbx + AS_msgs + VEC_ptr]
+    cmp dword ptr [rax + AM_role], R_TOOL
+    jne 1b
+    mov rax, [rax + AM_x]
+    test rax, rax
+    jz 1b
+    mov rdi, [rax + AT_id]
+    mov rsi, [rip + t1 + SB_ptr]
+    call strcmp_eq
+    test eax, eax
+    jz 1b
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# dg_text(array jv): t2 gets the extension's text of the problems (JAn): the files in the order they first
+#   come, each with its problems in order
+dg_text:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov rdi, rbx
+    call json_len
+    mov r15d, eax
+    mov edi, eax                # done flags
+    inc edi
+    call mem_alloc
+    mov [rsp], rax
+    mov rdi, rax
+    xor esi, esi
+    lea edx, [r15 + 1]
+    call memset
+    mov dword ptr [rsp + 8], 1  # the first element: no line feed before it
+    xor r12d, r12d
+1:  cmp r12d, r15d
+    jae 8f
+    mov rax, [rsp]
+    cmp byte ptr [rax + r12], 0
+    jne 7f
+    mov rdi, rbx
+    mov esi, r12d
+    call json_at
+    mov rdi, rax
+    lea rsi, [rip + .Ldg_file_path]
+    call jstr
+    mov r13, rax                # the file
+    mov r14, rdx
+    lea rdi, [rsp + 8]
+    call dg_elem
+    lea rdi, [rip + t2]
+    mov rsi, r13
+    mov rdx, r14
+    call sb_push
+    lea rdi, [rip + t2]
+    mov esi, ':'
+    call sb_push_byte
+    mov ecx, r12d               # its problems
+2:  cmp ecx, r15d
+    jae 6f
+    mov [rsp + 12], ecx
+    mov rax, [rsp]
+    cmp byte ptr [rax + rcx], 0
+    jne 5f
+    mov rdi, rbx
+    mov esi, ecx
+    call json_at
+    mov rdi, rax
+    lea rsi, [rip + .Ldg_file_path]
+    push rax
+    push rax
+    call jstr
+    mov rdi, rax
+    mov rsi, rdx
+    mov rdx, r13
+    mov rcx, r14
+    call dg_same
+    pop rdi
+    pop rdi
+    test eax, eax
+    jz 5f
+    mov ecx, [rsp + 12]
+    mov rax, [rsp]
+    mov byte ptr [rax + rcx], 1
+    push rdi
+    push rdi
+    lea rdi, [rsp + 24]
+    call dg_elem
+    pop rdi
+    pop rdi
+    call dg_line
+5:  mov ecx, [rsp + 12]
+    inc ecx
+    jmp 2b
+6:  lea rdi, [rsp + 8]          # the blank line after the file
+    call dg_elem
+7:  inc r12d
+    jmp 1b
+8:  mov rdi, [rsp]
+    call mem_free
+    EPILOGUE
+
+# dg_same(ptr, len, ptr, len) -> eax 1 when the two texts are equal (both none counts as equal)
+dg_same:
+    xor eax, eax
+    cmp rsi, rcx
+    jne 9f
+    test rsi, rsi
+    jz 8f
+    mov rsi, rdx
+    mov rdx, rcx
+    jmp memeq
+8:  mov eax, 1
+9:  ret
+
+# dg_elem(int* first): a line feed before every element but the first
+dg_elem:
+    cmp dword ptr [rdi], 0
+    je 1f
+    mov dword ptr [rdi], 0
+    ret
+1:  lea rdi, [rip + t2]
+    mov esi, 10
+    jmp sb_push_byte
+
+# dg_line(problem jv): t2 gets "  ✖ [Line L:C] MESSAGE [CODE] (Severity)"
+dg_line:
+    PROLOGUE 16
+    mov rbx, rdi
+    lea rdi, [rip + t2]
+    lea rsi, [rip + .Ldg_indent]
+    call sb_push_cstr
+    mov rdi, rbx                # the severity's sign, by its name in lower case
+    lea rsi, [rip + .Ldg_severity]
+    call jstr
+    mov r12, rax
+    mov r13, rdx
+    lea r14, [rip + dg_signs]
+1:  mov rdi, [r14]
+    test rdi, rdi
+    jz 2f
+    call strlen
+    mov rcx, rax
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, [r14]
+    call str_ieq
+    test eax, eax
+    jnz 3f
+    add r14, 16
+    jmp 1b
+2:  lea rsi, [rip + .Ldg_dot]
+    jmp 4f
+3:  mov rsi, [r14 + 8]
+4:  lea rdi, [rip + t2]
+    call sb_push_cstr
+    lea rdi, [rip + t2]
+    lea rsi, [rip + .Ldg_line]
+    call sb_push_cstr
+    mov rdi, rbx
+    lea rsi, [rip + .Ldg_line_key]
+    call json_get
+    mov rdi, rax
+    call json_int
+    lea rdi, [rip + t2]
+    mov rsi, rax
+    call sb_push_u64
+    lea rdi, [rip + t2]
+    mov esi, ':'
+    call sb_push_byte
+    mov rdi, rbx
+    lea rsi, [rip + .Ldg_column_key]
+    call json_get
+    mov rdi, rax
+    call json_int
+    lea rdi, [rip + t2]
+    mov rsi, rax
+    call sb_push_u64
+    lea rdi, [rip + t2]
+    lea rsi, [rip + .Ldg_close_br]
+    call sb_push_cstr
+    mov rdi, rbx
+    lea rsi, [rip + .Ldg_message]
+    call jstr
+    lea rdi, [rip + t2]
+    mov rsi, rax
+    call sb_push
+    mov rdi, rbx                # " [CODE]" when it has one
+    lea rsi, [rip + .Ldg_code]
+    call json_get
+    mov r14, rax
+    mov rdi, rax
+    call json_str
+    test rdx, rdx
+    jnz 5f
+    mov rdi, r14                # a number: its digits
+    call json_int
+    test edx, edx
+    jz 6f
+    mov [rsp + 8], rax
+    lea rdi, [rip + t2]
+    lea rsi, [rip + .Ldg_open_br]
+    call sb_push_cstr
+    lea rdi, [rip + t2]
+    mov rsi, [rsp + 8]
+    call sb_push_u64
+    lea rdi, [rip + t2]
+    mov esi, ']'
+    call sb_push_byte
+    jmp 6f
+5:  mov [rsp], rax
+    mov [rsp + 8], rdx
+    lea rdi, [rip + t2]
+    lea rsi, [rip + .Ldg_open_br]
+    call sb_push_cstr
+    lea rdi, [rip + t2]
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call sb_push
+    lea rdi, [rip + t2]
+    mov esi, ']'
+    call sb_push_byte
+6:  lea rdi, [rip + t2]
+    lea rsi, [rip + .Ldg_open_par]
+    call sb_push_cstr
+    lea rdi, [rip + t2]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    lea rdi, [rip + t2]
+    mov esi, ')'
+    call sb_push_byte
+    EPILOGUE
+# ---- end ----
 
 # ing_assistant(AS*, record): its content blocks: text (a reply row, read from a file only), tool_use (a
 #   call), thinking and redacted_thinking (a thinking row), any other type (an unknown block's row); under a
@@ -6527,3 +6990,37 @@ answer_tails: .quad .Lvtt1, .Lvtt2, 0
     .asciz "and follow what they actually say."
 .Lrte: .ascii "The search stopped before it finished, most likely at its time limit, so these results are incomplete: "
     .asciz "more matches may exist. Search a more specific path or pattern."
+# phase 4 task 10: the diagnostics row (the extension's words, WV@5485510)
+.Ldg_attachment: .asciz "attachment"
+.Ldg_context_type: .asciz "hook_additional_context"
+.Ldg_tool_use_id: .asciz "toolUseID"
+.Ldg_open: .asciz "<ide_diagnostics>"
+.Ldg_close: .asciz "</ide_diagnostics>"
+.Ldg_suffix: .asciz "#diagnostics"
+.Ldg_name: .asciz "Diagnostics"
+.Ldg_tail: .asciz "Problems"
+.Ldg_title: .asciz "Diagnostics: Problems"
+.Ldg_found: .asciz "Found "
+.Ldg_new: .asciz " new problem"
+.Ldg_file_path: .asciz "filePath"
+.Ldg_severity: .asciz "severity"
+.Ldg_message: .asciz "message"
+.Ldg_code: .asciz "code"
+.Ldg_line_key: .asciz "line"
+.Ldg_column_key: .asciz "column"
+.Ldg_indent: .asciz "  "
+.Ldg_line: .asciz " [Line "
+.Ldg_close_br: .asciz "] "
+.Ldg_open_br: .asciz " ["
+.Ldg_open_par: .asciz " ("
+.Ldg_dot: .asciz "\xe2\x80\xa2"
+.Ldg_s_error: .asciz "error"
+.Ldg_s_warning: .asciz "warning"
+.Ldg_s_info: .asciz "info"
+.Ldg_s_hint: .asciz "hint"
+.Ldg_g_error: .asciz "\xe2\x9c\x96"
+.Ldg_g_warning: .asciz "\xe2\x9a\xa0"
+.Ldg_g_info: .asciz "\xe2\x84\xb9"
+.p2align 3
+dg_signs: .quad .Ldg_s_error, .Ldg_g_error, .Ldg_s_warning, .Ldg_g_warning, .Ldg_s_info, .Ldg_g_info
+    .quad .Ldg_s_hint, .Ldg_dot, 0, 0

@@ -68,6 +68,7 @@
 .equ CID_DETAILS, 25
 .equ CID_EDIT, 26
 .equ CID_FIELD, 27
+.equ CID_OFFER, 28              # phase 4 task 11: "Review the change" (a request with a proposed change)
 .equ BTN_MAX, 16
 .equ LBUF_ONE, 512              # a button's label with its place, at most
 .equ LI_MAX, 200                # layout items
@@ -78,6 +79,7 @@
 .equ LK_BLINE, 5                # a line of a button's label (LI_idx: the button)
 .equ LK_FIELD, 6
 .equ LK_DETAILS, 7              # the "Details" line
+.equ LK_OFFER, 12               # phase 4 task 11: the link "Review the change" (its request has an offer)
 .equ TS_TITLE, 0                # text styles (style_tbl)
 .equ TS_BODY, 1
 .equ TS_MUTED, 2
@@ -180,6 +182,7 @@ stops: .zero 4 * STOPS_MAX      # the focus stops in order (CD_EDIT, buttons, CD
 nstops: .long 0
 pend_act: .long 0               # a click's answer, sent after the drawing (it frees the card)
 pend_dest: .long 0              # a click on the place's link
+why_next: .long 0               # phase 4 task 11: CD_why of the next answer (agentcard_resolve), else CDW_CARD
 dsb: .zero SB_SIZE              # dumps
 
 .text
@@ -731,6 +734,8 @@ FN agentcard_answer
     jz 8f
 0:  mov r14, [rbx + AS_live]
     mov [r13 + CD_chosen], r12d
+    mov eax, [rip + why_next]   # phase 4 task 11: where the answer came from
+    mov [r13 + CD_why], eax
     call time_ms
     mov [r14 + AL_used], rax
     xor r15d, r15d
@@ -760,6 +765,40 @@ FN agentcard_answer
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
+
+# FN agentcard_resolve(AS*, AQ*, act CBA_*, why CDW_*) -> eax 1 sent to the driver: an answer that did not
+#   come from the card's own buttons (its proposed change's Review tab, agentoffer.s): only for the request
+#   whose card shows, and only once its lock is over (agentcard_live: before, nothing happens); then as
+#   agentcard_answer, with CD_why saying where it came from (phase 4 task 11)
+FN agentcard_resolve
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    mov r14d, ecx
+    call agentcard_of
+    test rax, rax
+    jz 8f
+    cmp rax, [r12 + AQ_card]
+    jne 8f
+    mov [rip + why_next], r14d
+    mov rdi, rbx
+    mov esi, r13d
+    call agentcard_answer
+    mov dword ptr [rip + why_next], CDW_CARD
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# has_offer(CD*) -> eax 1 when its request has a proposed change in the Review tab (agentoffer.s)
+has_offer:
+    xor eax, eax
+    mov rcx, [rdi + CD_token]
+    test rcx, rcx
+    jz 1f
+    cmp qword ptr [rcx + AQ_offer], 0
+    setne al
+1:  ret
 
 # FN agentcard_pick(AS*, n) -> eax 1 when button n (from 0) was answered: its lock is waited out first
 #   (the loop runs meanwhile), as a click right after it
@@ -839,7 +878,7 @@ FN agentcard_set_text
     EPILOGUE
 
 # FN agentcard_toggle(AS*, what 0 fold | 1 the Details | 2 the place | 3 Submit answers | 4 the × | 5 the
-#   link) -> eax 1 done (as a click on it)
+#   link | 6 "Review the change") -> eax 1 done (as a click on it)
 FN agentcard_toggle
     PROLOGUE
     mov rbx, rdi
@@ -848,7 +887,17 @@ FN agentcard_toggle
     test rax, rax
     jz 8f
     mov r13, rax
-    cmp r12d, 5                 # the dialog cards' link, as a click on it
+    cmp r12d, 6                 # phase 4 task 11: "Review the change", as a click on it
+    jne 6f
+    mov rdi, r13
+    call has_offer
+    test eax, eax
+    jz 8f
+    mov rdi, [r13 + CD_token]
+    call agoffer_show
+    mov eax, 1
+    EPILOGUE
+6:  cmp r12d, 5                 # the dialog cards' link, as a click on it
     jne 5f
     mov rdi, rbx
     mov rsi, r13
@@ -1466,7 +1515,25 @@ bc_lay:
     mov esi, TS_CODE
     mov edx, JSON_LINES
     call lay_cstr
-6:  mov eax, [rip + g_pmt + 4*MI_8]
+6:  mov rdi, rbx                # phase 4 task 11: "Review the change" under the details
+    call has_offer
+    test eax, eax
+    jz 61f
+    mov edi, TS_LINK
+    call st_lineh
+    mov r14d, eax
+    mov edi, LK_OFFER
+    xor esi, esi
+    call li_new
+    mov ecx, [rip + lx]
+    mov [rax + LI_x], ecx
+    mov ecx, [rip + lw]
+    mov [rax + LI_w], ecx
+    mov ecx, [rip + ly]
+    mov [rax + LI_y], ecx
+    mov [rax + LI_h], r14d
+    add [rip + ly], r14d
+61: mov eax, [rip + g_pmt + 4*MI_8]
     add [rip + ly], eax
     # the buttons. Locals: [rsp] lx and [rsp + 4] lw kept (the lines under the rule button), [rsp + 8]
     #   the label's bytes left, [rsp + 16] the button's index, [rsp + 20] its text's x, [rsp + 24] a
@@ -1849,6 +1916,8 @@ bc_draw:
     je .Lbd_details
     cmp eax, LK_UNC             # plan review: a comment's ×
     je .Lbd_unc
+    cmp eax, LK_OFFER           # phase 4 task 11: "Review the change"
+    je .Lbd_offer
     cmp eax, LK_DLINK           # the dialog cards' link, × and greyed buttons (dc_item)
     jb .Lbd_item
     mov rdi, rbx
@@ -1922,6 +1991,36 @@ bc_draw:
     pop r8
     pop r8
     mov r9, rax
+    mov rdi, [rip + ag_fsmall]
+    mov esi, [rsp]
+    add esi, [r15 + LI_x]
+    mov edx, [rsp + 4]
+    add edx, [r15 + LI_y]
+    mov ecx, [r15 + LI_h]
+    mov eax, [r15 + LI_w]
+    push rax
+    COLOR eax, T_ACCENT
+    push rax
+    call ui_text_v_fit
+    add rsp, 16
+    jmp .Lbd_item
+.Lbd_offer:                     # phase 4 task 11: its click shows the offer's tab (after the frame)
+    mov edi, ID_AGCARD + CID_OFFER
+    mov esi, [rsp]
+    add esi, [r15 + LI_x]
+    mov edx, [rsp + 4]
+    add edx, [r15 + LI_y]
+    mov ecx, [r15 + LI_w]
+    mov r8d, [r15 + LI_h]
+    call ui_btn
+    test eax, UB_CLICK
+    jz 1f
+    mov rdi, [r12 + CD_token]
+    call agoffer_show
+1:  lea rdi, [rip + .Loffer_link]
+    call strlen
+    mov r9, rax
+    lea r8, [rip + .Loffer_link]
     mov rdi, [rip + ag_fsmall]
     mov esi, [rsp]
     add esi, [r15 + LI_x]
@@ -2783,7 +2882,14 @@ bc_dump:
     mov rdi, rbx
     mov esi, 10
     call sb_push_byte
-2:  xor r13d, r13d
+2:  mov rdi, r12                # phase 4 task 11: the link to the proposed change
+    call has_offer
+    test eax, eax
+    jz 21f
+    mov rdi, rbx
+    lea rsi, [rip + .Lw_offer]
+    call sb_push_cstr
+21: xor r13d, r13d
 3:  cmp r13, [r12 + CD_btns + VEC_len]
     jae 6f
     mov rax, [r12 + CD_btns + VEC_ptr]  # plan review: only the buttons shown, by their numbers there
@@ -3667,7 +3773,7 @@ kind_names: .quad .Lk_permission, .Lk_questions, .Lk_plan, .Lk_dialog
 .p2align 2
 text_slots: .long CD_title, CD_hint, CD_detail, CD_desc, CD_note, CD_json, CD_link, -1, CD_ph
 item_letters: .byte '?', 't', 'f', 'e', 'b', 'l', 'F', 'd'
-    .byte 'L', 'x', 'B', 'x', '?', '?', '?', '?', 'T', 'x', 'o', 'k', 'p'     # the dialog cards' 8..10; plan review's × 11; the question card's 16..
+    .byte 'L', 'x', 'B', 'x', 'r', '?', '?', '?', 'T', 'x', 'o', 'k', 'p'     # the dialog cards' 8..10; plan review's × 11; the question card's 16..
 .Lk_permission: .asciz "permission"
 .Lk_questions: .asciz "questions"
 .Lk_plan: .asciz "plan"
@@ -3676,6 +3782,8 @@ item_letters: .byte '?', 't', 'f', 'e', 'b', 'l', 'F', 'd'
 .Lesc: .asciz "Esc to cancel"
 .Ldigit: .asciz "8"
 .Ltip_arrows: .asciz "Left or Right arrow changes where this is saved"
+.Loffer_link: .asciz "Review the change"
+.Lw_offer: .asciz "link Review the change\n"
 .Ldetails_shut: .asciz "Details \342\226\270"
 .Ldetails_open: .asciz "Details \342\226\276"
 .Lwaiting: .asciz "Waiting for permission\342\200\246"

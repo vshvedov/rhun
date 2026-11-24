@@ -2412,7 +2412,8 @@ class SeamWordsTest(unittest.TestCase):
              'agentcompose.s', 'agentfoot.s', 'mdtab.s',
              # phase 3's generic files: the rows, their diff, the spinner, time, focus view, tasks, selection
              'agentrows.s', 'agentdiff.s', 'agentspin.s', 'agenttime.s', 'agentfold.s', 'agenttask.s',
-             'agentsel.s']
+             'agentsel.s',
+             'agentoffer.s']    # phase 4 tasks 11 and 12: a request's proposed change
     # file -> name -> the functions it may appear in
     ALLOWED = {
         'agent_drv.s': {

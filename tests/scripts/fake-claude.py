@@ -3964,6 +3964,92 @@ SCENARIOS.update({'diag': s_diag, 'hookedit': s_hookedit, 'hookread': s_hookread
                   'writefile': s_writefile, 'echoblocks': s_echoblocks, 'notify': s_notify})
 
 
+# ---- phase 4 tasks 11 and 12: proposed changes in the Review tab ----
+# editjs JSON (an Edit whose input is that JSON object: file_path relative to the cwd, old_string, new_string,
+# replace_all, as p4_file_call asks and applies it), writejs JSON (a Write likewise), editlater MS REST (MS ms,
+# then `editfile REST`: a request that comes while the user types), editnowrite FILE OLD NEW (asks as editfile,
+# applies nothing: a test that rhun writes no file reads the file's bytes after an allow), edit2 FILE OLD1 NEW1
+# OLD2 NEW2 (one message with two Edits whose requests wait at once; each allowed one is applied in order).
+def p4_input(prompt):
+    rest = prompt.split(None, 1)[1] if len(prompt.split(None, 1)) > 1 else '{}'
+    data = json.loads(rest)
+    data['file_path'] = p4_path(data.get('file_path', ''), 'notes.txt')
+    return data
+
+
+def s_editjs(prompt):
+    data = p4_input(prompt)
+    tool_input = {'replace_all': data.get('replace_all', False), 'file_path': data['file_path'],
+                  'old_string': data.get('old_string', ''), 'new_string': data.get('new_string', '')}
+    ask_input = {'file_path': data['file_path'], 'old_string': tool_input['old_string'],
+                 'new_string': tool_input['new_string'], 'replace_all': tool_input['replace_all']}
+    done = p4_file_call('Edit', tool_input, ask_input, p4_apply_edit)
+    if done != 'ended':
+        final('edited' if done == 'ok' else 'not edited')
+
+
+def s_writejs(prompt):
+    data = p4_input(prompt)
+    tool_input = {'file_path': data['file_path'], 'content': data.get('content', '')}
+    done = p4_file_call('Write', tool_input, dict(tool_input), p4_apply_write)
+    if done != 'ended':
+        final('written' if done == 'ok' else 'not written')
+
+
+def s_editlater(prompt):
+    words = prompt.split(None, 2)
+    time.sleep(int(words[1]) / 1000.0 if len(words) > 1 else 0.3)
+    s_editfile('editfile ' + (words[2] if len(words) > 2 else ''))
+
+
+def s_editnowrite(prompt):
+    words = prompt.split()
+    path = p4_path(words[1] if len(words) > 1 else '', 'notes.txt')
+    old, new = (words[2], words[3]) if len(words) > 3 else ('a', 'b')
+    ask_input = {'file_path': path, 'old_string': old, 'new_string': new, 'replace_all': False}
+    done = p4_file_call('Edit', dict(ask_input), ask_input,
+                        lambda edit, before: ('The file %s has been updated successfully.' % path, False, None))
+    if done != 'ended':
+        final('edited')
+
+
+def s_edit2(prompt):
+    words = prompt.split()
+    path = p4_path(words[1] if len(words) > 1 else '', 'notes.txt')
+    edits = [{'file_path': path, 'old_string': words[2], 'new_string': words[3], 'replace_all': False},
+             {'file_path': path, 'old_string': words[4], 'new_string': words[5], 'replace_all': False}]
+    mid = message_start()
+    tids = [tool_use(mid, i, 'Edit', dict(edit)) for i, edit in enumerate(edits)]
+    message_end('tool_use')
+    rids = [request_id() for _ in edits]
+    with COND:
+        for rid, edit, tid in zip(rids, edits, tids):
+            PENDING[rid] = None
+            emit({'type': 'control_request', 'request_id': rid, 'request': {
+                'subtype': 'can_use_tool', 'tool_name': 'Edit', 'display_name': 'Edit', 'input': edit,
+                'description': os.path.basename(path), 'permission_suggestions': [], 'tool_use_id': tid}})
+        answers = {}
+        while len(answers) < len(rids) and not withdrawn():
+            for rid in rids:
+                if rid not in answers and PENDING.get(rid) is not None:
+                    answers[rid] = PENDING.pop(rid)
+            COND.wait(0.05)
+    for rid, edit, tid in zip(rids, edits, tids):
+        answer = answers.get(rid)
+        log(answer=answer)
+        if not answer or answer.get('behavior') != 'allow':
+            tool_result(tid, REJECTED, True)
+            continue
+        allowed = answer.get('updatedInput') if isinstance(answer.get('updatedInput'), dict) else edit
+        give(tid, 'Edit', p4_apply_edit(allowed, None))
+    final('both')
+
+
+SCENARIOS.update({'editjs': s_editjs, 'writejs': s_writejs, 'editlater': s_editlater, 'editnowrite': s_editnowrite,
+                  'edit2': s_edit2})
+# ---- end of tasks 11 and 12 ----
+
+
 REFUSED = [False]                   # FAKE_CLAUDE_REFUSE_HELD: one held message was refused already
 DISCARDED = [False]                 # FAKE_CLAUDE_DISCARD_HELD: one held message was marked to be discarded
 QUIET = set()                       # FAKE_CLAUDE_NO_LIFECYCLE=local: the uuids of the CLI's own commands

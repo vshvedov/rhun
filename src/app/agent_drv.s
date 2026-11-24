@@ -340,6 +340,8 @@ aq_free:
     call agentpop_gone
     mov rdi, [rbx + AQ_tab]     # plan review: its tab and a comment prompt open for it close (mdtab.s)
     call mdtab_drop
+    mov rdi, rbx                # phase 4 task 11: its proposed change's tab closes, nothing is sent
+    call agoffer_drop
     mov rdi, [rbx + AQ_id]
     call mem_free
     mov rdi, [rbx + AQ_tool]
@@ -2403,6 +2405,24 @@ FN ev_card
     mov esi, ALS_WAITING
     call agent_state_set
     mov eax, 1
+    EPILOGUE
+
+# FN ev_offer(al, AQ*, path cstr, old ptr, oldlen, new ptr, [rsp] newlen, [rsp + 8] flags OFF_*) -> eax 1:
+#   the driver offers the change its request (the head, whose card shows) would make to one file: the file's
+#   text before and after, shown in the Review tab tied to the card (agentoffer.s; the texts are copied).
+#   Phase 4 task 11
+FN ev_offer
+    PROLOGUE 32
+    mov rbx, rdi
+    mov [rsp], rcx
+    mov [rsp + 8], r8
+    mov [rsp + 16], r9
+    mov rax, [rbp + 16]
+    mov [rsp + 24], rax
+    mov rdi, [rbx + AL_as]
+    lea rcx, [rsp]              # TX: old, oldlen, new, newlen
+    mov r8d, [rbp + 24]
+    call agoffer_open
     EPILOGUE
 
 # FN ev_request_gone(al, AQ*): answered or withdrawn: its card goes (when it shows), it leaves AL_reqs

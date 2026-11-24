@@ -96,6 +96,7 @@ check syntax-word build/grammar_test --try tests/data/region-word.syn tests/data
 check themes build/theme_test
 check term build/term_test
 check diff build/diff_test
+check edit-apply build/edit_apply_test   # phase 4 task 11: an edit applied as Claude Code applies it
 # agents: connections to a long-lived child (agent_conn.s)
 for s in exit stderr spawnfail echo fill stop linger bigline biglinenl watchfull watchlate guard reopen breaklast; do
     check agent-conn-$s build/agent_conn_test $s tests/scripts/fake-agent.py
@@ -154,6 +155,7 @@ python3 tests/fake-claude.py || fail=1   # the fake Claude Code against the reco
 python3 tests/claude-chat.py || fail=1   # Claude Code's chat against the fake
 python3 tests/claude-controls.py || fail=1   # its controls: settings, lists, menus, modes, models
 python3 tests/claude-cards.py || fail=1   # its cards: permission, questions, plan, dialogs
+python3 tests/claude-review.py || fail=1   # phase 4 tasks 11, 12: an edit's proposed change in the Review tab
 python3 tests/claude-transcript.py || fail=1   # the typed rows: a call's parts, text that opens in a tab (phase 3)
 python3 tests/claude-thread.py || fail=1   # the thread's engine: heights, the view's anchor, keys (phase 3)
 python3 tests/claude-bridge.py || fail=1   # claude in rhun's terminal: the bridge, its tools, terminal mode (phase 5)

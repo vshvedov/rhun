@@ -336,7 +336,7 @@ class PermissionCardTest(CardCase):
         self.start()
         self.command('agent-timing card=0')
         cases = [
-            ('edit', 'Make this edit to notes.txt?', []),
+            ('edit', 'Make this edit to notes.txt?', ['link Review the change']),   # phase 4 task 11
             ('fetch', 'Allow fetching this url?', ['detail https://example.com']),
             ('pwsh', 'Allow this PowerShell command?', ['edit Get-ChildItem', 'desc List the folder']),
             ('net', 'Allow network connection to this host?', ['detail example.com']),

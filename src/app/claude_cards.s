@@ -1869,6 +1869,14 @@ FN claude_card_show
     mov rsi, r12
     mov rdx, r13
     call ev_card
+    test eax, eax               # phase 4 task 11: an Edit's or a Write's change, in the Review tab
+    jz 9f
+    cmp qword ptr [r12 + AQ_offer], 0
+    jne 81f
+    mov rdi, rbx
+    mov rsi, r12
+    call offer_edit
+81: mov eax, 1
 9:  EPILOGUE
 
 # ---------------------------------------------------------------- the answers
@@ -1915,6 +1923,10 @@ FN claude_reply
     call write_answers
     jmp .Lcr_after
 .Lcr_yes:
+    mov rdi, r12                # phase 4 task 11: a proposed change with every change taken out
+    call offer_reverted
+    test eax, eax
+    jnz .Lcr_reverted
     mov rdi, rbx
     mov rsi, r12
     mov rdx, r13
@@ -1924,6 +1936,10 @@ FN claude_reply
 .Lcr_rule:
     cmp qword ptr [r12 + AQ_sugg], 0
     je .Lcr_yes
+    mov rdi, r12                # phase 4 task 11: as Yes, with every change taken out
+    call offer_reverted
+    test eax, eax
+    jnz .Lcr_reverted
     mov rdi, r12                # a setMode for this session: the mode first
     call session_mode
     test eax, eax
@@ -1945,7 +1961,13 @@ FN claude_reply
     call write_allow
     jmp .Lcr_after
 .Lcr_no:
-    lea rdi, [r13 + CD_field]
+    cmp qword ptr [r12 + AQ_offer], 0   # phase 4 task 11: rejected or closed in the Review tab
+    je 0f
+    cmp dword ptr [r13 + CD_why], CDW_TAB_REJECT
+    je .Lcr_cancel
+    cmp dword ptr [r13 + CD_why], CDW_TAB_CLOSED
+    je .Lcr_cancel
+0:  lea rdi, [r13 + CD_field]
     call tf_text
     mov rdi, rax
     mov rsi, rdx
@@ -2069,7 +2091,13 @@ write_allow:
     call write_edited
     test eax, eax
     jnz 2f
-1:  lea rdi, [rip + claude_cw]
+1:  cmp qword ptr [r12 + AQ_offer], 0   # phase 4 task 11: the proposed text as it stands, when changed
+    je 11f
+    mov rdi, r12
+    call offer_input
+    test eax, eax
+    jnz 2f
+11: lea rdi, [rip + claude_cw]
     mov rsi, [r12 + AQ_input]
     mov rdx, [r12 + AQ_inlen]
     call jw_rawn
@@ -4685,3 +4713,552 @@ dg_whole: .long 0
 dg_code: .zero 8
 dg_host: .zero 256              # a help URL's host, lower-cased
 .text
+
+# ---------------------------------------------------------------- an edit's proposed change (phase 4 task 11)
+#
+# An Edit or a Write waiting for permission: when its card shows (claude_card_show), the change it would make
+# is offered in the Review tab (ev_offer: the generic layer shows it and ties it to the card, agentoffer.s).
+# The texts, by the extension's rules (Sne EXT@3195254, _ne/oQe/PSr EXT@3192347): the file's saved text (an
+# open document's unsaved changes are not the file's: the CLI reads the file, as the extension reads the disk
+# for a dirty document); the text after is the edit applied to it (edit_apply). A file outside every
+# workspace folder, or one that cannot be read as text of at most 4 MB (a NUL in it): not read, " (file not
+# read)", the edit's old text against its new text (a Write: nothing against the content). An Edit whose old
+# text is not in the file: " (edited text only)", the same two texts. A file with CR LF is matched and shown
+# with LF alone: the CLI reads it so and writes CR LF back (finding 49), and every text sent back is LF.
+#
+# The answers (claude_reply; the webview's rNe and Ezt WV@6041884): accepted and unchanged (in the tab or by
+# the card's Yes): the request's own input; accepted with the text changed (task 12: changes taken out, the
+# text edited): Edit {file_path, old_string: the whole text before, new_string: the whole text now,
+# replace_all: false (as asked when the text before was the edit's own old text)}, Write {file_path, content};
+# accepted with every change taken out: deny "User reverted all proposed changes in the diff view", interrupt;
+# rejected or closed in the tab: deny "User cancelled the edit" ("User cancelled the write"), interrupt; the
+# card's No: as before. rhun never writes the file: the CLI does.
+#
+#   edit_apply(text, len, old, oldlen, new, newlen, [rsp] replace_all, [rsp + 8] sb) -> eax 1, 0 not found
+
+.bss
+.p2align 3
+e_text: .zero SB_SIZE           # edit_apply: a CR LF text with LF alone, and the edit's two strings so
+e_old: .zero SB_SIZE
+e_new: .zero SB_SIZE
+e_needle: .zero SB_SIZE         #   an old text and its line feed
+e_oin: .zero SB_SIZE            # offer_edit: the input's old text (or a Write's content) and new text
+e_nin: .zero SB_SIZE
+e_before: .zero SB_SIZE         #   the two texts offered
+e_after: .zero SB_SIZE
+
+.section .rodata
+.Lcrlf: .ascii "\r\n"
+.Lk_old_string: .asciz "old_string"
+.Lk_new_string: .asciz "new_string"
+.Lk_replace_all: .asciz "replace_all"
+.Lr_reverted: .asciz "User reverted all proposed changes in the diff view"
+.Lr_cancel_edit: .asciz "User cancelled the edit"
+.Lr_cancel_write: .asciz "User cancelled the write"
+
+.text
+
+# lf_copy(sb, ptr, len) -> rax ptr, rdx len: the bytes into sb, a CR before a LF left out
+lf_copy:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    call sb_clear
+    xor r14d, r14d
+1:  cmp r14, r13
+    jae 3f
+    movzx esi, byte ptr [r12 + r14]
+    inc r14
+    cmp esi, 13
+    jne 2f
+    cmp r14, r13
+    jae 2f
+    cmp byte ptr [r12 + r14], 10
+    je 1b
+2:  mov rdi, rbx
+    call sb_push_byte
+    jmp 1b
+3:  mov rax, [rbx + SB_ptr]
+    mov rdx, [rbx + SB_len]
+    EPILOGUE
+
+# FN edit_apply(text, len, old, oldlen, new, newlen, [rsp] replace_all, [rsp + 8] sb) -> eax 1 with sb the text
+#   after the edit, 0 when the old text is not in it (sb then holds the text unchanged). The extension's rules
+#   (oQe, PSr, _ne): no old text: the new text is the whole; an old text removed (new empty) that does not end
+#   with a line feed takes the line feed after it when the text has one there; the first match, or every one
+#   (replace_all, left to right, not overlapping); a text with CR LF (and an old text) is matched and made with
+#   LF alone, the edit's strings too (the result stays LF: finding 49)
+FN edit_apply
+    PROLOGUE 48
+    mov [rsp], rdi
+    mov [rsp + 8], rsi
+    mov r12, rdx
+    mov r13, rcx
+    mov r14, r8
+    mov r15, r9
+    mov eax, [rbp + 16]
+    mov [rsp + 16], eax
+    mov rbx, [rbp + 24]
+    mov rdi, rbx
+    call sb_clear
+    test r13, r13
+    jnz 1f
+    mov rdi, rbx                # no old text: the new text whole
+    mov rsi, r14
+    mov rdx, r15
+    call sb_push
+    mov eax, 1
+    EPILOGUE
+1:  mov rdi, [rsp]              # CR LF in the text: everything with LF alone
+    mov rsi, [rsp + 8]
+    lea rdx, [rip + .Lcrlf]
+    mov ecx, 2
+    call str_find
+    test rax, rax
+    js 2f
+    lea rdi, [rip + e_text]
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call lf_copy
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    lea rdi, [rip + e_old]
+    mov rsi, r12
+    mov rdx, r13
+    call lf_copy
+    mov r12, rax
+    mov r13, rdx
+    lea rdi, [rip + e_new]
+    mov rsi, r14
+    mov rdx, r15
+    call lf_copy
+    mov r14, rax
+    mov r15, rdx
+2:  test r15, r15               # removed without its line feed: with the one after it, when there is one
+    jnz 3f
+    cmp byte ptr [r12 + r13 - 1], 10
+    je 3f
+    lea rdi, [rip + e_needle]
+    call sb_clear
+    lea rdi, [rip + e_needle]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    lea rdi, [rip + e_needle]
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, [rsp]
+    mov rsi, [rsp + 8]
+    mov rdx, [rip + e_needle + SB_ptr]
+    mov rcx, [rip + e_needle + SB_len]
+    call str_find
+    test rax, rax
+    js 3f
+    mov r12, [rip + e_needle + SB_ptr]
+    mov r13, [rip + e_needle + SB_len]
+3:  mov qword ptr [rsp + 24], 0 # copied up to
+    mov dword ptr [rsp + 32], 0 # found
+4:  mov rdi, [rsp]
+    add rdi, [rsp + 24]
+    mov rsi, [rsp + 8]
+    sub rsi, [rsp + 24]
+    mov rdx, r12
+    mov rcx, r13
+    call str_find
+    test rax, rax
+    js 6f
+    mov [rsp + 40], rax
+    mov rdi, rbx
+    mov rsi, [rsp]
+    add rsi, [rsp + 24]
+    mov rdx, rax
+    call sb_push
+    mov rdi, rbx
+    mov rsi, r14
+    mov rdx, r15
+    call sb_push
+    mov rax, [rsp + 40]
+    add rax, r13
+    add [rsp + 24], rax
+    mov dword ptr [rsp + 32], 1
+    cmp dword ptr [rsp + 16], 0
+    jne 4b
+6:  mov rdi, rbx
+    mov rsi, [rsp]
+    add rsi, [rsp + 24]
+    mov rdx, [rsp + 8]
+    sub rdx, [rsp + 24]
+    call sb_push
+    mov eax, [rsp + 32]
+    EPILOGUE
+
+# in_text(jv, key, sb) -> eax 1 with a string member's bytes copied into sb (0: not a string)
+in_text:
+    PROLOGUE
+    mov r12, rdx
+    call json_get
+    mov rbx, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_STR
+    jne 8f
+    mov rdi, rbx
+    call json_str
+    mov r13, rax
+    mov r14, rdx
+    mov rdi, r12
+    call sb_clear
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r14
+    call sb_push
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# offer_edit(AL*, AQ*): an Edit's or a Write's change offered (ev_offer), when it can be shown. Locals: [rsp]
+#   the path (owned cstr), [rsp + 8] the file's bytes (owned) and [rsp + 16] their length, [rsp + 24] 1
+#   Write, [rsp + 28] flags, [rsp + 32] replace_all, [rsp + 36] 1 the file exists
+offer_edit:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, rsi
+    mov qword ptr [rsp], 0
+    mov qword ptr [rsp + 8], 0
+    mov qword ptr [rsp + 16], 0
+    mov dword ptr [rsp + 24], 0
+    mov dword ptr [rsp + 28], 0
+    mov dword ptr [rsp + 32], 0
+    mov dword ptr [rsp + 36], 0
+    cmp dword ptr [r12 + AQ_kind], AQK_PERMISSION
+    jne 99f
+    mov rdi, [r12 + AQ_tool]
+    test rdi, rdi
+    jz 99f
+    lea rsi, [rip + .Lt_edit]
+    call strcmp_eq
+    test eax, eax
+    jnz 1f
+    mov rdi, [r12 + AQ_tool]
+    lea rsi, [rip + .Lt_write]
+    call strcmp_eq
+    test eax, eax
+    jz 99f
+    mov dword ptr [rsp + 24], 1
+1:  mov rdi, [r12 + AQ_input]   # the input again (the arena is global)
+    mov rsi, [r12 + AQ_inlen]
+    mov edx, LINE_VALUES
+    mov ecx, LINE_DEPTH
+    call json_parse_lim
+    test rax, rax
+    jz 99f
+    mov r13, rax
+    mov rdi, r13                # the path: a string, absolute, without a NUL
+    lea rsi, [rip + .Lk_file_path]
+    lea rdx, [rip + e_before]
+    call in_text
+    test eax, eax
+    jz 99f
+    mov rdi, [rip + e_before + SB_ptr]
+    mov rsi, [rip + e_before + SB_len]
+    test rsi, rsi
+    jz 99f
+    xor ecx, ecx
+2:  cmp rcx, rsi
+    jae 3f
+    cmp byte ptr [rdi + rcx], 0
+    je 99f
+    inc rcx
+    jmp 2b
+3:  call ai_dup
+    mov [rsp], rax
+    mov rdi, rax
+    PATH_ABSOLUTE rdi, 4f
+    jmp 99f
+4:  cmp dword ptr [rsp + 24], 0
+    je 5f
+    mov rdi, r13                # Write: its content
+    lea rsi, [rip + .Lk_content]
+    lea rdx, [rip + e_oin]
+    call in_text
+    test eax, eax
+    jz 99f
+    jmp 6f
+5:  mov rdi, r13                # Edit: its two texts and replace_all
+    lea rsi, [rip + .Lk_old_string]
+    lea rdx, [rip + e_oin]
+    call in_text
+    test eax, eax
+    jz 99f
+    mov rdi, r13
+    lea rsi, [rip + .Lk_new_string]
+    lea rdx, [rip + e_nin]
+    call in_text
+    test eax, eax
+    jz 99f
+    mov rdi, r13
+    lea rsi, [rip + .Lk_replace_all]
+    call in_true
+    mov [rsp + 32], eax
+6:  # the file: outside every workspace folder, or not readable as text of at most 4 MB: not read
+    mov rdi, [rsp]
+    call wfold_of
+    test rax, rax
+    js 61f
+    mov rdi, [rsp]
+    call vfs_type
+    test eax, eax
+    jz 7f                       # no such file (a new one): the text before is empty
+    mov dword ptr [rsp + 36], 1
+    mov rdi, [rsp]
+    mov esi, 4194304            # review.s's RVP_TEXT_MAX
+    call vfs_read_limited
+    test rax, rax
+    jz 61f
+    mov [rsp + 8], rax
+    mov [rsp + 16], rdx
+    xor ecx, ecx
+60: cmp rcx, rdx
+    jae 7f
+    cmp byte ptr [rax + rcx], 0
+    je 61f
+    inc rcx
+    jmp 60b
+61: or dword ptr [rsp + 28], OFF_NOREAD
+7:  cmp dword ptr [rsp + 24], 0
+    je .Loe_edit
+    # Write: the file's text (LF), or nothing, against the content
+    lea rdi, [rip + e_before]
+    call sb_clear
+    test dword ptr [rsp + 28], OFF_NOREAD
+    jnz 71f
+    lea rdi, [rip + e_before]
+    mov rsi, [rsp + 8]
+    mov rdx, [rsp + 16]
+    call lf_copy
+71: lea rdi, [rip + e_after]
+    mov rsi, [rip + e_oin + SB_ptr]
+    mov rdx, [rip + e_oin + SB_len]
+    call lf_copy
+    jmp .Loe_offer
+.Loe_edit:
+    test dword ptr [rsp + 28], OFF_NOREAD
+    jnz .Loe_only
+    mov rdi, [rsp + 8]          # the edit applied to the file's text
+    mov rsi, [rsp + 16]
+    mov rdx, [rip + e_oin + SB_ptr]
+    mov rcx, [rip + e_oin + SB_len]
+    mov r8, [rip + e_nin + SB_ptr]
+    mov r9, [rip + e_nin + SB_len]
+    lea rax, [rip + e_after]
+    push rax
+    mov eax, [rsp + 8 + 32]
+    push rax
+    call edit_apply
+    add rsp, 16
+    test eax, eax
+    jz 8f
+    lea rdi, [rip + e_before]
+    mov rsi, [rsp + 8]
+    mov rdx, [rsp + 16]
+    call lf_copy
+    jmp .Loe_offer
+8:  or dword ptr [rsp + 28], OFF_PARTIAL    # its old text is not in the file
+.Loe_only:                      # the edit's old text against what it becomes
+    lea rdi, [rip + e_before]
+    mov rsi, [rip + e_oin + SB_ptr]
+    mov rdx, [rip + e_oin + SB_len]
+    call lf_copy
+    mov rdi, [rip + e_oin + SB_ptr]
+    mov rsi, [rip + e_oin + SB_len]
+    mov rdx, [rip + e_oin + SB_ptr]
+    mov rcx, [rip + e_oin + SB_len]
+    mov r8, [rip + e_nin + SB_ptr]
+    mov r9, [rip + e_nin + SB_len]
+    lea rax, [rip + e_after]
+    push rax
+    mov eax, [rsp + 8 + 32]
+    push rax
+    call edit_apply
+    add rsp, 16
+    test eax, eax
+    jz 99f
+    lea rdi, [rip + e_after]    # (LF alone, as the text before)
+    mov rsi, [rip + e_after + SB_ptr]
+    mov rdx, [rip + e_after + SB_len]
+    call lf_inplace
+.Loe_offer:
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, [rsp]
+    mov rcx, [rip + e_before + SB_ptr]
+    mov r8, [rip + e_before + SB_len]
+    mov r9, [rip + e_after + SB_ptr]
+    mov eax, [rsp + 28]
+    push rax
+    push qword ptr [rip + e_after + SB_len]
+    call ev_offer
+    add rsp, 16
+99: mov rdi, [rsp]
+    call mem_free
+    mov rdi, [rsp + 8]
+    call mem_free
+    EPILOGUE
+
+# lf_inplace(sb, ptr, len): sb's bytes with a CR before a LF left out (in place)
+lf_inplace:
+    xor ecx, ecx                # read
+    xor eax, eax                # written
+1:  cmp rcx, rdx
+    jae 3f
+    movzx r8d, byte ptr [rsi + rcx]
+    inc rcx
+    cmp r8d, 13
+    jne 2f
+    cmp rcx, rdx
+    jae 2f
+    cmp byte ptr [rsi + rcx], 10
+    je 1b
+2:  mov [rsi + rax], r8b
+    inc rax
+    jmp 1b
+3:  mov [rdi + SB_len], rax
+    ret
+
+# offer_reverted(AQ*) -> eax 1 when its proposed change was accepted with every change taken out
+offer_reverted:
+    PROLOGUE
+    xor ebx, ebx
+    cmp qword ptr [rdi + AQ_offer], 0
+    je 9f
+    call agoffer_text
+    test rax, rax
+    jz 9f
+    mov ebx, r8d
+9:  mov eax, ebx
+    EPILOGUE
+
+# offer_input(AQ*) -> eax 1 when the input went as its proposed text now stands (changed in its tab); 0 when it
+#   was not changed (nothing written: the request's own input goes)
+offer_input:
+    PROLOGUE 32
+    mov rbx, rdi
+    call agoffer_text
+    test rax, rax
+    jz 8f
+    test ecx, ecx
+    jz 8f
+    mov [rsp], rax
+    mov [rsp + 8], rdx
+    mov rdi, rbx
+    call agoffer_before
+    mov [rsp + 16], rax
+    mov [rsp + 24], rdx
+    mov rdi, [rbx + AQ_input]
+    mov rsi, [rbx + AQ_inlen]
+    mov edx, LINE_VALUES
+    mov ecx, LINE_DEPTH
+    call json_parse_lim
+    test rax, rax
+    jz 8f
+    mov r12, rax
+    mov rdi, r12
+    lea rsi, [rip + .Lk_file_path]
+    call json_get
+    test rax, rax
+    jz 8f
+    mov r13, rax
+    lea rdi, [rip + claude_cw]
+    call jw_obj
+    lea rdi, [rip + claude_cw]
+    lea rsi, [rip + .Lk_file_path]
+    call jw_key
+    lea rdi, [rip + claude_cw]
+    mov rsi, r13
+    call jw_jv
+    mov rdi, [rbx + AQ_tool]
+    lea rsi, [rip + .Lt_write]
+    call strcmp_eq
+    test eax, eax
+    jz 1f
+    lea rdi, [rip + claude_cw]  # Write: the content as it stands
+    lea rsi, [rip + .Lk_content]
+    call jw_key
+    lea rdi, [rip + claude_cw]
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call jw_str
+    jmp 7f
+1:  lea rdi, [rip + claude_cw]  # Edit: the whole text before, the whole text now
+    lea rsi, [rip + .Lk_old_string]
+    call jw_key
+    lea rdi, [rip + claude_cw]
+    mov rsi, [rsp + 16]
+    mov rdx, [rsp + 24]
+    call jw_str
+    lea rdi, [rip + claude_cw]
+    lea rsi, [rip + .Lk_new_string]
+    call jw_key
+    lea rdi, [rip + claude_cw]
+    mov rsi, [rsp]
+    mov rdx, [rsp + 8]
+    call jw_str
+    lea rdi, [rip + claude_cw]
+    lea rsi, [rip + .Lk_replace_all]
+    call jw_key
+    xor r14d, r14d              # replace_all as asked only when the text before was the edit's own old text
+    mov rdi, r12
+    lea rsi, [rip + .Lk_old_string]
+    call json_get
+    mov rdi, rax
+    call json_str
+    test rax, rax
+    jz 2f
+    cmp rdx, [rsp + 24]
+    jne 2f
+    mov rdi, rax
+    mov rsi, [rsp + 16]
+    call memeq
+    test eax, eax
+    jz 2f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_replace_all]
+    call in_true
+    mov r14d, eax
+2:  lea rdi, [rip + claude_cw]
+    mov esi, r14d
+    call jw_bool
+7:  lea rdi, [rip + claude_cw]
+    call jw_end_obj
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# the answers for a request with a proposed change (claude_reply's parts: rbx AL*, r12 AQ*, r13 CD*)
+.Lcr_reverted:                  # accepted with every change taken out
+    lea rdi, [rip + .Lr_reverted]
+    jmp 1f
+.Lcr_cancel:                    # rejected or closed in its tab
+    lea rdi, [rip + .Lr_cancel_edit]
+    push rdi
+    push rdi
+    mov rdi, [r12 + AQ_tool]
+    lea rsi, [rip + .Lt_write]
+    call strcmp_eq
+    pop rdi
+    pop rdi
+    test eax, eax
+    jz 1f
+    lea rdi, [rip + .Lr_cancel_write]
+1:  mov r14, rdi
+    call strlen
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r14
+    mov rcx, rax
+    mov r8d, 1
+    call write_deny
+    jmp .Lcr_after

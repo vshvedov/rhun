@@ -296,7 +296,7 @@ c_agent_release:
 9:  xor eax, eax
     EPILOGUE
 
-# agent-card N | fold | details | dest | submit | close | link: option N (from 1) of the open session's card
+# agent-card N | fold | details | dest | submit | close | link | review: option N (from 1) of the open session's card
 #   (a rich card's button N once its lock is over, agentcard.s; the question card's row N of the question it
 #   shows); a rich card's fold button, its Details, a click on its place; the question card's Submit
 #   answers and its × (a dialog card's × too); a dialog card's "Learn more"
@@ -2135,7 +2135,7 @@ card_word:
     mov r12, rdi
     mov r13, rsi
     xor ebx, ebx
-1:  cmp ebx, 6
+1:  cmp ebx, 7
     jae 8f
     lea rax, [rip + card_words]
     mov rdx, [rax + rbx*8]
@@ -2165,6 +2165,28 @@ c_print_agent_card:
     call agentcard_dump
 9:  xor eax, eax
     EPILOGUE
+
+# ---- phase 4 tasks 11 and 12: proposed changes ----
+# print-agent-offer: the open conversation's head request's proposed change in the Review tab (agoffer_dump):
+#   offer=ID file=PATH label=LABEL changes=N decided=N edited=0|1 scratch=0|1 shown=0|1 done=0|1 locked=0|1,
+#   or offer=none
+c_print_agent_offer:
+    PROLOGUE
+    call ai_set
+    call agents_open_driven
+    mov rbx, rax
+    call ai_out
+    mov rdi, rax
+    mov rsi, rbx
+    call agoffer_dump
+    xor eax, eax
+    EPILOGUE
+
+.section .rodata
+.Lc_print_agent_offer: .asciz "print-agent-offer"
+.Lw_card_review: .asciz "review"
+.text
+# ---- end of tasks 11 and 12 ----
 
 # print-agent-card-fit: its layout at every panel size and width (agentcard_fit_dump)
 c_print_agent_card_fit:
@@ -2523,10 +2545,13 @@ ai_ctl:
     # plan review (mdtab.s, agentcard.s)
     .quad .Lc_print_mdtab, c_print_mdtab, .Lc_mdtab_select, c_mdtab_select
     .quad .Lc_mdtab_comment, c_mdtab_comment, .Lc_agent_card_uncomment, c_agent_card_uncomment
+    # phase 4 tasks 11 and 12: proposed changes (agentoffer.s, review.s)
+    .quad .Lc_print_agent_offer, c_print_agent_offer
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's
     .quad .Lw_card_link                                            # the dialog cards'
+    .quad .Lw_card_review           # phase 4 task 11: "Review the change"
 focus_words:                    # agent-focus's words and their focus
     .quad .Lw_focus_editor
     .long FOCUS_EDITOR, 0

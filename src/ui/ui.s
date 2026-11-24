@@ -1889,8 +1889,8 @@ FN ta_key
 
 # ta_paint_row(tf, x, y, h, start, end): a text area's row [start, end) drawn by parts: the bytes of a
 #   painted range (TF_paint: {start 8, end 8, kind 4, pad 4} ending start -1) a glyph at a time in the cycling
-#   colours across the range (PAINT_RAINBOW: the extension's seven, for a dark or a light theme), the rest in
-#   T_FG. Locals: [rsp] the pen's x, [rsp+4] y, [rsp+8] h, [rsp+16] a part's end, [rsp+24] a glyph's colour
+#   colours across the range (PAINT_RAINBOW: the extension's seven, for a dark or a light theme), a mention's
+#   over a T_HOVER box (PAINT_CHIP), the rest in T_FG. Locals: [rsp] the pen's x, [rsp+4] y, [rsp+8] h, [rsp+16] a part's end, [rsp+24] a glyph's colour
 ta_paint_row:
     PROLOGUE 32
     mov rbx, rdi
@@ -1936,6 +1936,8 @@ ta_paint_row:
     mov r12, [rsp + 16]
     jmp .Lpr_part
 .Lpr_glyph:                     # one glyph of the range at r15: its colour by its place in the range
+    cmp dword ptr [r15 + 16], PAINT_CHIP    # phase 4 task 7: a mention, a tinted box behind it
+    je .Lpr_chip
     mov rcx, [r15]
     xor r8d, r8d                # the range's glyphs
     xor r9d, r9d                # those before r12
@@ -1979,6 +1981,45 @@ ta_paint_row:
     mov r9, [rsp + 16]
     sub r9, r12
     mov eax, [rsp + 24]
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    mov [rsp], eax
+    mov r12, [rsp + 16]
+    jmp .Lpr_part
+.Lpr_chip:                      # (phase 4 task 7) the range's bytes on this row over a T_HOVER box
+    mov rax, [r15 + 8]
+    cmp rax, r13
+    cmova rax, r13
+    mov [rsp + 16], rax
+    call ta_face
+    lea rsi, [r14 + r12]
+    mov rdx, [rsp + 16]
+    sub rdx, r12
+    call text_width
+    mov edx, eax                # its width
+    M eax, MI_2
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    add esi, eax
+    mov ecx, [rsp + 8]
+    sub ecx, eax
+    sub ecx, eax
+    jg 1f
+    mov ecx, [rsp + 8]
+    mov esi, [rsp + 4]
+1:  M r8d, MI_2
+    COLOR r9d, T_HOVER
+    call gfx_round_rect
+    call ta_face
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    lea r8, [r14 + r12]
+    mov r9, [rsp + 16]
+    sub r9, r12
+    COLOR eax, T_FG
     push rax
     push rax
     call ui_text_v

@@ -510,6 +510,7 @@ FN explorer_set_root
 # explorer_refresh(): reload the tree, keep expanded folders
 FN explorer_refresh
     PROLOGUE
+    call filelist_touch         # (phase 4 task 7) rhun's file list is made again at the next mention
     mov rbx, [rip + root]
     test rbx, rbx
     jz 9f
@@ -1256,15 +1257,22 @@ FN explorer_body_draw
     mov rdi, r14
     call select_target
     # files with changes: "Open Changes" too
-    lea rax, [rip + menu_items]
+    call agctx_chat_on          # phase 4 task 8: "Add to Chat" with the chat on (agentctx.s)
+    lea rcx, [rip + menu_items]
+    lea rdx, [rip + menu_items_chat]
+    test eax, eax
+    cmovnz rcx, rdx
     push rax
-    push rax
+    push rcx
     cmp dword ptr [rip + root_multi], 0  # resources group: a workspace folder's own row
     je 49f
     cmp dword ptr [r14 + N_depth], 0
     jne 49f
-    lea rax, [rip + menu_items_folder]
-    mov [rsp], rax
+    lea rcx, [rip + menu_items_folder]
+    lea rdx, [rip + menu_items_folder_chat]
+    cmp dword ptr [rsp + 8], 0
+    cmovnz rcx, rdx
+    mov [rsp], rcx
     jmp 50f
 49: cmp dword ptr [r14 + N_dir], 0
     jne 50f
@@ -1272,8 +1280,11 @@ FN explorer_body_draw
     call git_status_of
     test eax, eax
     jz 50f
-    lea rax, [rip + menu_items_git]
-    mov [rsp], rax
+    lea rcx, [rip + menu_items_git]
+    lea rdx, [rip + menu_items_git_chat]
+    cmp dword ptr [rsp + 8], 0
+    cmovnz rcx, rdx
+    mov [rsp], rcx
 50: pop rdi
     pop rax
     mov rsi, [r14 + N_path]
@@ -2070,6 +2081,7 @@ FN menu_print
 .Lm4: .asciz "Delete"
 .Lm5: .asciz "Copy Path"
 .Lm6: .asciz "Open Changes"
+.Lm_chat: .asciz "Add to Chat"         # phase 4 task 8
 .ifdef MACOS
 .Lm_reveal: .asciz "Show in Finder"
 .else
@@ -2090,5 +2102,18 @@ menu_items_root:
     .quad .Lm1, cmd_new_file_prompt, .Lm2, cmd_new_folder, .Lm5, copy_project_path
     .quad .Lm_reveal, reveal_project, 0, 0
 menu_items_folder:              # resources group: a workspace folder's row
+    .quad .Lm1, cmd_new_file_prompt, .Lm2, cmd_new_folder, .Lm5, cmd_copy_path
+    .quad .Lm_reveal, cmd_reveal_file, .Lm_remove_folder, cmd_remove_workspace_folder, 0, 0
+# phase 4 task 8: with the chat on, "Add to Chat" first (agentctx.s); never on the project's root
+menu_items_chat:
+    .quad .Lm_chat, agctx_add_explorer
+    .quad .Lm1, cmd_new_file_prompt, .Lm2, cmd_new_folder, .Lm3, cmd_rename_file
+    .quad .Lm4, cmd_delete_file, .Lm5, cmd_copy_path, .Lm_reveal, cmd_reveal_file, 0, 0
+menu_items_git_chat:
+    .quad .Lm_chat, agctx_add_explorer
+    .quad .Lm6, open_changes, .Lm1, cmd_new_file_prompt, .Lm2, cmd_new_folder, .Lm3, cmd_rename_file
+    .quad .Lm4, cmd_delete_file, .Lm5, cmd_copy_path, .Lm_reveal, cmd_reveal_file, 0, 0
+menu_items_folder_chat:
+    .quad .Lm_chat, agctx_add_explorer
     .quad .Lm1, cmd_new_file_prompt, .Lm2, cmd_new_folder, .Lm5, cmd_copy_path
     .quad .Lm_reveal, cmd_reveal_file, .Lm_remove_folder, cmd_remove_workspace_folder, 0, 0

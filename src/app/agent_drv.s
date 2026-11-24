@@ -3575,6 +3575,7 @@ FN agent_drv_shutdown
     call live_end
     jmp 1b
 9:  call agatt_reset            # phase 4 task 2: the box's pack and new conversations' go too
+    call filelist_reset         # phase 4 task 7: the project's file list (filelist.s)
     EPILOGUE
 
 # FN agent_drv_unlisted(): the provider switches changed (agents_sources_changed): a session rhun drives

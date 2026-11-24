@@ -124,6 +124,11 @@ fv_seen: .long 0                        # cfg_agents_focus_view as the last read
 .globl cfg_claude_ide, cfg_claude_use_terminal
 cfg_claude_ide: .long 1                 # [claude] ide: claude in rhun's terminal connects to rhun
 cfg_claude_use_terminal: .long 0        # [claude] use_terminal: Claude: Open starts claude in a terminal
+# phase 4 tasks 7 and 8: mentions and the selection chip (agentctx.s, filelist.s)
+.globl cfg_agents_attach_selection, cfg_agents_attach_open_file, cfg_agents_respect_gitignore
+cfg_agents_attach_selection: .long 1    # [agents] attach_selection: the editor's selection goes with a message
+cfg_agents_attach_open_file: .long 1    # [agents] attach_open_file: else the open file's name does
+cfg_agents_respect_gitignore: .long 1   # [agents] respect_gitignore: mentions and the chip leave out ignored files
 .p2align 3
 cfg_theme: .quad cfg_def_theme
 cfg_dark_theme: .quad cfg_def_theme
@@ -1037,6 +1042,10 @@ g_settings:
     SETTING .Ls_agents, timestamps, ST_BOOL, cfg_agents_timestamps, 0, 1, 1, 0, "Timestamps", "Show the time on prompts and replies, and a line where the day changes."
     SETTING .Ls_agents, focus_view, ST_BOOL, cfg_agents_focus_view, 0, 1, 1, 0, "Focus view", "Show only your prompts and the replies; tool calls and thinking fold into one line."
     SETTING .Ls_agents, archive_after_days, ST_INT, cfg_agents_archive_days, 0, 365, 1, 0, "Archive sessions after", "Days without activity before a session moves to Archived sessions. 0 never moves one."
+    # phase 4 tasks 7 and 8: mentions and the selection chip
+    SETTING .Ls_agents, attach_selection, ST_BOOL, cfg_agents_attach_selection, 0, 1, 1, 0, "Attach the selection", "Send the lines selected in the editor with your next message. The chip above the box shows them first."
+    SETTING .Ls_agents, attach_open_file, ST_BOOL, cfg_agents_attach_open_file, 0, 1, 1, 0, "Attach the open file", "Without a selection, send the open file's path with your next message."
+    SETTING .Ls_agents, respect_gitignore, ST_BOOL, cfg_agents_respect_gitignore, 0, 1, 1, 0, "Leave out ignored files", "Files that .gitignore ignores are not offered by @ and their selected text is never sent."
     # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
     SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
     SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."

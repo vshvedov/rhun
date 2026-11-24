@@ -2671,6 +2671,10 @@ FN agentext_input_key
     mov r12d, edi
     mov r13d, esi
     mov r14d, edx
+    mov esi, edx                # phase 4 task 8: Alt+K, Ctrl+Esc are the commands' (agentctx.s), not the box's
+    call agctx_passes
+    test eax, eax
+    jnz 9f
     cmp dword ptr [rip + g_show_agents], 0
     jne 6f
     mov dword ptr [rip + g_focus], FOCUS_EDITOR   # the panel was hidden: the editor has the keys

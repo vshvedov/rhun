@@ -1,0 +1,64 @@
+@src/a.c
+@src/a.c#L5
+@src/a.c#L5
+@src/a.c#L2-3
+@"a b.txt"
+@"a b.txt#L2-3"
+@src/
+@src//
+@/abs/path/x.py
+@"/abs/dir/"
+@"/"
+refused
+refused
+refused
+refused
+refused
+refused
+refused
+refused
+refused
+refused
+refused
+refused
+@"agent-notes.md"
+@"browser"
+@Makefile
+@"a:b.txt"
+@"a."
+@"file-"
+@"dir/sub-"
+@"C:\\x\\y.txt"
+@"\\win\\dir\\"
+@héllo.txt
+@naïve
+@日本語.md
+@"tab\there"
+@"non breaking"
+@x_
+@.env
+@.github/
+@a.b/
+@x(1).txt
+@"x(1)"
+@"report (final) v2.txt"
+@a,b
+@dir/#L3-7
+@/#L2
+1:0:8-16:src/a.c:0:0
+1:1:0-10:a b.txt:0:0 2:0:15-28:terminal:zsh:0:0
+-
+1:0:13-26:src/a.c:2:4 1:0:27-35:b.txt:2:0 1:0:36-44:c.md:10:0
+1:0:9-17:src/a.c:0:0
+1:0:15-25:README.md:0:0
+1:0:0-12:~/notes.txt:0:0 1:0:13-18:.env:0:0
+-
+1:0:6-14:src/b.c:0:0 1:0:22-30:src/c.c:0:0
+1:0:34-41:my/pkg:0:0
+2:0:24-42:terminal:my_shell:0:0
+1:0:15-20:dir/:0:0 1:0:21-30:dir/sub/:0:0
+1:0:12-31:src/日本.md！ok:0:0
+1:0:8-10:/:0:0 1:0:11-20:/abs/x.c:0:0
+1:1:0-10:a b.txt:0:0 1:0:14-26:a.c:0:0
+1:0:0-9:@src/a.c:0:0 1:0:10-18:a.c@b.c:0:0
+1:0:0-12:src/a.c?q=1:0:0 1:0:13-17:a.c:0:0 1:0:19-23:a.c:0:0

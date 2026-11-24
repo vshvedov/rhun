@@ -107,6 +107,7 @@ check json build/json_test
 check sha1 build/sha1_test
 check base64 build/base64_test   # phase 4 task 2: attachments' encoder
 check urilist build/urilist_test   # phase 4 tasks 4, 5: text/uri-list as paths (X11, Wayland)
+check mention build/mention_test   # phase 4 task 7: mentions, against the extension's own rules
 check images build/image_test $(ls tests/data/images/* | LC_ALL=C sort)
 python3 tests/image-fuzz.py 1 20 || fail=1
 check cpu build/cpu_test
@@ -167,6 +168,7 @@ python3 tests/claude-dialogs.py || fail=1   # the dialog shell and the dialogs t
 python3 tests/claude-attach.py || fail=1   # a message's parts: attachments, packs, chips, the + menu (phase 4 tasks 2, 3)
 python3 tests/claude-panels.py || fail=1   # side question, bookmarks, agent map, hand-off, Chrome, Remote Control (p7c)
 python3 tests/claude-paste.py || fail=1    # the clipboard's files and images, long pastes, drops (phase 4 tasks 4, 5)
+python3 tests/claude-mention.py || fail=1   # mentions, the selection chip, the commands that mention (phase 4 tasks 7, 8)
 python3 tests/ext-agents.py || fail=1
 python3 tests/ext-review.py || fail=1
 python3 tests/ext-tools.py || fail=1

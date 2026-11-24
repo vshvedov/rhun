@@ -8,9 +8,8 @@
 #   cmd_claude_open_terminal    Claude: Open in Terminal: claude ([claude] executable, else claude on the PATH)
 #                               in a new terminal tab named CLAUDE_CODE_TERMINAL_TITLE or "Claude Code", in the
 #                               project, with the keys; its environment is every terminal's (the bridge's port)
-#   cmd_agents_focus_input      Ctrl+Esc: the terminal (use_terminal); else the agents panel gets the keys, or,
-#                               when it has them, the editor gets them back (phase 4's task 8 owns the chat's
-#                               side, the box and the selection's mention: it keeps the terminal branch)
+#   (Ctrl+Esc, cmd_agents_focus_input, is agentctx.s's: with use_terminal it comes here, to
+#                               cmd_claude_open_terminal)
 #   cmd_claude_mention_terminal Ctrl+Alt+K: at_mentioned to the connected claude (the file, its selected lines),
 #                               then the terminal has the keys; with none connected, a toast says so
 .include "rhun.inc"
@@ -22,16 +21,6 @@ FN cmd_agents_open
     cmp dword ptr [rip + cfg_claude_use_terminal], 0
     jne cmd_claude_open_terminal
     jmp cmd_focus_agents
-
-# FN cmd_agents_focus_input()
-FN cmd_agents_focus_input
-    cmp dword ptr [rip + cfg_claude_use_terminal], 0
-    jne cmd_claude_open_terminal
-    cmp dword ptr [rip + g_focus], FOCUS_AGENTS
-    jne cmd_focus_agents
-    mov dword ptr [rip + g_focus], FOCUS_EDITOR
-    mov dword ptr [rip + g_dirty], 1
-    ret
 
 # FN cmd_claude_open_terminal()
 FN cmd_claude_open_terminal

@@ -39,6 +39,11 @@ md_parses: .quad 0              # replies parsed (print-agent-row)
 pend_link: .quad 0              # a link clicked in a reply, followed after the frame (owned cstr), or 0
 pend_cwd: .quad 0               # and the checkout it was in (owned), or 0
 pend_who: .quad 0               # a web link's: who asks to open it (links_ask_open), or 0
+chip_tip: .zero SB_SIZE         # (phase 4 task 7) a mention chip's tip, its link
+ff_last: .long 0, 0             # (phase 4 task 7) follow_file: a range's last line, 0 none
+cn_serial: .long 0              #   the mention chips drawn in a frame (print-agent-bubble-chips)
+cn_n: .long 0
+cn_tab: .zero 32 * 32           #   start 8, end 8, kind 2, x 2, y 2, w 2, h 2, pad 6
 lk_buf: .zero 4096              # follow_file: the link's path
 ff_frag: .quad 0                # follow_file: a heading's fragment in lk_buf (task 10), 0 none
 last_poll: .quad 0
@@ -3563,6 +3568,11 @@ FN agents_key
     call agentdlg_key           # a dialog over the panel takes its keys before anything (agentdlg.s)
     test eax, eax
     jnz 5f
+    mov edi, r12d               # phase 4 task 8: Alt+K, Ctrl+Esc are the commands' (agentctx.s), not the panel's
+    mov esi, r14d
+    call agctx_passes
+    test eax, eax
+    jnz 98f
     mov edi, r12d               # p7c: then a side panel with the keyboard (agentside.s)
     mov esi, r13d
     mov edx, r14d
@@ -3740,7 +3750,8 @@ th_keys:
 7:  mov dword ptr [rip + g_dirty], 1
     mov eax, 1
     EPILOGUE
-8:  xor eax, eax
+8:
+98: xor eax, eax                # (phase 4 task 8: a mention command's key)
     EPILOGUE
 
 # th_page() -> eax a page of the thread: the area's height less a line (MI_40), at least MI_20
@@ -6694,6 +6705,10 @@ F WR_draw, 4
 F WR_top, 4
 F WR_bot, 4
 F WR_mute, 8            # the byte drawn muted from on (a prompt's truncation marker), -1 none
+F WR_chips, 4           # (phase 4 task 7) 1: the text's mention chips are drawn as chips (a prompt's bubble)
+F WR_id, 4              #   their first id (ID_AG_MD's range of the row: a prompt has no Markdown)
+F WR_n, 4               #   the chips drawn so far
+F WR_pad, 4
 ENDSTRUCT WR_SIZE
 
 wrap:
@@ -6772,7 +6787,18 @@ wrap:
     jl 5f
     cmp eax, [rbx + WR_bot]
     jg 5f
-    mov rdx, [rbx + WR_face]
+    cmp dword ptr [rbx + WR_chips], 0   # (phase 4 task 7) the line's mention chips behind its text
+    je 50f
+    push rax
+    push rax
+    mov rdi, rbx
+    mov rsi, r13
+    mov rdx, [rsp + 8 + 16]
+    mov ecx, eax
+    call bubble_chips
+    pop rax
+    pop rax
+50: mov rdx, [rbx + WR_face]
     add eax, [rdx + FACE_ascent]
     mov edx, eax
     mov rdi, [rbx + WR_face]
@@ -7247,6 +7273,8 @@ msg_doc:
 # so a message wraps the same in both.
 wr_setup:
     mov qword ptr [rdi + WR_mute], -1
+    mov dword ptr [rdi + WR_chips], 0
+    mov dword ptr [rdi + WR_n], 0
     mov rax, [rbx + AM_text]
     mov [rdi + WR_text], rax
     mov rax, [rbx + AM_len]
@@ -8359,6 +8387,20 @@ draw_msg:
     mov [rsp + WR_mute], rax
 33: mov rax, [rsp + WR_mute]    # (print-agent-row muted=)
     mov [rbx + AM_mute], rax
+    cmp dword ptr [rbx + AM_role], R_USER   # (phase 4 task 7) a prompt's mentions are chips
+    jne 34f
+    mov rcx, [rip + th_as]
+    mov rax, rbx
+    sub rax, [rcx + AS_msgs + VEC_ptr]
+    xor edx, edx
+    mov ecx, AM_SIZE
+    div rcx
+    and eax, 255
+    shl eax, 12
+    add eax, ID_AG_MD
+    mov [rsp + WR_id], eax
+    mov dword ptr [rsp + WR_chips], 1
+34:
     mov dword ptr [rsp + WR_draw], 1
     mov eax, [rip + g_cv + CV_cy0]
     mov [rsp + WR_top], eax
@@ -8901,6 +8943,246 @@ link_scheme:
     mov eax, 1
 9:  ret
 
+# ---- phase 4 task 7: a prompt's mention chips ----
+
+# bubble_chips(WR*, line start, line end, top): the mention chips of a line of a prompt's bubble (agentmention.s:
+#   a path, or a terminal) as T_BG boxes behind their text; the first 16 of the prompt are buttons, a path's
+#   (tip "Open PATH") opening its file at its lines after the frame (the thread's pending link), a terminal's
+#   with its tip only
+bubble_chips:
+    PROLOGUE 64
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    mov [rsp + 32], ecx
+    mov r14, r12                # from
+1:  mov rdi, [rbx + WR_text]
+    mov rsi, r13
+    mov rdx, r14
+    lea rcx, [rsp]
+    call agmention_next
+    test eax, eax
+    jz 9f
+    mov r14, [rsp + 8]
+    mov rdi, [rbx + WR_face]    # where it is on the line, how wide
+    mov rsi, [rbx + WR_text]
+    add rsi, r12
+    mov rdx, [rsp]
+    sub rdx, r12
+    call text_width
+    add eax, [rbx + WR_x]
+    mov [rsp + 36], eax
+    mov rdi, [rbx + WR_face]
+    mov rsi, [rbx + WR_text]
+    add rsi, [rsp]
+    mov rdx, [rsp + 8]
+    sub rdx, [rsp]
+    call text_width
+    mov [rsp + 40], eax
+    mov edi, [rsp + 36]
+    sub edi, [rip + g_pmt + 4*MI_2]
+    mov esi, [rsp + 32]
+    mov edx, [rsp + 40]
+    add edx, [rip + g_pmt + 4*MI_2]
+    add edx, [rip + g_pmt + 4*MI_2]
+    mov ecx, [rbx + WR_lh]
+    PM r8d, MI_4
+    COLOR r9d, T_BG
+    call gfx_round_rect
+    call chip_note
+    mov eax, [rbx + WR_n]
+    inc dword ptr [rbx + WR_n]
+    cmp eax, 16
+    jae 1b                      # past 16: drawn only
+    add eax, [rbx + WR_id]
+    mov [rsp + 44], eax
+    mov edi, eax
+    mov esi, [rsp + 36]
+    mov edx, [rsp + 32]
+    mov ecx, [rsp + 40]
+    mov r8d, [rbx + WR_lh]
+    call ui_btn
+    mov [rsp + 48], eax
+    lea rdi, [rip + chip_tip]   # its tip: "Open PATH", a terminal's its name (the token's text)
+    call sb_clear
+    mov rax, [rsp]
+    mov rcx, [rbx + WR_text]
+    lea r15, [rcx + rax + 1]    # without its "@" and its quotes
+    mov rdx, [rsp + 8]
+    sub rdx, rax
+    dec rdx
+    cmp dword ptr [rsp + 20], 0
+    je 2f
+    inc r15
+    sub rdx, 2
+2:  mov [rsp + 56], rdx
+    cmp dword ptr [rsp + 16], 1
+    jne 3f
+    lea rdi, [rip + chip_tip]
+    lea rsi, [rip + .Lchip_open]
+    call sb_push_cstr
+3:  lea rdi, [rip + chip_tip]
+    mov rsi, r15
+    mov rdx, [rsp + 56]
+    call sb_push
+    lea rdi, [rip + chip_tip]
+    xor esi, esi
+    call sb_push_byte
+    mov edi, [rsp + 44]
+    mov esi, [rsp + 36]
+    mov edx, [rsp + 32]
+    add edx, [rbx + WR_lh]
+    mov ecx, [rsp + 40]
+    mov r8d, [rsp + 48]
+    mov r9, [rip + chip_tip + SB_ptr]
+    call tip_note_text
+    cmp dword ptr [rsp + 16], 1
+    jne 1b
+    test dword ptr [rsp + 48], UB_CLICK
+    jz 1b
+    mov rdi, [rbx + WR_text]
+    add rdi, [rsp]
+    mov rsi, [rsp + 8]
+    sub rsi, [rsp]
+    call chip_open
+    jmp 1b
+9:  EPILOGUE
+
+# chip_note() with bubble_chips' frame: the chip as drawn in this frame, for print-agent-bubble-chips (the
+#   first CN_MAX of a frame)
+chip_note:
+    mov eax, [rip + th_serial]
+    cmp eax, [rip + cn_serial]
+    je 1f
+    mov [rip + cn_serial], eax
+    mov dword ptr [rip + cn_n], 0
+1:  mov eax, [rip + cn_n]
+    cmp eax, 32
+    jae 9f
+    inc dword ptr [rip + cn_n]
+    imul rax, rax, 32
+    lea rcx, [rip + cn_tab]
+    add rcx, rax
+    mov rax, [rsp + 8]          # (the caller's frame: the token, its kind, place and width)
+    mov [rcx], rax
+    mov rax, [rsp + 8 + 8]
+    mov [rcx + 8], rax
+    mov eax, [rsp + 8 + 16]
+    mov [rcx + 16], ax
+    mov eax, [rsp + 8 + 36]
+    mov [rcx + 18], ax
+    mov eax, [rsp + 8 + 32]
+    mov [rcx + 20], ax
+    mov eax, [rsp + 8 + 40]
+    mov [rcx + 22], ax
+    mov eax, [rbx + WR_lh]
+    mov [rcx + 24], ax
+9:  ret
+
+# FN agents_bubble_chips_dump(sb): print-agent-bubble-chips: "chip START-END KIND X,Y,W,H" for each mention chip
+#   of a prompt drawn in the last frame of the conversation (START and END in its text; KIND path or terminal)
+FN agents_bubble_chips_dump
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12d, [rip + cn_n]
+    jae 9f
+    imul r13, r12, 32
+    lea rax, [rip + cn_tab]
+    add r13, rax
+    mov rdi, rbx
+    lea rsi, [rip + .Lcn_chip]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [r13]
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, '-'
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, [r13 + 8]
+    call sb_push_u64
+    lea rsi, [rip + .Lcn_path]
+    cmp word ptr [r13 + 16], 1
+    je 2f
+    lea rsi, [rip + .Lcn_term]
+2:  mov rdi, rbx
+    call sb_push_cstr
+    xor r14d, r14d
+3:  movzx esi, word ptr [r13 + 18 + r14*2]
+    mov rdi, rbx
+    call sb_push_u64
+    inc r14d
+    cmp r14d, 4
+    jae 4f
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    jmp 3b
+4:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    inc r12d
+    jmp 1b
+9:  EPILOGUE
+
+# chip_open(token ptr, len): a path chip's file, at its lines, opened after the frame as the thread's links are
+#   (the pending link, relative to the conversation's checkout: follow_file)
+chip_open:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    lea rdi, [rip + chip_tip]
+    call sb_clear
+    mov rdi, rbx
+    mov rsi, r12
+    lea rdx, [rip + chip_tip]
+    call agmention_target
+    mov r13d, eax
+    mov r14d, edx
+    test r13d, r13d
+    jz 1f
+    lea rdi, [rip + chip_tip]   # PATH:L or PATH:L-M
+    mov esi, ':'
+    call sb_push_byte
+    lea rdi, [rip + chip_tip]
+    mov esi, r13d
+    call sb_push_u64
+    test r14d, r14d
+    jz 1f
+    cmp r14d, r13d
+    je 1f
+    lea rdi, [rip + chip_tip]
+    mov esi, '-'
+    call sb_push_byte
+    lea rdi, [rip + chip_tip]
+    mov esi, r14d
+    call sb_push_u64
+1:  mov rdi, [rip + pend_link]
+    call mem_free
+    mov rdi, [rip + pend_cwd]
+    call mem_free
+    mov qword ptr [rip + pend_cwd], 0
+    mov qword ptr [rip + pend_who], 0
+    mov rdi, [rip + chip_tip + SB_ptr]
+    mov rsi, [rip + chip_tip + SB_len]
+    call mem_dup
+    mov [rip + pend_link], rax
+    mov rax, [rip + th_as]
+    test rax, rax
+    jz 9f
+    mov rbx, [rax + AS_cwd]
+    test rbx, rbx
+    jz 9f
+    mov rdi, rbx
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    call mem_dup
+    mov [rip + pend_cwd], rax
+9:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
 # reply_follow(): the link reply_click kept, followed: a model wrote it, so it only ever opens a file's text
 #   in a tab (lk_try: no folder, no workspace file made the project, no extension installed): a
 #   rhun://file/ link's path, a path, a file: URI (follow_file); other rhun:// links do nothing
@@ -8971,6 +9253,7 @@ reply_follow:
 #   gone to. A toast when it names no file
 follow_file:
     PROLOGUE 32
+    mov dword ptr [rip + ff_last], 0
     mov rbx, rdi
     mov r12, rsi
     mov qword ptr [rip + ff_frag], 0
@@ -9047,11 +9330,25 @@ follow_file:
     cmp byte ptr [rdi + rcx + 1], 'L'
     jne 42f
     lea rdi, [rdi + rcx + 2]
+    mov [rsp], rdi
     mov esi, 12
     call parse_u64
     test rdx, rdx
     jz 42f
     mov r13d, eax
+    mov rdi, [rsp]              # (phase 4 task 7) "#L2-L4", "#L2-4": the range's last line
+    add rdi, rdx
+    cmp byte ptr [rdi], '-'
+    jne .Lff_open
+    inc rdi
+    cmp byte ptr [rdi], 'L'
+    jne 42f
+    inc rdi
+42: mov esi, 12
+    call parse_u64
+    test rdx, rdx
+    jz .Lff_open
+    mov [rip + ff_last], eax
     jmp .Lff_open
 42: mov rax, [rsp + 16]
     cmp byte ptr [rax], 0
@@ -9094,6 +9391,7 @@ follow_file:
     jz .Lff_open
     cmp rdx, [rsp + 16]
     jne .Lff_open
+    mov [rip + ff_last], eax    # (phase 4 task 7) the range's last line
 52: mov rcx, [rsp]
     lea rax, [rip + lk_buf]
     mov byte ptr [rax + rcx], 0
@@ -9337,6 +9635,10 @@ lk_try:
     jnz 7f
     mov esi, 1
 7:  call app_goto_line
+    mov eax, [rip + ff_last]    # (phase 4 task 7) a range: its lines selected, the first one shown
+    cmp eax, r13d
+    jbe 8f
+    call ff_select
 8:  mov rdi, rbx
     call mem_free
     mov eax, r15d
@@ -9344,6 +9646,39 @@ lk_try:
     pop r15
     pop rbx
     ret
+
+# ff_select() using r13d the first line, ff_last the last (from 1): the editor's document selects from the
+#   first line's start to the last one's end, the caret at the start (phase 4 task 7)
+ff_select:
+    PROLOGUE
+    mov rbx, [rip + g_doc]
+    test rbx, rbx
+    jz 9f
+    mov rax, [rbx + DOC_nlines]
+    mov r12d, r13d
+    dec r12
+    cmp r12, rax
+    jae 9f
+    mov r14d, [rip + ff_last]
+    dec r14
+    cmp r14, rax
+    jb 1f
+    lea r14, [rax - 1]
+1:  mov rdi, rbx
+    mov rsi, r14
+    call doc_line_end
+    mov rdi, rbx
+    mov rsi, rax
+    xor edx, edx
+    call ed_set_cursor
+    mov rdi, rbx
+    mov rsi, r12
+    call doc_line_start
+    mov rdi, rbx
+    mov rsi, rax
+    mov edx, 1
+    call ed_set_cursor
+9:  EPILOGUE
 
 # lk_hex: al -> eax its value as a hex digit, or -1 (touches nothing else)
 lk_hex:
@@ -9677,6 +10012,10 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Lqueued: .asciz "queued"
 .Lr_pill: .asciz "pill"
 .Lqueued_dump: .asciz "queued "
+.Lchip_open: .asciz "Open "                 # (phase 4 task 7) a mention chip's tip
+.Lcn_chip: .asciz "chip "
+.Lcn_path: .asciz " path "
+.Lcn_term: .asciz " terminal "
 .Lno_file: .asciz "No such file: "
 .Lrhun_file: .ascii "rhun://file/"
 .Lrow_n: .asciz "row="

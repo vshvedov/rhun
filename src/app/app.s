@@ -2943,6 +2943,7 @@ timeout_fns:
     .quad uproc_timeout
     .quad agent_conn_timeout    # agents: connections to their programs (agent_conn.s)
     .quad agent_drv_timeout     # agents: sessions rhun drives (agent_drv.s)
+    .quad filelist_timeout      # phase 4 task 7: the mention menu's file list and query (filelist.s)
     .quad termproto_timeout     # tasks: terminal output waiting for its budget (termproto.s)
     .quad query_timeout
     .quad testing_timeout
@@ -2987,6 +2988,7 @@ FN app_tick
     call uproc_tick
     call agent_conn_tick        # agents: connections to their programs (agent_conn.s)
     call agent_drv_tick         # agents: sessions rhun drives: starts that waited (agent_drv.s)
+    call filelist_tick          # phase 4 task 7: the mention menu's file list and query (filelist.s)
     call term_tick
     call ide_tick               # Claude chat phase 5: the bridge for terminal claude (ide_server.s)
     call problems_tick          # documents opened since get their problems' marks

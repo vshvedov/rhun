@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import time
 import unittest
 
@@ -53,17 +54,21 @@ class ConfigTest(CfgCase):
                                 'claude.allow_bypass_permissions', 'claude.prompt_suggestions',
                                 'claude.use_terminal', 'claude.ide', 'claude.spinner_verbs'])     # phase 5: two
         agents = [line for line in out.splitlines() if line.startswith('agents.')]
-        self.assertEqual(agents[-5:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
-                                      'agents.focus_view', 'agents.archive_after_days'])    # (phase 6: the last)
+        self.assertEqual(agents[-8:], ['agents.ctrl_enter_sends', 'agents.scroll_on_send', 'agents.timestamps',
+                                      'agents.focus_view', 'agents.archive_after_days',    # (phase 6: the last)
+                                      # phase 4 task 8: the selection chip's two, task 7's mentions
+                                      'agents.attach_selection', 'agents.attach_open_file',
+                                      'agents.respect_gitignore'])
         self.command('cmd toggle_word_wrap')            # a setting changed: the exit writes the file
         self.quit()
         saved = self.config.read_text(encoding='utf-8')
         self.assertEqual(chat.section(saved, 'claude')[3:], [
             'initial_mode =', 'allow_bypass_permissions = false', 'prompt_suggestions = true',
             'use_terminal = false', 'ide = true', 'spinner_verbs = append'])
-        self.assertEqual(chat.section(saved, 'agents')[-5:], [
+        self.assertEqual(chat.section(saved, 'agents')[-8:], [
             'ctrl_enter_sends = false', 'scroll_on_send = true', 'timestamps = true', 'focus_view = false',
-            'archive_after_days = 14'])
+            'archive_after_days = 14',
+            'attach_selection = true', 'attach_open_file = true', 'respect_gitignore = true'])
         # changed, they are written back as they are; the env pairs still follow the last [claude] row
         claude = self.claude_section('initial_mode = acceptEdits\nallow_bypass_permissions = true\n'
                                      'prompt_suggestions = false\nspinner_verb = Zooming\nspinner_verbs = replace\n'
@@ -83,9 +88,9 @@ class ConfigTest(CfgCase):
             'allow_bypass_permissions = true', 'prompt_suggestions = false', 'use_terminal = false', 'ide = true',
             'spinner_verbs = replace',
             'env.FOO = bar', 'spinner_verb = Zooming', 'spinner_verb = Whooshing'])
-        self.assertEqual(chat.section(saved, 'agents')[-5:], ['ctrl_enter_sends = true', 'scroll_on_send = false',
-                                                              'timestamps = false', 'focus_view = true',
-                                                              'archive_after_days = 14'])
+        self.assertEqual(chat.section(saved, 'agents')[-8:-3], ['ctrl_enter_sends = true', 'scroll_on_send = false',
+                                                                'timestamps = false', 'focus_view = true',
+                                                                'archive_after_days = 14'])
 
     def mode_passed(self, extra):
         self.start(self.claude_section(extra))
@@ -2420,7 +2425,9 @@ class SeamWordsTest(unittest.TestCase):
              'agentsel.s',
              'agentoffer.s',    # phase 4 tasks 11 and 12: a request's proposed change
              # phase 4 task 2: a message's parts, the editor's context
-             'agentatt.s', 'agentctx.s']
+             'agentatt.s', 'agentctx.s',
+             # phase 4 task 7: mentions and the project's file list
+             'agentmention.s', 'filelist.s']
     # file -> name -> the functions it may appear in
     ALLOWED = {
         'agent_drv.s': {

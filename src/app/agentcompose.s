@@ -892,20 +892,33 @@ FN composer_placeholder
     je 2f
     cmp ecx, ALS_WAITING
     je 2f
-    mov rcx, [rax + AL_suggest] # no turn runs: the suggestion
-    test rcx, rcx
-    jz 3f
-    mov r12, rcx
+    mov r14, [rax + AL_suggest]
+    call agctx_placeholder_c    # (phase 4 task 8) the editor has a selection, the keys are elsewhere: the
+    mov r12, rax                #   suggestion hides while this shows (UI 1.29)
+    test rax, rax
+    jnz 9f
+    mov r12, r14                # no turn runs: the suggestion
+    test r14, r14
+    jz 4f
     jmp 9f
 2:  lea r12, [rip + .Lph_queue]
     jmp 9f
-3:  mov ecx, [rbx + AS_kind]    # until the window's first Send of this driver: its first-use text
+3:  call agctx_placeholder_c    # (phase 4 task 8) the editor has a selection, the keys are elsewhere
+    mov r12, rax
+    test rax, rax
+    jnz 9f
+4:  mov ecx, [rbx + AS_kind]    # until the window's first Send of this driver: its first-use text
     cmp ecx, 63
-    ja 9f
+    ja 4f
     mov rax, [rip + sent_kinds]
     bt rax, rcx
-    jc 9f
+    jc 4f
     mov r12, [r13 + DRV_hint]
+    test r12, r12
+    jnz 9f
+4:  mov rdi, r13                # (phase 4 task 8) the key that focuses or unfocuses the box
+    call agctx_placeholder_e
+    mov r12, rax
 9:  mov rax, r12
     EPILOGUE
 
@@ -1434,59 +1447,121 @@ paint_find:
     EPILOGUE
 
 # FN composer_paint(TF*, AS* or 0): see the top. The text is looked through again only when it, its field
-#   or the word changed (pt_*: as looked through last), not on each frame
+#   or the word changed (pt_*: as looked through last), not on each frame. Phase 4 task 7: with a driver that
+#   expands mentions (DRVC_MENTIONS), each mention chip of the text (agmention_next: a path or a terminal) is
+#   painted too (PAINT_CHIP); a parked box's are found again the same way. The box emptied: the terminal
+#   names a link's prompt brought go (agterm_blocked_clear)
 FN composer_paint
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, rdi
     mov qword ptr [rbx + TF_paint], 0
+    mov qword ptr [rsp], 0      # the word (its 16 bytes), or none
+    mov qword ptr [rsp + 8], 0
+    xor r12d, r12d
     test rsi, rsi
-    jz 9f
+    jz 1f
     mov r12, [rsi + AS_live]
     test r12, r12
-    jz 9f
-    cmp byte ptr [r12 + AL_word], 0
-    je 9f
-    mov rdi, rbx
+    jz 1f
+    mov rax, [r12 + AL_word]
+    mov [rsp], rax
+    mov rax, [r12 + AL_word + 8]
+    mov [rsp + 8], rax
+1:  mov rdi, rbx
     call tf_text
     mov r13, rax
     mov r14, rdx
-    cmp [rip + pt_tf], rbx      # the same as last time: the ranges found then
-    jne 1f
+    test r14, r14
+    jnz 11f
+    call agentext_box
+    cmp rax, rbx
+    jne 11f
+    call agterm_blocked_clear
+11: cmp [rip + pt_tf], rbx      # the same as last time: the ranges found then
+    jne 12f
     mov rax, [rbx + TF_revision]
     cmp [rip + pt_rev], rax
-    jne 1f
+    jne 12f
     cmp [rip + pt_ptr], r13
-    jne 1f
+    jne 12f
     cmp [rip + pt_len], r14
-    jne 1f
-    mov rax, [r12 + AL_word]
+    jne 12f
+    mov rax, [rsp]
     cmp [rip + pt_word], rax
-    jne 1f
-    mov rax, [r12 + AL_word + 8]
+    jne 12f
+    mov rax, [rsp + 8]
     cmp [rip + pt_word + 8], rax
-    jne 1f
+    jne 12f
     mov eax, [rip + pt_count]
     jmp 2f
-1:  mov [rip + pt_tf], rbx
+12: mov [rip + pt_tf], rbx
     mov rax, [rbx + TF_revision]
     mov [rip + pt_rev], rax
     mov [rip + pt_ptr], r13
     mov [rip + pt_len], r14
-    mov rax, [r12 + AL_word]
+    mov rax, [rsp]
     mov [rip + pt_word], rax
-    mov rax, [r12 + AL_word + 8]
+    mov rax, [rsp + 8]
     mov [rip + pt_word + 8], rax
     inc dword ptr [rip + pt_scans]
+    xor r15d, r15d
+    mov qword ptr [rip + paint_buf], -1
+    cmp byte ptr [rsp], 0
+    je 13f
     mov rdi, r13
     mov rsi, r14
-    lea rdx, [r12 + AL_word]
+    lea rdx, [rip + pt_word]
     call paint_find
-    mov [rip + pt_count], eax
+    mov r15d, eax
+13: call agatt_caps
+    test eax, DRVC_MENTIONS
+    jz 14f
+    mov rdi, r13
+    mov rsi, r14
+    mov edx, r15d
+    call paint_mentions
+    mov r15d, eax
+14: mov [rip + pt_count], r15d
+    mov eax, r15d
 2:  test eax, eax
     jz 9f
     lea rax, [rip + paint_buf]
     mov [rbx + TF_paint], rax
 9:  EPILOGUE
+
+# paint_mentions(ptr, len, n) -> eax the ranges: after paint_buf's first n, a PAINT_CHIP range for each mention
+#   chip of the text (agentmention.s), up to PAINT_MAX, then the end
+paint_mentions:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    xor r14d, r14d              # from
+1:  cmp r13d, PAINT_MAX
+    jae 8f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r14
+    lea rcx, [rsp]
+    call agmention_next
+    test eax, eax
+    jz 8f
+    imul rax, r13, 24
+    lea rcx, [rip + paint_buf]
+    add rax, rcx
+    mov rcx, [rsp]
+    mov [rax], rcx
+    mov rcx, [rsp + 8]
+    mov [rax + 8], rcx
+    mov dword ptr [rax + 16], PAINT_CHIP
+    mov r14, rcx
+    inc r13d
+    jmp 1b
+8:  imul rax, r13, 24
+    lea rcx, [rip + paint_buf]
+    mov qword ptr [rcx + rax], -1
+    mov eax, r13d
+    EPILOGUE
 
 # FN composer_dump(sb): see the top
 FN composer_dump

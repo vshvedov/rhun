@@ -2436,6 +2436,8 @@ ENDSTRUCT CRF_SIZE
     CTXKEY CTX_REMOTE_HOST, "remoteHost", 0
     # phase 4 task 12: the active tab is a Review tab with something undecided (review.s)
     CTXKEY CTX_VIEWING_PROPOSED, "viewingProposedChange", ck_viewing_proposed
+    # phase 4 task 8: the agents panel's prompt box has the keys
+    CTXKEY CTX_AGENTS_INPUT_FOCUS, "agentsInputFocus", ck_agents_input_focus
 .endm
 # when.s expands the list as records: FN, the name, padding to 8 bytes
 .macro CTXKEY sym, name, fn
@@ -3147,6 +3149,11 @@ F AS_fask, 4            # the fold a waiting request holds open, + 1 (0 none), a
 F AS_ftodo, 4           # the todo row the folds' counts leave out (AS_todo as they follow it), + 1 (0 none)
 F AS_fpad, 4
 F AS_parts, 8           # phase 4 task 2: AP*: the box's pack while the box belongs to another session, or 0
+F AS_ctx_off, 8         # phase 4 task 8 (agentctx.s): the selection chip's dismissal (the selection's hash, the
+F AS_ctx_offp, 8        #   path's), what the conversation last sent (a hash), whether it took the draft's marks
+F AS_ctx_sent, 8
+F AS_ctx_init, 4
+F AS_ctx_pad, 4
 ENDSTRUCT AS_SIZE
 .equ AG_CLAUDE, 1               # AS_kind of the built-in sources (AS_KIND_EXT 5: an extension's)
 .equ AG_CODEX, 2
@@ -3442,7 +3449,8 @@ ENDSTRUCT AMD_SIZE
 .equ DRVC_MENTIONS, 16384       # expands "@path" in the text itself
 .equ DW_UNFOCUS, 0              # DRV_words' indices
 .equ DW_MENTION_REFUSED, 1
-.equ DW_COUNT, 2
+.equ DW_SELTIP, 2               # phase 4 task 8: the selection chip's tip ("Showing Claude your current file selection")
+.equ DW_COUNT, 3
 # MP: one part of a message (by value in AP_parts)
 STRUCT
 F MP_kind, 4            # MPK_*
@@ -3861,6 +3869,9 @@ ENDSTRUCT OT_SIZE
 .equ CW_SEND, 0                 # composer_check's reasons
 .equ CW_PASTE, 1
 .equ PAINT_RAINBOW, 1           # TF_paint's kinds
+# phase 4 task 7: mentions (agentmention.s, filelist.s, agentpop.s)
+.equ PAINT_CHIP, 2              # TF_paint: a mention, a tinted box behind its bytes
+.equ APP_MENTION, 4             # agentpop.s: the mention menu (typed "@token")
 .equ TAB_MDDOC, 7
 .equ ID_MDTAB, 0x6c3000         # + 0xfff: its links, Comment, scrollbar
 .equ PROMPT_MD_COMMENT, 110

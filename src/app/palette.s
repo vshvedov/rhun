@@ -1671,6 +1671,10 @@ load_commands:
     jz 9f
     cmp byte ptr [r12], 0
     je 2f
+    mov rdi, rbx                # phase 4 task 8: the mention commands are not listed with the chat off
+    call agctx_cmd_hidden
+    test eax, eax
+    jnz 2f
     mov rdi, r12
     call strlen
     mov r13, rax

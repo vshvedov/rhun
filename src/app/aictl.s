@@ -230,7 +230,9 @@ c_agent_prompt:
     call has_target
     test eax, eax
     jz 8f
+    mov dword ptr [rip + g_agctx_quiet], 1  # phase 4 task 8: a prompt the box did not write carries no context
     call agentext_send
+    mov dword ptr [rip + g_agctx_quiet], 0
     xor eax, eax
     EPILOGUE
 8:  mov edi, 1
@@ -496,6 +498,123 @@ c_agent_test_caps:
 1:  mov [rip + g_att_test_caps], ecx
     inc qword ptr [rip + g_att_gen]
     mov dword ptr [rip + g_dirty], 1
+    xor eax, eax
+    EPILOGUE
+
+# ---- phase 4 task 7: the mention menu's file list (filelist.s) ----
+
+# print-filelist: "state= n= gen= runs= steps= candidates= rows= cut="
+c_print_filelist:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call filelist_dump
+    xor eax, eax
+    EPILOGUE
+
+# filelist-wait [MS]: until the list is made (10 s by default; then "timeout" and the dump)
+c_filelist_wait:
+    PROLOGUE
+    call ai_set
+    mov r12d, 10000
+    call ai_arg
+    test rdx, rdx
+    jz 1f
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov r12, rax
+1:  call time_ms
+    lea rbx, [rax + r12]
+2:  call filelist_state
+    cmp eax, 2                  # FL_READY
+    je 8f
+    call time_ms
+    cmp rax, rbx
+    jae 7f
+    mov edi, 20
+    call loop_poll
+    call app_tick
+    jmp 2b
+7:  call ai_out
+    mov rdi, rax
+    lea rsi, [rip + .Lw_fl_timeout]
+    call sb_push_cstr
+    call ai_out
+    mov rdi, rax
+    call filelist_dump
+8:  xor eax, eax
+    EPILOGUE
+
+# print-agent-bubble-chips: the mention chips of the prompts drawn last (agents.s)
+c_print_agent_bubble_chips:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agents_bubble_chips_dump
+    xor eax, eax
+    EPILOGUE
+
+# print-agent-context [fit]: the selection chip and what goes (agentctx.s), then where the footer drew it
+#   (agentfoot.s); fit: its layout at every size and width
+c_print_agent_context:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    test rdx, rdx
+    jz 1f
+    call ai_out
+    mov rdi, rax
+    call foot_sel_fit
+    xor eax, eax
+    EPILOGUE
+1:  call ai_out
+    mov rdi, rax
+    call agctx_dump
+    call ai_out
+    mov rdi, rax
+    call foot_sel_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-context dismiss: the chip's x, for the box's conversation
+c_agent_context:
+    PROLOGUE
+    call ai_set
+    call agentext_box_owner
+    mov rdi, rax
+    call agctx_dismiss
+    xor eax, eax
+    EPILOGUE
+
+# agent-mention TEXT: a mention delivered to the box as the commands deliver one (agctx_deliver)
+c_agent_mention:
+    PROLOGUE
+    call ai_set
+    call ai_arg_rest
+    mov rdi, rax
+    mov rsi, rdx
+    call agctx_deliver
+    xor eax, eax
+    EPILOGUE
+
+# filelist-test N [more]: N made-up paths join the list (filelist_test: no disk); more: it stays "being made"
+c_filelist_test:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov rbx, rax
+    call ai_arg
+    xor esi, esi
+    test rdx, rdx
+    setnz sil
+    mov rdi, rbx
+    call filelist_test
     xor eax, eax
     EPILOGUE
 
@@ -3067,6 +3186,14 @@ c_agent_card_uncomment:
 .Lc_print_agent_bufs: .asciz "print-agent-bufs"
 .Lc_agent_test_caps: .asciz "agent-test-caps"
 .Lc_print_agent_attachments_fit: .asciz "print-agent-attachments-fit"
+.Lc_print_filelist: .asciz "print-filelist"        # phase 4 task 7
+.Lc_filelist_wait: .asciz "filelist-wait"
+.Lc_filelist_test: .asciz "filelist-test"
+.Lc_print_agent_bubble_chips: .asciz "print-agent-bubble-chips"
+.Lc_print_agent_context: .asciz "print-agent-context"  # phase 4 task 8
+.Lc_agent_context: .asciz "agent-context"
+.Lc_agent_mention: .asciz "agent-mention"
+.Lw_fl_timeout: .asciz "timeout "
 .Lw_bytes: .asciz "bytes:"
 .Lw_image: .asciz "Image"
 .Lr_no_parts: .asciz "this agent takes no attachments\n"
@@ -3188,6 +3315,10 @@ ai_ctl:
     .quad agside_n_open, agside_c_open, agside_n_bookmark, agside_c_bookmark
     .quad agside_n_pick, agside_c_pick, agside_n_size, agside_c_size
     .quad agside_n_print, agside_c_print, claude_side_n_print, claude_side_c_print
+    .quad .Lc_print_filelist, c_print_filelist, .Lc_filelist_wait, c_filelist_wait   # task 7
+    .quad .Lc_filelist_test, c_filelist_test, .Lc_print_agent_bubble_chips, c_print_agent_bubble_chips
+    .quad .Lc_print_agent_context, c_print_agent_context, .Lc_agent_context, c_agent_context   # task 8
+    .quad .Lc_agent_mention, c_agent_mention
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

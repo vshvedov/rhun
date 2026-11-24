@@ -57,6 +57,8 @@
 .equ FOOT_CTX, 4                #   the context pie
 .equ FOOT_CACHE, 5              #   the prompt cache's clock
 .equ FOOT_ADD, 6                #   the "+" (phase 4 task 3: a driver that takes parts)
+.equ FOOT_SEL, 7                #   the selection chip, its x (phase 4 task 8)
+.equ FOOT_SELX, 8
 .equ BAND_LINK, 8               # ID_AGBAND + BAND_LINK + kind: a band's link
 
 .data
@@ -120,6 +122,19 @@ fl_ax: .long 0                  #   layout(): the "+"'s x, width (0: none), y fr
 fl_aw: .long 0                  #   stage 2 it is on the pill's row, before the pill), and which row the pass
 fl_ay: .long 0                  #   puts it on (1, 2)
 fl_arow: .long 0
+fl_sx: .long 0                  # phase 4 task 8: the selection chip's x, width (0: none), stage, label's width
+fl_sw: .long 0
+fl_sst: .long 0
+fl_slw: .long 0
+fl_res: .long 0                 #   the room it takes (0: none), and at the stages past 0
+fl_res1: .long 0
+fd_sel: .long 0                 #   as drawn last: its centre, its x's
+fd_sel_y: .long 0
+fd_selx: .long 0
+fd_selx_y: .long 0
+.p2align 3
+ssb: .zero SB_SIZE              #   its label as shown, its tip
+ssb2: .zero SB_SIZE
 .p2align 3
 pill_name: .quad 0              # the name pill_drv found (cstr), or 0
 psb2: .zero SB_SIZE             # the pill's text
@@ -873,9 +888,31 @@ layout:
     PROLOGUE
     mov rbx, rdi                # phase 4 task 3: the "+" on the first row; at stage 2 on the pill's row
     mov r12d, esi
-    mov dword ptr [rip + fl_arow], 1
+    call sel_measure            # phase 4 task 8: the selection chip's room (fl_res), kept left of the menu
+    mov dword ptr [rip + fl_arow], 1   #   button; the whole chip at stage 0, the icon and its x at the others,
+    mov rdi, rbx                #   none when even that squeezes the mode button under a square
+    mov esi, r12d
     call layout_pass
-    cmp dword ptr [rip + fl_stage], 2
+    cmp dword ptr [rip + fl_res], 0
+    je 2f
+    cmp dword ptr [rip + fl_stage], 0
+    je 1f
+    mov eax, [rip + fl_res1]
+    mov [rip + fl_res], eax
+    mov dword ptr [rip + fl_sst], 1
+    mov rdi, rbx
+    mov esi, r12d
+    call layout_pass
+1:  cmp dword ptr [rip + fl_mw], 0
+    je 2f
+    mov eax, [rip + fl_mw]
+    cmp eax, [rip + fl_row]
+    jge 2f
+    mov dword ptr [rip + fl_res], 0
+    mov rdi, rbx
+    mov esi, r12d
+    call layout_pass
+2:  cmp dword ptr [rip + fl_stage], 2
     jne 9f
     cmp dword ptr [rip + fl_aw], 0
     je 9f
@@ -885,7 +922,8 @@ layout:
     mov rdi, rbx
     mov esi, r12d
     call layout_pass
-9:  EPILOGUE
+9:  call sel_place              # phase 4 task 8
+    EPILOGUE
 
 # layout_pass(AS* or 0, w): layout with the "+" on row fl_arow (2: the stage is 2, the "+" before the pill)
 layout_pass:
@@ -901,6 +939,7 @@ layout_pass:
     add r13d, [rip + g_pmt + 4*MI_12]
     sub r13d, eax
     mov [rip + fl_nx], r13d
+    sub r13d, [rip + fl_res]    # (phase 4 task 8: the selection chip's room, left of the menu button)
     mov rdi, rbx                # what comes and goes: fl_hfast, fl_hctx, fl_cstate (csb)
     call extras
     xor eax, eax                # the clock's width
@@ -1152,9 +1191,10 @@ layout_pass:
 15: mov rdi, [rip + psb2 + SB_ptr]
     mov esi, ecx
     call label_cut2
-.Lly_right:                     # right to left from the menu button
+.Lly_right:                     # right to left from the menu button (and the selection chip: phase 4 task 8)
     mov ecx, [rip + fl_nx]
     sub ecx, [rip + g_pmt + 4*MI_8]
+    sub ecx, [rip + fl_res]
     mov edx, [rip + fl_row]
     xor eax, eax
     mov [rip + fl_fx], eax
@@ -1450,9 +1490,11 @@ FN foot_draw
     mov [rsp], esi
     mov [rsp + 4], edx
     mov [rsp + 8], ecx
+    mov dword ptr [rip + fd_sel], 0     # (phase 4 task 8: drawn below, when it shows)
+    mov dword ptr [rip + fd_selx], 0
     call foot_drv
     test rax, rax
-    jz 9f
+    jz 99f
     mov rdi, rbx
     mov esi, [rsp + 8]
     call layout
@@ -1619,7 +1661,11 @@ FN foot_draw
     jz 9f
     mov edi, APP_MENU
     call toggle
-9:  EPILOGUE
+9:  mov rdi, rbx                # phase 4 task 8: the selection chip
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    call sel_draw
+99: EPILOGUE
 
 # add_draw(AS* or 0, x, y): the "+" where layout put it (none: fl_aw 0): an icon, lit while hovered, tip "Add";
 #   a click opens its menu above it (agatt_plus_menu: Upload from computer, Add context). Phase 4 task 3
@@ -2690,7 +2736,306 @@ put_at:
     call sb_push_u64
     EPILOGUE
 
+# ---- phase 4 task 8: the selection chip ----
+
+# sel_measure(AS* or 0): the selection chip's widths (agentctx.s's label for that conversation): fl_res the room
+#   it takes at stage 0 (MI_6, an icon, MI_4, the label cut with "…" at MI_120, MI_4, its x, MI_2, and MI_4 before
+#   the menu button), fl_res1 the icon and its x alone; both 0 without a chip. ssb the label as shown
+sel_measure:
+    PROLOGUE
+    mov rbx, rdi
+    xor eax, eax
+    mov [rip + fl_res], eax
+    mov [rip + fl_res1], eax
+    mov [rip + fl_sw], eax
+    mov [rip + fl_slw], eax
+    mov [rip + fl_sst], eax
+    lea rdi, [rip + ssb]
+    call sb_clear
+    mov rdi, rbx
+    call foot_drv
+    test rax, rax
+    jz 9f
+    call agctx_sync
+    mov rdi, rbx
+    call agctx_label
+    test rax, rax
+    jz 9f
+    mov r15, rax
+    mov r12d, [rip + g_pmt + 4*MI_6]    # the icon and the x
+    add r12d, [rip + g_pmt + 4*MI_14]
+    add r12d, [rip + g_pmt + 4*MI_4]
+    add r12d, [rip + g_pmt + 4*MI_16]
+    add r12d, [rip + g_pmt + 4*MI_2]
+    mov eax, [rip + g_pmt + 4*MI_40]    # the label at most MI_120
+    imul eax, eax, 3
+    mov rdi, r15
+    mov esi, eax
+    lea rdx, [rip + ssb]
+    call cut_into
+    mov rdi, [rip + ag_fsmall]
+    mov rsi, [rip + ssb + SB_ptr]
+    mov rdx, [rip + ssb + SB_len]
+    call text_width
+    mov [rip + fl_slw], eax
+    lea ecx, [r12 + rax]
+    add ecx, [rip + g_pmt + 4*MI_4]
+    add ecx, [rip + g_pmt + 4*MI_4]
+    mov [rip + fl_res], ecx
+    add r12d, [rip + g_pmt + 4*MI_4]
+    mov [rip + fl_res1], r12d
+9:  EPILOGUE
+
+# sel_place(): where the chip goes: its right edge MI_4 before the menu button, its width the room layout kept
+sel_place:
+    mov dword ptr [rip + fl_sw], 0
+    mov eax, [rip + fl_res]
+    test eax, eax
+    jz 9f
+    cmp dword ptr [rip + fl_nw], 0
+    je 9f
+    sub eax, [rip + g_pmt + 4*MI_4]
+    mov [rip + fl_sw], eax
+    mov ecx, [rip + fl_nx]
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    sub ecx, eax
+    mov [rip + fl_sx], ecx
+9:  ret
+
+# sel_draw(AS* or 0, x, y): the chip where sel_layout put it: a button (its tip "Showing … (LABEL)") with the
+#   icon and the label, then its x ("Remove from message", a hit area of MI_16): the chip goes for that
+#   conversation until the selection changes
+sel_draw:
+    PROLOGUE 32
+    mov rbx, rdi
+    cmp dword ptr [rip + fl_sw], 0
+    je 9f
+    mov r12d, esi
+    add r12d, [rip + fl_sx]
+    mov r13d, edx
+    mov r14d, [rip + fl_sw]     # the chip without its x
+    sub r14d, [rip + g_pmt + 4*MI_16]
+    sub r14d, [rip + g_pmt + 4*MI_2]
+    mov edi, ID_AGFOOT + FOOT_SEL
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    mov r8d, [rip + fl_row]
+    call ui_btn
+    mov [rsp], eax
+    mov edi, r12d               # its face: a quiet round box
+    mov esi, r13d
+    mov edx, [rip + fl_sw]
+    mov ecx, [rip + fl_row]
+    PM r8d, MI_RADIUS
+    COLOR r9d, T_HOVER
+    call gfx_round_rect
+    mov eax, r14d
+    shr eax, 1
+    add eax, r12d
+    mov [rip + fd_sel], eax
+    mov eax, [rip + fl_row]
+    shr eax, 1
+    add eax, r13d
+    mov [rip + fd_sel_y], eax
+    PM ecx, MI_14               # the icon
+    mov edx, [rip + fl_row]
+    sub edx, ecx
+    sar edx, 1
+    add edx, r13d
+    mov esi, r12d
+    add esi, [rip + g_pmt + 4*MI_6]
+    mov edi, IC_FILE
+    COLOR r8d, T_MUTED
+    call icon_draw
+    cmp dword ptr [rip + fl_sst], 0
+    jne 1f
+    mov rdi, [rip + ag_fsmall]  # the label
+    mov esi, r12d
+    add esi, [rip + g_pmt + 4*MI_6]
+    add esi, [rip + g_pmt + 4*MI_14]
+    add esi, [rip + g_pmt + 4*MI_4]
+    mov edx, r13d
+    mov ecx, [rip + fl_row]
+    mov r8, [rip + ssb + SB_ptr]
+    mov r9, [rip + ssb + SB_len]
+    COLOR eax, T_FG
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+1:  lea rdi, [rip + ssb2]       # the chip's tip
+    call sb_clear
+    lea rdi, [rip + ssb2]
+    mov rsi, rbx
+    call agctx_tip
+    mov edi, ID_AGFOOT + FOOT_SEL
+    mov esi, r12d
+    mov edx, r13d
+    add edx, [rip + fl_row]
+    mov ecx, r14d
+    mov r8d, [rsp]
+    mov r9, [rip + ssb2 + SB_ptr]
+    call tip_note_text
+    mov r15d, r12d              # its x
+    add r15d, r14d
+    PM ecx, MI_16
+    mov [rsp + 8], ecx
+    mov edi, ID_AGFOOT + FOOT_SELX
+    mov esi, r15d
+    mov edx, [rip + fl_row]
+    sub edx, ecx
+    sar edx, 1
+    add edx, r13d
+    mov [rsp + 12], edx
+    mov r8d, ecx
+    call ui_btn
+    mov [rsp + 4], eax
+    mov eax, [rsp + 8]
+    shr eax, 1
+    lea ecx, [r15 + rax]
+    mov [rip + fd_selx], ecx
+    add eax, [rsp + 12]
+    mov [rip + fd_selx_y], eax
+    test dword ptr [rsp + 4], UB_HOVER
+    jz 2f
+    mov edi, r15d
+    mov esi, [rsp + 12]
+    mov edx, [rsp + 8]
+    mov ecx, edx
+    PM r8d, MI_RADIUS
+    COLOR r9d, T_BORDER
+    call gfx_round_rect
+2:  mov edi, IC_CLOSE
+    mov esi, r15d
+    mov edx, [rsp + 12]
+    COLOR r8d, T_MUTED
+    test dword ptr [rsp + 4], UB_HOVER
+    jz 3f
+    COLOR r8d, T_FG
+3:  call icon_draw
+    mov edi, ID_AGFOOT + FOOT_SELX
+    mov esi, r15d
+    mov edx, [rsp + 12]
+    add edx, [rsp + 8]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 4]
+    lea r9, [rip + .Lt_sel_remove]
+    call tip_note_text
+    test dword ptr [rsp + 4], UB_CLICK
+    jz 9f
+    mov rdi, rbx
+    call agctx_dismiss
+9:  EPILOGUE
+
+# FN foot_sel_dump(sb): "at=X,Y x=X,Y stage=N shown=LABEL" of the selection chip as drawn last (0,0: not drawn),
+#   for print-agent-context
+FN foot_sel_dump
+    PROLOGUE
+    mov rbx, rdi
+    lea rsi, [rip + .Ld_sel_at]
+    lea rdx, [rip + fd_sel]
+    call put_at
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_selx_at]
+    lea rdx, [rip + fd_selx]
+    call put_at
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_sel_stage]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + fl_sst]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_sel_shown]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + ssb + SB_ptr]
+    mov rdx, [rip + ssb + SB_len]
+    test rsi, rsi
+    jz 1f
+    call sb_push
+1:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    EPILOGUE
+
+# FN foot_sel_fit(sb): the chip at every panel size 8 to 32 and width 240 to 900 (step 20): "size=S w=W x=X
+#   cw=W stage=N left=L right=R label=LW" (x and the row's parts from the panel's left, cw 0: not shown; L the
+#   end of what the row holds at its left, R the start of its right group)
+FN foot_sel_fit
+    PROLOGUE 32
+    mov rbx, rdi
+    call agentext_box_owner
+    mov r15, rax
+    mov eax, [rip + cfg_agents_font_size]
+    mov [rsp], eax
+    mov dword ptr [rsp + 4], 8
+1:  cmp dword ptr [rsp + 4], 32
+    ja 8f
+    mov eax, [rsp + 4]
+    mov [rip + cfg_agents_font_size], eax
+    call agents_metrics
+    mov dword ptr [rsp + 8], 240
+2:  cmp dword ptr [rsp + 8], 900
+    ja 7f
+    mov rdi, r15
+    mov esi, [rsp + 8]
+    call layout
+    lea r12, [rip + sf_words]
+    lea r13, [rsp + 4]
+    mov rdi, rbx
+    lea rsi, [rip + .Ls_size]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rsp + 4]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Ls_w]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rsp + 8]
+    call sb_push_u64
+    lea r14, [rip + sf_vals]
+3:  mov rsi, [r12]
+    test rsi, rsi
+    jz 4f
+    mov rdi, rbx
+    call sb_push_cstr
+    mov rax, [r14]
+    mov esi, [rax]
+    mov rdi, rbx
+    call sb_push_u64
+    add r12, 8
+    add r14, 8
+    jmp 3b
+4:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    add dword ptr [rsp + 8], 20
+    jmp 2b
+7:  inc dword ptr [rsp + 4]
+    jmp 1b
+8:  mov eax, [rsp]
+    mov [rip + cfg_agents_font_size], eax
+    call agents_metrics
+    EPILOGUE
+
 .section .rodata
+.Lt_sel_remove: .asciz "Remove from message"      # phase 4 task 8
+.Ld_sel_at: .asciz " at="
+.Ld_selx_at: .asciz " x="
+.Ld_sel_stage: .asciz " stage="
+.Ld_sel_shown: .asciz " shown="
+.Ls_size: .asciz "size="
+.Ls_w: .asciz " w="
+.Ls_x: .asciz " x="
+.Ls_cw: .asciz " cw="
+.Ls_stage: .asciz " stage="
+.Ls_mx: .asciz " mode_x="
+.Ls_mw: .asciz " mode_w="
+.Ls_nx: .asciz " menu_x="
+.Ls_lw: .asciz " label="
 .p2align 3
 band_colors: .long T_ERROR, T_WARNING, T_WARNING, T_WARNING, T_INFO
 band_names: .quad .Lk_error, .Lk_settings, .Lk_auth, .Lk_rate, .Lk_notice
@@ -2793,6 +3138,8 @@ band_tips: .quad .Lt_error, .Lt_warning, .Lt_warning, .Lt_warning, .Lt_notice
 .Lf_cool: .asciz "cooldown"
 .p2align 3
 fast_words: .quad .Lf_off, .Lf_on, .Lf_cool
+sf_words: .quad .Ls_x, .Ls_cw, .Ls_stage, .Ls_mx, .Ls_mw, .Ls_nx, .Ls_lw, 0      # phase 4 task 8
+sf_vals: .quad fl_sx, fl_sw, fl_sst, fl_mx, fl_mw, fl_nx, fl_slw
 pie_dirs:                       # sin, cos (x 1024) of each percent of a turn, 0 to 100
     .short 0, 1024, 64, 1022, 128, 1016, 192, 1006, 255, 992, 316, 974, 377, 952, 436, 927, 493, 897, 549, 865
     .short 602, 828, 653, 789, 701, 746, 746, 701, 789, 653, 828, 602, 865, 549, 897, 493, 927, 436, 952, 377

@@ -2289,6 +2289,10 @@ g_commands:
     COMMAND review_accept_change, "Review: Accept Change at Cursor", review_cmd_accept_change, ""
     COMMAND review_reject_change, "Review: Reject Change at Cursor", review_cmd_reject_change, ""
     COMMAND review_edit, "Review: Edit Proposed Text", review_cmd_edit, ""
+    # phase 4 task 8: the commands that mention (agentctx.s); each tests its own state, no when clause
+    COMMAND agents_insert_mention, "Agents: Insert @-Mention", cmd_agents_insert_mention, "alt+k"
+    COMMAND agents_focus_input, "Agents: Focus or Unfocus the Message Box", cmd_agents_focus_input, "ctrl+Escape"
+    COMMAND agents_add_to_chat, "Agents: Add to Chat", cmd_agents_add_to_chat, ""
     COMMAND open_file, "Open File", cmd_open_file, "ctrl+o"
     COMMAND open_folder, "Open Folder", cmd_open_folder, "ctrl+shift+o"
     COMMAND add_workspace_folder, "Add Folder to Workspace", cmd_add_workspace_folder, ""   # resources: workspace.s
@@ -2478,9 +2482,8 @@ g_commands:
     COMMAND fold_level_2, "Fold Level 2", cmd_fold_level_2, ""
     COMMAND fold_level_3, "Fold Level 3", cmd_fold_level_3, ""
     # Claude chat phase 5: terminal claude and terminal mode (claudeterm.s); agents_open and agents_focus_input
-    #   are phase 4's names (tasks 13 and 8 build their chat side)
+    #   are phase 4's names (tasks 13 and 8 build their chat side; agents_focus_input is task 8's, above)
     COMMAND agents_open, "Agents: Open", cmd_agents_open, ""
-    COMMAND agents_focus_input, "Agents: Focus or Unfocus the Message Box", cmd_agents_focus_input, "ctrl+Escape"
     COMMAND claude_open_terminal, "Claude: Open in Terminal", cmd_claude_open_terminal, ""
     COMMAND claude_mention_terminal, "Claude: Insert @-Mention in Terminal", cmd_claude_mention_terminal, "ctrl+alt+k"
     .quad 0, 0, 0, 0

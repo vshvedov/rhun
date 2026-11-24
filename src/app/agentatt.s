@@ -2675,25 +2675,210 @@ FN agatt_browse_dir
     mov rax, [rax + AS_cwd]
 1:  ret
 
-# ---- later tasks' hooks (agentext_send calls them; they fill them in their own files) ----
+# ---- phase 4 task 7: a terminal's text for its mention (agentext_send's hook) ----
 
-# FN agterm_parts(AS* or 0, AP*, ptr, len): a part per @terminal: mention of the prompt (task 7): nothing yet
+# FN agterm_parts(AS* or 0, AP*, ptr, len): for each "@terminal:NAME" chip of the prompt, in order and each name
+#   once, the last 100 lines of the terminal whose title with spaces as "_" is NAME, as a part (MPK_TERMINAL,
+#   MPF_AUTO: never kept in the box). A name that is no terminal adds nothing; a name a link's prompt brought
+#   (agterm_block) adds nothing until the user picked that terminal from the mention menu. Read now, at the Send
 FN agterm_parts
-    ret
+    PROLOGUE 48
+    mov r12, rsi
+    mov r13, rdx
+    mov r14, rcx
+    test r12, r12
+    jz 9f
+    lea rdi, [rip + term_seen]
+    call sb_clear
+    xor r15d, r15d              # from
+1:  mov rdi, r13
+    mov rsi, r14
+    mov rdx, r15
+    lea rcx, [rsp]
+    call agmention_next
+    test eax, eax
+    jz 8f
+    mov r15, [rsp + 8]
+    cmp dword ptr [rsp + 16], 2
+    jne 1b
+    mov rbx, [rsp]              # its name: after "@terminal:"
+    add rbx, 10
+    lea rax, [r13 + rbx]
+    mov [rsp + 24], rax
+    mov rax, r15
+    sub rax, rbx
+    mov [rsp + 32], rax
+    jz 1b
+    mov rdi, [rsp + 24]         # once a name; not one a link brought
+    mov rsi, [rsp + 32]
+    lea rdx, [rip + term_seen]
+    call name_in
+    test eax, eax
+    jnz 1b
+    mov rdi, [rsp + 24]
+    mov rsi, [rsp + 32]
+    lea rdx, [rip + term_blocked]
+    call name_in
+    test eax, eax
+    jnz 1b
+    lea rdi, [rip + term_seen]
+    mov rsi, [rsp + 24]
+    mov rdx, [rsp + 32]
+    call sb_push
+    lea rdi, [rip + term_seen]
+    xor esi, esi
+    call sb_push_byte
+    lea rdi, [rip + term_text]
+    call sb_clear
+    mov rdi, [rsp + 24]
+    mov rsi, [rsp + 32]
+    mov edx, 100
+    lea rcx, [rip + term_text]
+    call term_tail
+    test eax, eax
+    jz 1b
+    mov rdi, [rsp + 24]         # its name as a string
+    mov rsi, [rsp + 32]
+    call mem_dup
+    mov [rsp + 40], rax
+    push 0
+    push 0
+    mov rdi, r12
+    mov esi, MPK_TERMINAL
+    mov rdx, rax
+    xor ecx, ecx
+    mov r8, [rip + term_text + SB_ptr]
+    mov r9, [rip + term_text + SB_len]
+    test r8, r8
+    jnz 2f
+    lea r8, [rip + .Lempty_text]
+2:  call agatt_add_text
+    add rsp, 16
+    mov rdi, [rsp + 40]
+    call mem_free
+    jmp 1b
+8:  lea rdi, [rip + term_blocked]   # the prompt left the box: what a link brought goes with it
+    call sb_clear
+9:  EPILOGUE
 
-# FN agterm_block(ptr, len): a link's prompt was put in the box: its @terminal: names are blocked (task 7)
+# name_in(ptr, len, names sb) -> eax 1 when the name is one of the NUL-ended names
+name_in:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, [rdx + SB_ptr]
+    mov r14, [rdx + SB_len]
+    add r14, r13
+    xor eax, eax
+    test r13, r13
+    jz 9f
+1:  cmp r13, r14
+    jae 8f
+    mov rdi, r13
+    call strlen
+    lea r15, [r13 + rax + 1]
+    cmp rax, r12
+    jne 2f
+    mov rdi, r13
+    mov rsi, rbx
+    mov rdx, r12
+    call memeq
+    test eax, eax
+    jnz 9f
+2:  mov r13, r15
+    jmp 1b
+8:  xor eax, eax
+9:  EPILOGUE
+
+# FN agterm_block(ptr, len): a link's prompt was put in the box: its "@terminal:" names are blocked (until the
+#   user picks that terminal from the menu, or the prompt leaves the box)
 FN agterm_block
-    ret
+    PROLOGUE 32
+    mov r12, rdi
+    mov r13, rsi
+    lea rdi, [rip + term_blocked]
+    call sb_clear
+    xor r14d, r14d
+1:  mov rdi, r12
+    mov rsi, r13
+    mov rdx, r14
+    lea rcx, [rsp]
+    call agmention_next
+    test eax, eax
+    jz 9f
+    mov r14, [rsp + 8]
+    cmp dword ptr [rsp + 16], 2
+    jne 1b
+    mov rbx, [rsp]
+    add rbx, 10
+    lea rdi, [rip + term_blocked]
+    lea rsi, [r12 + rbx]
+    mov rdx, r14
+    sub rdx, rbx
+    call sb_push
+    lea rdi, [rip + term_blocked]
+    xor esi, esi
+    call sb_push_byte
+    jmp 1b
+9:  EPILOGUE
 
-# FN agterm_unblock(name ptr, len): the user picked that terminal from the menu (task 7)
+# FN agterm_unblock(name ptr, len): the user picked that terminal from the menu: its text may go
 FN agterm_unblock
-    ret
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+1:  mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + term_blocked]
+    call name_in
+    test eax, eax
+    jz 9f
+    mov rbx, [rip + term_blocked + SB_ptr]  # (each name once is enough: blank them all)
+    mov r14, [rip + term_blocked + SB_len]
+    xor ecx, ecx
+2:  cmp rcx, r14
+    jae 9f
+    lea rdi, [rbx + rcx]
+    push rcx
+    push rcx
+    call strlen
+    pop rcx
+    pop rcx
+    lea r15, [rcx + rax + 1]
+    cmp rax, r13
+    jne 3f
+    push rcx
+    push rcx
+    lea rdi, [rbx + rcx]
+    mov rsi, r12
+    mov rdx, r13
+    call memeq
+    pop rcx
+    pop rcx
+    test eax, eax
+    jz 3f
+    mov byte ptr [rbx + rcx], 1 # no name matches it any more
+3:  mov rcx, r15
+    jmp 2b
+9:  EPILOGUE
+
+# FN agterm_blocked_clear(): the box emptied (composer_paint): nothing a link brought is left in it
+FN agterm_blocked_clear
+    lea rdi, [rip + term_blocked]
+    jmp sb_clear
+
+.bss
+.p2align 3
+term_seen: .zero SB_SIZE        # (phase 4 task 7) the terminals' names a Send took
+term_blocked: .zero SB_SIZE     #   the names a link's prompt brought
+term_text: .zero SB_SIZE
 
 .section .rodata
 .Lrr_before: .asciz "Files on this computer cannot be attached in a remote window: the agent runs on "
 .Lrr_the_host: .asciz "the host"
 .Lrr_after: .asciz "."
 .Lm_png: .asciz "image/png"
+.Lempty_text: .asciz ""
 .Lm_jpeg: .asciz "image/jpeg"
 .Lm_gif: .asciz "image/gif"
 .Lm_webp: .asciz "image/webp"

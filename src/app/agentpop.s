@@ -33,6 +33,13 @@
 #   agentpop_slash(AS*, ptr, len) -> eax 1 when the text is a command the driver's own table runs (it ran)
 #   agentpop_run(AS* or 0, kind, act, ptr, len)     a command's action
 #   agentpop_pick(n) -> eax 1           row n (from 1) as Enter would (headless)
+#
+# The mention menu (APP_MENTION, phase 4 task 7; typed only, a driver with DRVC_MENTIONS): the caret in a token
+# (?:^|\s)@[^\s]* (@"… with spaces runs to its closing quote): the project's files and folders (filelist.s,
+# matched in slices while it draws: the rows follow within frames) and the terminals ("terminal:NAME"). Enter
+# or Tab or a click puts the mention in the token's place (agentmention.s's text, the path relative to the
+# conversation's checkout: agctx_path) and a space; a folder picked with Tab or a click keeps the menu open
+# without the space, so the user goes on into it. A path that cannot be mentioned: the driver's toast.
 #   agentpop_dump(sb)                   print-agent-menu; agentpop_fit_dump(sb) its layout at every size
 .include "rhun.inc"
 
@@ -282,16 +289,28 @@ FN agentpop_typed
     cmp dword ptr [rip + pop_typed], 0
     je 9f
     call sync
-    jmp 9f
+    cmp dword ptr [rip + pop_kind], 0   # (phase 4 task 7) the caret left its token: another may open
+    jne 9f
 1:  cmp dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
     jne 9f
     mov rdi, r12
     mov rsi, r13
     mov rdx, r14
     call find_token
+    mov r15d, APP_MENU
+    test rax, rax
+    jns 2f
+    call mention_ok             # phase 4 task 7: "@token" opens the mention menu
+    test eax, eax
+    jz 8f
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r14
+    call find_at_token
     test rax, rax
     js 8f
-    mov rdi, r12
+    mov r15d, APP_MENTION
+2:  mov rdi, r12
     mov rsi, r13
     call hash_text
     cmp rax, [rip + dis_hash]
@@ -301,7 +320,7 @@ FN agentpop_typed
     jz 9f
     mov [rip + pop_owner], rax
     mov [rip + pop_dkind], edx
-    mov dword ptr [rip + pop_kind], APP_MENU
+    mov [rip + pop_kind], r15d
     mov dword ptr [rip + pop_typed], 1
     mov qword ptr [rip + pop_aq], 0
     mov dword ptr [rip + pop_user], 0
@@ -342,6 +361,8 @@ sync:
     mov rdi, r12
     mov rsi, r13
     mov rdx, [rbx + TF_cur]
+    cmp dword ptr [rip + pop_kind], APP_MENTION
+    je 1f
     call find_token
     test rax, rax
     js 8f
@@ -351,6 +372,24 @@ sync:
     mov rsi, rdx
     sub rsi, rax
     call set_query
+    jmp 7f
+1:  call find_at_token          # phase 4 task 7: the mention's token, its query without the "@"
+    test rax, rax
+    js 8f
+    mov [rip + pop_ts], rax
+    mov [rip + pop_te], rdx
+    lea rdi, [r12 + rax + 1]
+    mov rsi, rdx
+    sub rsi, rax
+    dec rsi
+    call set_query
+    call filelist_want
+    mov rdi, [rip + pop_q + SB_ptr]
+    mov rsi, [rip + pop_q + SB_len]
+    test rdi, rdi
+    jnz 11f
+    lea rdi, [rip + empty]
+11: call flq_set
     jmp 7f
 2:  xor esi, esi
     lea rdi, [rip + empty]
@@ -516,10 +555,16 @@ hash_text:
 #   blink draws (its commands may be a thousand)
 build:
     PROLOGUE
-    call build_sig
+    cmp dword ptr [rip + pop_kind], APP_MENTION     # phase 4 task 7: the query goes on a slice
+    jne 0f
+    mov edi, 4000
+    call flq_step
+0:  call build_sig
     cmp dword ptr [rip + pop_kind], APP_MENU
+    je 71f
+    cmp dword ptr [rip + pop_kind], APP_MENTION
     jne 1f
-    cmp rax, [rip + pop_sig]
+71: cmp rax, [rip + pop_sig]
     je 9f
 1:  mov [rip + pop_sig], rax
     inc dword ptr [rip + pop_builds]
@@ -538,8 +583,12 @@ build:
     call build_modes
     jmp 5f
 2:  cmp eax, APP_MODELS
-    jne 5f
+    jne 3f
     call build_models
+    jmp 5f
+3:  cmp eax, APP_MENTION
+    jne 5f
+    call build_mention
 5:  call select
 9:  EPILOGUE
 
@@ -607,7 +656,11 @@ build_sig:
     lea rdi, [r12 + AL_model]
     mov esi, AL_bandoff - AL_model
     call sig_mix
-8:  mov rax, rbx
+8:  cmp dword ptr [rip + pop_kind], APP_MENTION     # phase 4 task 7: the rows, the terminals, the list
+    jne 81f
+    call mention_sig
+    mov rbx, rax
+81: mov rax, rbx
     test rax, rax
     jnz 9f
     inc rax
@@ -1763,6 +1816,13 @@ enter:
 11: cmp dword ptr [rbx + PR_kind], APK_SWITCH   # a switch (any popup): flipped, the popup stays
     je 1f
     mov eax, [rip + pop_kind]
+    cmp eax, APP_MENTION        # phase 4 task 7: a mention picked
+    jne 13f
+    mov rdi, rbx
+    mov esi, r15d
+    call mention_pick
+    jmp .Le_taken
+13:
     cmp eax, APP_MODES
     je .Le_mode
     cmp eax, APP_MODELS
@@ -2635,6 +2695,8 @@ row_geom:
     add r13d, [rip + g_pw]
     sub r13d, [rip + g_pmt + 4*MI_10]   # rx
     cmp dword ptr [rip + pop_kind], APP_MENU
+    je 1f
+    cmp dword ptr [rip + pop_kind], APP_MENTION
     je 1f
     add r12d, [rip + g_pmt + 4*MI_16]   # a picker: the check's column
     add r12d, [rip + g_pmt + 4*MI_4]
@@ -3580,7 +3642,13 @@ FN agentpop_dump
     jne 6f
     lea rsi, [rip + .Lf_switch]
     call flag_word
-6:  cmp dword ptr [r14 + PR_kind], APK_LEVELS
+6:  cmp dword ptr [rip + pop_kind], APP_MENTION   # phase 4 task 7: a mention's kind
+    jne 61f
+    mov eax, [r14 + PR_act]
+    lea rcx, [rip + mention_kinds]
+    mov rsi, [rcx + rax*8]
+    call flag_word
+61: cmp dword ptr [r14 + PR_kind], APK_LEVELS
     jne 7f
     lea rsi, [rip + .Lf_levels]
     call flag_word
@@ -3873,6 +3941,444 @@ FN agentpop_fit_dump
     call agents_metrics
     EPILOGUE
 
+# ---- phase 4 task 7: the mention menu ----
+
+# mention_ok() -> eax 1 when the box's driver expands mentions itself (DRVC_MENTIONS)
+mention_ok:
+    sub rsp, 8
+    call agatt_caps
+    add rsp, 8
+    and eax, DRVC_MENTIONS
+    ret
+
+# find_at_token(ptr, len, caret) -> rax where the "@token" holding the caret starts (its "@"), -1 none; rdx its
+#   end: (?:^|\s)@[^\s]*, the caret after its "@"; @"… with white space in it runs to its closing quote (on its
+#   line) or, without one, to the end of the run the caret is in
+find_at_token:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    cmp rdx, rsi
+    jbe 0f
+    mov rdx, rsi
+0:  mov r13, rdx                # the caret
+    mov rcx, rdx                # back to the start of the caret's run
+1:  test rcx, rcx
+    jz 2f
+    cmp byte ptr [rbx + rcx - 1], ' '
+    jbe 2f
+    dec rcx
+    jmp 1b
+2:  cmp rcx, r13
+    jae 3f
+    cmp byte ptr [rbx + rcx], '@'
+    jne 3f
+    mov r14, rcx                # "@word": to the end of the run
+    mov rdx, r13
+21: cmp rdx, r12
+    jae 22f
+    cmp byte ptr [rbx + rdx], ' '
+    jbe 22f
+    inc rdx
+    jmp 21b
+22: cmp rdx, r13                # a quoted one goes on to its quote
+    jb 8f
+    lea rax, [r14 + 1]
+    cmp rax, r12
+    jae 23f
+    cmp byte ptr [rbx + r14 + 1], '"'
+    jne 23f
+    call quote_end
+23: mov rax, r14
+    EPILOGUE
+3:  mov r15, rcx                # @"… with white space: an "@\"" further back on the line, no quote since
+    mov r8, 1024
+31: test rcx, rcx
+    jz 8f
+    dec r8
+    jz 8f
+    movzx eax, byte ptr [rbx + rcx - 1]
+    cmp eax, 10
+    je 8f
+    cmp eax, '"'
+    jne 32f
+    cmp rcx, 2
+    jb 8f
+    cmp byte ptr [rbx + rcx - 2], '@'
+    jne 8f
+    lea r14, [rcx - 2]          # "@\"" at r14: at the start or after white space
+    test r14, r14
+    jz 33f
+    cmp byte ptr [rbx + r14 - 1], ' '
+    ja 8f
+33: mov rdx, r13
+    call quote_end
+    mov rax, r14
+    EPILOGUE
+32: dec rcx
+    jmp 31b
+8:  mov rax, -1
+    EPILOGUE
+
+# quote_end() using rbx the text, r12 its length, r14 the "@", rdx the end of the caret's run -> rdx after the
+#   first quote after the "@\"" on its line, else that end
+quote_end:
+    lea rcx, [r14 + 2]
+1:  cmp rcx, r12
+    jae 3f
+    movzx eax, byte ptr [rbx + rcx]
+    cmp eax, 10
+    je 3f
+    inc rcx
+    cmp eax, '"'
+    jne 1b
+    mov rdx, rcx
+    ret
+3:  cmp rdx, r12                # no quote: the run
+    jae 4f
+    cmp byte ptr [rbx + rdx], ' '
+    jbe 4f
+    inc rdx
+    jmp 3b
+4:  ret
+
+# mention_sig() using rbx build_sig's hash -> rax it, gone on over the query's rows, the terminals, the list's
+#   state and its cut
+mention_sig:
+    PROLOGUE 16
+    mov r12, rbx
+    call flq_gen
+    mov [rsp], rax
+    call term_count
+    mov [rsp + 8], rax
+    mov rbx, r12
+    lea rdi, [rsp]
+    mov esi, 16
+    call sig_mix
+    mov r12, rbx
+    call filelist_state
+    mov [rsp], eax
+    call filelist_cut
+    mov [rsp + 4], eax
+    call flq_count
+    mov [rsp + 8], rax
+    mov rbx, r12
+    lea rdi, [rsp]
+    mov esi, 16
+    call sig_mix
+    mov r12, rbx
+    lea rdi, [rip + term_sb]    # the terminals' names
+    call sb_clear
+    xor r13d, r13d
+1:  call term_count
+    cmp r13, rax
+    jae 2f
+    mov rdi, r13
+    lea rsi, [rip + term_sb]
+    call term_title_at
+    inc r13
+    jmp 1b
+2:  mov rbx, r12
+    mov rdi, [rip + term_sb + SB_ptr]
+    mov rsi, [rip + term_sb + SB_len]
+    test rdi, rdi
+    jz 9f
+    call sig_mix
+9:  mov rax, rbx                # (the hash goes back in rax: EPILOGUE restores rbx)
+    EPILOGUE
+
+# terms_first() -> eax 1 when the query is a beginning of "terminal:" (the terminals before the files)
+terms_first:
+    PROLOGUE
+    mov r12, [rip + q_len]
+    xor eax, eax
+    test r12, r12
+    jz 9f
+    cmp r12, 9
+    ja 9f
+    mov rdi, [rip + q_ptr]
+    mov rsi, r12
+    lea rdx, [rip + .Lterminal_colon]
+    mov rcx, r12
+    call str_ieq
+9:  EPILOGUE
+
+# mention_terms(): a row for each terminal whose "terminal:NAME" (its title, spaces made "_") holds the query
+#   (any case; the extension's getMatchingTerminals)
+mention_terms:
+    PROLOGUE
+    xor r12d, r12d
+1:  call term_count
+    cmp r12, rax
+    jae 9f
+    lea rdi, [rip + term_sb]
+    call sb_clear
+    lea rdi, [rip + term_sb]
+    lea rsi, [rip + .Lterminal_colon]
+    call sb_push_cstr
+    mov rdi, r12
+    lea rsi, [rip + term_sb]
+    call term_title_at
+    mov rbx, [rip + term_sb + SB_ptr]
+    mov r13, [rip + term_sb + SB_len]
+    xor ecx, ecx                # spaces made "_"
+2:  cmp rcx, r13
+    jae 3f
+    cmp byte ptr [rbx + rcx], ' '
+    jne 21f
+    mov byte ptr [rbx + rcx], '_'
+21: inc rcx
+    jmp 2b
+3:  mov rdi, rbx                # holds the query?
+    mov rsi, r13
+    mov rdx, [rip + q_ptr]
+    mov rcx, [rip + q_len]
+    test rcx, rcx
+    jz 4f
+    cmp byte ptr [rdx], '"'     # (a quoted token's quotes are not the name's)
+    jne 31f
+    inc rdx
+    dec rcx
+31: call str_ifind
+    test rax, rax
+    js 8f
+4:  mov rdi, rbx
+    mov rsi, r13
+    call mem_dup
+    mov r14, rax
+    lea rdi, [rip + owned]
+    mov esi, 8
+    call vec_push
+    mov [rax], r14
+    mov dword ptr [rip + tmpl + PR_kind], APK_ROW
+    mov [rip + tmpl + PR_label], r14
+    lea rax, [rip + .Lk_terminal]
+    mov [rip + tmpl + PR_trail], rax
+    mov dword ptr [rip + tmpl + PR_act], 2
+    mov [rip + tmpl + PR_extra], r12
+    mov rdi, rbx
+    mov rsi, r13
+    call hash_text
+    mov [rip + tmpl + PR_arg], rax
+    call row_push
+8:  inc r12
+    jmp 1b
+9:  EPILOGUE
+
+# build_mention(): the rows: the files and folders the query matched (filelist.s), the terminals before them
+#   or after; "No files found" when there is none; the cut said at the end
+build_mention:
+    PROLOGUE 32
+    call terms_first
+    mov [rsp + 24], eax
+    test eax, eax
+    jz 1f
+    call mention_terms
+1:  xor r12d, r12d
+2:  call flq_count
+    cmp r12, rax
+    jae 6f
+    mov rdi, r12
+    lea rsi, [rsp]
+    call flq_at
+    mov rbx, [rsp]              # the path
+    mov r13, [rsp + 8]
+    mov r14d, [rsp + 16]        # 1 a folder
+    mov rcx, r13                # its last part
+3:  test rcx, rcx
+    jz 4f
+    cmp byte ptr [rbx + rcx - 1], '/'
+    je 4f
+    dec rcx
+    jmp 3b
+4:  mov r15, rcx
+    test r14d, r14d
+    jz 41f
+    lea rdi, [rip + term_sb]    # a folder: its path and "/"
+    call sb_clear
+    lea rdi, [rip + term_sb]
+    mov rsi, rbx
+    mov rdx, r13
+    call sb_push
+    lea rdi, [rip + term_sb]
+    mov esi, '/'
+    call sb_push_byte
+    mov rdi, [rip + term_sb + SB_ptr]
+    mov rsi, [rip + term_sb + SB_len]
+    call own_bytes
+    mov [rip + tmpl + PR_label], rax
+    jmp 5f
+41: lea rdi, [rbx + r15]        # a file: its name, its folder dimmed
+    mov rsi, r13
+    sub rsi, r15
+    call own_bytes
+    mov [rip + tmpl + PR_label], rax
+    test r15, r15
+    jz 5f
+    mov rdi, rbx
+    lea rsi, [r15 - 1]
+    call own_bytes
+    mov [rip + tmpl + PR_desc], rax
+5:  mov dword ptr [rip + tmpl + PR_kind], APK_ROW
+    mov [rip + tmpl + PR_act], r14d
+    mov [rip + tmpl + PR_extra], r12
+    mov rdi, rbx
+    mov rsi, r13
+    call hash_text
+    xor rax, r14
+    mov [rip + tmpl + PR_arg], rax
+    call row_push
+    inc r12
+    jmp 2b
+6:  cmp dword ptr [rsp + 24], 0
+    jne 7f
+    call mention_terms
+7:  cmp qword ptr [rip + rows + VEC_len], 0
+    jne 8f
+    mov dword ptr [rip + tmpl + PR_kind], APK_EMPTY
+    lea rax, [rip + .Lno_files]
+    mov [rip + tmpl + PR_label], rax
+    call row_push
+8:  call filelist_cut
+    test eax, eax
+    jz 9f
+    mov dword ptr [rip + tmpl + PR_kind], APK_FOOT
+    lea rax, [rip + .Lcut_note]
+    mov [rip + tmpl + PR_label], rax
+    call row_push
+9:  EPILOGUE
+
+# own_bytes(ptr, len) -> rax a NUL-ended copy, freed at the next build
+own_bytes:
+    PROLOGUE
+    call mem_dup
+    mov rbx, rax
+    lea rdi, [rip + owned]
+    mov esi, 8
+    call vec_push
+    mov [rax], rbx
+    mov rax, rbx
+    EPILOGUE
+
+# mention_pick(PR*, tab): the row's mention in the token's place: a space after it unless one follows, or (a
+#   folder by Tab or a click) none, the menu staying open for its entries; a path that cannot be mentioned: the
+#   driver's toast, the box unchanged
+mention_pick:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov [rsp], esi
+    lea rdi, [rip + men_sb]
+    call sb_clear
+    cmp dword ptr [rbx + PR_act], 2
+    jne 1f
+    lea rdi, [rip + men_sb]     # a terminal: "@terminal:NAME"; its text may go at Send now
+    mov esi, '@'
+    call sb_push_byte
+    lea rdi, [rip + men_sb]
+    mov rsi, [rbx + PR_label]
+    call sb_push_cstr
+    mov rdi, [rbx + PR_label]
+    add rdi, 9                  # "terminal:"
+    call strlen
+    mov rsi, rax
+    mov rdi, [rbx + PR_label]
+    add rdi, 9
+    call agterm_unblock
+    jmp 4f
+1:  lea rdi, [rip + term_sb]    # a file or a folder: its path as the conversation's checkout sees it
+    call sb_clear
+    mov rdi, [rbx + PR_extra]
+    lea rsi, [rip + term_sb]
+    call flq_abs
+    test eax, eax
+    jz 9f
+    lea rdi, [rip + men_path]
+    call sb_clear
+    lea rdi, [rip + men_path]
+    mov rsi, [rip + term_sb + SB_ptr]
+    mov rdx, [rip + pop_owner]
+    call agctx_path
+    lea rdi, [rip + men_sb]
+    mov rsi, [rip + men_path + SB_ptr]
+    mov rdx, [rip + men_path + SB_len]
+    xor ecx, ecx
+    xor r8d, r8d
+    call agmention_text
+    test eax, eax
+    jnz 4f
+    lea rdi, [rip + men_sb]     # refused: the driver's words and the path
+    call sb_clear
+    mov edi, [rip + pop_dkind]
+    call agent_drv_for_kind
+    lea rsi, [rip + .Lrefused_generic]
+    test rax, rax
+    jz 2f
+    mov rax, [rax + DRV_words]
+    test rax, rax
+    jz 2f
+    mov rsi, [rax + 8*DW_MENTION_REFUSED]
+2:  lea rdi, [rip + men_sb]
+    call sb_push_cstr
+    lea rdi, [rip + men_sb]
+    mov rsi, [rip + men_path + SB_ptr]
+    mov rdx, [rip + men_path + SB_len]
+    call sb_push
+    lea rdi, [rip + men_sb]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + men_sb + SB_ptr]
+    call app_toast
+    jmp 9f
+4:  xor r14d, r14d              # 1: no space, the menu stays (a folder by Tab or a click)
+    cmp dword ptr [rbx + PR_act], 1
+    jne 41f
+    cmp dword ptr [rsp], 0
+    je 41f
+    mov r14d, 1
+41: call box_text               # the box's text with the token replaced
+    mov r12, rax
+    mov r13, rdx
+    lea rdi, [rip + psb]
+    call sb_clear
+    lea rdi, [rip + psb]
+    mov rsi, r12
+    mov rdx, [rip + pop_ts]
+    call sb_push
+    lea rdi, [rip + psb]
+    mov rsi, [rip + men_sb + SB_ptr]
+    mov rdx, [rip + men_sb + SB_len]
+    call sb_push
+    mov r15, [rip + psb + SB_len]   # the caret
+    test r14d, r14d
+    jnz 5f
+    mov rax, [rip + pop_te]
+    cmp rax, r13
+    jae 42f
+    cmp byte ptr [r12 + rax], ' '
+    je 43f
+42: lea rdi, [rip + psb]
+    mov esi, ' '
+    call sb_push_byte
+43: inc r15                     # after the space
+5:  lea rdi, [rip + psb]
+    mov rsi, [rip + pop_te]
+    lea rsi, [r12 + rsi]
+    mov rdx, r13
+    sub rdx, [rip + pop_te]
+    call sb_push
+    test r14d, r14d
+    jnz 6f
+    call agentpop_close
+6:  mov rdi, r15
+    call set_box
+9:  EPILOGUE
+
+.bss
+.p2align 3
+term_sb: .zero SB_SIZE          # phase 4 task 7: a terminal's name, a path being made
+men_sb: .zero SB_SIZE           #   the mention picked
+men_path: .zero SB_SIZE
+
 .data
 .p2align 2
 trk_last: .long -1              # the level a drag of the track gave last
@@ -3882,7 +4388,8 @@ pop_q_marker: .byte 0           # 1: the next query differs from the last, whate
 .p2align 3
 sec_names: .quad .Lempty_s, .Ls_context, .Ls_model, .Ls_customize, .Ls_settings, .Ls_support, .Ls_slash
     .quad .Lempty_s
-kind_names: .quad .Ld_dash, .Lk_menu, .Lk_modes, .Lk_models
+kind_names: .quad .Ld_dash, .Lk_menu, .Lk_modes, .Lk_models, .Lk_mention
+mention_kinds: .quad .Lk_file, .Lk_folder, .Lk_terminal   # phase 4 task 7
 empty: .byte 0
 .Lempty_s: .asciz ""
 .Ls_context: .asciz "Context"
@@ -3937,6 +4444,14 @@ empty: .byte 0
 .Lk_menu: .asciz "menu"
 .Lk_modes: .asciz "modes"
 .Lk_models: .asciz "models"
+.Lk_mention: .asciz "mention"   # phase 4 task 7
+.Lk_file: .asciz "file"
+.Lk_folder: .asciz "folder"
+.Lk_terminal: .asciz "terminal"
+.Lterminal_colon: .asciz "terminal:"
+.Lno_files: .asciz "No files found"
+.Lcut_note: .asciz "Only the first 200,000 files are listed."
+.Lrefused_generic: .asciz "This path can't be @-mentioned: "
 .Lf_check: .asciz "check"
 .Lf_off: .asciz "off"
 .Lf_on: .asciz "on"

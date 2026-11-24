@@ -1730,6 +1730,10 @@ ck_agents_focus:
     mov edi, FOCUS_AGENTS
     call ck_focus_is
     jmp ck_bool
+ck_agents_input_focus:          # phase 4 task 8: agentsInputFocus, the agents panel's prompt box
+    mov edi, FOCUS_AGENT_INPUT
+    call ck_focus_is
+    jmp ck_bool
 ck_terminal_focus:
     mov edi, FOCUS_TERMINAL
     call ck_focus_is

@@ -2901,6 +2901,11 @@ ai_ctl:
     .quad .Lc_print_agent_offer, c_print_agent_offer
     # phase 6, sessions: the session list (agentlist.s)
     .quad aglist_n_print, aglist_print, aglist_n_state, aglist_print_state, aglist_n_list, aglist_ctl_entry
+    # the dialogs (agentdlg.s; phase 7, claude-chat-p7): agent-dialog NAME, -pick N, -press N, -filter T,
+    #   -close, print-agent-dialog [fit]
+    .quad agentdlg_n_open, agentdlg_c_open, agentdlg_n_pick, agentdlg_c_pick
+    .quad agentdlg_n_press, agentdlg_c_press, agentdlg_n_filter, agentdlg_c_filter
+    .quad agentdlg_n_close, agentdlg_c_close, agentdlg_n_print, agentdlg_c_print
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

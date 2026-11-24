@@ -2624,7 +2624,11 @@ FN agentext_input_key
     jne 6f
     mov dword ptr [rip + g_focus], FOCUS_EDITOR   # the panel was hidden: the editor has the keys
     jmp 9f
-6:  mov edi, r12d               # the composer first: an open popup takes its keys (Escape closes it
+6:  call agentdlg_key           # a dialog over the panel takes the keys first (agentdlg.s)
+    test eax, eax
+    jz 61f
+    EPILOGUE
+61: mov edi, r12d               # the composer first: an open popup takes its keys (Escape closes it
     mov esi, r13d               #   before Escape means anything else)
     mov edx, r14d
     call composer_key

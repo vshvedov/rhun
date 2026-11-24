@@ -3465,7 +3465,56 @@ ENDSTRUCT ACH_SIZE
 .equ ACT_ULTRA, 16
 .equ ACT_FOCUSVIEW, 17          # focus view (agentfold.s, task 9)
 .equ ACT_RESUME, 18             # phase 6, sessions: "Resume conversation", /resume: the history dropdown
-.equ ACT_COUNT, 19
+# phase 7, the dialogs (claude-chat-p7: agentdlg.s, claude_dlg.s): the commands that open them
+.equ ACT_STATUS, 19             # Status (/status)
+.equ ACT_USAGE, 20              # Account & usage (/usage, the rate band's "View usage")
+.equ ACT_CONTEXT, 21            # Context usage (/context)
+.equ ACT_OSTYLE, 22             # Output styles
+.equ ACT_SKILLS, 23             # Slash commands (/skills, /help)
+.equ ACT_MEMORY, 24             # Memory (/memory)
+.equ ACT_INSTRUCT, 25           # Instructions
+.equ ACT_COUNT, 26
+# the dialog shell (agentdlg.s): a row (DGR), its kinds and flags, a button's flags, a dialog's ops table
+.equ ID_AGDLG, 0x8e00           # the dialog's controls: + DID_* (agentdlg.s), to 0x8fff
+STRUCT
+F DGR_kind, 4            # DGK_*
+F DGR_flags, 4           # DGF_*
+F DGR_act, 4             # its act (Enter, a click), 0 none
+F DGR_act2, 4            # a DGF_STATE row's pill's act (Space, a click on the pill)
+F DGR_val, 8             # a bar's percent, a swatch's ARGB
+F DGR_arg, 8             # passed with its acts
+F DGR_t1, 8              # owned cstrs (agentdlg_text)
+F DGR_t2, 8
+F DGR_t3, 8
+F DGR_y, 4               # the layout's (agentdlg.s)
+F DGR_h, 4
+F DGR_m, 4
+F DGR_pad, 4
+ENDSTRUCT DGR_SIZE
+.equ DGK_HEAD, 1
+.equ DGK_PAIR, 2
+.equ DGK_TEXT, 3
+.equ DGK_BAR, 4
+.equ DGK_ITEM, 5
+.equ DGK_TOGGLE, 6
+.equ DGK_COLS, 7
+.equ DGK_LINK, 8
+.equ DGK_GAP, 9
+.equ DGF_MUTED, 1
+.equ DGF_ERROR, 2
+.equ DGF_CHECK, 4
+.equ DGF_OFF, 8                 # greyed, takes no focus
+.equ DGF_FILTER, 16             # shown only while it matches the filter
+.equ DGF_ON, 32                 # a switch that is on
+.equ DGF_SWATCH, 64             # COLS: DGR_val is an ARGB square before t1
+.equ DGF_SMALL, 128             # TEXT: the small face
+.equ DGF_STATE, 256             # ITEM: t3 is a pill (DGR_act2)
+.equ DBF_PRIMARY, 1
+.equ DBF_NUM, 2                 # the footer's buttons are numbered; digits press them
+.equ DGO_act, 0                 # a dialog's ops: (act, arg, DR* or 0)
+.equ DGO_free, 8                #   (): it closes
+.equ DA_CLOSE, -1               # an act that closes the dialog
+.equ DA_ASK, -2                 # DGO_act: the driver it waited for is ready (agentdlg_pend)
 STRUCT
 F AGC_kind, 4           # the driver kind (AS_kind)
 F AGC_flags, 4          # AGCF_*

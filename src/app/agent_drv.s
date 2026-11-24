@@ -263,7 +263,9 @@ FN agent_state_set
     je 2f
     cmp r12d, ALS_FAILED
     jne 9f
-2:  mov rdi, rbx
+2:  mov rdi, rbx                # a dialog waiting for its process fails, one shown for it closes (agentdlg.s)
+    call agentdlg_ended
+    mov rdi, rbx
     mov rax, [rbx + AL_drv]
     call [rax + DRV_ended]
 9:  EPILOGUE
@@ -274,6 +276,8 @@ live_free:
     mov rbx, rdi
     mov rdi, [rbx + AL_as]      # a popup opened for its session closes (agentpop.s)
     call agentpop_gone
+    mov rdi, rbx                # a dialog's wait on it ends (agentdlg.s)
+    call agentdlg_gone
     lea rdi, [rbx + AL_cn]
     call conn_close
     mov rdi, rbx
@@ -539,6 +543,8 @@ FN agent_closed
     PROLOGUE
     mov rbx, rdi
     call agentext_row_gone
+    mov rdi, rbx                # a dialog opened for it closes (agentdlg.s)
+    call agentdlg_gone
     mov r12, [rbx + AS_live]
     test r12, r12
     jz 9f
@@ -2018,6 +2024,8 @@ FN ev_ready
     mov rbx, rdi
     test dword ptr [rbx + AL_flags], ALF_ENDING
     jnz 9f                      # a start given up (start_cancel): it is ending, nothing goes
+    mov rdi, rbx                # a dialog that waited for the process asks it now (agentdlg.s)
+    call agentdlg_ready
     mov esi, ALS_READY
     cmp qword ptr [rbx + AL_queue + VEC_len], 0
     je 1f

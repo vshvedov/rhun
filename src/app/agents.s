@@ -3544,6 +3544,12 @@ FN agents_key
     mov r12d, edi
     mov r13d, esi
     mov r14d, edx
+    call agentdlg_key           # a dialog over the panel takes its keys before anything (agentdlg.s)
+    test eax, eax
+    jnz 5f
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, r14d
     call aglist_key             # phase 6: a rename field, the history dropdown, the list's keys (agentlist.s)
     test eax, eax
     jnz 5f
@@ -7236,6 +7242,7 @@ FN agents_draw
     mov edx, [rsp + 8]
     mov ecx, [rsp + 12]
     call gfx_clip_push
+    call agentdlg_shield        # a dialog over the panel (agentdlg.s): what is under it takes no pointer
     call aglist_shield          # phase 6: the pointer over the history dropdown is its own (agentlist.s)
     call agentext_new_active    # AI (D4): a new session of an extension is being written
     test rax, rax
@@ -7265,6 +7272,11 @@ FN agents_draw
     mov edx, [rsp + 8]
     mov ecx, [rsp + 12]
     call aglist_drop_draw
+    mov edi, [rsp]              # the dialog, drawn last over all of it (agentdlg.s)
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 12]
+    call agentdlg_draw
     call gfx_clip_pop
     EPILOGUE
 

@@ -2121,7 +2121,17 @@ FN agentpop_slash
     jz 8f
     test dword ptr [rax + ACM_flags], ACMF_LOCAL
     jz 8f
-    mov r15d, [rax + ACM_act]
+    test dword ptr [rax + ACM_flags], ACMF_CLI  # one the program advertises runs here by its name only:
+    jz 11f                                      #   an alias of it goes as text (phase 7: /cost is the
+    mov r15, rax                                #   program's, /usage rhun's dialog, as the extension's)
+    lea rdi, [r12 + 1]
+    lea rsi, [r14 - 1]
+    mov rdx, [rax + ACM_name]
+    call str_eq_cstr
+    test eax, eax
+    jz 8f
+    mov rax, r15
+11: mov r15d, [rax + ACM_act]
     cmp r15d, ACT_SEND
     je 8f
     cmp r15d, ACT_UNAVAILABLE

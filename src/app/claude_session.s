@@ -100,6 +100,9 @@ FN claude_init_answer
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    call claude_dlg_init        # the account and the output style, for the dialogs (claude_dlg.s)
+    mov rdi, rbx
+    mov rsi, r12
     mov edi, AG_CLAUDE
     call agentcfg_get
     mov r13, rax
@@ -2679,6 +2682,13 @@ FN claude_action
     je .Lca_settings
     cmp r12d, ACT_HELP
     je .Lca_help
+    mov rdi, rbx                # phase 7: a dialog's command (claude_dlg.s)
+    mov esi, r12d
+    mov rdx, r13
+    mov rcx, r14
+    call claude_dlg_open
+    test eax, eax
+    jnz .Lca_yes
     cmp r12d, ACT_EFFORT        # the effort row: a step, a round, or a level's id (a draft's: AL* 0)
     je 10f
     test rbx, rbx
@@ -2835,11 +2845,17 @@ FN claude_rate
     mov rcx, [rip + rsb + SB_len]
     call ev_band
     test dword ptr [rbx + AL_cfg], CLP_PAID
-    jz 9f
+    jz 8f
     mov rdi, rbx
     mov esi, BK_RATE
     lea rdx, [rip + .Lr_more]
     lea rcx, [rip + .Lr_more_url]
+    call ev_band_link
+    EPILOGUE
+8:  mov rdi, rbx                # phase 7: "View usage" opens Account & usage (a band has one link: a Pro or
+    mov esi, BK_RATE            #   Max plan keeps "Get more usage")
+    lea rdx, [rip + .Lr_view_usage]
+    lea rcx, [rip + .Lr_view_usage_url]
     call ev_band_link
     EPILOGUE
 7:  mov rdi, rbx
@@ -3336,6 +3352,21 @@ spin_record:
 9:  EPILOGUE
 
 # ---- times in the bundle's form (index.js @3698835 ex, @3698130 Vj, @3698516 $j) ----
+
+# phase 7 (claude_dlg.s): FN claude_reset_text(unix seconds, named day) -> rax ptr, rdx len: fmt_reset's
+#   words alone (rsb, valid until the next band or call)
+FN claude_reset_text
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    lea rdi, [rip + rsb]
+    call sb_clear
+    mov rdi, rbx
+    mov esi, r12d
+    call fmt_reset
+    mov rax, [rip + rsb + SB_ptr]
+    mov rdx, [rip + rsb + SB_len]
+    EPILOGUE
 
 # fmt_reset(unix seconds, esi named day): rsb gains "soon" within a minute, "at 3:45 PM" within a day
 #   unless named day, else "Tue, Nov 24 at 3:45 PM" (", 2027" after the day in another year), local time
@@ -3938,6 +3969,10 @@ menu_tbl:
     .quad .Lm_model, .Ld_model
     .long APK_ROW, 0
     .quad shows_model
+    .long APS_MODEL, ACT_USAGE      # phase 7 (claude_dlg.s)
+    .quad .Lm_usage, .Lm_usage_d
+    .long APK_ROW, 0
+    .quad 0
     .long APS_MODEL, ACT_MODES
     .quad .Lm_modes, .Lm_modes_d
     .long APK_ROW, 0
@@ -3958,6 +3993,27 @@ menu_tbl:
     .quad .Lm_fast, .Lm_fast_d
     .long APK_ROW, 0
     .quad shows_fast
+    # phase 7, the dialogs that show what Claude Code reports (claude_dlg.s; claude-chat-p7)
+    .long APS_CUSTOMIZE, ACT_STATUS
+    .quad .Lm_status, .Lm_status_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CUSTOMIZE, ACT_SKILLS
+    .quad .Lm_skills, .Lm_skills_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CUSTOMIZE, ACT_MEMORY
+    .quad .Lm_memory, .Lm_memory_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CUSTOMIZE, ACT_INSTRUCT
+    .quad .Lm_instruct, .Lm_instruct_d
+    .long APK_ROW, 0
+    .quad 0
+    .long APS_CUSTOMIZE, ACT_OSTYLE
+    .quad .Lm_ostyle, .Lm_ostyle_d
+    .long APK_ROW, 0
+    .quad 0
     .long APS_CUSTOMIZE, ACT_TERMINAL
     .quad .Lm_term, .Lm_term_d
     .long APK_ROW, 0
@@ -3998,6 +4054,14 @@ local_cmds:
     .quad .Ln_copy, .Ld_copy, .Lh_copy, ACT_COPY
     .quad .Ln_login, .Ld_login, .Lempty, ACT_SIGNIN
     .quad .Ln_logout, .Ld_logout, .Lempty, ACT_SIGNOUT
+    # phase 7 (claude_dlg.s): the dialog commands the extension answers itself (1.25; /usage and /context
+    #   while the CLI's own are its built-ins, as TW decides)
+    .quad .Ln_status, .Ld_status, .Lempty, ACT_STATUS
+    .quad .Ln_skills, .Ld_skills, .Lempty, ACT_SKILLS
+    .quad .Ln_help, .Ld_help, .Lempty, ACT_SKILLS
+    .quad .Ln_memory, .Ld_memory, .Lempty, ACT_MEMORY
+    .quad .Ln_usage, .Ld_usage, .Lempty, ACT_USAGE
+    .quad .Ln_context, .Ld_context, .Lempty, ACT_CONTEXT
     .quad 0, 0, 0, 0
 .Lempty: .asciz ""
 .Ln_clear: .asciz "clear"
@@ -4038,6 +4102,31 @@ local_cmds:
 .Lm_signin: .asciz "Switch account"
 .Lm_signout: .asciz "Sign out"
 .Lm_help: .asciz "View help docs"
+# phase 7 (claude_dlg.s): the menu's and the slash table's words (ext-webview-ui.md 1.24, 1.25)
+.Lm_usage: .asciz "Account & usage\342\200\246"
+.Lm_usage_d: .asciz "View account info and usage"
+.Lm_status: .asciz "Status"
+.Lm_status_d: .asciz "Version, session, account, model and server details"
+.Lm_skills: .asciz "Slash commands"
+.Lm_skills_d: .asciz "Browse slash commands"
+.Lm_memory: .asciz "Memory"
+.Lm_memory_d: .asciz "View and manage what Claude remembers about this project"
+.Lm_instruct: .asciz "Instructions"
+.Lm_instruct_d: .asciz "Edit CLAUDE.md files"
+.Lm_ostyle: .asciz "Output styles"
+.Lm_ostyle_d: .asciz "Change response formatting style"
+.Ln_status: .asciz "status"
+.Ld_status: .asciz "Show version, account, model, MCP servers, and setup warnings"
+.Ln_skills: .asciz "skills"
+.Ld_skills: .asciz "List available skills"
+.Ln_help: .asciz "help"
+.Ld_help: .asciz "Browse slash commands"
+.Ln_memory: .asciz "memory"
+.Ld_memory: .asciz "View and manage what Claude remembers about this project"
+.Ln_usage: .asciz "usage"
+.Ld_usage: .asciz "View account info and usage"
+.Ln_context: .asciz "context"
+.Ld_context: .asciz "Show context usage"
 .Lm_help_d: .asciz "Open help documentation"
 .Lp_unshown: .asciz "Couldn't show the plan"     # plan review
 .Lp_couldnt: .asciz "Couldn't switch to plan mode"
@@ -4191,6 +4280,8 @@ local_cmds:
 .Lk_member2: .asciz "member_zero_credit_limit"
 .Lk_group: .asciz "group_zero_credit_limit"
 .Lr_more: .asciz "Get more usage"
+.Lr_view_usage: .asciz "View usage"            # phase 7 (claude_dlg.s)
+.Lr_view_usage_url: .asciz "dialog:usage"
 .Lr_more_url: .asciz "https://claude.ai/settings/usage"
 .Lr_soon: .asciz "soon"
 .Lr_at: .asciz "at "

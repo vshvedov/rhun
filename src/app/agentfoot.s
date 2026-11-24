@@ -552,6 +552,10 @@ link_draw:
 2:  mov rdi, r12                # the URL after the label
     call strlen
     lea r14, [r12 + rax + 1]
+    mov rdi, r14                # "dialog:NAME": a dialog of the panel's (agentdlg.s)
+    call agentdlg_link
+    test eax, eax
+    jnz 9f
     mov rdi, r14
     call strlen
     mov rdx, rax

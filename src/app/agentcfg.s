@@ -2052,7 +2052,9 @@ act_names:                      # ACT_* by value
     .quad .La_send, .La_clear, .La_new, .La_model, .La_modes, .La_thinking, .La_effort, .La_fast
     .quad .La_plan, .La_copy, .La_signin, .La_signout, .La_terminal, .La_settings, .La_help
     .quad .La_unavailable, .La_ultra
-    .quad aghead_a_focusview, aghead_n_resume   # phase 6: ACT_FOCUSVIEW's and ACT_RESUME's (agenthead.s)
+    .quad aghead_a_focusview, aghead_n_resume   # 17, 18: ACT_FOCUSVIEW's and ACT_RESUME's (agenthead.s)
+    # phase 7 (claude_dlg.s; claude-chat-p7): the dialogs' commands, ACT_STATUS (19) to ACT_INSTRUCT (25)
+    .quad .La_status, .La_usage, .La_context, .La_ostyle, .La_skills, .La_memory, .La_instruct
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .Lsuffix: .asciz ".agents-"
 .Lempty: .asciz ""
@@ -2116,6 +2118,13 @@ fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .La_help: .asciz "help"
 .La_unavailable: .asciz "unavailable"
 .La_ultra: .asciz "ultra"
+.La_status: .asciz "status"
+.La_usage: .asciz "usage"
+.La_context: .asciz "context"
+.La_ostyle: .asciz "output-style"
+.La_skills: .asciz "skills"
+.La_memory: .asciz "memory"
+.La_instruct: .asciz "instructions"
 .Lfs_off: .asciz "off"
 .Lfs_on: .asciz "on"
 .Lfs_cooldown: .asciz "cooldown"

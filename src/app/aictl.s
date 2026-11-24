@@ -2906,6 +2906,7 @@ ai_ctl:
     .quad agentdlg_n_open, agentdlg_c_open, agentdlg_n_pick, agentdlg_c_pick
     .quad agentdlg_n_press, agentdlg_c_press, agentdlg_n_filter, agentdlg_c_filter
     .quad agentdlg_n_close, agentdlg_c_close, agentdlg_n_print, agentdlg_c_print
+    .quad claude_dlg_n_usage, claude_dlg_c_usage   # print-agent-usage [toggle] (claude_dlg.s)
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

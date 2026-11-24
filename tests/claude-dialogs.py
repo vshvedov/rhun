@@ -164,5 +164,312 @@ class ShellTest(DialogCase):
         self.assertEqual(self.command('print-agent-dialog'), 'dialog=none\n')
 
 
+class ClaudeDialogCase(DialogCase):
+    """A conversation of the fake's and a dialog of Claude Code's over it."""
+
+    def ready(self, env=None):
+        """rhun, a conversation whose process is up (a first prompt answered)."""
+        self.start(env=env)
+        self.command('cmd focus_agents')
+        self.chat('hello')
+
+    def draft(self, env=None):
+        """rhun, a new conversation's draft (no process)."""
+        self.start(env=env)
+        self.command('cmd focus_agents')
+        self.command('agent-new claude')
+
+    def opened(self, name, state='ready'):
+        self.command('agent-dialog ' + name)
+        return self.until_state(state)
+
+    def rows(self, kind):
+        return [line for line in self.body() if line.split(' ')[0].split('[')[0] == kind]
+
+
+class StatusTest(ClaudeDialogCase):
+    """Row 6.14 (and 1.25's /status): get_status's sections as label/value rows (finding 60)."""
+
+    def test_rows_with_the_extensions_labels(self):
+        self.ready()
+        head = self.opened('status')
+        self.assertEqual(head['title'], 'Status')
+        body = self.body()
+        self.assertEqual(body[0], 'head Session')
+        self.assertIn(f'pair Working folder\t{self.project}', body)         # the CLI's "cwd"
+        self.assertIn('pair Session type\tinteractive', body)               # its "Session kind"
+        self.assertIn('pair Email\tuser@example.com', body)
+        self.assertIn('head Environment', body)
+        self.assertEqual(self.control('get_status'), [{'subtype': 'get_status'}])
+
+    def test_typed_command_opens_it_and_sends_nothing(self):
+        self.ready()
+        self.command('agent-prompt /status')
+        self.until_state('ready')
+        self.assertEqual(self.prompts(), ['hello'])                         # /status never went as text
+
+    def test_a_draft_starts_its_process_quietly(self):
+        self.draft()
+        self.command('agent-dialog status')
+        head = self.until_state('ready')
+        self.assertEqual(head['dialog'], 'status')
+        self.assertEqual(len(self.starts()), 1)
+        self.assertEqual(self.prompts(), [])
+
+    def test_loading(self):
+        self.draft(env={'FAKE_CLAUDE_DIALOG_MS': '1500'})
+        self.command('agent-dialog status')
+        head = self.head()
+        self.assertEqual(head['state'], 'loading')
+        self.assertIn('msg Loading status…', self.command('print-agent-dialog'))
+        self.until_state('ready')
+
+    def test_error_and_retry(self):
+        self.draft(env={'FAKE_CLAUDE_DIALOG_FAIL': 'get_status'})
+        self.command('agent-dialog status')
+        self.until_state('error')
+        self.assertEqual(self.body(), ['msg Could not load status: fake: get_status refused',
+                                       'button 1 Retry primary'])
+        self.command('agent-dialog-press 1')
+        self.until(lambda: len(self.control('get_status')) == 2, 'the second get_status')
+        self.until_state('error')
+        self.assertEqual(self.body(), ['msg Could not load status: fake: get_status refused',
+                                       'button 1 Retry primary'])
+
+    def test_closes_with_its_process_and_its_conversation(self):
+        self.ready()
+        self.opened('status')
+        self.command('agent-release')                                       # the process ends
+        self.until(lambda: self.command('print-agent-dialog') == 'dialog=none\n', 'closed')
+        self.opened('status')
+        self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')                # the panel's back arrow, under it:
+        self.assertEqual(self.command('print-agent-dialog'), 'dialog=none\n')   # the press closes the dialog
+        self.assertIn(' box=1', self.command('print-agent-input'))          # and the conversation stays open
+        self.opened('status')
+        self.command('agent-new claude')                                    # another conversation shows
+        self.command('shot /dev/null')
+        self.assertEqual(self.command('print-agent-dialog'), 'dialog=none\n')
+
+    def test_menu_entries(self):
+        self.ready()
+        self.command('agent-menu')
+        menu = self.command('print-agent-menu')
+        for label in ('Account & usage…', 'Status', 'Slash commands', 'Memory', 'Instructions', 'Output styles'):
+            self.assertIn('\t' + label if False else label, menu)
+        self.command('agent-menu Status')
+        self.command('agent-menu-pick 1')
+        self.assertEqual(self.until_state('ready')['dialog'], 'status')
+
+
+class UsageTest(ClaudeDialogCase):
+    """Rows 6.15 and 2.18's part: Account (initialize's), the usage bars, the session's totals (finding 61)."""
+
+    def test_account_and_bars(self):
+        self.ready()
+        self.opened('usage')
+        body = self.body()
+        self.assertEqual(body[:5], ['head Account', 'pair Auth method\tClaude AI', 'pair Email\tuser@example.com',
+                                    "pair Organization\tuser@example.com's Organization", 'pair Plan\tClaude Max'])
+        self.assertEqual(body[5], 'head Usage')
+        self.assertTrue(body[6].startswith('bar Weekly (7 day) 14% Resets '), body[6])
+        self.assertTrue(body[7].startswith('bar Weekly Fable 16% Resets '), body[7])
+        self.assertEqual(body[8], 'link[1] Manage usage on claude.ai')
+        self.assertEqual(self.control('get_usage'), [{'subtype': 'get_usage'}])
+
+    def test_loading_shows_the_account_first(self):
+        self.draft(env={'FAKE_CLAUDE_DIALOG_MS': '1500'})
+        self.command('agent-dialog usage')
+        body = self.body()
+        self.assertEqual(body[1], 'pair Auth method\tNot authenticated')    # (no initialize answer yet)
+        self.assertEqual(body[-1], 'text Loading usage data…')
+        self.until(lambda: 'bar Weekly (7 day) 14%' in self.command('print-agent-dialog'), 'the bars')
+
+    def test_session_totals_without_rate_limits(self):
+        self.ready(env={'FAKE_CLAUDE_USAGE': 'api', 'FAKE_CLAUDE_ACCOUNT': 'bedrock'})
+        self.opened('usage')
+        body = self.body()
+        self.assertIn('pair Auth method\tAmazon Bedrock', body)
+        self.assertNotIn('pair Email\tuser@example.com', body)
+        self.assertIn('pair Estimated cost\t$0.0045', body)
+        self.assertIn('pair Total duration (API)\t1s', body)
+        self.assertIn('pair Total duration (wall)\t1h 3m 13s', body)
+        self.assertIn('pair Total code changes\t1 line added, 2 lines removed', body)
+        self.assertIn('pair claude-haiku-5-5\t1.2k input, 16 output, 25.9k cache read, 20.6k cache write ($0.0045)',
+                      body)
+
+    def test_no_limits_for_this_login(self):
+        self.ready(env={'FAKE_CLAUDE_USAGE': 'none'})
+        self.opened('usage')
+        self.assertIn("text Plan limits aren't available for this login method.", self.body())
+
+    def test_failure_and_retry(self):
+        self.ready(env={'FAKE_CLAUDE_DIALOG_FAIL': 'get_usage'})
+        self.command('agent-dialog usage')
+        self.until(lambda: 'text Failed to load usage data' in self.body(), 'the failure')
+        self.assertIn('link[1] Retry', self.body())
+        self.command('agent-dialog-pick 1')
+        self.until(lambda: len(self.control('get_usage')) == 2, 'the second get_usage')
+
+    def test_rate_band_view_usage(self):
+        self.ready(env={'FAKE_CLAUDE_RATE': 'warning', 'FAKE_CLAUDE_ACCOUNT': 'none'})   # no Pro or Max plan
+        link = None
+        for line in self.command('print-agent-bands').splitlines():
+            match = re.match(r'link rate (\d+),(\d+) (.*)\t(.*)$', line)
+            if match:
+                link = match.groups()
+        self.assertEqual(link[2:], ('View usage', 'dialog:usage'))
+        self.command(f'click {link[0]} {link[1]}')
+        self.assertEqual(self.until_state('ready')['dialog'], 'usage')
+
+    def test_list_section(self):
+        self.ready()
+        self.assertEqual(self.command('print-agent-usage'), 'usage open=0\n')
+        self.assertEqual(self.command('print-agent-usage toggle'),
+                         'usage open=1\nemail user@example.com\ndetails\n')   # no usage asked yet
+        self.opened('usage')
+        self.command('agent-dialog-close')
+        self.assertEqual(self.command('print-agent-usage'),
+                         'usage open=1\nemail user@example.com\nmeter Weekly (7 day) 14%\n'
+                         'meter Weekly Fable 16%\ndetails\n')
+
+    def test_typed_usage_opens_it(self):
+        self.ready()
+        self.command('agent-prompt /usage')
+        self.assertEqual(self.until_state('ready')['dialog'], 'usage')
+        self.assertEqual(self.prompts(), ['hello'])
+
+
+class ContextTest(ClaudeDialogCase):
+    """Row 2.16: Context usage from get_context_usage (finding 62)."""
+
+    def test_table(self):
+        self.ready()
+        self.opened('context')
+        self.assertEqual(self.body(), [
+            'head claude-haiku-5-5 hint 33.0k / 1.0M tokens (3%)',
+            'bar  3% ',
+            'cols Category\tTokens\tUsage',
+            'cols System prompt\t3.6k\t0.4%',
+            'cols System tools\t14.3k\t1.4%',
+            'cols Memory files\t385\t<0.1%',
+            'cols Free space\t934.0k\t93.4%',
+            'head Memory files hint /memory',
+            f'cols {self.project}/CLAUDE.md\t371\t',
+            f'cols {self.work}/.claude/CLAUDE.md\t14\t',
+            'head Custom agents hint /agents',
+            'cols reviewer\t404\t'])
+        self.command('agent-dialog-close')
+        self.command('agent-prompt /context')
+        self.assertEqual(self.until_state('ready')['dialog'], 'context')
+        self.assertEqual(self.prompts(), ['hello'])
+
+
+class OutputStyleTest(ClaudeDialogCase):
+    """Row 6.16: the styles Claude Code lists (finding 63), the one in effect checked; a pick goes to the
+    project's local settings (update_settings localSettings outputStyle, finding 12; the fake's only)."""
+
+    def test_pick(self):
+        self.ready()
+        self.opened('output-style')
+        self.assertEqual(self.body(), ['head Select an output style', 'item[1] default\t\t check',
+                                       'item[2] Explanatory\t\t', 'item[3] Learning\t\t'])
+        self.assertEqual(self.head()['focus'], '1')
+        self.keys('Down', 'Return')
+        self.until(lambda: self.command('print-agent-dialog') == 'dialog=none\n', 'closed')
+        self.assertEqual(self.control('update_settings'), [{'subtype': 'update_settings', 'source': 'localSettings',
+                                                            'settings': {'outputStyle': 'Explanatory'}}])
+        self.opened('output-style')
+        self.assertIn('item[2] Explanatory\t\t check', self.body())
+
+
+class SkillsTest(ClaudeDialogCase):
+    """Row 6.13 (/skills, /help): the commands Claude Code offers, filtered; a skill's source, size and state
+    (finding 64), cycled with set_skill_state (the fake's only)."""
+
+    def test_rows_filter_and_select(self):
+        self.ready()
+        self.opened('skills')
+        self.assertEqual(self.head()['focus'], '1')                          # the filter
+        items = self.rows('item')
+        self.assertIn('item[2] /compact\tClear history but keep a summary\t', items)
+        self.assertIn('item[16] /tools:lint\tplugin · ~1.2k tokens\tOn · locked', items)
+        self.assertIn('item[17] /notes\tuser · < 20 tokens\tOff pill', items)
+        self.command('type comp')                                           # /compact, and /logout's "computer"
+        self.assertEqual([i.split('\t')[0] for i in self.rows('item')], ['item[2] /compact', 'item[3] /logout'])
+        self.keys('Return')
+        self.assertEqual(self.command('print-agent-dialog'), 'dialog=none\n')
+        self.assertIn('input=/compact ', self.command('print-agent-input'))
+
+    def test_state(self):
+        self.ready()
+        self.opened('skills')
+        self.command('agent-dialog-filter review')
+        self.keys('Tab', 'space')
+        self.until(lambda: 'item[2] /review\tuser · ~120 tokens\tName only pill' in self.body(), 'the new state')
+        logged = [r['dialog'] for r in self.records() if 'dialog' in r]
+        self.assertEqual(logged, [{'set_skill_state': {'name': 'review', 'state': 'name-only',
+                                                       'handles': {'unqualified_name': 'review',
+                                                                   'aliases': ['review']}}}])
+
+    def test_no_process_starts(self):
+        self.draft()
+        self.command('agent-dialog skills')
+        self.assertEqual(self.head()['state'], 'ready')
+        self.assertEqual(self.body(), ['text No slash commands available.'])   # none known yet
+        self.assertEqual(self.starts(), [])
+        self.command('agent-dialog-close')
+        self.chat('hello')                                                  # the commands are kept now
+        self.command('agent-release')
+        self.until_gone()
+        self.command('agent-dialog skills')
+        self.assertIn('item[2] /compact\tClear history but keep a summary\t', self.rows('item'))
+        self.assertNotIn('pill', self.command('print-agent-dialog'))       # no process: no skills' states
+        self.assertEqual(len(self.starts()), 1)
+        self.command('agent-prompt /help')                                  # /help is the same browser
+        self.assertEqual(self.head()['dialog'], 'skills')
+
+
+class MemoryTest(ClaudeDialogCase):
+    """Rows 6.11 and 6.12: get_memory_dialog (finding 65): Memory's switches, memories and folder;
+    Instructions' CLAUDE.md files, opened in a tab with the extension's note."""
+
+    def test_memory(self):
+        self.ready()
+        self.opened('memory')
+        self.assertEqual(self.body(), ['toggle[1] Auto-memory on', 'text No memories saved for this project yet.',
+                                       'item[2] Open auto-memory folder\t\t',
+                                       'text ↑ ↓ to navigate · Enter to select · Esc to close'])
+        self.command('agent-dialog-pick 1')
+        self.until(lambda: 'toggle[1] Auto-memory off' in self.body(), 'switched off')
+        logged = [r['dialog'] for r in self.records() if 'dialog' in r]
+        self.assertEqual(logged, [{'set_memory_setting': {'setting': 'autoMemoryEnabled', 'enabled': False}}])
+
+    def test_instructions(self):
+        self.ready()
+        (self.project / 'CLAUDE.md').write_text('Reply briefly.\n', encoding='utf-8')
+        self.opened('instructions')
+        self.assertEqual(self.body(), ['item[1] User instructions\tSaved in ~/.claude/CLAUDE.md\t',
+                                       'item[2] Project instructions\tChecked in at ./CLAUDE.md\t',
+                                       'item[3] CLAUDE.local.md\tLocal, not checked in\t',
+                                       'text ↑ ↓ to navigate · Enter to select · Esc to close'])
+        self.keys('Down', 'Return')
+        self.assertEqual(self.command('print-agent-dialog'), 'dialog=none\n')
+        self.assertIn('Reply briefly.', self.command('print-doc'))
+        self.assertEqual(self.command('print-toast').strip(),
+                         'toast=Claude reads Project instructions when a session starts. After editing, reload to '
+                         'apply changes to the current session.')
+
+
+class FitTest(ClaudeDialogCase):
+    """Every dialog lies inside the panel at every size and width."""
+
+    def test_fit(self):
+        self.ready()
+        for name in ('status', 'usage', 'context', 'output-style', 'skills', 'memory', 'instructions'):
+            self.opened(name)
+            for line in self.command('print-agent-dialog fit').splitlines():
+                self.assertTrue(line.endswith(' in=1'), (name, line))
+
+
 if __name__ == '__main__':
     unittest.main()

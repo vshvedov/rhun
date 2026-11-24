@@ -812,8 +812,8 @@ PARITY = [
     ('fetch', ('1',), {}), ('pwsh', ('1',), {}), ('net', ('1',), {}), ('skill', ('1',), {}),
     ('project', ('1',), {}), ('glob', ('1',), {}), ('grep', ('1',), {}), ('websearch', ('1',), {}),
     ('noid', (), {}), ('subagent', (), {}), ('pending', ('3',), {}), ('withdraw', (), {}),
-    ('apierror', (), {}), ('/context', (), {}), ('hello', (), {}), ('bg', (), {}), ('/compact', (), {}),
-    ('/status', (), {}), ('error', (), {}),
+    ('apierror', (), {}), ('/cost', (), {}), ('hello', (), {}), ('bg', (), {}), ('/compact', (), {}),
+    ('error', (), {}),      # (/cost, not /context or /status: phase 7 made those rhun's dialogs)
     ('agent', (), {'until': 'The folder has a.py and notes.txt.'}),
     ('agents2', (), {'until': 'Both agents ended.'}),
 ]

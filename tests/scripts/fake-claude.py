@@ -4365,6 +4365,150 @@ def worker():
                 COND.notify_all()
 
 
+# ---- phase 7, the dialogs (claude-chat-p7): the requests behind Status, Account & usage, Context usage,
+# Output styles, the slash commands browser, Memory and Instructions, in the shapes of README findings 60 to
+# 66 (2.1.330's answers, account details made up). Knobs: FAKE_CLAUDE_DIALOG_MS (each answer that late);
+# FAKE_CLAUDE_DIALOG_FAIL (comma-separated subtypes answered with "fake: SUBTYPE refused", unrecorded);
+# FAKE_CLAUDE_USAGE (claude: bars, as recorded; api: no rate limits, the session's totals; none: no rate
+# limits). set_skill_state and set_memory_setting keep their change in this process only and are logged
+# (dialog=...); update_settings outputStyle goes to the project's local settings as above.
+DIALOG_SUBTYPES = ('get_status', 'get_usage', 'get_context_usage', 'get_skills_dialog', 'set_skill_state',
+                   'get_memory_dialog', 'set_memory_setting', 'reload_output_styles')
+SKILL_STATES = {}                   # a skill's state set by set_skill_state (this process only)
+MEMORY_SETTINGS = {'autoMemoryEnabled': True, 'autoDreamEnabled': False}
+
+
+def dialog_status():
+    """get_status (finding 60): two sections of label/value rows; cwd is the CLI's own label."""
+    account = init_response().get('account') or {}
+    session = [{'label': 'Version', 'value': '2.1.330'}, {'label': 'Session ID', 'value': SID},
+               {'label': 'Session kind', 'value': 'interactive'}, {'label': 'cwd', 'value': CWD}]
+    if account.get('email'):
+        session += [{'label': 'Login method', 'value': account.get('subscriptionType', '') + ' account'},
+                    {'label': 'Organization', 'value': account.get('organization', '')},
+                    {'label': 'Email', 'value': account['email']}]
+    return {'sections': [{'title': 'Session', 'rows': session},
+                         {'title': 'Environment', 'rows': [{'label': 'Model', 'value': 'claude-opus-5-5'},
+                                                            {'label': 'MCP servers', 'value': '1 connected · /mcp'},
+                                                            {'label': 'Setting sources', 'value': 'User settings'}]}]}
+
+
+def dialog_usage():
+    """get_usage (finding 61): the session's totals, the plan, rate limits (null ones too), behaviors."""
+    kind = ENV.get('FAKE_CLAUDE_USAGE', 'claude')
+    session = {'total_cost_usd': 0.00449649, 'total_api_duration_ms': 1861, 'total_duration_ms': 3793000,
+               'total_lines_added': 1, 'total_lines_removed': 2,
+               'model_usage': {'claude-haiku-5-5': {'inputTokens': 1174, 'outputTokens': 16,
+                                                    'cacheReadInputTokens': 25929, 'cacheCreationInputTokens': 20559,
+                                                    'webSearchRequests': 0, 'costUSD': 0.00449649}}}
+    if kind != 'claude':
+        return {'session': session, 'subscription_type': None, 'rate_limits_available': False,
+                'rate_limits': None, 'behaviors': None}
+    resets = time.strftime('%Y-%m-%dT%H:%M:%S.180576+00:00', time.gmtime(time.time() + 2 * 86400))
+    return {'session': session, 'subscription_type': 'max', 'rate_limits_available': True,
+            'rate_limits': {'five_hour': None,
+                            'seven_day': {'utilization': 14, 'resets_at': resets, 'limit_dollars': None},
+                            'seven_day_opus': None, 'seven_day_sonnet': None,
+                            'model_scoped': [{'display_name': 'Fable', 'utilization': 16.5, 'resets_at': resets}]},
+            'behaviors': {'day': {'recommendations': [{'key': 'long_context', 'pct': 93,
+                                                       'title': 'Start fresh when you switch tasks',
+                                                       'detail': 'run /clear'}]}, 'week': None}}
+
+
+def dialog_context():
+    """get_context_usage (finding 62): categories (deferred ones too), totals, memory files, agents."""
+    return {'categories': [{'id': 'system_prompt', 'name': 'System prompt', 'tokens': 3624, 'color': 'promptBorder',
+                            'kind': 'used'},
+                           {'id': 'system_tools', 'name': 'System tools', 'tokens': 14339, 'color': 'inactive',
+                            'kind': 'used'},
+                           {'id': 'mcp_tools_deferred', 'name': 'MCP tools (deferred)', 'tokens': 88115,
+                            'color': 'inactive', 'isDeferred': True, 'kind': 'deferred'},
+                           {'id': 'memory_files', 'name': 'Memory files', 'tokens': 385, 'color': 'claude',
+                            'kind': 'used'},
+                           {'id': 'messages', 'name': 'Messages', 'tokens': 0, 'color': 'purple', 'kind': 'used'},
+                           {'id': 'free_space', 'name': 'Free space', 'tokens': 934008, 'color': 'promptBorder',
+                            'kind': 'free'}],
+            'totalTokens': 32992, 'maxTokens': 1000000, 'rawMaxTokens': 1000000,
+            'autocompactSource': 'model-default', 'percentage': 3, 'gridRows': [], 'model': 'claude-haiku-5-5',
+            'memoryFiles': [{'path': ENV['HOME'] + '/.claude/CLAUDE.md', 'type': 'User', 'tokens': 14},
+                            {'path': CWD + '/CLAUDE.md', 'type': 'Project', 'tokens': 371}],
+            'mcpTools': [], 'agents': [{'agentType': 'reviewer', 'source': 'projectSettings', 'tokens': 404}],
+            'isAutoCompactEnabled': True, 'apiUsage': None}
+
+
+def dialog_skills():
+    """get_skills_dialog (finding 64): {skills: [...]} (no "dialog" member), a plugin's skill locked."""
+    skills = [{'name': 'review', 'display_name': 'review', 'description': 'Review the diff', 'source': 'user',
+               'tokens': 119, 'state': 'on', 'advertised': True, 'handles': {'unqualified_name': 'review',
+                                                                            'aliases': ['review']}},
+              {'name': 'tools:lint', 'display_name': 'tools:lint', 'source': 'plugin', 'tokens': 1234,
+               'state': 'on', 'locked_by': 'plugin', 'advertised': True, 'handles': {'aliases': ['lint']}},
+              {'name': 'notes', 'display_name': 'notes', 'source': 'user', 'tokens': 12, 'state': 'off',
+               'advertised': False, 'handles': {}}]
+    for skill in skills:
+        skill['state'] = SKILL_STATES.get(skill['name'], skill['state'])
+    return {'skills': skills}
+
+
+def dialog_memory():
+    """get_memory_dialog (finding 65): files, folders, memories, auto_memory, auto_dream."""
+    folder = os.path.join(config_dir(), 'projects', re.sub(r'[^A-Za-z0-9]', '-', CWD), 'memory')
+    memories = []
+    if os.path.isdir(folder):
+        for name in sorted(os.listdir(folder)):
+            path = os.path.join(folder, name)
+            memories.append({'name': name, 'path': path, 'type': 'feedback', 'description': None,
+                             'modified_ms': int(os.path.getmtime(path) * 1000)})
+    return {'files': [{'kind': 'user', 'path': os.path.join(config_dir(), 'CLAUDE.md'), 'label': 'User instructions',
+                       'description': 'Saved in ~/.claude/CLAUDE.md', 'exists': True},
+                      {'kind': 'project', 'path': os.path.join(CWD, 'CLAUDE.md'), 'label': 'Project instructions',
+                       'description': 'Checked in at ./CLAUDE.md', 'exists': True},
+                      {'kind': 'local', 'path': os.path.join(CWD, 'CLAUDE.local.md'), 'label': 'CLAUDE.local.md',
+                       'description': '', 'exists': False}],
+            'folders': [{'kind': 'auto', 'path': folder + '/', 'label': 'Open auto-memory folder', 'description': ''}],
+            'memories': memories,
+            'auto_memory': {'enabled': MEMORY_SETTINGS['autoMemoryEnabled'], 'toggleable': True,
+                            'status': 'on' if MEMORY_SETTINGS['autoMemoryEnabled'] else 'off'},
+            'auto_dream': {'shown': False, 'enabled': MEMORY_SETTINGS['autoDreamEnabled'], 'toggleable': True,
+                           'status': 'off', 'detail': ''}}
+
+
+def dialog_request(rid, sub, request):
+    if sub in ENV.get('FAKE_CLAUDE_DIALOG_FAIL', '').split(','):
+        respond_error(rid, 'fake: %s refused' % sub)
+        return
+    if sub == 'set_skill_state':
+        SKILL_STATES[request.get('name')] = request.get('state')
+        log(dialog={'set_skill_state': {k: request.get(k) for k in ('name', 'state', 'handles')}})
+        answer = dialog_skills()
+    elif sub == 'set_memory_setting':
+        MEMORY_SETTINGS[request.get('setting')] = request.get('enabled')
+        log(dialog={'set_memory_setting': {k: request.get(k) for k in ('setting', 'enabled')}})
+        answer = {'dialog': dialog_memory()}
+    elif sub == 'reload_output_styles':      # finding 63
+        answer = {'available_output_styles': ['default', 'Explanatory', 'Learning']}
+    else:
+        answer = {'get_status': dialog_status, 'get_usage': dialog_usage, 'get_context_usage': dialog_context,
+                  'get_skills_dialog': dialog_skills, 'get_memory_dialog': dialog_memory}[sub]()
+    delay = int(ENV.get('FAKE_CLAUDE_DIALOG_MS', '0')) / 1000
+    if delay:
+        threading.Timer(delay, respond, (rid, answer)).start()
+    else:
+        respond(rid, answer)
+
+
+_handle_before_dialogs = handle
+
+
+def handle(message):                        # noqa: F811 (the dialogs' requests first, then the rest)
+    request = message.get('request') if message.get('type') == 'control_request' else None
+    if isinstance(request, dict) and request.get('subtype') in DIALOG_SUBTYPES and not message.get('_later'):
+        dialog_request(message.get('request_id'), request.get('subtype'), request)
+        return
+    _handle_before_dialogs(message)
+# ---- end of phase 7's dialogs ----
+
+
 threading.Thread(target=worker, daemon=True).start()
 for raw in sys.stdin:
     raw = raw.strip()

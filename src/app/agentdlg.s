@@ -1365,10 +1365,13 @@ FN agentdlg_shield
     mov rbx, [rip + dg_as]
     test rbx, rbx
     jz 1f
+    call agentext_new_active    # a new conversation's draft hides it
+    test rax, rax
+    jnz 2f
     call agents_open_driven
     cmp rax, rbx
     je 1f
-    call agentdlg_close
+2:  call agentdlg_close
     jmp 9f
 1:  mov dword ptr [rip + g_block], 1
 9:  EPILOGUE
@@ -1818,13 +1821,17 @@ draw_row:
     je .Ldr_link
     jmp .Ldr_click
 .Ldr_head:
-    mov r12d, [rsp + 8]         # the hint at the right
+    mov r12d, [rsp + 8]         # the hint at the right, half the row at most
     mov rsi, [rbx + DGR_t3]
     test rsi, rsi
     jz 1f
     mov rdi, [rip + ag_fsmall]
     call cwidth
     mov r13d, eax
+    mov eax, [rsp + 8]
+    shr eax, 1
+    cmp r13d, eax
+    cmovg r13d, eax
     mov rcx, [rbx + DGR_t3]
     mov rdi, rcx
     call strlen
@@ -3733,6 +3740,37 @@ FN agentdlg_c_open
 8:  mov rax, -1
     EPILOGUE
 
+# FN agentdlg_link(url cstr) -> eax 1 when it is "dialog:NAME" (a band's link): that dialog's command runs
+#   for the box's conversation, as agent-dialog NAME
+FN agentdlg_link
+    PROLOGUE
+    mov rbx, rdi
+    xor eax, eax
+    mov rdi, rbx
+    mov esi, 7
+    lea rdx, [rip + .Ldlg_scheme]
+    call str_eq_cstr
+    test eax, eax
+    jz 9f
+    lea rdi, [rbx + 7]
+    call strlen
+    lea rsi, [rbx + 7]
+    mov rdx, rax
+    lea rdi, [rip + dsb]
+    call sb_clear
+    lea rdi, [rip + dsb]
+    call sb_push
+    lea rdi, [rip + dsb]
+    xor esi, esi
+    mov rdx, [rip + dsb + SB_ptr]
+    mov rcx, [rip + dsb + SB_len]
+    xor edi, edi
+    mov rsi, rdx
+    mov rdx, rcx
+    call agentdlg_c_open
+    mov eax, 1
+9:  EPILOGUE
+
 # FN agentdlg_c_pick(out, rest, len): agent-dialog-pick N (the N-th focusable, from 1, as Enter)
 FN agentdlg_c_pick
     PROLOGUE
@@ -3829,6 +3867,7 @@ agentdlg_n_press: .asciz "agent-dialog-press"
 agentdlg_n_filter: .asciz "agent-dialog-filter"
 agentdlg_n_close: .asciz "agent-dialog-close"
 agentdlg_n_print: .asciz "print-agent-dialog"
+.Ldlg_scheme: .asciz "dialog:"
 .Ln_status: .asciz "status"
 .Ln_usage: .asciz "usage"
 .Ln_context: .asciz "context"

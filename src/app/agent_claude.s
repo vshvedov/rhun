@@ -55,6 +55,7 @@
 .equ OA_GET_PLAN, 11            # plan review: get_plan for /plan (claude_plan_answer)
 .equ OA_TASK_STOP, 12           # task 11: stop_task (an error answer: a toast)
 .equ OA_TASK_BG, 13             # task 11: background_tasks (task_answer)
+.equ OA_DIALOG, 14              # phase 7: a dialog's request (claude_dlg.s: claude_dlg_answer)
 .equ QUESTION_OPTS, 16          # a question's card shows its first 16 options
 .equ AUTH_MS, 10000             # the sign-in question's answer is waited for this long
 .equ AUTH_MAX, 65536            # bytes of its answer kept
@@ -2915,6 +2916,32 @@ FN claude_get_plan
     call req_end
     EPILOGUE
 
+# phase 7, the dialogs (claude-chat-p7: claude_dlg.s): FN claude_dlg_begin(AL*, subtype cstr) -> rax the
+#   request's number: {"type":"control_request","request_id":"rN","request":{"subtype":S begun (its answer
+#   for claude_dlg_answer); FN claude_dlg_cw() -> rax the writer it is in (more members, jw_*); FN
+#   claude_dlg_end(AL*) -> eax 1 written
+FN claude_dlg_begin
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov esi, OA_DIALOG
+    call req_begin
+    mov r13, [rbx + AL_next]
+    dec r13
+    lea rdi, [rip + cw]
+    lea rsi, [rip + .Lk_subtype]
+    call jw_key
+    lea rdi, [rip + cw]
+    mov rsi, r12
+    call jw_cstr
+    mov rax, r13
+    EPILOGUE
+FN claude_dlg_cw
+    lea rax, [rip + cw]
+    ret
+FN claude_dlg_end
+    jmp req_end
+
 # reply_begin(AL*, AQ*): {"type":"control_response","response":{"subtype":"success","request_id":ID,
 #   "response":{  (the answer's members follow; reply_end closes it)
 reply_begin:
@@ -3237,7 +3264,14 @@ h_response:
     mov rdx, r15                # (the plan whose Yes waits for this request's answer)
     call claude_plan_mode_answer
     jmp 9f
-33: cmp eax, OA_GET_PLAN
+33: cmp eax, OA_DIALOG          # a dialog's (claude_dlg.s)
+    jne 32f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r15
+    call claude_dlg_answer
+    jmp 9f
+32: cmp eax, OA_GET_PLAN
     jne 34f
     mov rdi, rbx
     mov rsi, r12

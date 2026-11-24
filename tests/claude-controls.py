@@ -121,7 +121,7 @@ class ConfigTest(CfgCase):
         cmds = self.lines('cmd')
         self.assertIn('compact\tClear history but keep a summary\t-\t-\t-\tsend\tcli', cmds)
         self.assertIn("usage\tShow session cost, plan usage, and what's contributing to your limits\t-\tcost stats"
-                      "\t-\tsend\tcli", cmds)
+                      "\t-\tusage\tlocal,cli", cmds)       # phase 7: the built-in /usage opens Account & usage
         self.assertIn('copy\tCopy the last response to clipboard (/copy 2 for the one before)\t[N]\t-\t-\tcopy\tlocal',
                       cmds)
         self.assertIn('version 2.1.330', out)
@@ -236,11 +236,12 @@ class ConfigTest(CfgCase):
         names = self.until(lambda: (lambda n: n if 'review' in n else None)(
             [c.split('\t')[0] for c in self.lines('cmd')]), 'the changed list')
         self.assertEqual(names, ['compact', 'usage', 'review', 'resume', 'continue', 'clear', 'model', 'plan',
-                                 'copy', 'login', 'logout'])    # (resume, continue: phase 6's history)
+                                 'copy', 'login', 'logout', 'status', 'skills', 'help', 'memory', 'context'])
+        # (resume, continue: phase 6's history; status to context: phase 7's dialogs)
         self.assertIn('review\tSkill review\t-\t-\t-\tsend\tcli', self.lines('cmd'))
         text = self.state_file().read_text(encoding='utf-8')
         self.assertIn('cmd\treview\t', text)
-        self.assertNotIn('cmd\tcontext\t', text)
+        self.assertNotIn('cmd\tcontext\tShow current context usage', text)     # rhun's own /context only
 
     def test_settings_are_asked_after_initialize(self):
         self.start(env={'FAKE_CLAUDE_MODELS': 'ultra'})
@@ -695,14 +696,13 @@ class MenuTest(MenuCase):
         self.assertEqual(len(listed), 2)
         self.assertTrue(sid)
 
-    def test_typed_dialog_command_goes_to_the_cli(self):
-        # the CLI answers /status itself (finding 22): rhun sends it as text
+    def test_typed_dialog_command_opens_rhuns_dialog(self):
+        # phase 7: /status opens rhun's Status dialog (the CLI would answer "isn't available in this
+        # environment", finding 22); nothing is sent as text (tests/claude-dialogs.py has the rest)
         self.ready()
         self.command('agent-prompt /status')
-        self.command('wait-agent ready')
-        self.until(lambda: '/status' in self.prompts(), 'sent')
-        self.until(lambda: "pill /status isn't available in this environment." in self.command('print-agents'),
-                   "the CLI's answer")              # (one line of a command's output: a pill, phase 3 task 8)
+        self.assertTrue(self.command('print-agent-dialog').startswith('dialog=status '))
+        self.assertEqual(self.prompts(), ['hello'])
 
     def toast(self):
         return self.command('print-toast').strip()
@@ -2132,7 +2132,7 @@ class NoticeTest(NoticeCase):
         self.start(env={'FAKE_CLAUDE_RATE': 'warning', 'FAKE_CLAUDE_ACCOUNT': 'none'})
         self.chat('hello')
         self.assertTrue(self.band('rate').startswith("You've used 85% of your 5-hour limit"))
-        self.assertIsNone(self.link('rate'))
+        self.assertEqual(self.link('rate')[2:], ('View usage', 'dialog:usage'))   # phase 7: Account & usage
 
     def test_settings_error_band(self):
         self.start(env={'FAKE_CLAUDE_SETTINGS_ERROR': 'Unexpected token'})
@@ -3047,10 +3047,10 @@ class ReviewProtocolTest(ModelCase):
         # its end puts nothing back in the box
         self.start(env={'FAKE_CLAUDE_NO_LIFECYCLE': '1'})
         self.chat('held', 'working')
-        self.command('agent-prompt /context')
+        self.command('agent-prompt /cost')            # (phase 7: /context is rhun's dialog)
         self.until(lambda: self.held_count() == 1, 'held')
         self.command('wait-agent ready 20000')
-        self.until(lambda: 'user /context' in self.thread(), 'its row')
+        self.until(lambda: 'user /cost' in self.thread(), 'its row')
         self.assertEqual(self.held_count(), 0)
         self.assertEqual([l for l in self.command('print-agents').splitlines() if l.startswith('queued ')], [])
         # the next one runs, as a turn: working, and Stop interrupts it
@@ -3193,13 +3193,13 @@ class ReviewProtocolTest(ModelCase):
         # queued, p2 is back in the box, and the conversation is idle (its idle stop puts nothing back)
         self.start(env={'FAKE_CLAUDE_NO_LIFECYCLE': 'local', 'FAKE_CLAUDE_DISCARD_HELD': 'p2'})
         self.chat('held', 'working')
-        self.command('agent-prompt /context')
+        self.command('agent-prompt /cost')            # (phase 7: /context is rhun's dialog)
         self.command('agent-prompt p2')
         self.until(lambda: self.held_count() == 2, 'both held')
         self.until(lambda: [r for r in self.records() if 'discarded' in r], 'the discard')
         self.command('wait-agent ready 20000')
         self.command('wait 100')
-        self.assertIn('user /context', self.thread())
+        self.assertIn('user /cost', self.thread())
         self.assertEqual(self.held_count(), 0)
         self.assertEqual([l for l in self.command('print-agents').splitlines() if l.startswith('queued ')], [])
         self.assertTrue(self.command('print-agent-input').startswith('input=p2 '))

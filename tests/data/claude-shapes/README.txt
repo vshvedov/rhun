@@ -688,6 +688,76 @@ wrote; with --replay-user-messages every one of them comes back on stdout (18), 
     "failed", then a normal reply; mcp_status {name, status "failed", transport "sdk", scope "user", source
     "sdk"}. MCP_CONNECTION_NONBLOCKING does not apply to an SDK server.
 
+Phase 7 findings (CLI 2.1.330, recorded 2026-11-23 on macOS, the same subscription)
+
+Numbering: 38 to 59 are other phase 7 work's; the dialogs of the first part are 60 to 66. Command line: the
+pinned one with --setting-sources=user,project,local --permission-mode=default --model=haiku --effort=low;
+environment HOME, PATH, USER, LANG, TMPDIR, CLAUDE_CODE_ENTRYPOINT=rhun, MCP_CONNECTION_NONBLOCKING=true;
+initialize {"hooks":null}; a temporary git repository with a one-line CLAUDE.md. Two runs: read-only
+requests right after initialize, then the same after one prompt ("Reply with the word ok"). Every request
+here was answered without a turn and without any record around its answer. Account details (email,
+organization) and the home folder are redacted in what is kept.
+
+60. get_status: {sections: [{title, rows: [{label, value}]}]}, all values strings. "Session": Version,
+    Session name (only after a turn: the conversation's title), Session ID, Session kind ("interactive"),
+    Peer address ("uds:/tmp/cc-socks/PID.sock"), cwd (the resolved folder), Login method ("Claude Ultra
+    account"), Organization, Email; "Environment": Model (the resolved id), MCP servers ("32 need auth, 8
+    pending, 20 failed · /mcp"), Setting sources ("User settings"), Auto mode server ("Disabled"). The
+    extension shows cwd as "Working folder", Peer address as "Messaging address", Session kind as
+    "Session type" (webview rzn); the rest as they come.
+61. get_usage: {session, subscription_type, rate_limits_available, rate_limits, behaviors}. session
+    {total_cost_usd, total_api_duration_ms, total_duration_ms, total_lines_added, total_lines_removed,
+    model_usage}: zeros and {} before a turn; after one model_usage {MODEL: {inputTokens, outputTokens,
+    cacheReadInputTokens, cacheCreationInputTokens, webSearchRequests, costUSD, contextWindow,
+    maxOutputTokens, thinkingTokens, cacheCreationEphemeral5mInputTokens,
+    cacheCreationEphemeral1hInputTokens, canonicalModel, provider "firstParty", costBasis "list"}}.
+    subscription_type "max" (initialize's account says "Claude Ultra": not the same words). rate_limits:
+    five_hour null, seven_day {utilization 14 (an integer here), resets_at "YYYY-MM-DDTHH:MM:SS.ffffff+00:00",
+    limit_dollars, used_dollars, remaining_dollars, locked_reason}, about 30 more keys null (code names),
+    extra_usage {is_enabled, monthly_limit, used_credits, utilization, currency, ..., credits_can_pay},
+    limits [{kind weekly_all|weekly_scoped, group, percent, severity, resets_at, scope {model {id,
+    display_name}, surface}, is_active}], spend {...}, seven_day_breakdown {as_of, window_started_at, rows
+    [{key, display_name, percent, percent_of_limit}]}, weekly_scoped_shares, model_scoped [{display_name
+    "Fable", utilization 16, resets_at}]. behaviors {day, week}: {recommendations [{key, pct, title,
+    detail?}], fix {keys, messages}, request_count, session_count, behaviors [{key, pct, count}], agents
+    [{name, pct}], skills, plugins, mcp_servers}: built from this machine's logs (titles name local files);
+    null with skip_behaviors true.
+62. get_context_usage: {categories [{id, name, tokens, color, kind "used"|"deferred"|"buffer"|"free",
+    isDeferred (deferred ones only)}], totalTokens, maxTokens, rawMaxTokens, autocompactSource
+    "model-default", percentage (an integer), gridRows, model, memoryFiles [{path, type "User"|"Project",
+    tokens}], mcpTools [{name, serverName, tokens, isLoaded}], mcpInstructions [{serverName, tokens}],
+    agents [{agentType, source, pluginId?, path, tokens}], slashCommands {totalCommands, includedCommands,
+    tokens}, skills {totalSkills, includedSkills, tokens, skillFrontmatter [{name, source, path, tokens}]},
+    autoCompactThreshold, isAutoCompactEnabled, messageBreakdown {toolCallTokens, ..., attachmentsByType},
+    apiUsage}. Categories here: System prompt, System tools, MCP tools, MCP server instructions, MCP tools
+    (deferred), System tools (deferred), Custom agents, Memory files, Skills, Messages, Autocompact buffer,
+    Free space (the free space makes the used, buffer and free add up to maxTokens). apiUsage null before a
+    turn, {input_tokens, output_tokens, cache_creation_input_tokens, cache_read_input_tokens} after one.
+63. Output styles: initialize's output_style "default", available_output_styles ["default", "Proactive",
+    "Concise", "Explanatory", "Learning"] (two of them this machine's), user_output_styles_dir
+    "<config>/output-styles"; reload_output_styles (it only reads the style files again) answers
+    {available_output_styles: [the same]}; get_settings' effective has no outputStyle while none is set.
+    Picking one is update_settings localSettings {outputStyle} (finding 12): it writes the project's
+    .claude/settings.local.json, so it was not tried here (the fake's).
+64. get_skills_dialog: {skills: [{name, display_name, description, source "user"|"plugin"|"claude.ai sync",
+    tokens, state, advertised, handles {unqualified_name?, aliases?, bare_name_reserved?}, locked_by?
+    "plugin"}]}: no "dialog" member (the extension's host adds it). 133 skills, every state "on"; a plugin's
+    are locked_by "plugin" (aliases: their names without the plugin), some advertised false. A name may be
+    "plugin:skill" while display_name is the bare name. set_skill_state writes settings: not tried (the
+    fake answers it with {skills} as above).
+65. get_memory_dialog: {files [{kind "user"|"other"|"project", path, label ("User instructions", "Project
+    instructions", or "L PATH" for a file a CLAUDE.md imports), description ("Saved in ~/.claude/CLAUDE.md",
+    "Checked in at ./CLAUDE.md"), exists}], folders [{kind "auto", path "<config>/projects/<slug>/memory/",
+    label "Open auto-memory folder", description ""}], memories [], auto_memory {enabled, toggleable, status
+    "on"}, auto_dream {shown false, enabled, toggleable, status "off", detail ""}}. Asking it made the
+    empty <config>/projects/<slug>/memory/ folder, with no prompt. set_memory_setting writes the user's
+    settings: not tried.
+66. get_settings (asked to see outputStyle): its effective member carries the user's whole permission rules,
+    and a rule can hold a secret (here an allow rule's command had an API key in it). Nothing of that answer
+    is kept in these recordings, and rhun reads only the members it needs from it.
+    ~/.claude/settings.json had the same SHA-256 before the first run and after the last; left under
+    ~/.claude: session-env/<id> of each run; the runs' folders under <config>/projects were deleted.
+
 Other things learned
 
 - Without --permission-mode the user's settings decide (C1 holds): with defaultMode auto there,

@@ -217,6 +217,26 @@ class LocationTest(TabCase):
         self.assertNotIn('location = tab', chat.section(self.config_text(), 'agents'))
 
 
+class DraftTest(TabCase):
+    def test_a_new_conversations_text_in_a_tab_is_kept_when_another_tab_takes_the_view(self):
+        """A new conversation's box text (never sent) stays with its tab while another conversation tab (a new
+        one too) has the view, and comes back with it."""
+        self.start(extra='[agents]\nlocation = tab\n')
+        self.to_tab()
+        self.command('cmd agents_new_conversation')          # the first tab: a new conversation
+        self.command('cmd agents_open_tab')                  # a second one, new too
+        self.command('agent-type my draft')
+        self.assertTrue(self.command('print-agent-input').startswith('input=my draft '))
+        self.command('cmd prev_tab')
+        self.assertTrue(self.command('print-agent-input').startswith('input= '))
+        self.command('cmd next_tab')
+        self.assertTrue(self.command('print-agent-input').startswith('input=my draft '),
+                        self.command('print-agent-input'))
+        self.file_tab()                                      # and a file's tab between
+        self.command('cmd prev_tab')
+        self.assertTrue(self.command('print-agent-input').startswith('input=my draft '))
+
+
 class LabelTest(TabCase):
     def test_the_label_is_cut_at_24_characters(self):
         path = self.seed('s1')

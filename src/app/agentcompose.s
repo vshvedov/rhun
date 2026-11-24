@@ -616,6 +616,10 @@ FN composer_owner
     call is_draft_conv
     test eax, eax
     jz 1f
+    mov rdi, r14                # a new conversation a tab shows keeps its text as any other (its tab
+    call agtab_has              #   shows it again: agenttab.s)
+    test eax, eax
+    jnz 1f
     test rbx, rbx               # a new conversation left before its first prompt for another new one:
     jnz 11f                     #   it goes, its text with it (that one begins empty)
     call agatt_drop_box         # (phase 4 task 2: its pack too)

@@ -3466,10 +3466,15 @@ FN agent_drv_tick
 9:  EPILOGUE
 
 # draft_left(AL*) -> eax 1 when the new conversation (ALF_DRAFT) is not the one the panel shows any more:
-#   Back, another one opened, a new one begun, or the panel closed
+#   Back, another one opened, a new one begun, or the panel closed; never while a conversation tab has it
 draft_left:
     PROLOGUE
     mov rbx, rdi
+    mov rdi, [rbx + AL_as]      # phase 4 task 13: a conversation tab keeps it (it goes when its tab closes)
+    call agtab_has
+    test eax, eax
+    mov eax, 0
+    jnz 9f
     mov eax, 1
     cmp dword ptr [rip + g_show_agents], 0
     je 9f

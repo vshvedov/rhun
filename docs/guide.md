@@ -708,6 +708,8 @@ allow_bypass_permissions = false
 prompt_suggestions = true
 use_terminal = false
 ide = true
+disable_login_prompt = false
+python_env = true
 env.CLAUDE_CONFIG_DIR = /home/me/.claude-work
 [agents]
 idle_stop_minutes = 10
@@ -715,6 +717,12 @@ font_size = 0
 ctrl_enter_sends = false
 scroll_on_send = true
 archive_after_days = 14
+location = panel
+autosave = true
+attach_selection = true
+attach_open_file = true
+respect_gitignore = true
+continue_after_restart = true
 ```
 
 - `chat` (**Chat with Claude Code**, on by default): off, Claude Code's conversations get no box,
@@ -739,6 +747,13 @@ archive_after_days = 14
   after a reply, and Tab takes it.
 - `use_terminal` (**Use the terminal**, off by default) and `ide` (**Connect claude in the
   terminal**, on by default): see [Claude Code in the terminal](#claude-code-in-the-terminal).
+- `disable_login_prompt` (**No sign-in check**, off by default): rhun starts `claude` without
+  asking it first whether it is signed in, and shows no Sign In notice; Claude Code itself says
+  when it is not. For an API key or a cloud provider set in its environment.
+- `python_env` (**Use the project's Python environment**, on by default): a `.venv` or `venv`
+  folder of a trusted project that holds `bin/python` (`Scripts\python.exe` on Windows) goes first
+  on Claude Code's `PATH`, and `VIRTUAL_ENV` names it, so the commands Claude runs use the project's
+  Python. An `env.PATH` or `env.VIRTUAL_ENV` line wins; a remote window's host is left alone.
 - `env.NAME = value`: a variable for Claude Code's environment, a line each, at most 64 of at most
   8 KiB each. NAME is letters, digits and `_`, and does not start with a digit; a line that breaks
   these rules is dropped with a log line that names it. The values are only in the config file:
@@ -759,6 +774,17 @@ archive_after_days = 14
   nothing was written to for that many days goes to **Archived sessions** in the list; 0 never moves
   one there
   (see [The list of conversations](#the-list-of-conversations)).
+- `location` (**Open conversations in**, `panel` by default, or `tab`): where **Agents: Open** and
+  **Agents: New Conversation** show a conversation: the agents panel, or an editor tab of its own.
+  **Agents: Open in New Tab** and **Agents: Open in Side Panel** set it to what you chose last.
+- `autosave` (**Save files before the agent reads or edits them**, on by default): before Claude Code
+  reads, edits or writes a file that is open in rhun with unsaved changes, rhun saves it (as Ctrl+S
+  does) and only then lets the tool run; see "What Claude can ask the editor" below.
+- `attach_selection`, `attach_open_file` and `respect_gitignore` (**Attach the selection**, **Attach
+  the open file**, **Leave out ignored files**, all on by default): what goes with a message from
+  the editor, and what git ignores; see "Mentions and the editor's selection" above.
+- `continue_after_restart` (**Continue after a restart**, on by default): a step Claude was taking
+  when rhun quit goes on when its conversation opens again.
 
 Otherwise Claude Code gets your environment: rhun's own when rhun was started from a terminal or
 runs on Windows, else the one your login shell gives, without the variables a Claude Code that
@@ -846,6 +872,45 @@ Around Claude Code's reads and edits rhun runs three hooks, the VS Code extensio
 
 Stop answers the hooks that still wait at once, and a hook's answer is never sent to a Claude Code
 process started after the one that asked.
+
+### Commands and keys
+
+Every command is in the Command Palette and can be bound in `[keys]`, with these `when` keys besides
+rhun's own: `agentsFocus` (the agents panel has the keys), `agentsInputFocus` (its box has them),
+`claudeFocus` (either), `claudeUseTerminal` (`[claude] use_terminal`) and `viewingProposedChange`
+(a Review tab with something undecided).
+
+| The extension's command | rhun | Key |
+| --- | --- | --- |
+| Open (last location) | **Agents: Open** | |
+| Open in Side Bar | **Agents: Open in Side Panel** | |
+| Open in New Tab | **Agents: Open in New Tab** | Ctrl+Shift+Esc (Cmd+Shift+Esc) |
+| Open in New Window | **Agents: Open in New Window** | |
+| New Conversation | **Agents: New Conversation** | |
+| Focus input / Blur input | **Agents: Focus or Unfocus the Message Box**, **Agents: Return to the Editor** | Ctrl+Esc (Cmd+Esc) |
+| Focus last message | **Agents: Focus Last Message** | |
+| Insert @-Mention | **Agents: Insert @-Mention** | Alt+K (Option+K) |
+| Insert @-Mention (terminal) | **Claude: Insert @-Mention in Terminal** | Ctrl+Alt+K (Cmd+Alt+K) |
+| Add to Chat (explorer) | **Agents: Add to Chat**, also in the explorer's menu | |
+| Accept / Reject Proposed Changes | **Review: Accept Proposed Changes**, **Review: Reject Proposed Changes** | `a`, `r` in the tab |
+| Accept / Reject change (hunk) | **Review: Accept Change at Cursor**, **Review: Reject Change at Cursor** | `A`, `R` in the tab |
+| Toggle Focus View | **Agents: Toggle Focus View** | Ctrl+Alt+F |
+| Expand or collapse thinking | **Agents: Expand or Collapse Thinking** | Ctrl+O in the panel |
+| Mark Session as Unread | **Agents: Mark Conversation as Unread** | |
+| Rename Session | **Agents: Rename Conversation** | |
+| Add Session to Group | **Agents: Add Conversation to Group** | |
+| Show Logs | **Agents: Show Logs** | |
+| Open in Terminal | **Claude: Open in Terminal** | |
+| Sign In, Sign Out | **Agents: Sign In**, **Agents: Sign Out** (`claude auth login`, `logout` in rhun's terminal) | |
+| Install Plugin | **Agents: Install Plugin** (`claude /plugin` in rhun's terminal) | |
+| Reopen Closed Session | **Reopen Closed Tab** brings a closed conversation tab back | Ctrl+Shift+T |
+| Update, Open Walkthrough, Toggle Dictation | none: rhun and Claude Code update themselves; the guide is the walkthrough; no dictation | |
+
+Ctrl+N stays **New File**; bind `agents_new_conversation` to it in `[keys]` (with `when claudeFocus`)
+for the extension's `enableNewConversationShortcut`. Shift+Tab in the box cycles the mode.
+
+**Agents: Show Logs** opens a tab with what the agents'
+programs did: when each started, became ready, worked, waited, ended, and why one failed.
 
 ### Claude Code in the terminal
 

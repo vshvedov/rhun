@@ -109,6 +109,7 @@ check base64 build/base64_test   # phase 4 task 2: attachments' encoder
 check urilist build/urilist_test   # phase 4 tasks 4, 5: text/uri-list as paths (X11, Wayland)
 check mention build/mention_test   # phase 4 task 7: mentions, against the extension's own rules
 check images build/image_test $(ls tests/data/images/* | LC_ALL=C sort)
+check thumbhdr build/thumbhdr_test $(ls tests/data/images/* | LC_ALL=C sort)   # phase 4 task 6: Base64, headers
 python3 tests/image-fuzz.py 1 20 || fail=1
 check cpu build/cpu_test
 check cols build/cols_test

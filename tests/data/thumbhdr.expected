@@ -1,0 +1,34 @@
+ -> (empty)
+Zg== -> f
+Zm8= -> fo
+Zm9v -> foo
+Zm9vYg== -> foob
+Zm9vYmE= -> fooba
+Zm9vYmFy -> foobar
+Zm9vYmE -> fooba
+Zm9v
+YmFy -> foobar
+Zm9v YmFy -> foobar
+Zm9vY -> bad
+Zm=9v -> bad
+Zm9v!mFy -> bad
+Zm9vYmFy==== -> foobar
+baseline-420.jpg header=32x24 decoded=32x24
+bgr24.bmp header=13x7 decoded=13x7
+bitfields32.bmp header=13x7 decoded=13x7
+bits.pbm header=0x0 decoded=13x7
+exif-rotated.jpg header=24x16 decoded=16x24
+gray16-adam7.png header=13x9 decoded=13x9
+huge-frame.gif header=1x1 decoded=-
+icon.ico header=20x12 decoded=20x12
+interlaced-transparent.gif header=24x16 decoded=24x16
+not-an-image.png -
+palette-trns.png header=13x9 decoded=13x9
+palette8.bmp header=13x7 decoded=13x7
+plain.ppm header=0x0 decoded=5x3
+progressive-gray.jpg header=24x16 decoded=24x16
+raw.pgm header=0x0 decoded=13x7
+rgba.png header=24x16 decoded=24x16
+rgba.qoi header=24x16 decoded=24x16
+rle.tga header=13x7 decoded=13x7
+truncated.png header=24x16 decoded=24x16

@@ -26,7 +26,7 @@
 #   agsel_clear(), agsel_dump(sb), agsel_cmd_select() -> rax   print-agent-selection, agent-select
 .include "rhun.inc"
 
-.equ ID_AG_SEL, 0x620000        # + (row & 0xffff): a row's area (phase 3's 0x600000-0x63ffff)
+.equ ID_AG_SEL, 0x610000        # + (row & 0xffff): a row's area (phase 3's 0x600000-0x63ffff; 0x620000 is task lines')
 .equ ID_AG_RESP, 0x630000       # + (row & 0xfff): a reply's Copy response
 .equ LINK_MAX, 4000             # a link target is copied whole up to this (reply_click's limit)
 .equ ERR_CUT, 2000              # an error's OUT is drawn cut at this many characters (agentrows.s)

@@ -426,8 +426,8 @@ class RealTest(RealCase):
         self.assertIn(' requests=0 ', self.live())
         self.assertEqual(self.errors(), [])
         thread = self.thread()
-        self.assertIn('result ' + chat.REJECTED[:60], thread)
-        self.assertEqual(thread[-1], 'info Interrupted', thread)   # No interrupts: the turn ends there
+        self.assertIn(' state=denied', self.command('print-agent-rows 0 1000'))   # phase 3: the call's state
+        self.assertIn(thread[-1], ('info Interrupted', 'info Tool interrupted'), thread)   # No interrupts: the turn ends there
         # (4) Stop during a long reply, then a short prompt
         before = len(self.thread())
         self.send(COUNT, 'working')
@@ -694,7 +694,7 @@ class Phase2Test(RealCase):
                          ('deny', REASON + ' ' + reason, False))
         self.assertFalse((self.project / 'denied.txt').exists())
         thread = self.thread()
-        self.assertIn('result ' + REASON[:60], '\n'.join(thread))
+        self.assertIn(' state=denied', self.command('print-agent-rows 0 1000'))   # phase 3: the call's state
         self.assertNotEqual(thread[-1], 'info Interrupted', thread[-4:])
         self.assertTrue(thread[-1].startswith('agent'), thread[-4:])
         self.assertIn('skipped', self.last_text().lower())
@@ -940,7 +940,8 @@ class Phase2Test(RealCase):
         listed = {r[1][1:]: r for r in rows}
         self.assertEqual(len(listed), len(rows))              # each once
         names = {c['name'] for c in cli}
-        self.assertEqual(set(listed) - names, {'copy', 'plan'} - names)
+        own = {'copy', 'plan', 'btw', 'tasks', 'chrome', 'export', 'remote-control'}   # rhun's, as the extension's
+        self.assertEqual(set(listed) - names, own - names)
         self.assertEqual(sorted(names - set(listed)), [])
         for c in cli:
             hint = c.get('argumentHint') or '-'

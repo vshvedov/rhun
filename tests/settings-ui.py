@@ -116,7 +116,7 @@ class SettingsUI(unittest.TestCase):
             k + ' = ' + v + '\n' for k, v in values.items()) for s, values in data.items()),
             encoding='utf-8')
 
-    def run_editor(self, actions, height=7800, width=1400):   # the whole page: every row
+    def run_editor(self, actions, height=9000, width=1400):   # the whole page: every row (the merged lines' rows)
         script = self.work / 'actions.rsc'
         script.write_text('\n'.join(['cmd settings', *actions, 'quit']) + '\n', encoding='utf-8')
         result = subprocess.run([str(EXE), self.work.as_posix(), '--headless', f'{width}x{height}',

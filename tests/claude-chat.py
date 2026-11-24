@@ -18,6 +18,10 @@ import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[1]
 EXE = Path(os.environ.get('RHUN_TEST_EXE', ROOT / 'build/rhun')).resolve()
+# phase 4 task 10: the hooks rhun declares in initialize (the extension's three, README finding 48)
+HOOKS = {'PreToolUse': [{'matcher': 'Edit|Write|MultiEdit', 'hookCallbackIds': ['hook_0']},
+                        {'matcher': 'Edit|Write|Read', 'hookCallbackIds': ['hook_1']}],
+         'PostToolUse': [{'matcher': 'Edit|Write|MultiEdit', 'hookCallbackIds': ['hook_2'], 'contextOnly': True}]}
 FAKE = ROOT / 'tests/scripts/fake-claude.py'
 PYTHON = Path(sys.executable).resolve()
 
@@ -542,7 +546,7 @@ class ChatTest(DrivenCase):
             self.assertIn(member, first['request'])
             del first['request'][member]
         self.assertEqual(first, {'type': 'control_request', 'request_id': 'r1',
-                                           'request': {'subtype': 'initialize', 'hooks': None,
+                                           'request': {'subtype': 'initialize', 'hooks': HOOKS,
                                                        'promptSuggestions': True, 'supportedDialogKinds': [
                                                            'fable_overage_consent_prompt', 'auto_mode_server_fallback'],
                                                        'perTaskStopAffordance': True,
@@ -1141,8 +1145,9 @@ class RequestTest(DrivenCase):
         self.chat('unhandled')
         error = {'behavior': 'error', 'message': 'not supported by rhun yet'}
         unknown = {'behavior': 'error', 'message': 'unknown server'}     # phase 4 task 9: an mcp_message
-        self.assertEqual(self.logged('unhandled'), [[error, unknown, error, error, error]])
-        self.assertEqual([r['subtype'] for r in self.responses()], ['error'] * 5)
+        hook = {'continue': True}       # phase 4 task 10: a hook_callback without a file is answered so
+        self.assertEqual(self.logged('unhandled'), [[hook, unknown, error, error, error]])
+        self.assertEqual([r['subtype'] for r in self.responses()], ['success'] + ['error'] * 4)
         self.assertIsNone(self.card())
         self.assertEqual(self.thread(), ['user unhandled', REPLY + 'done'])
 

@@ -18,9 +18,7 @@ _spec.loader.exec_module(mcp)
 chat = mcp.chat
 McpCase = mcp.McpCase
 
-HOOKS = {'PreToolUse': [{'matcher': 'Edit|Write|MultiEdit', 'hookCallbackIds': ['hook_0']},
-                        {'matcher': 'Edit|Write|Read', 'hookCallbackIds': ['hook_1']}],
-         'PostToolUse': [{'matcher': 'Edit|Write|MultiEdit', 'hookCallbackIds': ['hook_2'], 'contextOnly': True}]}
+HOOKS = chat.HOOKS
 CONTINUE = {'continue': True}
 # areDiagnosticsEqual's table: made by the bundle's own findNewDiagnostics and areDiagnosticsEqual
 # (extension.js of 2.1.328, the class hne at EXT@3183400, run under node on these pairs); each case is a

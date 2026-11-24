@@ -66,16 +66,17 @@ class ConfigTest(CfgCase):
         self.assertEqual(chat.section(saved, 'claude')[3:], [
             'initial_mode =', 'allow_bypass_permissions = false', 'prompt_suggestions = true',
             'use_terminal = false', 'ide = true', 'spinner_verbs = append'])
-        self.assertEqual(chat.section(saved, 'agents')[-8:], [
+        self.assertEqual(chat.section(saved, 'agents')[-9:], [
             'ctrl_enter_sends = false', 'scroll_on_send = true', 'timestamps = true', 'focus_view = false',
             'archive_after_days = 14',
-            'attach_selection = true', 'attach_open_file = true', 'respect_gitignore = true'])
+            'attach_selection = true', 'attach_open_file = true', 'respect_gitignore = true',
+            'autosave = true'])                         # phase 4 task 10
         # changed, they are written back as they are; the env pairs still follow the last [claude] row
         claude = self.claude_section('initial_mode = acceptEdits\nallow_bypass_permissions = true\n'
                                      'prompt_suggestions = false\nspinner_verb = Zooming\nspinner_verbs = replace\n'
                                      'env.FOO = bar\nspinner_verb = Whooshing\n')
         self.start(claude, '[agents]\nctrl_enter_sends = true\nscroll_on_send = false\ntimestamps = false\n'
-                           'focus_view = true\n')
+                           'focus_view = true\nautosave = false\n')
         out = self.command('print-settings')
         rows = [line for line in out.splitlines() if line.startswith('claude.')]
         self.assertEqual(rows[-5:], ['claude.ide', 'claude.spinner_verbs',
@@ -89,9 +90,10 @@ class ConfigTest(CfgCase):
             'allow_bypass_permissions = true', 'prompt_suggestions = false', 'use_terminal = false', 'ide = true',
             'spinner_verbs = replace',
             'env.FOO = bar', 'spinner_verb = Zooming', 'spinner_verb = Whooshing'])
-        self.assertEqual(chat.section(saved, 'agents')[-8:-3], ['ctrl_enter_sends = true', 'scroll_on_send = false',
+        self.assertEqual(chat.section(saved, 'agents')[-9:-4], ['ctrl_enter_sends = true', 'scroll_on_send = false',
                                                                 'timestamps = false', 'focus_view = true',
                                                                 'archive_after_days = 14'])
+        self.assertEqual(chat.section(saved, 'agents')[-1:], ['autosave = false'])   # phase 4 task 10
 
     def mode_passed(self, extra):
         self.start(self.claude_section(extra))
@@ -465,8 +467,9 @@ class QueueTest(CfgCase):
         self.assertEqual(self.queued(), [])
 
     def initialize(self):
-        # phase 4 task 9's members (rhun's in-process server and its note) are tests/claude-mcp.py's
-        return [{k: v for k, v in r['initialize'].items() if k not in chat.P4_INIT}
+        # phase 4 task 9's members (rhun's in-process server and its note) are tests/claude-mcp.py's, task 10's
+        # hooks tests/claude-hooks.py's
+        return [{k: v for k, v in r['initialize'].items() if k not in chat.P4_INIT + ('hooks',)}
                 for r in self.records() if 'initialize' in r]
 
     def test_the_new_flags_are_passed(self):

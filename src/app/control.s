@@ -723,10 +723,27 @@ c_agents_page:
     ret
 
 # print-agents-runs: "runs=N", discovery runs started so far
+# print-agents-runs [busy]: "runs=N"; with busy, " busy=0|1" before the line end (a run started and not
+#   answered yet, or one waiting to start: an idle window measured then counts its answer's wake-ups)
 c_agents_runs:
     lea rdi, [rip + out]
     call agents_runs_dump
-    xor eax, eax
+    test r12, r12
+    jz 9f
+    dec qword ptr [rip + out + SB_len]      # (its line feed)
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Lc_busy]
+    call sb_push_cstr
+    call agents_busy
+    xor esi, esi
+    test eax, eax
+    setnz sil
+    lea rdi, [rip + out]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+9:  xor eax, eax
     ret
 
 # wait-grep: until find in files has read the project's files
@@ -2374,6 +2391,7 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Lc_agents_more: .asciz "agents-more"
 .Lc_agents_page: .asciz "print-agents-page"
 .Lc_agents_runs: .asciz "print-agents-runs"
+.Lc_busy: .asciz " busy="
 .Lc_wait_grep: .asciz "wait-grep"
 .Lc_wait_term: .asciz "wait-term"
 .Lc_print_gitlog: .asciz "print-gitlog"

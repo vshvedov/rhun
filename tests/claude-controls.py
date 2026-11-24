@@ -2081,6 +2081,13 @@ class NoticeCase(ModelCase):
         """The panel's discovery runs started so far (print-agents-runs)."""
         return int(self.command('print-agents-runs').split('=')[1])
 
+    def quiet(self, seconds=10):
+        """Until no discovery run is in flight: under load its answer can come later than any settle time, and
+        its 3 to 5 passes would land in the window measured next."""
+        end = time.time() + seconds
+        while self.command('print-agents-runs busy').split('busy=')[1].strip() != '0' and time.time() < end:
+            time.sleep(0.05)
+
     def idle(self, seconds=3, samples=1, settle=2.5, again=True):
         """The main loop's passes (without the second command's own) and the frames it drew over that long,
         in windows the panel's discovery stayed out of; of several samples, the one with the fewest passes.
@@ -2093,6 +2100,9 @@ class NoticeCase(ModelCase):
         before = self.runs()
         time.sleep(settle)
         for _ in range(samples + 6):
+            self.quiet()
+            if self.runs() != before:               # (one began while it waited: it has answered)
+                before = self.runs()
             p0, d0 = self.stats()
             time.sleep(seconds)
             p1, d1 = self.stats()

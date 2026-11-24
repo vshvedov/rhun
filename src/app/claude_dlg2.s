@@ -1244,7 +1244,9 @@ FN c2_running
     setne al
     ret
 
-# FN c2_last_json(sb) -> rax the last line of the output that parses as JSON (from its end; 0 none)
+# FN c2_last_json(sb) -> rax the last JSON object or array of the output (0 none): from its end, each line that
+#   starts with { or [ alone (one-line JSON, as `--json` changes print it), then from there to the output's end
+#   (indented JSON over many lines, as `plugin list --json` prints it). The CLI's own lines are skipped.
 FN c2_last_json
     PROLOGUE
     mov rbx, [rdi + SB_ptr]
@@ -1252,6 +1254,7 @@ FN c2_last_json
     xor eax, eax
     test rbx, rbx
     jz 9f
+    mov r14, -1                 # the output's end without its line ends (found first)
 1:  test r12, r12               # the last line's end without its line ends
     jz 8f
     movzx eax, byte ptr [rbx + r12 - 1]
@@ -1259,20 +1262,36 @@ FN c2_last_json
     ja 2f
     dec r12
     jmp 1b
-2:  mov r13, r12                # its start
+2:  cmp r14, -1
+    jne 21f
+    mov r14, r12
+21: mov r13, r12                # its start
 3:  test r13, r13
     jz 4f
     cmp byte ptr [rbx + r13 - 1], 10
     je 4f
     dec r13
     jmp 3b
-4:  lea rdi, [rbx + r13]
+4:  movzx eax, byte ptr [rbx + r13]
+    cmp eax, '{'
+    je 5f
+    cmp eax, '['
+    jne 7f
+5:  lea rdi, [rbx + r13]        # the line alone
     mov rsi, r12
     sub rsi, r13
     call json_parse
     test rax, rax
     jnz 9f
-    mov r12, r13                # the line before
+    cmp r12, r14
+    je 7f
+    lea rdi, [rbx + r13]        # from it to the end
+    mov rsi, r14
+    sub rsi, r13
+    call json_parse
+    test rax, rax
+    jnz 9f
+7:  mov r12, r13                # the line before
     jmp 1b
 8:  xor eax, eax
 9:  EPILOGUE

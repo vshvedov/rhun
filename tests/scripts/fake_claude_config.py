@@ -440,15 +440,20 @@ def plugin_sub(args, config, stdin):
         verbs.remove(scope)
     verbs = [v for v in verbs if v not in rest]
     target = rest[0] if rest else None
-    if verbs[:1] == ['list']:
+    if verbs[:1] == ['list']:               # the real CLI prints these lists indented, over many lines
         installed = [dict(p) for p in state['installed']]
         if '--available' in flags:
-            print(json.dumps({'installed': installed, 'available': state['available']}))
+            available = list(state['available'])
+            for n in range(int(os.environ.get('FAKE_CLAUDE_PLUGINS_MANY', '0'))):  # the official directory's size
+                available.append({'pluginId': 'many-%04d@directory' % n, 'name': 'many-%04d' % n,
+                                  'description': 'One of many', 'marketplaceName': 'directory', 'version': '1.0.0',
+                                  'source': {'source': 'url', 'url': 'https://example.invalid/many-%04d.git' % n}})
+            print(json.dumps({'installed': installed, 'available': available}, indent=2))
         else:
-            print(json.dumps(installed))
+            print(json.dumps(installed, indent=2))
         return 0
     if verbs[:2] == ['marketplace', 'list']:
-        print(json.dumps(state['marketplaces']))
+        print(json.dumps(state['marketplaces'], indent=2))
         return 0
     if verbs[:2] == ['marketplace', 'add']:
         source = target or ''
@@ -541,7 +546,7 @@ def plugin_sub(args, config, stdin):
         shown = {k: v for k, v in values.items() if k != 'apiKey'}
         configured = sorted(values)
         print(json.dumps(dict(OPTIONS, inputs=shown, configured=configured,
-                              unconfigured=[k for k in OPTIONS['schema'] if k not in values])))
+                              unconfigured=[k for k in OPTIONS['schema'] if k not in values]), indent=2))
         return 0
     sys.stderr.write('error: unknown plugin command %s\n' % ' '.join(words))
     return 1

@@ -54,7 +54,7 @@
 .equ OPTS_MAX, 16
 .equ CHOICES_MAX, 16
 .equ NAME_MAX, 200
-.equ ORDER_MAX, 512             # available plugins sorted at most
+.equ ORDER_MAX, 16384           # available plugins listed at most (the official directory has thousands)
 
 .bss
 .p2align 3
@@ -1057,10 +1057,12 @@ plg_build:
     jz 9f
     lea rdi, [rip + .Lg_available]
     call c2_head
+    call installed_ids          # the installed ids copied, so the available list is parsed once
     lea rdi, [rip + c2_doc3]
     call c2_parse
     mov rbx, rax
     call avail_order            # by install count, the most first
+    mov r13d, eax               #   (ORDER_MAX at most)
     xor r14d, r14d
 6:  cmp r14d, r13d
     jae 9f
@@ -1075,13 +1077,6 @@ plg_build:
     call is_installed
     test eax, eax
     jnz 6b
-    lea rdi, [rip + c2_doc3]    # (parsed again: is_installed parsed the installed list)
-    call c2_parse
-    mov rbx, rax
-    mov rdi, rax
-    mov esi, [rsp + 16]
-    call json_at
-    mov r15, rax
     mov edi, DGK_ITEM
     mov esi, DGF_FILTER
     mov edx, GA_AVAIL
@@ -1763,8 +1758,8 @@ find_installed:
 8:  xor eax, eax
     EPILOGUE
 
-# avail_order(available in rbx... as rdi? no: c2_doc3 parsed in rbx): order = the indexes by installCount, the
-#   most first (a stable insertion sort; ORDER_MAX at most)
+# avail_order(rbx: c2_doc3 parsed) -> eax how many: order = the indexes by installCount, the most first (a
+#   stable insertion sort; ORDER_MAX at most)
 avail_order:
     PROLOGUE 16
     mov rdi, rbx
@@ -1802,45 +1797,69 @@ avail_order:
     mov [rax + r15*4], r13d
     inc r13d
     jmp 2b
+9:  mov eax, r12d
+    EPILOGUE
+
+# installed_ids(): inst_ids = the installed plugins' ids, each with a NUL after it (c2_doc parsed for it)
+installed_ids:
+    PROLOGUE
+    lea rdi, [rip + inst_ids]
+    call sb_clear
+    lea rdi, [rip + c2_doc]
+    call c2_parse
+    mov rbx, rax
+    xor r12d, r12d
+1:  mov rdi, rbx
+    call json_len
+    cmp r12d, eax
+    jae 9f
+    mov rdi, rbx
+    mov esi, r12d
+    call json_at
+    inc r12d
+    mov rdi, rax
+    lea rsi, [rip + .Lk_id]
+    call c2_jstr
+    test rdx, rdx
+    jz 1b
+    lea rdi, [rip + inst_ids]
+    mov rsi, rax
+    call sb_push
+    lea rdi, [rip + inst_ids]
+    xor esi, esi
+    call sb_push_byte
+    jmp 1b
 9:  EPILOGUE
 
-# is_installed(available entry) -> eax 1 when its pluginId is an installed plugin's id (c2_doc parsed:
-#   the entry's own parse is dead after)
+# is_installed(available entry) -> eax 1 when its pluginId is one of inst_ids (installed_ids; nothing parsed)
 is_installed:
     PROLOGUE
     lea rsi, [rip + .Lk_pluginId]
     call c2_jstr
-    mov rdi, rax
-    mov rsi, rdx
-    call mem_dup
-    mov r12, rax
-    lea rdi, [rip + c2_doc]
-    call c2_parse
-    mov rbx, rax
-    xor r13d, r13d
-    xor r14d, r14d
-1:  mov rdi, rbx
-    call json_len
-    cmp r13d, eax
+    test rdx, rdx
+    jz 8f
+    mov r12, rax                # its id
+    mov r13, rdx
+    mov rbx, [rip + inst_ids + SB_ptr]
+    mov r14, [rip + inst_ids + SB_len]
+    add r14, rbx                # the end
+1:  cmp rbx, r14
     jae 8f
     mov rdi, rbx
-    mov esi, r13d
-    call json_at
-    inc r13d
-    mov rdi, rax
-    lea rsi, [rip + .Lk_id]
-    call c2_jstr
-    mov rdi, rax
-    mov rsi, rdx
-    mov rdx, r12
+    call strlen
+    mov r15, rax
+    cmp rax, r13
+    jne 2f
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, rbx
     call str_eq_cstr
     test eax, eax
-    jz 1b
-    mov r14d, 1
-8:  mov rdi, r12
-    call mem_free
-    mov eax, r14d
-    EPILOGUE
+    jnz 9f
+2:  lea rbx, [rbx + r15 + 1]
+    jmp 1b
+8:  xor eax, eax
+9:  EPILOGUE
 
 # link_install(): a link's plugin, its marketplace added: its install page (found among the available), else
 #   why not
@@ -3025,6 +3044,7 @@ tmp_n: .quad 0
 .bss
 .p2align 3
 order: .zero 4 * ORDER_MAX
+inst_ids: .zero SB_SIZE         # the installed ids (installed_ids)
 counts: .zero 8 * ORDER_MAX
 tmp_doc: .zero SB_SIZE
 

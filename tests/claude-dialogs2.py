@@ -582,6 +582,19 @@ class PluginsTest(Case):
         self.until(lambda: len(self.control('reload_plugins')) == 2, 'asked again')
         self.until_body(lambda b: not any('Restart' in l for l in b), 'the notice gone')
 
+    def test_thousands_available(self):
+        """The official directory lists thousands, as indented JSON over many lines: all of them, each read once."""
+        self.env['FAKE_CLAUDE_PLUGINS_MANY'] = '4000'
+        self.panel()
+        self.open('plugins')
+        self.until(lambda: any(l.startswith('head Available') for l in self.body()), 'available', 20)
+        items = [l for l in self.body() if l.startswith('item[')]
+        self.assertEqual(len(items), 4003)
+        self.assertEqual(items[-1].split('] ', 1)[1], 'many-3999\tfrom directory \u00b7 One of many\t')
+        self.command('type many-3998')              # the filter
+        self.assertEqual([l.split('] ', 1)[1].split('\t')[0] for l in self.body() if l.startswith('item[')],
+                         ['many-3998'])
+
     def test_a_failed_install_says_why(self):
         self.panel()
         self.open('plugins')

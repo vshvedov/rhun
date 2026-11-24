@@ -243,6 +243,8 @@ type them.
 | General config… | Opens Settings > Claude Code |
 | Switch account, `/login`; Sign out, `/logout` | Opens rhun's terminal prompt with `claude auth login` or `claude auth logout` |
 | View help docs | Asks before opening Claude Code's documentation |
+| Status, `/status`; Account & usage…, `/usage`; `/context` | Open the dialogs of [Status, usage and other dialogs](#status-usage-and-other-dialogs) |
+| Slash commands, `/skills`, `/help`; Memory, `/memory`; Instructions; Output styles | The same |
 | `/plan [open\|TEXT]` | Switches to Plan mode, and sends TEXT as a prompt; in Plan mode `/plan`, with or without words, shows the plan Claude wrote in a tab instead |
 | `/copy [N]` | Copies Claude's last reply, or the Nth last, to the clipboard |
 | Every other command | Goes to Claude Code as typed, as the list of its commands shows them |
@@ -257,6 +259,40 @@ each conversation's mode, where you last saved a rule) and the lists of models a
 Code last gave, so that the lists work before it starts, in a file per project in its state folder
 (`$XDG_STATE_HOME/rhun`, beside the project's session). Nothing about your account is kept. A
 window without a folder keeps them until it closes.
+
+### Status, usage and other dialogs
+
+Some commands open a dialog over the panel: **Status** (`/status`), **Account & usage…** (`/usage`),
+`/context`, **Slash commands** (`/skills`, `/help`), **Memory** (`/memory`), **Instructions** and
+**Output styles**, from the command menu or typed in the box. A dialog shows what Claude Code
+reports; it says "Loading…" while it asks, and why when Claude Code could not answer, with
+**Retry**. Escape or × closes it, as does a click beside it; Tab, Up and Down move between its rows
+and buttons, Enter takes the one you are on, and a numbered button also takes its digit. Only one
+dialog shows at a time, and it closes when you leave its conversation or its process ends. The keys
+go back to the box afterwards.
+
+Most dialogs ask the conversation's running process. When none runs, opening one starts it quietly,
+as typing would, and sends no prompt; **Slash commands** starts nothing.
+
+- **Status**: Claude Code's version, the session, the working folder, how it is signed in, the
+  model, the MCP servers and setup warnings, as Claude Code words them.
+- **Account & Usage**: how you are signed in (with a Claude subscription also the email,
+  organization and plan Claude Code reports), then the usage limits as bars with when they reset,
+  and **Manage usage on claude.ai**, which asks before it opens. Signed in with an API key or
+  another provider, it shows the session's cost, durations, code changes and tokens by model
+  instead. rhun keeps these account details only while it runs, and never writes or logs them.
+- **Context usage**: the model, the tokens in use against its window, a table of what takes the
+  context (Category, Tokens, Usage), and the largest memory files and custom agents.
+- **Slash commands**: every command Claude Code offers, with a filter; Enter puts `/NAME ` in the
+  box. While Claude Code runs, each skill also shows where it comes from, its size and its state
+  (**On**, **Name only**, **User only**, **Off**): Space or a click changes it, which Claude Code
+  saves in your settings. A skill its plugin manages says "locked".
+- **Memory**: the auto-memory switches, the memories Claude Code saved for this project with
+  their age (Enter opens one in a tab) and their folder. A switch changes Claude Code's settings.
+- **Instructions**: the CLAUDE.md files Claude Code reads. Enter opens one in a tab, with a
+  reminder that Claude reads it when a session starts.
+- **Output styles**: the styles Claude Code knows, the one in effect checked. Picking one saves it
+  in the project's `.claude/settings.local.json`, as Claude Code's `/output-style` does.
 
 ### Permissions, questions and plans
 

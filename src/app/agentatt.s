@@ -88,6 +88,7 @@ at_x: .zero 4 * AP_MAX_PARTS    #   as drawn last: each chip's place on screen, 
 at_y: .zero 4 * AP_MAX_PARTS
 xb_x: .zero 4 * AP_MAX_PARTS
 xb_y: .zero 4 * AP_MAX_PARTS
+ch_pic: .zero 4 * AP_MAX_PARTS  #   task 6: 1 when its picture drew (print-agent-attachments thumb=)
 .p2align 3
 ch_lsb: .zero SB_SIZE
 
@@ -115,7 +116,11 @@ FN agatt_new
 part_drop:
     PROLOGUE
     mov rbx, rdi
-    mov rdi, [rbx + MP_name]
+    mov rdi, [rbx + MP_thumb]   # task 6: its thumbnail is no longer the box's
+    test rdi, rdi
+    jz 0f
+    call agimg_unpin
+0:  mov rdi, [rbx + MP_name]
     call mem_free
     mov rdi, [rbx + MP_path]
     call mem_free
@@ -130,6 +135,21 @@ part_drop:
     mov edx, MP_SIZE
     call memset
     EPILOGUE
+
+# thumb_part(MP*): an image part's thumbnail record (agentimg.s copies the bytes and pins it while the part
+#   lives); a WebP or an image too large for one gets none (its chip draws the icon)
+thumb_part:
+    cmp dword ptr [rdi + MP_kind], MPK_IMAGE
+    jne 1f
+    push rbx
+    mov rbx, rdi
+    mov rdi, [rbx + MP_data]
+    mov rsi, [rbx + MP_len]
+    mov edx, 1
+    call agimg_bytes
+    mov [rbx + MP_thumb], rax
+    pop rbx
+1:  ret
 
 # FN agatt_free(AP* or 0): a pack and everything it owns
 FN agatt_free
@@ -589,6 +609,8 @@ FN agatt_add_file
     call clean_name
     mov rcx, [rsp + 16]
     mov [rcx + MP_name], rax
+    mov rdi, rcx                # task 6: an image's thumbnail (made between frames)
+    call thumb_part
     inc qword ptr [rip + g_att_gen]
     xor eax, eax
     jmp 9f
@@ -666,6 +688,8 @@ FN agatt_add_bytes
     call clean_name
     mov rcx, [rsp + 8]
     mov [rcx + MP_name], rax
+    mov rdi, rcx                # task 6: an image's thumbnail (made between frames)
+    call thumb_part
     inc qword ptr [rip + g_att_gen]
     xor eax, eax
 9:  EPILOGUE
@@ -1770,6 +1794,21 @@ FN agatt_dump
     mov rdi, rbx
     mov rsi, r13
     call agatt_dump_geom         # task 3: where its chip is drawn
+    mov rsi, r14                # task 6: an image's picture drew in its chip
+    call pic_part
+    test ecx, ecx
+    jz 21f
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_thumb]
+    call sb_push_cstr
+    xor esi, esi
+    cmp r13d, [rip + ch_drawn]
+    jae 22f
+    lea rax, [rip + ch_pic]
+    mov esi, [rax + r13*4]
+22: mov rdi, rbx
+    call sb_push_u64
+21:
     mov rdi, rbx
     mov esi, 10
     call sb_push_byte
@@ -1817,16 +1856,35 @@ ch_key:
     inc eax
 1:  ret
 
-# chip_w(label width) -> eax a chip's width: MI_8, the icon (MI_16), MI_6, the label, MI_4, the x (MI_16), MI_6
+# chip_w(label width, MP*) -> eax a chip's width: MI_8, the icon (MI_16), MI_6, the label, MI_4, the x (MI_16),
+#   MI_6; an image with a thumbnail (task 6) has its picture in place of the icon: MI_2, MI_32 less MI_4, MI_6
 chip_w:
     mov eax, edi
-    add eax, [rip + g_pmt + 4*MI_8]
+    call pic_part
+    test ecx, ecx
+    jz 1f
+    mov eax, edi
+    add eax, [rip + g_pmt + 4*MI_2]
+    add eax, [rip + g_pmt + 4*MI_32]
+    sub eax, [rip + g_pmt + 4*MI_4]
+    jmp 2f
+1:  add eax, [rip + g_pmt + 4*MI_8]
     add eax, [rip + g_pmt + 4*MI_16]
-    add eax, [rip + g_pmt + 4*MI_6]
+2:  add eax, [rip + g_pmt + 4*MI_6]
     add eax, [rip + g_pmt + 4*MI_4]
     add eax, [rip + g_pmt + 4*MI_16]
     add eax, [rip + g_pmt + 4*MI_6]
     ret
+
+# pic_part(MP*) -> ecx its thumbnail's id when it is an image with one (task 6), else 0 (rsi: the part)
+pic_part:
+    xor ecx, ecx
+    test rsi, rsi
+    jz 1f
+    cmp dword ptr [rsi + MP_kind], MPK_IMAGE
+    jne 1f
+    mov rcx, [rsi + MP_thumb]
+1:  ret
 
 # ch_layout(AP* or 0, w): the chips of that pack across the panel's width w (from MI_12 in to MI_12 before the
 #   right edge), left to right, wrapping; a label is the part's name, cut to 24 characters with "…", and further
@@ -1903,6 +1961,7 @@ ch_layout:
     call text_width
     add [rsp + 28], eax
 31: mov edi, [rsp + 28]
+    mov rsi, r14
     call chip_w
     cmp eax, [rsp + 16]
     jle 4f
@@ -2229,6 +2288,31 @@ FN agatt_draw
     push rax
     call gfx_frame
     add rsp, 16
+    mov rsi, r15                # task 6: an image's picture in place of its icon (the icon until it is
+    call pic_part               #   made, between frames)
+    test ecx, ecx
+    jz 30f
+    mov rdi, rcx
+    mov esi, [rsp + 24]
+    add esi, [rip + g_pmt + 4*MI_2]
+    mov edx, [rsp + 28]
+    add edx, [rip + g_pmt + 4*MI_2]
+    PM ecx, MI_32
+    sub ecx, [rip + g_pmt + 4*MI_4]
+    call agimg_draw
+    lea rcx, [rip + ch_pic]
+    mov [rcx + rbx*4], eax
+    test eax, eax
+    jnz 33f
+    mov edi, IC_F_IMAGE
+    PM ecx, MI_16
+    PM esi, MI_32
+    sub esi, ecx
+    sar esi, 1
+    add esi, [rsp + 24]
+    jmp 34f
+30: lea rcx, [rip + ch_pic]
+    mov dword ptr [rcx + rbx*4], 0
     mov eax, [r15 + MP_kind]    # its icon
     mov edi, IC_FILE
     cmp eax, MPK_IMAGE
@@ -2239,18 +2323,26 @@ FN agatt_draw
     mov edi, IC_F_PDF
 32: mov esi, [rsp + 24]
     add esi, [rip + g_pmt + 4*MI_8]
-    PM ecx, MI_16
+34: PM ecx, MI_16
     mov edx, r13d
     sub edx, ecx
     sar edx, 1
     add edx, [rsp + 28]
     COLOR r8d, T_MUTED
     call icon_draw
+33: mov rsi, r15
+    call pic_part
     mov rdi, [rip + ag_fsmall]  # its label as the layout cut it
     mov esi, [rsp + 24]
-    add esi, [rip + g_pmt + 4*MI_8]
+    test ecx, ecx
+    jz 35f
+    add esi, [rip + g_pmt + 4*MI_2]
+    add esi, [rip + g_pmt + 4*MI_32]
+    sub esi, [rip + g_pmt + 4*MI_4]
+    jmp 36f
+35: add esi, [rip + g_pmt + 4*MI_8]
     add esi, [rip + g_pmt + 4*MI_16]
-    add esi, [rip + g_pmt + 4*MI_6]
+36: add esi, [rip + g_pmt + 4*MI_6]
     mov edx, [rsp + 28]
     mov ecx, r13d
     lea rax, [rip + ch_lo]
@@ -2285,15 +2377,38 @@ FN agatt_draw
     jz 41f
     COLOR r8d, T_FG
 41: call icon_draw
-    lea edi, [rbx*2 + ID_AG_CHIP]   # the tips: its name, "Remove"
+    mov r9, [r15 + MP_name]     # the tips: its name (task 6: a picture too large to preview says so),
+    mov rsi, r15                #   "Remove"
+    call pic_part
+    test ecx, ecx
+    jz 42f
+    mov rdi, rcx
+    push r9
+    push r9
+    call agimg_state
+    pop r9
+    pop r9
+    cmp eax, 2                  # AIS_REFUSED
+    jne 42f
+    lea r9, [rip + .Lt_large]
+42: lea edi, [rbx*2 + ID_AG_CHIP]
     mov esi, [rsp + 24]
     mov edx, [rsp + 28]
     add edx, r13d
     mov ecx, r14d
     sub ecx, [rsp + 24]
     mov r8d, [rsp + 32]
-    mov r9, [r15 + MP_name]
     call tip_note_text
+    test dword ptr [rsp + 32], UB_CLICK     # task 6: a click on an image opens its picture (after the frame)
+    jz 43f
+    mov rsi, r15
+    call pic_part
+    test ecx, ecx
+    jz 43f
+    mov rdi, rcx
+    mov rsi, [r15 + MP_name]
+    call agimg_open
+43:
     lea edi, [rbx*2 + ID_AG_CHIP + 1]
     mov esi, r14d
     lea rax, [rip + xb_y]
@@ -2903,6 +3018,8 @@ term_text: .zero SB_SIZE
 .Lb_more: .asciz " more"
 .Lb_tail: .asciz ". Supported types: images (PNG, JPG, GIF, WebP), text files, and PDFs. To reference unsupported files, please include its absolute file path in your prompt (using @ for paths inside your working directory, and entering the path for files outside)."
 .Lellipsis: .asciz "\xe2\x80\xa6"
+.Lt_large: .asciz "Too large to preview"
+.Ld_thumb: .asciz " thumb="
 .Lt_remove: .asciz "Remove"
 .Ld_at: .asciz " at="
 .Ld_x: .asciz " x="

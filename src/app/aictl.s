@@ -376,6 +376,57 @@ c_agent_attach_remove:
 8:  mov rax, -1
     EPILOGUE
 
+# ---- phase 4 task 6: thumbnails (agentimg.s) ----
+
+# print-agent-images: the thumbnail cache (agimg_dump)
+c_print_agent_images:
+    PROLOGUE
+    call ai_set
+    call ai_out
+    mov rdi, rax
+    call agimg_dump
+    xor eax, eax
+    EPILOGUE
+
+# agent-images-hold 1|0: no decode while 1 (the copies are still made)
+c_agent_images_hold:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    xor edi, edi
+    test rdx, rdx
+    jz 1f
+    cmp byte ptr [rax], '1'
+    sete dil
+1:  call agimg_hold
+    xor eax, eax
+    EPILOGUE
+
+# agent-image-open ID [TITLE]: that picture in an image tab, as a click on its chip opens it
+c_agent_image_open:
+    PROLOGUE
+    call ai_set
+    call ai_arg
+    mov rdi, rax
+    mov rsi, rdx
+    call parse_u64
+    mov rbx, rax
+    call ai_arg_rest
+    xor esi, esi
+    test rdx, rdx
+    jz 1f
+    mov rdi, rax
+    mov rsi, rdx
+    call mem_dup
+    mov rsi, rax
+1:  mov r12, rsi
+    mov rdi, rbx
+    call agimg_open
+    mov rdi, r12
+    call mem_free
+    xor eax, eax
+    EPILOGUE
+
 # print-agent-attachments: the box's parts and every pack alive (agatt_dump)
 c_print_agent_attachments:
     PROLOGUE
@@ -3194,6 +3245,9 @@ c_agent_card_uncomment:
 .Lc_agent_context: .asciz "agent-context"
 .Lc_agent_mention: .asciz "agent-mention"
 .Lw_fl_timeout: .asciz "timeout "
+.Lc_print_agent_images: .asciz "print-agent-images"     # phase 4 task 6
+.Lc_agent_images_hold: .asciz "agent-images-hold"
+.Lc_agent_image_open: .asciz "agent-image-open"
 .Lw_bytes: .asciz "bytes:"
 .Lw_image: .asciz "Image"
 .Lr_no_parts: .asciz "this agent takes no attachments\n"
@@ -3322,6 +3376,8 @@ ai_ctl:
     # claude-chat-p7b: a form field's text (agent-dialog-field N TEXT, \n a line end; agentdlg2.s), a link's
     #   plugin (agent-plugin-link PLUGIN SOURCE; claude_plugins.s)
     .quad agentdlg2_n_setfield, agentdlg2_c_setfield, c2_n_link, c2_c_link
+    .quad .Lc_print_agent_images, c_print_agent_images, .Lc_agent_images_hold, c_agent_images_hold  # task 6
+    .quad .Lc_agent_image_open, c_agent_image_open
     .quad 0, 0
 card_words: .quad .Lw_card_fold, .Lw_card_details, .Lw_card_dest
     .quad .Lw_card_submit, .Lw_card_close                          # the question card's

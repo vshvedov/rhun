@@ -80,6 +80,10 @@ slot_ser: .zero 4 * SLOTS       #   and the frame it was drawn in last (0: free)
 tab_key: .zero 8 * TABS_KEPT    # the tabs opened from a row's text: (session path, call id, part) hashed,
 tab_doc: .zero 4 * TABS_KEPT    #   and the document's DOC_id
 tab_next: .long 0
+chip_title: .zero SB_SIZE       # phase 4 task 6: an image chip's title (its tab)
+pl_kind: .long 0                # prompt_lay: the chip's kind, its label's place in it, the pictures drawn
+pl_lead: .long 0
+pl_drew: .long 0
 rw_chips: .long 0               # phase 4 task 7: rw_wrap draws a prompt's mention chips (agents_line_chips)
 lr_mode: .long 0                # tr_lay's: its mode, the unit's slot, the row's left and top
 lr_slot: .long 0
@@ -1128,6 +1132,8 @@ FN agrow_free
     call mem_free
     mov rdi, [rbx + AT_file]
     call mem_free
+    mov rdi, [rbx + AT_pics]
+    call mem_free
     lea rdi, [rbx + AT_in]
     call sb_free
     lea rdi, [rbx + AT_out]
@@ -1201,6 +1207,9 @@ FN agrow_clone
     mov rdi, [r12 + AT_file]
     call dup_cstr
     mov [rbx + AT_file], rax
+    mov rdi, [r12 + AT_pics]
+    call dup_cstr
+    mov [rbx + AT_pics], rax
     xor r13d, r13d              # the texts
 3:  cmp r13d, 4
     jae 4f
@@ -3464,7 +3473,14 @@ unit_lay:
     mov edx, PART_PRE
 84: call pend_set
 81: add r13d, [rsp + 44]
-82: mov edi, [rsp]              # the todo list
+82: mov rdi, rbx                # the pictures of its result (phase 4 task 6)
+    mov rsi, r15
+    mov edx, [rsp]
+    mov ecx, r13d
+    mov r8d, [rsp + 8]
+    call pics_lay
+    add r13d, eax
+    mov edi, [rsp]              # the todo list
     mov esi, r13d
     mov edx, [rsp + 8]
     call todo_lay
@@ -4555,6 +4571,10 @@ FN agrow_follow
     je 7f
     cmp r13d, PART_BG
     je 71f
+    mov eax, r13d               # a picture of its result: opened whole in an image tab (phase 4 task 6)
+    sub eax, PART_PIC
+    cmp eax, PICS_MAX
+    jb .Lfw_pic
     mov esi, ATX_IN             # a text in a tab
     cmp r13d, PART_IN
     je 2f
@@ -4570,6 +4590,41 @@ FN agrow_follow
     mov rdx, r12
     mov ecx, r13d
     call open_text
+    jmp 8f
+.Lfw_pic:                       # (eax its n) its line of AT_pics, its target
+    mov r13, [r12 + AT_pics]
+    test r13, r13
+    jz 8f
+    mov r14d, eax
+1:  test r14d, r14d
+    jz 12f
+11: movzx eax, byte ptr [r13]
+    test eax, eax
+    jz 8f
+    inc r13
+    cmp eax, 10
+    jne 11b
+    dec r14d
+    jmp 1b
+12: mov rdi, r13
+    call chip_kind
+    mov rdi, rax
+13: movzx ecx, byte ptr [rdi]
+    test ecx, ecx
+    jz 14f
+    cmp ecx, 10
+    je 14f
+    cmp ecx, 9
+    je 14f
+    inc rdi
+    jmp 13b
+14: call chip_target
+    test rdx, rdx
+    jz 8f
+    mov rdi, rbx
+    mov rsi, rax
+    lea rcx, [rip + .Lpic_title]
+    call agimg_chip_open
     jmp 8f
 3:  mov rdi, rbx                # the header's link
     mov rsi, r12
@@ -5965,6 +6020,9 @@ FN agrow_dump
     mov rdi, rbx
     lea rsi, [rip + .Ld_chip]
     call sb_push_cstr
+    mov rdi, r15                # (its kind is not shown)
+    call chip_kind
+    mov r15, rax
     xor ecx, ecx
 72: movzx eax, byte ptr [r15 + rcx]
     test eax, eax
@@ -6356,6 +6414,9 @@ FN agrow_fit_dump
 .Ltip_full: .asciz "Press Enter to open the full text in an editor tab"
 .Lfit_indent: .asciz "  "
 .Lk_button: .asciz "button "
+.Lk_pics: .asciz "pics "          # (phase 4 task 6) pics_lay's dump
+.Lk_drew: .asciz " drew "
+.Lpic_title: .asciz "Image"
 .Lk_header: .asciz "header"
 .Lk_link: .asciz "link"
 .Lk_second: .asciz "second"
@@ -6794,9 +6855,20 @@ prompt_lay:
     mov eax, [rsp]
     add eax, [rsp + 8]
     mov [rsp + 56], eax
+    mov dword ptr [rip + pl_drew], 0
 .Lpl_chip:
     cmp byte ptr [r14], 0
     je .Lpl_chips_end
+    mov rdi, r14                # its kind (phase 4 task 6: an image's picture before its label)
+    call chip_kind
+    mov r14, rax
+    mov [rip + pl_kind], edx
+    PM eax, MI_8
+    cmp edx, 'i'
+    jne 41f
+    mov eax, [rsp + 52]         # a square of the chip's height less MI_4, MI_4 each side
+    add eax, [rip + g_pmt + 4*MI_4]
+41: mov [rip + pl_lead], eax
     xor r15d, r15d              # its label: to a TAB, a line feed or the end
 4:  movzx eax, byte ptr [r14 + r15]
     test eax, eax
@@ -6812,7 +6884,7 @@ prompt_lay:
     mov rdx, r15
     call text_width
     mov [rsp + 68], eax
-    add eax, [rip + g_pmt + 4*MI_8]
+    add eax, [rip + pl_lead]
     add eax, [rip + g_pmt + 4*MI_8]
     cmp eax, [rsp + 8]
     jle 6f
@@ -6847,16 +6919,30 @@ prompt_lay:
     push rax
     call gfx_frame
     add rsp, 16
-    mov rdi, [rip + ag_fsmall]
+    cmp dword ptr [rip + pl_kind], 'i'  # (phase 4 task 6) an image: its picture, else the image icon
+    jne 72f
+    lea rdi, [r14 + r15]
+    call chip_target
+    mov rsi, rax
+    mov rdi, rbx
+    mov ecx, [rsp + 72]
+    add ecx, [rip + g_pmt + 4*MI_4]
+    mov r8d, [rsp + 16]
+    add r8d, [rip + g_pmt + 4*MI_2]
+    mov r9d, [rsp + 52]
+    sub r9d, [rip + g_pmt + 4*MI_4]
+    call agimg_chip_pic
+    add [rip + pl_drew], eax
+72: mov rdi, [rip + ag_fsmall]
     mov esi, [rsp + 72]
-    add esi, [rip + g_pmt + 4*MI_8]
+    add esi, [rip + pl_lead]
     mov edx, [rsp + 16]
     mov ecx, [rsp + 52]
     mov r8, r14
     mov r9, r15
     COLOR r10d, T_FG
     mov r11d, [rsp + 64]
-    sub r11d, [rip + g_pmt + 4*MI_8]
+    sub r11d, [rip + pl_lead]
     sub r11d, [rip + g_pmt + 4*MI_8]
     jg 71f
     mov r11d, 1
@@ -6874,13 +6960,10 @@ prompt_lay:
     mov r8d, [rsp + 52]
     xor r9d, r9d
     call lay_line
-81: cmp byte ptr [r14 + r15], 9 # a chip with a target: a button that opens it (a dump: " chipN=X,Y,W,H")
-    jne 82f
-    movzx eax, byte ptr [r14 + r15 + 1]
-    test eax, eax
+81: lea rdi, [r14 + r15]        # a chip with a target: a button that opens it (a dump: " chipN=X,Y,W,H")
+    call chip_target
+    test rdx, rdx
     jz 82f
-    cmp eax, 10
-    je 82f
     mov edi, [rsp + 60]
     cmp edi, 16
     jae 82f
@@ -6920,6 +7003,12 @@ prompt_lay:
     add r14, r15
     jmp .Lpl_chip
 .Lpl_chips_end:
+    cmp dword ptr [rip + lr_mode], LM_DRAW  # (phase 4 task 6) the pictures drawn (print-agent-row thumb=)
+    jne .Lpl_drew_done
+    mov rdi, [r13 + AM_name]
+    mov esi, [rip + pl_drew]
+    call agimg_drew_note
+.Lpl_drew_done:
     mov eax, [rsp + 52]
     add eax, [rip + g_pmt + 4*MI_4]
     add [rsp + 16], eax
@@ -7889,6 +7978,168 @@ FN agrow_err_click
     mov eax, 1
 9:  EPILOGUE
 
+# pics_lay(AS*, AT*, x, y, w) -> eax the height of a call's result's pictures (AT_pics) in lr_mode: a row of
+#   MI_32 squares under its body, each its picture (the image icon while it has none) and a button that opens it
+#   (PART_PIC + n); PICS_MAX at most, as many as the width holds. Written out: "pics N drew D" and the buttons
+pics_lay:
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, rsi
+    mov [rsp], edx
+    mov [rsp + 4], ecx
+    mov [rsp + 8], r8d
+    xor eax, eax
+    mov r13, [r12 + AT_pics]
+    test r13, r13
+    jz 9f
+    cmp byte ptr [r13], 0
+    je 9f
+    mov eax, [rsp + 4]
+    add eax, [rip + g_pmt + 4*MI_6]
+    mov [rsp + 4], eax          # the squares' top
+    mov dword ptr [rsp + 12], 0 # drawn
+    xor r14d, r14d              # n
+    mov r15d, [rsp]             # its x
+1:  cmp byte ptr [r13], 0
+    je 7f
+    cmp r14d, PICS_MAX
+    jae 7f
+    test r14d, r14d             # a square past the width (not the first): no more
+    jz 2f
+    mov eax, r15d
+    add eax, [rip + g_pmt + 4*MI_32]
+    mov ecx, [rsp]
+    add ecx, [rsp + 8]
+    cmp eax, ecx
+    jg 7f
+2:  mov rdi, r13                # its target
+    call chip_kind
+    mov rdi, rax
+21: movzx ecx, byte ptr [rdi]
+    test ecx, ecx
+    jz 22f
+    cmp ecx, 10
+    je 22f
+    cmp ecx, 9
+    je 22f
+    inc rdi
+    jmp 21b
+22: call chip_target
+    mov [rsp + 16], rax
+    mov [rsp + 24], rdx
+    cmp dword ptr [rip + lr_mode], LM_DRAW
+    jne 3f
+    COLOR r9d, T_BORDER
+    COLOR eax, T_POPUP
+    mov edi, r15d
+    mov esi, [rsp + 4]
+    PM edx, MI_32
+    PM ecx, MI_32
+    PM r8d, MI_RADIUS
+    push rax
+    push rax
+    call gfx_frame
+    add rsp, 16
+    mov rdi, rbx
+    mov rsi, [rsp + 16]
+    mov rdx, [rsp + 24]
+    mov ecx, r15d
+    add ecx, [rip + g_pmt + 4*MI_2]
+    mov r8d, [rsp + 4]
+    add r8d, [rip + g_pmt + 4*MI_2]
+    PM r9d, MI_32
+    sub r9d, [rip + g_pmt + 4*MI_4]
+    call agimg_chip_pic
+    add [rsp + 12], eax
+3:  lea edi, [r14 + PART_PIC]
+    mov esi, r15d
+    mov edx, [rsp + 4]
+    PM ecx, MI_32
+    PM r8d, MI_32
+    call lay_btn
+    inc r14d
+    mov eax, [rip + g_pmt + 4*MI_32]
+    add eax, [rip + g_pmt + 4*MI_6]
+    add r15d, eax
+4:  movzx eax, byte ptr [r13]   # the next line
+    test eax, eax
+    jz 1b
+    inc r13
+    cmp eax, 10
+    jne 4b
+    jmp 1b
+7:  mov eax, [rip + lr_mode]
+    cmp eax, LM_DRAW
+    jne 71f
+    mov rdi, [r12 + AT_pics]
+    mov esi, [rsp + 12]
+    call agimg_drew_note
+    jmp 8f
+71: cmp eax, LM_DUMP
+    jne 8f
+    mov r13, [rip + lr_out]
+    mov rdi, r13
+    lea rsi, [rip + .Lk_pics]
+    call sb_push_cstr
+    mov rdi, r13
+    mov esi, r14d
+    call sb_push_u64
+    mov rdi, r13
+    lea rsi, [rip + .Lk_drew]
+    call sb_push_cstr
+    mov rdi, [r12 + AT_pics]
+    call agimg_chips_drew
+    mov rdi, r13
+    mov esi, eax
+    call sb_push_u64
+    mov rdi, r13
+    mov esi, 10
+    call sb_push_byte
+8:  mov eax, [rip + g_pmt + 4*MI_32]
+    add eax, [rip + g_pmt + 4*MI_6]
+9:  EPILOGUE
+
+# chip_target(ptr at a label's end) -> rax, rdx the chip's target (after the TAB to the line's end); 0, 0 none
+#   (nothing, or "-": agentatt.s's chips text for a part without one)
+chip_target:
+    xor eax, eax
+    xor edx, edx
+    cmp byte ptr [rdi], 9
+    jne 9f
+    lea rax, [rdi + 1]
+1:  movzx ecx, byte ptr [rax + rdx]
+    test ecx, ecx
+    jz 9f
+    cmp ecx, 10
+    je 9f
+    inc rdx
+    jmp 1b
+9:  cmp rdx, 1
+    jne 10f
+    cmp byte ptr [rax], '-'
+    jne 10f
+    xor eax, eax
+    xor edx, edx
+10: ret
+
+# chip_kind(chip line) -> rax past its kind ("K" and a TAB: KIND TAB LABEL TAB TARGET, agentatt.s's chips
+#   text), edx the kind byte; a line without one as it is, edx 0
+chip_kind:
+    xor edx, edx
+    mov rax, rdi
+    movzx ecx, byte ptr [rdi]
+    test ecx, ecx
+    jz 9f
+    cmp ecx, 9
+    je 9f
+    cmp ecx, 10
+    je 9f
+    cmp byte ptr [rdi + 1], 9
+    jne 9f
+    mov edx, ecx
+    lea rax, [rdi + 2]
+9:  ret
+
 # open_follow(AS*): a row's AMF_OPEN flipped (pend_open) or a chip's file opened (pend_chip), after the frame
 open_follow:
     PROLOGUE
@@ -7935,14 +8186,19 @@ open_follow:
     jne 2b
     dec r14d
     jmp 1b
-3:  movzx eax, byte ptr [r13]
+3:  mov rdi, r13                # past its kind (an image's picture opens in a tab of its own)
+    call chip_kind
+    mov r13, rax
+    mov r15d, edx
+    mov r12, rax                # its label
+31: movzx eax, byte ptr [r13]
     test eax, eax
     jz 9f
     cmp eax, 10
     je 9f
     inc r13
     cmp eax, 9
-    jne 3b
+    jne 31b
     xor r14d, r14d
 4:  movzx eax, byte ptr [r13 + r14]
     test eax, eax
@@ -7953,7 +8209,26 @@ open_follow:
     jmp 4b
 5:  test r14, r14
     jz 9f
+    cmp r15d, 'i'
+    jne 6f
+    lea rdi, [rip + chip_title] # (phase 4 task 6) its label as the tab's title
+    call sb_clear
+    mov rdx, r13
+    sub rdx, r12
+    dec rdx
+    lea rdi, [rip + chip_title]
+    mov rsi, r12
+    call sb_push
+    lea rdi, [rip + chip_title]
+    xor esi, esi
+    call sb_push_byte
     mov rdi, rbx
+    mov rsi, r13
+    mov rdx, r14
+    mov rcx, [rip + chip_title + SB_ptr]
+    call agimg_chip_open
+    jmp 9f
+6:  mov rdi, rbx
     mov rsi, r13
     mov rdx, r14
     call agents_open_link

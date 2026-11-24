@@ -2282,6 +2282,7 @@ FN app_on_button
     push rdx
     call time_ms
     mov [rip + g_blink_t0], rax
+    mov [rip + g_input_ms], rax # agents: no thumbnail decoded within 300 ms of a click (agentimg.s)
     pop rdx
     pop rsi
     pop rdi
@@ -2483,6 +2484,7 @@ FN app_on_key
     mov dword ptr [rip + g_dirty], 1
     call time_ms
     mov [rip + g_blink_t0], rax
+    mov [rip + g_input_ms], rax # agents: nor of a key (agentimg.s)
     # a chord waiting for its second stroke takes the key first (keys.s)
     mov edi, r12d
     mov esi, r13d
@@ -2919,6 +2921,7 @@ FN app_timeout
 # app_timeout's parts: each fn() -> eax milliseconds until it needs a tick, or -1; 0-ended
 timeout_fns:
     .quad agents_timeout
+    .quad agimg_timeout         # agents: thumbnails to decode once the keys rest (agentimg.s)
     .quad git_timeout
     .quad gitrepos_timeout      # and the other workspace folders' repositories (gitrepos.s)
     .quad scmext_timeout        # source control: quick-diff requests' time
@@ -2985,6 +2988,7 @@ FN app_tick
     mov qword ptr [rip + g_toast_until], 0
     mov dword ptr [rip + g_dirty], 1
 2:  call agents_tick
+    call agimg_tick             # agents: a picture to open, thumbnails to make (agentimg.s)
     call uproc_tick
     call agent_conn_tick        # agents: connections to their programs (agent_conn.s)
     call agent_drv_tick         # agents: sessions rhun drives: starts that waited (agent_drv.s)

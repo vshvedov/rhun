@@ -269,6 +269,20 @@ about (git paused, missing, failing or slower than 2 s), sends its name only. gi
 file, and only after you typed in the conversation's box. **Attach the selection** and **Attach
 the open file** (`[agents] attach_selection`, `attach_open_file`) turn either off.
 
+An image shows as its picture: in its chip above the box, in the chips above a prompt (live, and
+read again from the conversation's file), and a reply's `data:image/png`, `jpeg` or `gif` picture in
+place of the "[Image]" chip. A click on a picture opens it whole in an image tab of its own (it has
+no file: Save does nothing, it is not in the session nor in Reopen Closed Tab). Pictures are made
+between frames, never while one is drawn and never within 300 ms of a key or a click, one per pass
+of the main loop, so typing and scrolling stay smooth; until its picture is made a chip shows the
+image icon. A picture of more than 16 million pixels (or a side over 8192) is not decoded at all:
+its chip keeps the icon, its tip and a click say "Too large to preview". A WebP is sent as it is but
+has no picture (rhun has no WebP decoder). An image in a tool's result shows as its picture under the
+call's output too. rhun
+keeps at most 64 pictures and 32 MB of the images they come from; an older picture whose bytes went
+says "The picture is no longer in memory." when clicked (one read from the conversation's file is
+read again from it instead).
+
 ### Modes, model and the command menu
 
 The row under the box holds the permission mode, the model, then at the right the context

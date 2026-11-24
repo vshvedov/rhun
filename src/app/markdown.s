@@ -123,6 +123,8 @@ F MD_fnused, 4          # footnote numbers given (in order of first use)
 F MD_fnpad, 4
 F MD_muted, 4           # its text in the muted colour where it would be the text colour (md_set_muted)
 F MD_tint, 4            # the theme slot its text takes where it would be the text colour, 0 none (md_set_tint)
+F MD_mutedpad, 4
+F MD_datafn, 8          # md_set_data_images: fn(link ptr, len) -> a picture's id (agentimg.s), or 0
 ENDSTRUCT MD_SIZE
 
 # a footnote definition (MD_fns)
@@ -136,7 +138,8 @@ ENDSTRUCT MDN_SIZE
 # an image (MD_imgs)
 STRUCT
 F MDM_link, 4           # its link (the source)
-F MDM_kind, 4           # 0 none (its alt text shows), 1 an img: handle, 2 a file decoded
+F MDM_kind, 4           # 0 none (its alt text shows), 1 an img: handle, 2 a file decoded, 3 a data: image
+                        #   (MDM_id: agentimg.s's id; laid out at its thumbnail's size once that is made)
 F MDM_id, 4             # the handle
 F MDM_w, 4              # its size, pixels
 F MDM_h, 4
@@ -621,10 +624,26 @@ md_image:
     call md_link
     test rdx, rdx
     jz 8f
-    cmp rdx, 1000
-    ja 8f
     mov r14, rax
     mov r15, rdx
+    cmp qword ptr [rbx + MD_datafn], 0  # a data: image: its picture's record (no decode here)
+    je 0f
+    cmp r15, 5
+    jb 0f
+    cmp dword ptr [r14], 0x61746164     # "data"
+    jne 0f
+    cmp byte ptr [r14 + 4], ':'
+    jne 0f
+    mov rdi, r14
+    mov rsi, r15
+    call [rbx + MD_datafn]
+    test rax, rax
+    jz 8f
+    mov [r13 + MDM_id], eax
+    mov dword ptr [r13 + MDM_kind], 3
+    jmp 8f
+0:  cmp r15, 1000
+    ja 8f
     cmp r15, 4                  # img:N
     jbe 3f
     cmp dword ptr [r14], 0x3a676d69     # "img:"
@@ -728,6 +747,15 @@ image_run:
     cmp dword ptr [rax + MDM_kind], 0
     je 8f
     mov r13, rax
+    cmp dword ptr [r13 + MDM_kind], 3   # a data: image: its thumbnail's size, a chip until it has one
+    jne 0f
+    mov edi, [r13 + MDM_id]
+    call agimg_size
+    test eax, eax
+    jz 8f
+    mov [r13 + MDM_w], eax
+    mov [r13 + MDM_h], edx
+0:  mov rax, r13
     sub rax, [rbx + MD_imgs + VEC_ptr]
     xor edx, edx
     mov ecx, MDM_SIZE
@@ -821,6 +849,12 @@ FN md_source
 # md_focus(m) -> eax the link the keyboard is on, -1
 FN md_focus
     mov eax, [rdi + MD_focus]
+    ret
+
+# FN md_set_data_images(m, fn): its data: images ask fn(link ptr, len) -> a picture's id or 0 when first laid
+#   out, and are drawn as that picture's thumbnail once it is made (agentimg.s); without fn, or for 0, the chip
+FN md_set_data_images
+    mov [rdi + MD_datafn], rsi
     ret
 
 # md_set_ext(m, ext): the extension whose img: handles its images name
@@ -6767,6 +6801,8 @@ FN md_draw
     mov esi, r14d
     mov edx, [r13 + MDI_w]
     mov ecx, [r13 + MDI_h]
+    cmp dword ptr [r8 + MDM_kind], 3
+    je 2f
     cmp dword ptr [r8 + MDM_kind], 1
     jne 1f
     mov r9d, [r8 + MDM_id]
@@ -6775,6 +6811,44 @@ FN md_draw
     jmp .Lmd_next
 1:  add r8, MDM_img
     call viewimg_blit_img
+    jmp .Lmd_next
+2:  mov eax, [r8 + MDM_link]    # a data: image: its thumbnail (agentimg.s; a blit), a click opens it
+    mov [rsp + 56], eax
+    mov eax, [r8 + MDM_id]
+    mov [rsp + 60], eax
+    mov r8d, edx                # the square it fits in: its longer side, centred on the item
+    cmp r8d, ecx
+    cmovl r8d, ecx
+    mov eax, r8d
+    sub eax, edx
+    sar eax, 1
+    sub edi, eax                # x less half the room left
+    mov eax, r8d
+    sub eax, ecx
+    sar eax, 1
+    mov edx, esi
+    sub edx, eax                # y likewise
+    mov esi, edi
+    mov ecx, r8d
+    mov edi, [rsp + 60]
+    call agimg_draw
+    mov eax, [rsp + 56]
+    and eax, MD_LINKS_MAX - 1
+    add eax, [rsp + 20]
+    mov edi, eax
+    mov esi, r15d
+    mov edx, r14d
+    mov ecx, [r13 + MDI_w]
+    mov r8d, [r13 + MDI_h]
+    call ui_btn
+    test eax, UB_HOVER
+    jz .Lmd_next
+    mov dword ptr [rip + g_cursor], CUR_POINTER
+    test eax, UB_CLICK
+    jz .Lmd_next
+    mov edi, [rsp + 60]
+    lea rsi, [rip + .Limg_title]
+    call agimg_open
     jmp .Lmd_next
 .Lmd_fill:
     mov edi, r15d
@@ -6926,6 +7000,7 @@ FN md_draw
 .Lp_rhun: .asciz "rhun://"
 .Lcopy_code: .asciz "Copy"
 .Limg_chip: .asciz "[Image]"
+.Limg_title: .asciz "Image"
 .Limg_blocked: .asciz "Image blocked: "
 .Limg_unknown: .asciz "unknown"
 .Lfn_target: .asciz "#^"

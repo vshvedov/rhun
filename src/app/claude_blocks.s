@@ -10,6 +10,8 @@
 #   claude_text(AS*, AT*, ATX_IN..ATX_B, record jv, sb) -> eax 1   that part's whole text from its record read
 #                                                           again, when the record is that call's
 #   claude_kids(AS*, AT*) -> eax 1                          its subagent's calls, from their file
+#   claude_image(AS*, record jv, n, sb) -> eax 1            its n-th image's bytes (a prompt's, or in its tool
+#                                                           results), for a thumbnail read again (agentimg.s)
 #   claude_seen(AL*, record jv) -> eax 1                    the stream gave a record of this uuid before
 #                                                           (finding 30: after a compaction it may send a
 #                                                           preserved record again): it is dropped
@@ -68,8 +70,12 @@ t1: .zero SB_SIZE               # scratch
 t2: .zero SB_SIZE
 t3: .zero SB_SIZE
 ptext: .zero SB_SIZE            # a prompt's text blocks, joined (ing_user)
-pchips: .zero SB_SIZE           # its chips: "LABEL\tTARGET" a line each (AM_name, AMF_CHIPS)
+pchips: .zero SB_SIZE           # its chips: "KIND\tLABEL\tTARGET" a line each (AM_name, AMF_CHIPS; push_chip)
 utext: .zero SB_SIZE            # an echo's line, a meta line, a pill's text
+tp_sb: .zero SB_SIZE            # (phase 4 task 6) tool_pics: a call's pictures as a chips text, and one
+tp_bytes: .zero SB_SIZE         #   picture's bytes decoded
+img_n: .long 0                  # (phase 4 task 6) the user record's images so far (media_chip, claude_image)
+.p2align 3
 pc_sb: .zero SB_SIZE            # a prompt's text with its pastes unwrapped (phase 4 task 4)
 pc_tag: .zero SB_SIZE           #   and the closing tag it looks for
 
@@ -1348,6 +1354,7 @@ ing_user:
     call prompt_row
     jmp 9f
 3:  mov dword ptr [rsp + 16], 0 # a prompt's blocks: the waiting calls stopped once
+    mov dword ptr [rip + img_n], 0  # (phase 4 task 6) the record's images so far (claude_image's n)
     lea rdi, [rip + ptext]
     call sb_clear
     lea rdi, [rip + pchips]
@@ -1377,6 +1384,9 @@ ing_user:
     mov rsi, r15
     mov rdx, [rsp + 8]
     call result_block
+    mov rdi, r15                # (phase 4 task 6) its images count among the record's
+    call result_images
+    add [rip + img_n], eax
     jmp 4b
 5:  cmp qword ptr [rsp], 0
     jne 4b
@@ -1387,7 +1397,14 @@ ing_user:
     mov dword ptr [rsp + 16], 1
     mov rdi, rbx
     call agrow_stop
-6:  mov rdi, [rsp + 24]
+6:  mov rdi, rbx                # phase 4 task 6: an image or a document is a chip of the prompt
+    mov rsi, r15
+    mov rdx, [rsp + 24]
+    lea rcx, [rsp + 20]
+    call media_chip
+    test eax, eax
+    jnz 4b
+    mov rdi, [rsp + 24]
     lea rsi, [rip + .Lv_text]
     call json_is
     test eax, eax
@@ -1413,8 +1430,9 @@ ing_user:
     jmp 4b
 7:  cmp dword ptr [rip + cb_flags], ING_FILE   # an image, a document: a chip of the prompt
     jne 4b
-    mov rdi, r15
-    mov rsi, [rsp + 24]
+    mov rdi, rbx
+    mov rsi, r15
+    mov rdx, [rsp + 24]
     call media_chip
     jmp 4b
 8:  cmp dword ptr [rip + cb_flags], ING_FILE
@@ -2432,6 +2450,7 @@ chip_of:
     mov rsi, [rip + t2 + SB_len]
     mov rdx, [rip + t3 + SB_ptr]
     mov rcx, [rip + t3 + SB_len]
+    mov r8d, 's'
     call push_chip
     mov eax, 1
     EPILOGUE
@@ -2481,6 +2500,7 @@ chip_of:
     mov rdi, rax
     mov rsi, rdx
     mov rdx, r12
+    mov r8d, 'f'
     mov rcx, r13
     call push_chip
     mov eax, 1
@@ -2502,6 +2522,7 @@ chip_of:
     jz 8b
     mov rdi, r12
     mov rsi, r13
+    mov r8d, 't'
     xor edx, edx
     xor ecx, ecx
     call push_chip
@@ -2549,6 +2570,7 @@ chip_of:
     test eax, eax
     jz 8b
     mov rdi, r12
+    mov r8d, 'b'
     mov rsi, r13
     xor edx, edx
     xor ecx, ecx
@@ -2607,14 +2629,16 @@ path_ok:
 8:  mov eax, 1
 9:  ret
 
-# push_chip(label ptr, len, target ptr, len): a chip into pchips, "LABEL\tTARGET" (a line feed before it when
-#   there are chips already; 16 at most)
+# push_chip(label ptr, len, target ptr, len, kind byte): a chip into pchips, "KIND\tLABEL\tTARGET" (agentatt.s's
+#   chips text: i image, d document, s selection, f opened file, t terminal, b browser tab; a line feed before it
+#   when there are chips already; 16 at most)
 push_chip:
-    PROLOGUE
+    PROLOGUE 16
     mov r12, rdi
     mov r13, rsi
     mov r14, rdx
     mov r15, rcx
+    mov [rsp], r8d
     mov rdi, [rip + pchips + SB_ptr]
     mov rsi, [rip + pchips + SB_len]
     test rsi, rsi
@@ -2625,7 +2649,13 @@ push_chip:
     lea rdi, [rip + pchips]
     mov esi, 10
     call sb_push_byte
-2:  xor ebx, ebx
+2:  lea rdi, [rip + pchips]
+    mov esi, [rsp]
+    call sb_push_byte
+    lea rdi, [rip + pchips]
+    mov esi, 9
+    call sb_push_byte
+    xor ebx, ebx
 3:  cmp rbx, r13
     jae 4f
     movzx esi, byte ptr [r12 + rbx]
@@ -2647,31 +2677,65 @@ push_chip:
     call sb_push
 9:  EPILOGUE
 
-# media_chip(block, type jv): an image block of a prompt is the chip "[Image]" (its thumbnail is phase 4), a
-#   document its title, else "Document"; any other block nothing
+# media_chip(AS*, block, type jv): an image block of a prompt is the chip "[Image]" whose target is its place,
+#   "@OFF:LEN:N" (the record's line in the session's file, its n-th image: agentimg.s reads the picture again
+#   from it; "-" without a place), a document its title, else "Document"; any other block nothing
 media_chip:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
-    mov rdi, r12
+    mov r13, rdx
+    mov rdi, rdx
     lea rsi, [rip + .Lv_image]
     call json_is
     test eax, eax
     jz 1f
+    lea rdi, [rip + t3]
+    call sb_clear
+    mov rcx, [rbx + AS_linelen]
+    test rcx, rcx
+    jz 11f
+    mov rsi, [rbx + AS_line]
+    test rsi, rsi
+    js 11f
+    lea rdi, [rip + t3]
+    mov esi, '@'
+    call sb_push_byte
+    lea rdi, [rip + t3]
+    mov rsi, [rbx + AS_line]
+    call sb_push_u64
+    lea rdi, [rip + t3]
+    mov esi, ':'
+    call sb_push_byte
+    lea rdi, [rip + t3]
+    mov rsi, [rbx + AS_linelen]
+    call sb_push_u64
+    lea rdi, [rip + t3]
+    mov esi, ':'
+    call sb_push_byte
+    lea rdi, [rip + t3]
+    mov esi, [rip + img_n]
+    call sb_push_u64
+    jmp 12f
+11: lea rdi, [rip + t3]
+    mov esi, '-'
+    call sb_push_byte
+12: inc dword ptr [rip + img_n]
     lea rdi, [rip + .Lchip_image]
     call strlen
     lea rdi, [rip + .Lchip_image]
     mov rsi, rax
-    xor edx, edx
-    xor ecx, ecx
+    mov rdx, [rip + t3 + SB_ptr]
+    mov rcx, [rip + t3 + SB_len]
+    mov r8d, 'i'
     call push_chip
     EPILOGUE
-1:  mov rdi, r12
+1:  mov rdi, r13
     lea rsi, [rip + .Lv_document]
     call json_is
     test eax, eax
     jz 9f
-    mov rdi, rbx
+    mov rdi, r12
     lea rsi, [rip + .Lk_title]
     call jstr
     test rdx, rdx
@@ -2687,8 +2751,259 @@ media_chip:
     mov rsi, rdx
     xor edx, edx
     xor ecx, ecx
+    mov r8d, 'd'
     call push_chip
 9:  EPILOGUE
+
+# tool_pics(AS*, AT*, tool_result block): its image blocks (PICS_MAX at most) as the call's AT_pics: read from
+#   the session's own file a place, "@OFF:LEN:N" (the record's line, the n-th image of the record: img_n counts
+#   those before; agentimg.s reads it again when it is drawn), else (the stream, a subagent's file) the picture
+#   decoded now and kept, "#ID"; nothing when it has none
+tool_pics:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rdx
+    lea rsi, [rip + .Lk_content]
+    call json_get
+    mov r13, rax
+    mov rdi, rax
+    call json_type
+    cmp eax, JT_ARR
+    jne 9f
+    lea rdi, [rip + tp_sb]
+    call sb_clear
+    xor r14d, r14d              # the block
+    mov dword ptr [rsp], 0      # its images so far
+1:  mov rdi, r13
+    call json_len
+    cmp r14d, eax
+    jae 7f
+    mov rdi, r13
+    mov esi, r14d
+    call json_at
+    mov r15, rax
+    inc r14d
+    mov rdi, r15
+    lea rsi, [rip + .Lk_type]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_image]
+    call json_is
+    test eax, eax
+    jz 1b
+    mov eax, [rsp]
+    inc dword ptr [rsp]
+    cmp eax, PICS_MAX
+    jae 1b
+    lea rdi, [rip + t3]         # its target
+    call sb_clear
+    cmp qword ptr [r12 + AT_file], 0
+    jne 3f
+    mov rcx, [rbx + AS_linelen]
+    test rcx, rcx
+    jz 3f
+    mov rcx, [rbx + AS_line]
+    test rcx, rcx
+    js 3f
+    lea rdi, [rip + t3]
+    mov esi, '@'
+    call sb_push_byte
+    lea rdi, [rip + t3]
+    mov rsi, [rbx + AS_line]
+    call sb_push_u64
+    lea rdi, [rip + t3]
+    mov esi, ':'
+    call sb_push_byte
+    lea rdi, [rip + t3]
+    mov rsi, [rbx + AS_linelen]
+    call sb_push_u64
+    lea rdi, [rip + t3]
+    mov esi, ':'
+    call sb_push_byte
+    mov esi, [rsp]
+    dec esi
+    add esi, [rip + img_n]
+    lea rdi, [rip + t3]
+    call sb_push_u64
+    jmp 5f
+3:  mov rdi, r15                # the stream's: decoded and kept
+    lea rsi, [rip + .Lk_source]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lk_data]
+    call jstr
+    test rdx, rdx
+    jz 1b
+    mov [rsp + 8], rax
+    mov [rsp + 16], rdx
+    lea rdi, [rip + tp_bytes]
+    call sb_clear
+    lea rdi, [rip + tp_bytes]
+    mov rsi, [rsp + 8]
+    mov rdx, [rsp + 16]
+    call b64_decode
+    test eax, eax
+    jz 1b
+    mov rdi, [rip + tp_bytes + SB_ptr]
+    mov rsi, [rip + tp_bytes + SB_len]
+    xor edx, edx
+    call agimg_bytes
+    test rax, rax
+    jz 1b
+    mov [rsp + 8], rax
+    lea rdi, [rip + t3]
+    mov esi, '#'
+    call sb_push_byte
+    lea rdi, [rip + t3]
+    mov rsi, [rsp + 8]
+    call sb_push_u64
+5:  cmp qword ptr [rip + tp_sb + SB_len], 0
+    je 6f
+    lea rdi, [rip + tp_sb]
+    mov esi, 10
+    call sb_push_byte
+6:  lea rdi, [rip + .Lchip_image]
+    call strlen
+    lea rdi, [rip + tp_sb]
+    mov esi, 'i'
+    lea rdx, [rip + .Lchip_image]
+    mov rcx, rax
+    mov r8, [rip + t3 + SB_ptr]
+    mov r9, [rip + t3 + SB_len]
+    call agatt_chip_line
+    jmp 1b
+7:  cmp qword ptr [rip + tp_sb + SB_len], 0
+    je 9f
+    lea rdi, [rip + tp_sb]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [r12 + AT_pics]
+    call mem_free
+    mov rdi, [rip + tp_sb + SB_ptr]
+    mov rsi, [rip + tp_sb + SB_len]
+    call mem_dup
+    mov [r12 + AT_pics], rax
+    mov rdi, rbx
+    mov rsi, r12
+    call agrow_touch
+9:  EPILOGUE
+
+# result_images(tool_result block) -> eax the image blocks in its content
+result_images:
+    PROLOGUE
+    lea rsi, [rip + .Lk_content]
+    call json_get
+    mov rbx, rax
+    xor r12d, r12d
+    mov rdi, rbx
+    call json_type
+    cmp eax, JT_ARR
+    jne 8f
+    xor r13d, r13d
+1:  mov rdi, rbx
+    call json_len
+    cmp r13d, eax
+    jae 8f
+    mov rdi, rbx
+    mov esi, r13d
+    call json_at
+    inc r13d
+    mov rdi, rax
+    lea rsi, [rip + .Lk_type]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lv_image]
+    call json_is
+    add r12d, eax
+    jmp 1b
+8:  mov eax, r12d
+    EPILOGUE
+
+# FN claude_image(AS*, record jv, n, sb) -> eax 1: the n-th image block (from 0) of a user record, a prompt's
+#   or inside its tool results, its Base64 decoded into sb; 0 none (the reader's fifth function: agentimg.s
+#   reads a picture again from its line)
+FN claude_image
+    PROLOGUE 16
+    mov rbx, rcx
+    mov [rsp], edx              # the images still to pass
+    mov rdi, rsi
+    lea rsi, [rip + .Lk_message]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lk_content]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rsp]
+    call image_in
+    test rax, rax
+    jz 9f
+    lea rsi, [rip + .Lk_source]
+    mov rdi, rax
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lk_data]
+    call jstr
+    test rdx, rdx
+    jz 9f
+    mov rdi, rbx
+    mov rsi, rax
+    call b64_decode
+    EPILOGUE
+9:  xor eax, eax
+    EPILOGUE
+
+# image_in(content jv, *left) -> rax the image block *left images on in that array (a tool_result's content is
+#   looked into), 0 none; *left counted down
+image_in:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rbx
+    call json_type
+    cmp eax, JT_ARR
+    jne 9f
+    xor r13d, r13d
+1:  mov rdi, rbx
+    call json_len
+    cmp r13d, eax
+    jae 9f
+    mov rdi, rbx
+    mov esi, r13d
+    call json_at
+    mov r14, rax
+    inc r13d
+    mov rdi, r14
+    lea rsi, [rip + .Lk_type]
+    call json_get
+    mov r15, rax
+    mov rdi, r15
+    lea rsi, [rip + .Lv_image]
+    call json_is
+    test eax, eax
+    jz 2f
+    cmp dword ptr [r12], 0
+    je 8f
+    dec dword ptr [r12]
+    jmp 1b
+2:  mov rdi, r15
+    lea rsi, [rip + .Lv_tool_result]
+    call json_is
+    test eax, eax
+    jz 1b
+    mov rdi, r14
+    lea rsi, [rip + .Lk_content]
+    call json_get
+    mov rdi, rax
+    mov rsi, r12
+    call image_in
+    test rax, rax
+    jz 1b
+    EPILOGUE
+8:  mov rax, r14
+    EPILOGUE
+9:  xor eax, eax
+    EPILOGUE
 
 # ---------------- system records (task 8) ----------------
 
@@ -3096,6 +3411,10 @@ result_block:
     mov rdi, r12
     mov rsi, [rsp]
     call fill_result
+    mov rdi, rbx                # (phase 4 task 6) its pictures
+    mov rsi, r13
+    mov rdx, r12
+    call tool_pics
     mov rdi, rbx
     mov rsi, r13
     call agrow_done
@@ -6770,6 +7089,8 @@ answer_tails: .quad .Lvtt1, .Lvtt2, 0
 .Lv_user: .asciz "user"
 .Lv_tool_use: .asciz "tool_use"
 .Lv_tool_result: .asciz "tool_result"
+.Lk_source: .asciz "source"
+.Lk_data: .asciz "data"
 .Lv_text: .asciz "text"
 .Lv_thinking: .asciz "thinking"
 .Lk_think_ms: .asciz "thinking_duration_ms"

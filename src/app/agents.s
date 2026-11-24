@@ -4877,7 +4877,11 @@ FN agents_rows_cut
     cmp r12, [rbx + AS_msgs + VEC_len]
     jbe 1f
     mov r12, [rbx + AS_msgs + VEC_len]
-1:  mov rdi, rbx                # the calls of the rows that go leave the table first
+1:  test r12, r12              # phase 4 task 6: every row goes: its pictures go (a partial cut keeps them:
+    jnz 0f                      #   the rows left may show them; the cache's caps bound them)
+    mov rdi, rbx
+    call agimg_session_gone
+0:  mov rdi, rbx                # the calls of the rows that go leave the table first
     mov rsi, r12
     call agrow_cut
     mov rdi, rbx                # task 10: and a selection, a right press in them (agentsel.s)
@@ -5660,10 +5664,16 @@ row_measure:
     cmp eax, R_UNKNOWN
     je 5f
     mov dword ptr [r14 + AM_w], -1      # msg_height's own cache says nothing of ag_gen
+    mov rdi, rbx                # phase 4 task 6: a reply's data: images belong to this row
+    mov rsi, r12
+    call agimg_ctx
     mov rdi, r14
     mov esi, r13d
     call msg_height
     mov r15d, eax
+    xor edi, edi
+    xor esi, esi
+    call agimg_ctx
     mov rdi, r14                # and above it its day pill, a prompt's time line
     call row_above
     add r15d, eax
@@ -7253,6 +7263,9 @@ msg_doc:
     mov rdi, r12
     mov esi, 1
     call md_set_compact
+    mov rdi, r12                # phase 4 task 6: a data: image is drawn as its thumbnail
+    lea rsi, [rip + agimg_md]
+    call md_set_data_images
     inc qword ptr [rip + md_parses]
 2:  call panel_px
     cmp eax, [rbx + AM_dpx]
@@ -9767,7 +9780,17 @@ FN agents_row_dump
     mov rdi, r15
     mov esi, [rip + th_content]
     call sb_push_u64
+    test dword ptr [rbx + AM_flags], AMF_CHIPS  # phase 4 task 6: the pictures its chips drew
+    jz 0f
     mov rdi, r15
+    lea rsi, [rip + .Lrow_thumb]
+    call sb_push_cstr
+    mov rdi, [rbx + AM_name]
+    call agimg_chips_drew
+    mov rdi, r15
+    mov esi, eax
+    call sb_push_u64
+0:  mov rdi, r15
     lea rsi, [rip + .Lrow_parsed]
     call sb_push_cstr
     xor r14d, r14d
@@ -9990,6 +10013,7 @@ ext_state_labels: .quad .Lr0, .Lst_working, .Lst_waiting, .Lst_error
 .Loc_failed: .asciz "OpenCode: check CLI and data access"
 .Lnoproj: .asciz "Open a folder to see its agent sessions"
 .Luntitled: .asciz "Untitled session"
+.Lrow_thumb: .asciz " thumb="
 .Lst_time: .asciz " time="
 .Lst_tip: .asciz " tip="
 .Lst_day: .asciz " day="

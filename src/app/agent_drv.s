@@ -3954,7 +3954,7 @@ FN agent_ingest
     ret
 
 # FN agent_reader(kind, n) -> rax the kind's n-th reader function (0 ingest, 1 a part's whole text, 2 a
-#   call's children) or 0
+#   call's children, 3 an image's bytes: phase 4 task 6) or 0
 FN agent_reader
     lea rax, [rip + readers]
 1:  mov rcx, [rax]
@@ -3962,9 +3962,9 @@ FN agent_reader
     jz 8f
     cmp ecx, edi
     je 2f
-    add rax, 32
+    add rax, 40
     jmp 1b
-2:  cmp esi, 2
+2:  cmp esi, 3
     ja 8f
     mov rax, [rax + 8 + rsi*8]
     ret
@@ -3997,10 +3997,10 @@ ext_drv:
     .quad ext_none              # DRV_task: no tasks
     .quad 0                     # DRV_words: the generic words (phase 4)
     .long 0, 0                  # DRV_glyph: none
-# the readers of the kinds that have one, by AS_kind: {kind, ingest, text, kids}, then 0 (agent_ingest,
+# the readers of the kinds that have one, by AS_kind: {kind, ingest, text, kids, image}, then 0 (agent_ingest,
 #   agent_reader; the one place above the drivers that names a kind's reader)
 readers:
-    .quad AG_CLAUDE, claude_ingest, claude_text, claude_kids
+    .quad AG_CLAUDE, claude_ingest, claude_text, claude_kids, claude_image
     .quad 0
 kind_names: .quad .Lk_claude, .Lk_codex, .Lk_grok, .Lk_opencode
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown

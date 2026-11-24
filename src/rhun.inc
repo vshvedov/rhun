@@ -2975,6 +2975,8 @@ F AT_rev, 4
 F AT_fold, 4            # what its fold counts of it (agentfold.s): 1 a call, 2 a failed one
 F AT_nfail, 4           # its children that failed (task 11: the count line's " · M failed")
 F AT_kpad, 4
+F AT_pics, 8            # (phase 4 task 6) owned cstr or 0: its result's images as a chips text ("i TAB [Image]
+                        #   TAB TARGET" lines: "@OFF:LEN:N" a place in the session's file, "#ID" a picture kept)
 ENDSTRUCT AT_SIZE
 .equ ATS_RUNNING, 0
 .equ ATS_OK, 1
@@ -3039,6 +3041,8 @@ ENDSTRUCT AT_SIZE
 .equ PART_COLLAPSE, 14          #   and its "Collapse" line
 .equ PART_CHIP, 16              # + n, n < 16
 .equ PART_ERR, 32               # + n, n < 8
+.equ PART_PIC, 40               # + n, n < PICS_MAX: a picture of a call's result (phase 4 task 6)
+.equ PICS_MAX, 4
 # phase 3 task 10 (agentsel.s): what holds a selection, a reply's Copy response (free parts of a unit's ids)
 .equ SELP_MD, 0                 # the row's Markdown (its document holds it); else PART_IN, PART_OUT or:
 .equ SELP_PROMPT, 60            #   a prompt's text

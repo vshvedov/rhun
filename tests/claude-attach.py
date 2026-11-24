@@ -170,7 +170,7 @@ class SeamTest(AttachCase):
         self.command('agent-prompt ')
         self.ready()
         self.assertEqual(len(self.users()), 2)
-        self.assertEqual(self.chips(self.last_user_row()), [f'i\ta.png\t{path}'])
+        self.assertEqual(self.chips(self.last_user_row()), ['i\ta.png\t#1'])   # its thumbnail (task 6)
         self.assertEqual(self.att()['head']['parts'], 0)
 
     def test_the_prompts_row_has_its_chips(self):
@@ -182,9 +182,9 @@ class SeamTest(AttachCase):
         self.command('agent-new claude')
         self.attach(img)
         self.command('agent-prompt first')
-        self.assertEqual(self.chips('q0'), [f'i\ta.png\t{img}'])
+        self.assertEqual(self.chips('q0'), ['i\ta.png\t#1'])     # an image's target: its thumbnail (task 6)
         self.ready()
-        self.assertEqual(self.chips(self.last_user_row()), [f'i\ta.png\t{img}'])
+        self.assertEqual(self.chips(self.last_user_row()), ['i\ta.png\t#1'])
         self.attach(txt)                                # at once
         self.command('agent-prompt second')
         self.ready()
@@ -193,13 +193,13 @@ class SeamTest(AttachCase):
         self.command('wait-agent working 5000')
         self.attach(img, txt)
         self.command('agent-prompt third')
-        self.assertEqual(self.chips('q0'), [f'i\ta.png\t{img}', f'd\tn.txt\t{txt}'])
+        self.assertEqual(self.chips('q0'), ['i\ta.png\t#1', f'd\tn.txt\t{txt}'])     # the same bytes, the same one
         self.ready()
         rows = self.rows()
         index = [i for i, l in enumerate(rows) if l == '  text third']
         self.assertTrue(index, rows)
         number = int(rows[index[0] - 1].split(' ')[0])
-        self.assertEqual(self.chips(number), [f'i\ta.png\t{img}', f'd\tn.txt\t{txt}'])
+        self.assertEqual(self.chips(number), ['i\ta.png\t#1', f'd\tn.txt\t{txt}'])
         self.assertEqual(self.live_packs(), (0, 0))
 
     def test_a_driver_without_parts_gets_none(self):

@@ -1,9 +1,8 @@
-# SHA-1 (FIPS 180-4) and Base64 (RFC 4648, with padding) for the WebSocket handshake of the bridge for
-# terminal claude (ide_server.s): Sec-WebSocket-Accept is the Base64 of the SHA-1 of the key and a GUID.
-# Small and plain: one pass, no state kept between calls.
+# SHA-1 (FIPS 180-4) for the WebSocket handshake of the bridge for terminal claude (ide_server.s):
+# Sec-WebSocket-Accept is the Base64 (base64.s) of the SHA-1 of the key and a GUID. Small and plain: one
+# pass, no state kept between calls.
 #
 #   sha1(ptr, len, out20)              the 20-byte digest of len bytes
-#   b64_encode(ptr, len, out) -> rax   the Base64 text (4 * ceil(len / 3) bytes) at out, its length
 .include "rhun.inc"
 
 .text
@@ -174,72 +173,3 @@ block:
     pop r13
     ret
 
-# b64_encode(ptr, len, out) -> rax the length written
-FN b64_encode
-    PROLOGUE
-    mov rbx, rdi
-    mov r12, rsi
-    mov r13, rdx
-    lea r14, [rip + .Lb64]
-    xor r15d, r15d              # written
-    xor ecx, ecx                # read
-1:  mov rax, r12
-    sub rax, rcx
-    jz 9f
-    cmp rax, 3
-    jb 2f
-    movzx eax, byte ptr [rbx + rcx]
-    shl eax, 16
-    movzx edx, byte ptr [rbx + rcx + 1]
-    shl edx, 8
-    or eax, edx
-    movzx edx, byte ptr [rbx + rcx + 2]
-    or eax, edx
-    add rcx, 3
-    mov edx, 4
-    jmp 3f
-2:  # one or two bytes left
-    movzx edx, byte ptr [rbx + rcx]
-    shl edx, 16
-    cmp rax, 2
-    jb 21f
-    movzx esi, byte ptr [rbx + rcx + 1]
-    shl esi, 8
-    or edx, esi
-21: mov r8, rax                 # 1 or 2 bytes: 2 or 3 characters
-    mov eax, edx
-    add rcx, r8
-    lea edx, [r8 + 1]
-3:  # edx characters of the 24 bits in eax, then '=' to four
-    mov r8d, eax
-    shr r8d, 18
-    and r8d, 63
-    movzx r8d, byte ptr [r14 + r8]
-    mov [r13 + r15], r8b
-    mov r8d, eax
-    shr r8d, 12
-    and r8d, 63
-    movzx r8d, byte ptr [r14 + r8]
-    mov [r13 + r15 + 1], r8b
-    mov r8d, eax
-    shr r8d, 6
-    and r8d, 63
-    movzx r8d, byte ptr [r14 + r8]
-    mov byte ptr [r13 + r15 + 2], '='
-    cmp edx, 3
-    jb 4f
-    mov [r13 + r15 + 2], r8b
-4:  mov r8d, eax
-    and r8d, 63
-    movzx r8d, byte ptr [r14 + r8]
-    mov byte ptr [r13 + r15 + 3], '='
-    cmp edx, 4
-    jb 5f
-    mov [r13 + r15 + 3], r8b
-5:  add r15, 4
-    jmp 1b
-9:  mov rax, r15
-    EPILOGUE
-
-.section .rodata
-.Lb64: .ascii "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"

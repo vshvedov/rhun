@@ -1028,20 +1028,15 @@ handshake:
     mov rsi, [rip + resp + SB_len]
     lea rdx, [rip + hbuf]
     call sha1
-    lea rdi, [rip + hbuf]
-    mov esi, 20
-    lea rdx, [rip + hbuf + 32]
-    call b64_encode
-    mov [rsp + 24], rax
     lea rdi, [rip + resp]
     call sb_clear
     lea rdi, [rip + resp]
     lea rsi, [rip + .Lr_101]
     call sb_push_cstr
-    lea rdi, [rip + resp]
-    lea rsi, [rip + hbuf + 32]
-    mov rdx, [rsp + 24]
-    call sb_push
+    lea rdi, [rip + resp]       # (base64.s: appended to the buffer)
+    lea rsi, [rip + hbuf]
+    mov edx, 20
+    call b64_encode
     cmp dword ptr [rbx + IC_proto], 0
     je 5f
     lea rdi, [rip + resp]

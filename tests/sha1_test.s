@@ -1,12 +1,11 @@
-# sha1 and b64_encode (src/app/sha1.s): FIPS 180-4's examples, every tail length around the one-block and
-# two-block padding (0 to 130 bytes of a pattern), a million "a", Base64 of 0 to 5 bytes, and RFC 6455's
-# handshake example (the key and its Sec-WebSocket-Accept)
+# sha1 (src/app/sha1.s): FIPS 180-4's examples, every tail length around the one-block and two-block
+# padding (0 to 130 bytes of a pattern), a million "a", and RFC 6455's handshake example (the key and its
+# Sec-WebSocket-Accept, with base64.s's encoder; Base64 itself is base64_test.s's)
 .include "rhun.inc"
 .bss
 .p2align 3
 out: .zero SB_SIZE
 dig: .zero 32
-enc: .zero 64
 pat: .zero 200
 big: .zero 1000000
 .text
@@ -44,35 +43,15 @@ FN main
     lea rdi, [rip + big]
     mov esi, 1000000
     call one
-    # Base64 of the first 0 to 5 bytes of "foobar" (RFC 4648 section 10)
-    xor r12d, r12d
-3:  lea rdi, [rip + .Lfoobar]
-    mov rsi, r12
-    lea rdx, [rip + enc]
-    call b64_encode
-    lea rdi, [rip + out]
-    lea rsi, [rip + enc]
-    mov rdx, rax
-    call sb_push
-    lea rdi, [rip + out]
-    mov esi, 10
-    call sb_push_byte
-    inc r12
-    cmp r12, 6
-    jbe 3b
     # RFC 6455 1.3: the key and the GUID, SHA-1, Base64
     lea rdi, [rip + .Lkey]
     mov esi, .Lkey_end - .Lkey
     lea rdx, [rip + dig]
     call sha1
-    lea rdi, [rip + dig]
-    mov esi, 20
-    lea rdx, [rip + enc]
-    call b64_encode
     lea rdi, [rip + out]
-    lea rsi, [rip + enc]
-    mov rdx, rax
-    call sb_push
+    lea rsi, [rip + dig]
+    mov edx, 20
+    call b64_encode
     lea rdi, [rip + out]
     mov esi, 10
     call sb_push_byte
@@ -127,6 +106,5 @@ one:
 .Lc_abc: .ascii "abc"
 .Lc_448: .ascii "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
 .Lc_896: .ascii "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"
-.Lfoobar: .ascii "foobar"
 .Lkey: .ascii "dGhlIHNhbXBsZSBub25jZQ==258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 .Lkey_end:

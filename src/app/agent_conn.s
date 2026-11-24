@@ -92,6 +92,8 @@ FN conn_open
     mov rdi, [r12]
     test rdi, rdi
     jz .Lco_fail
+    cmp dword ptr [rip + g_remote], 0
+    jne .Lco_remote
     mov esi, 1                  # X_OK
     SYS SYS_access
     test rax, rax
@@ -144,6 +146,8 @@ FN conn_open
     call nonblock
     mov edi, [rbx + CN_fd_err]
     call nonblock
+    mov dword ptr [rbx + CN_flags], 0
+.Lco_opened:
     lea rdi, [rbx + CN_rbuf]
     call sb_clear
     lea rdi, [rbx + CN_ebuf]
@@ -157,7 +161,6 @@ FN conn_open
     mov [rbx + CN_eof_at], rax
     mov [rbx + CN_reap_from], rax
     mov [rbx + CN_reap_at], rax
-    mov dword ptr [rbx + CN_flags], 0
     mov dword ptr [rbx + CN_exit], -1
     inc dword ptr [rbx + CN_gen]
     call time_ms
@@ -236,6 +239,84 @@ FN conn_open
 .Lco_fail:
     xor eax, eax
     EPILOGUE
+.Lco_remote:
+    # a remote window: the program runs on the host (vfs_uproc_spawn), in the host's login environment,
+    # its group a process group there that uproc_signal reaches; its input and output are one socket
+    # (CN_fd_in a second descriptor of it, shut for writing when the input ends), its error output
+    # another. argv[0] with a separator is a path on the host, else it is found on the host's PATH
+    xor ecx, ecx
+1:  movzx eax, byte ptr [rdi + rcx]
+    test eax, eax
+    jz 2f
+    inc rcx
+    cmp eax, '/'
+    jne 1b
+    mov esi, 1                  # a path: it must be a program there (a failed exec would be a child that
+    call vfs_access             #   exits 127), as here
+    test rax, rax
+    jz 21f
+    mov dword ptr [rbx + CN_err], CN_E_OFFLINE
+    cmp rax, -107
+    je .Lco_fail
+    mov dword ptr [rbx + CN_err], CN_E_NOENT
+    jmp .Lco_fail
+21: mov ecx, 8
+    jmp 3f
+2:  xor ecx, ecx
+3:  or ecx, 2 | 4               # its error output apart; uproc's (signalled, waited for, ended)
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r14
+    mov [rsp], rcx
+    xor ecx, ecx
+    xor r8d, r8d
+    push qword ptr [rsp]
+    push qword ptr [rsp + 8]
+    call vfs_uproc_spawn
+    add rsp, 16
+    test rax, rax
+    jg 4f
+    mov dword ptr [rbx + CN_err], CN_E_NOENT
+    cmp rax, -2                 # ENOENT: not there
+    je .Lco_fail
+    mov dword ptr [rbx + CN_err], CN_E_OFFLINE
+    cmp rax, -107               # ENOTCONN: the host is not connected
+    je .Lco_fail
+    mov dword ptr [rbx + CN_err], CN_E_SPAWN
+    jmp .Lco_fail
+4:  mov [rbx + CN_pid], eax
+    mov [rbx + CN_fd_out], edx
+    mov [rbx + CN_fd_err], ecx
+    mov edi, edx                # the input: a second descriptor of the same socket
+    xor esi, esi                # F_DUPFD
+    mov edx, 3
+    SYS SYS_fcntl
+    mov [rbx + CN_fd_in], eax
+    test eax, eax
+    js 5f
+    mov edi, eax
+    mov esi, 2                  # F_SETFD FD_CLOEXEC
+    mov edx, 1
+    SYS SYS_fcntl
+    mov dword ptr [rbx + CN_flags], CNF_REMOTE
+    jmp .Lco_opened
+5:  mov dword ptr [rbx + CN_err], CN_E_SPAWN
+    mov edi, [rbx + CN_fd_out]
+    SYS SYS_close
+    mov edi, [rbx + CN_fd_err]
+    test edi, edi
+    js 6f
+    SYS SYS_close
+6:  mov dword ptr [rbx + CN_fd_in], -1
+    mov dword ptr [rbx + CN_fd_out], -1
+    mov dword ptr [rbx + CN_fd_err], -1
+    mov edi, [rbx + CN_pid]
+    mov esi, SIGKILL
+    call uproc_signal
+    mov edi, [rbx + CN_pid]
+    xor esi, esi
+    call uproc_end
+    jmp .Lco_fail
 
 # ---------------- stdout and stderr ----------------
 
@@ -464,7 +545,13 @@ close_input:
     test edi, edi
     js 1f
     call watch_remove
-    mov edi, [rbx + CN_fd_in]
+    test dword ptr [rbx + CN_flags], CNF_REMOTE
+    jz 2f
+    mov edi, [rbx + CN_fd_in]   # one socket both ways: the program's input ends only when it is shut (the
+                                #   pump then closes the host's side: what it writes after is not read)
+    mov esi, SHUT_WR
+    SYS SYS_shutdown
+2:  mov edi, [rbx + CN_fd_in]
     SYS SYS_close
     mov dword ptr [rbx + CN_fd_in], -1
 1:  mov qword ptr [rbx + CN_wbuf + SB_len], 0
@@ -833,7 +920,13 @@ FN agent_conn_tick
     jae 9f
     lea rax, [rip + conns]
     mov rbx, [rax + r12*8]
-    # reaping: once stdout ended, or while stopping
+    test dword ptr [rbx + CN_flags], CNF_LOST   # its host's connection went
+    jz 0f
+    mov rdi, rbx
+    mov esi, CN_E_LOST
+    call conn_break
+    jmp .Lct_next
+0:  # reaping: once stdout ended, or while stopping
     cmp qword ptr [rbx + CN_eof_at], 0
     jne 1f
     cmp dword ptr [rbx + CN_state], CN_STOPPING
@@ -945,7 +1038,11 @@ FN agent_conn_timeout
     jae 9f
     lea rax, [rip + conns]
     mov rbx, [rax + r12*8]
-    cmp qword ptr [rbx + CN_eof_at], 0
+    test dword ptr [rbx + CN_flags], CNF_LOST   # broken at once
+    jz 0f
+    xor edi, edi
+    call pick
+0:  cmp qword ptr [rbx + CN_eof_at], 0
     jne 2f
     cmp dword ptr [rbx + CN_state], CN_STOPPING
     jne 4f
@@ -989,20 +1086,45 @@ FN agent_conn_count
     mov eax, [rip + nconns]
     ret
 
-# agent_conn_owns(pid) -> eax 1 when pid is the child of an open connection (rhun's own program)
+# agent_conn_owns(pid) -> eax 1 when pid is the child of an open connection (rhun's own program). In a
+#   remote window pid is a pid on the host (a record there names it), compared with the host's pid of
+#   each child (remote_pid_host)
 FN agent_conn_owns
+    PROLOGUE
+    mov r12d, edi
+    xor ebx, ebx
+1:  cmp ebx, [rip + nconns]
+    jae 8f
+    lea rdx, [rip + conns]
+    mov rax, [rdx + rbx*8]
+    inc ebx
+    mov edi, [rax + CN_pid]
+    test dword ptr [rax + CN_flags], CNF_REMOTE
+    jz 2f
+    call remote_pid_host
+    mov edi, eax
+2:  cmp edi, r12d
+    jne 1b
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# agent_conn_remote_lost(): the remote window's connection to its host went (remote.s rm_lost): every
+#   connection to a program there is broken at the next tick (CN_E_LOST), not in the middle of the stream's
+#   reading. Its program, if the host's session keeps it, has its input end once the window is back
+FN agent_conn_remote_lost
     xor ecx, ecx
     lea rdx, [rip + conns]
 1:  cmp ecx, [rip + nconns]
-    jae 8f
+    jae 9f
     mov rax, [rdx + rcx*8]
     inc ecx
-    cmp [rax + CN_pid], edi
-    jne 1b
-    mov eax, 1
-    ret
-8:  xor eax, eax
-    ret
+    test dword ptr [rax + CN_flags], CNF_REMOTE
+    jz 1b
+    or dword ptr [rax + CN_flags], CNF_LOST
+    jmp 1b
+9:  ret
 
 .section .rodata
 .Lnl: .byte 10

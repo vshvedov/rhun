@@ -8,6 +8,10 @@
 #
 #   holder_claude(sid cstr) -> eax HOLDER_NONE, HOLDER_OTHER or HOLDER_UNKNOWN. It parses JSON: the
 #     shared arena is reset (a JV* of an earlier parse is invalid afterwards). Windows: HOLDER_NONE
+#
+# In a remote window the records are the host's (its Claude folder, read through vfs.s: a listing and a
+# request per record, at a start only): their pids are the host's, alive while /proc/PID is there (the
+# host is Linux), and rhun's own programs there are known by their pids on the host (agent_conn_owns).
 .include "rhun.inc"
 
 .equ RECORD_MAX, 65536      # a session record is a few hundred bytes
@@ -31,21 +35,40 @@ hc_buf: .zero SB_SIZE
 .else
 .Ldomain: .asciz "linux"
 .endif
+.Lhost_domain: .asciz "linux"     # a remote window's host
 .text
 
-.ifndef WINDOWS
-# pid_alive(pid) -> eax 1 when a process has the pid (kill 0 succeeds, or is refused for permission)
+# pid_alive(pid) -> eax 1 when a process has the pid (kill 0 succeeds, or is refused for permission); in a
+#   remote window a pid on the host: /proc/PID is there
 pid_alive:
+    cmp dword ptr [rip + g_remote], 0
+    jne host_alive
+.ifndef WINDOWS
     xor esi, esi
     SYS SYS_kill
     test rax, rax
     jz 9f
     cmp rax, -1                 # EPERM
     je 9f
+.endif
     xor eax, eax
     ret
 9:  mov eax, 1
     ret
+
+# host_alive(pid) -> eax 1 when the remote host has /proc/PID
+host_alive:
+    PROLOGUE 32
+    mov esi, edi
+    mov dword ptr [rsp], 0x6f72702f     # "/proc/"
+    mov word ptr [rsp + 4], 0x2f63
+    lea rdi, [rsp + 6]
+    call fmt_u64
+    mov byte ptr [rsp + rax + 6], 0
+    lea rdi, [rsp]
+    call vfs_missing
+    xor eax, 1
+    EPILOGUE
 
 # record_pid(jv) -> rax the pid, rdx 1 when jv is a positive integer that fits a pid
 record_pid:
@@ -99,7 +122,10 @@ judge:
     jne 1f
     mov rdi, r12
     lea rsi, [rip + .Ldomain]
-    call json_is
+    cmp dword ptr [rip + g_remote], 0
+    je 2f
+    lea rsi, [rip + .Lhost_domain]
+2:  call json_is
     test eax, eax
     jz 9f
 1:  mov edi, r13d               # rhun's own program: never a holder
@@ -136,7 +162,7 @@ one_file:
     call path_join_tmp
     mov rdi, rax
     mov esi, RECORD_MAX
-    call file_read_limited
+    call vfs_read_limited
     test rax, rax
     jnz 1f
     cmp rdx, -2                 # ENOENT: the session ended between the listing and the read
@@ -169,6 +195,11 @@ one_file:
 # FN holder_claude(sid) -> eax HOLDER_* (see the top)
 FN holder_claude
     PROLOGUE
+.ifdef WINDOWS
+    mov eax, HOLDER_NONE        # Windows: the records name pids rhun does not check there yet (a remote
+    cmp dword ptr [rip + g_remote], 0   #   window's host is Linux: checked)
+    je 9f
+.endif
     mov [rip + hc_sid], rdi
     mov dword ptr [rip + hc_result], HOLDER_NONE
     lea rdi, [rip + hc_buf]     # the Claude folder by the one rule discovery and the driver use
@@ -187,7 +218,7 @@ FN holder_claude
     mov rdi, rax
     lea rsi, [rip + one_file]
     xor edx, edx
-    call dir_each_names
+    call vfs_dir_each_names
     mov rbx, rax
     mov rdi, [rip + hc_dir]
     call mem_free
@@ -197,13 +228,6 @@ FN holder_claude
     cmp rbx, -2                 # ENOENT: no sessions folder: nobody holds it
     jne 8f
 1:  mov eax, [rip + hc_result]
-    EPILOGUE
+9:  EPILOGUE
 8:  mov eax, HOLDER_UNKNOWN
     EPILOGUE
-
-.else
-# Windows: the records name pids rhun does not check there yet
-FN holder_claude
-    mov eax, HOLDER_NONE
-    ret
-.endif

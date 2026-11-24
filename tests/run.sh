@@ -280,6 +280,7 @@ python3 tests/ext-fuzz.py 1 4 || fail=1
 for t in debug-launch debug-framing debug-config debug-breakpoints debug-step debug-lifetime debug-view debug-gutter debug-transport debug-terminal debug-feature debug-tasks debug-review debug-sessions debug-questions debug-variables debug-configs debug-threads debug-remote debug-real; do
     python3 tests/$t.py || fail=1
 done
+python3 tests/claude-remote.py || fail=1   # phase 8: the chat in a remote window (docker host; local: on Linux)
 # testing: the test explorer (feature "tests")
 python3 tests/testing.py || fail=1
 python3 tests/testing-real.py || fail=1   # skips without TESTS_DIR (a rhun-editor/tests checkout)

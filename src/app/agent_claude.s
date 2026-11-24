@@ -253,7 +253,33 @@ cl_start:
     mov rdx, [rsp + 224]
     call conn_open
     mov r13d, eax
-    mov rdi, [rsp + 224]
+    test eax, eax               # a remote host whose PATH has no claude: the places installers use there,
+    jnz 62f                     #   when neither the program nor a wrapper is set
+    cmp dword ptr [rbx + AL_cn + CN_err], CN_E_NOENT
+    jne 62f
+    mov rax, [rip + cfg_claude_executable]
+    cmp byte ptr [rax], 0
+    jne 62f
+    mov rax, [rip + cfg_claude_wrapper]
+    cmp byte ptr [rax], 0
+    jne 62f
+    call claude_host_place
+    test rax, rax
+    jz 62f
+    mov r15, rax
+    mov [rsp], rax              # argv[0]
+    mov rcx, [r12 + AS_cwd]
+    test rcx, rcx
+    jnz 61f
+    mov rcx, [rip + g_project]
+61: lea rdi, [rbx + AL_cn]
+    lea rsi, [rsp]
+    mov rdx, [rsp + 224]
+    call conn_open
+    mov r13d, eax
+    mov rdi, r15
+    call mem_free
+62: mov rdi, [rsp + 224]
     call mem_free
     mov rdi, [rsp + 232]
     call mem_free
@@ -316,7 +342,18 @@ cl_start:
     cmp dword ptr [rbx + AL_cn + CN_err], CN_E_GUARD
     jne 7f
     lea rsi, [rip + .Lr_busy]
-7:  lea rdi, [rbx + AL_report]
+7:  lea rdx, [rip + .Lr_host_nf]    # a remote window's: the host says what
+    cmp dword ptr [rbx + AL_cn + CN_err], CN_E_NOENT
+    je 71f
+    lea rdx, [rip + .Lr_host_off]
+    cmp dword ptr [rbx + AL_cn + CN_err], CN_E_OFFLINE
+    jne 72f
+71: lea rdi, [rbx + AL_report]
+    mov rsi, rdx
+    call host_text
+    xor eax, eax
+    EPILOGUE
+72: lea rdi, [rbx + AL_report]
     call sb_push_cstr
     xor eax, eax
     EPILOGUE
@@ -334,6 +371,41 @@ cl_start:
     call sb_push_cstr
     xor eax, eax
     EPILOGUE
+
+# host_text(sb, text): text (two cstrs, "BEFORE\0AFTER\0") with the remote window's host between them ("the
+#   host" when it has no name, the local: transport)
+host_text:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    call sb_push_cstr
+    mov rdi, r12
+    call strlen
+    lea r12, [r12 + rax + 1]
+    call remote_host
+    cmp byte ptr [rax], 0
+    jne 1f
+    lea rax, [rip + .Lw_the_host]
+1:  mov rdi, rbx
+    mov rsi, rax
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, r12
+    call sb_push_cstr
+    EPILOGUE
+
+# path_flag(argv0 cstr) -> eax vfs_uproc_spawn's 8 when it is a path (a separator in it), else 0 (a name
+#   found on the host's PATH)
+path_flag:
+    xor eax, eax
+1:  movzx ecx, byte ptr [rdi]
+    inc rdi
+    test ecx, ecx
+    jz 2f
+    cmp ecx, '/'
+    jne 1b
+    mov eax, 8
+2:  ret
 
 # arg_add(-, value cstr, prefix cstr, slot*): "PREFIXVALUE" and a NUL after asb's strings, its place in
 #   asb into the slot; an empty value adds nothing (-1 in the slot)
@@ -1250,7 +1322,12 @@ cl_auth:
     call mem_dup
     mov [rip + au_key], rax
     jmp .Lau_wait
-3:  mov rdi, r13                # cannot ask: signed in, as far as rhun knows
+3:  cmp dword ptr [rip + g_remote], 0  # a remote host not connected: asked again next time
+    je 31f
+    call remote_is_up
+    test eax, eax
+    jz .Lau_in
+31: mov rdi, r13                # cannot ask: signed in, as far as rhun knows
     mov esi, AU_IN
     call au_set
 .Lau_in:
@@ -1387,6 +1464,8 @@ au_begin:
     lea rax, [rip + .La_json]
     mov [rsp + rcx*8 + 16], rax
     mov qword ptr [rsp + rcx*8 + 24], 0
+    cmp dword ptr [rip + g_remote], 0
+    jne .Lab_remote
     lea rdi, [rsp + 64]         # in: [64] it reads, [68] rhun's end, closed at once
     mov esi, O_CLOEXEC
     SYS SYS_pipe2
@@ -1426,6 +1505,7 @@ au_begin:
     mov esi, F_SETFL
     mov edx, O_NONBLOCK
     SYS SYS_fcntl
+.Lab_watch:
     mov edi, [rsp + 72]
     mov esi, POLLIN
     lea rdx, [rip + au_on_out]
@@ -1460,6 +1540,31 @@ au_begin:
     call mem_free
 8:  xor eax, eax
     EPILOGUE
+.Lab_remote:
+    # a remote window: it runs on the host (its output and errors on one socket; its input is not ended: the
+    # host's side of a socket that reads its end is closed, its output with it), uproc's as a local one is
+    mov rdi, r12
+    call start_env
+    mov [rsp + 80], rax
+    mov rdi, [rsp]
+    call path_flag
+    or eax, 4
+    mov rdi, rsp
+    mov rsi, [rsp + 80]
+    mov rdx, [rip + g_project]
+    xor ecx, ecx
+    xor r8d, r8d
+    push rax
+    push rax
+    call vfs_uproc_spawn
+    add rsp, 16
+    mov rbx, rax
+    mov [rsp + 72], edx
+    mov rdi, [rsp + 80]
+    call mem_free
+    test rbx, rbx
+    jle 7b
+    jmp .Lab_watch
 
 # au_on_out(fd, events, ctx): the status question's output, kept up to AUTH_MAX bytes; at its end the
 #   answer is read
@@ -2541,7 +2646,7 @@ find_file:
     mov rdi, [r12 + AS_path]
     test rdi, rdi
     jz 1f
-    call file_missing
+    call vfs_missing
     test eax, eax
     jz 8f
 1:  lea rdi, [rip + dsb]        # in its program's folder
@@ -2561,12 +2666,12 @@ find_file:
     mov rdi, [rip + dsb + SB_ptr]
     lea rsi, [rip + find_one]
     mov rdx, rbx
-    call dir_each
+    call vfs_dir_each           # (a remote window's: the host's folder)
     mov qword ptr [rip + found_al], 0
     mov rdi, [r12 + AS_path]
     test rdi, rdi
     jz 9f
-    call file_missing
+    call vfs_missing
     test eax, eax
     jnz 9f
 8:  and dword ptr [rbx + AL_flags], ~ALF_NEW
@@ -2602,7 +2707,7 @@ find_one:
     lea rsi, [rip + .Ljsonl]
     call sb_push_cstr
     mov rdi, [rip + psb + SB_ptr]
-    call file_missing
+    call vfs_missing
     test eax, eax
     jnz 9f
     mov rdi, rbx
@@ -3877,7 +3982,12 @@ cl_close:
     jne 4f
     lea rsi, [rip + .Lr_ended_early]
 4:  lea rdi, [rbx + AL_report]
-    call sb_push_cstr
+    cmp r12d, CN_E_LOST         # a remote window's host went
+    jne 41f
+    lea rsi, [rip + .Lr_host_lost]
+    call host_text
+    jmp 5f
+41: call sb_push_cstr
     cmp r12d, CN_E_EXIT
     jne 5f
     mov eax, [rbx + AL_cn + CN_exit]
@@ -4295,4 +4405,9 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lr_line: .asciz "Claude Code sent a line longer than 64 MiB"
 .Lr_stall: .asciz "Claude Code stopped reading what rhun sent"
 .Lr_broke: .asciz "The connection to Claude Code broke"
+# a remote window's (host_text: the host's name between the two parts)
+.Lr_host_nf: .asciz "Claude Code was not found on ", ". Install it there, or set its path on that machine in Settings > Claude Code."
+.Lr_host_off: .asciz "Not connected to ", ". Reconnect, then send again."
+.Lr_host_lost: .asciz "The connection to ", " was lost"
+.Lw_the_host: .asciz "the host"
 .Lr_colon: .asciz ":\n"

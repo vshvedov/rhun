@@ -174,8 +174,8 @@ c_agent_new:
     EPILOGUE
 
 # no_chat(look): why the box takes nothing, a line of the output (the command answers error): the chat is
-#   off, or this is a remote window (look 1: when the open session is a Claude Code one, or none is
-#   open), else no open conversation takes prompts
+#   off (look 1: when the open session is a Claude Code one, or none is open), else no open conversation
+#   takes prompts
 no_chat:
     PROLOGUE
     test edi, edi
@@ -189,9 +189,6 @@ no_chat:
 1:  lea rbx, [rip + .Lr_chat_off]
     cmp dword ptr [rip + cfg_claude_chat], 0
     je 3f
-    lea rbx, [rip + agentext_remote_text]
-    cmp dword ptr [rip + g_remote], 0
-    jne 3f
     lea rbx, [rip + .Lr_no_box]
 3:  call ai_out
     mov rdi, rax

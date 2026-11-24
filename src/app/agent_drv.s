@@ -7,7 +7,9 @@
 #
 #   agent_drv_of(AS*) -> rax DRV* or 0        the driver that can talk for this session now
 #   agent_drv_for_kind(kind) -> rax DRV* or 0 a built-in driver, when it is available (Claude Code:
-#                                             [claude] chat is on and the window is not remote)
+#                                             [claude] chat is on; in a remote window too)
+#   agent_drv_remote_back()                   a remote window's host answers again: conversations whose
+#                                             file could not be read when their program ended are read
 #   agent_kind_name(kind) -> rax cstr         "claude", "codex", "grok", "opencode", or "-"
 #   agent_kind_named(ptr, len) -> eax kind    the kind of such a word, or 0
 #   agent_live(AS*) -> rax AL* (made on first use; 0 without a driver that keeps one)
@@ -95,6 +97,7 @@
 .equ RS_QUEUE, 1                # queue_restore's: the prompts that waited for a start
 .equ RS_HELD, 2                 #   the messages held
 .equ RS_ALL, 3
+.equ SIGNIN_LEN, 29             # .Lq_signin's bytes
 
 .bss
 .p2align 3
@@ -103,6 +106,8 @@ jsb: .zero SB_SIZE              # the prompts that waited, joined; a new convers
 uuid_n: .quad 0                 # agent_uuid's counter (no /dev/urandom)
 q_serial: .quad 0               # the last serial a prompt waiting for a start got (queue_dup)
 trust_answered: .long 0         # the window's answer to the trust card was given (a project asks once)
+.p2align 3
+stx: .zero SB_SIZE              # signin_text's words in a remote window
 
 .data
 .p2align 2
@@ -119,9 +124,7 @@ FN agent_drv_for_kind
     jne 1f
     cmp dword ptr [rip + cfg_claude_chat], 0
     je 1f
-    cmp dword ptr [rip + g_remote], 0   # remote windows: not yet (the spawn goes through uproc.s)
-    jne 1f
-    lea rax, [rip + claude_drv]
+    lea rax, [rip + claude_drv]    # (a remote window's program runs on its host: agent_conn.s)
 1:  ret
 
 # FN agent_drv_of(AS*) -> rax the driver that can talk for this session now, or 0
@@ -1262,6 +1265,8 @@ agent_start:
     mov rdi, rbx
     mov esi, ALS_STARTING
     call agent_state_set
+    cmp dword ptr [rip + g_remote], 0   # a remote window's program has its host's login environment
+    jne 1f
     call uproc_env_ready
     test eax, eax
     jnz 1f
@@ -1454,9 +1459,10 @@ signed_out:
     mov rbx, rdi
     lea rdi, [rbx + AL_report]
     call sb_clear
+    call signin_text
     lea rdi, [rbx + AL_report]
-    lea rsi, [rip + .Lq_signin]
-    call sb_push_cstr
+    mov rsi, rax
+    call sb_push
     mov rdi, rbx
     mov esi, ALS_FAILED
     call agent_state_set
@@ -1471,15 +1477,46 @@ signed_out:
 FN ev_signed_out
     PROLOGUE
     mov rbx, rdi
-    lea rdi, [rip + .Lq_signin]
-    call strlen
+    call signin_text
+    mov rcx, rdx
+    mov rdx, rax
     mov rdi, rbx
     mov esi, AQK_SIGNIN
-    lea rdx, [rip + .Lq_signin]
-    mov rcx, rax
     lea r8, [rip + opts_signin]
     mov r9d, 1
     call own_card
+    EPILOGUE
+
+# signin_text() -> rax ptr, rdx len: the sign-in notice's words; a remote window's name its host (its program
+#   and its sign-in are there: Sign In runs in rhun's terminal, which is on the host too)
+signin_text:
+    cmp dword ptr [rip + g_remote], 0
+    jne 1f
+    lea rax, [rip + .Lq_signin]
+    mov edx, SIGNIN_LEN
+    ret
+1:  PROLOGUE
+    lea rdi, [rip + stx]
+    call sb_clear
+    lea rdi, [rip + stx]
+    lea rsi, [rip + .Lq_signin]
+    mov edx, SIGNIN_LEN - 1     # without its "."
+    call sb_push
+    lea rdi, [rip + stx]
+    lea rsi, [rip + .Lq_on]
+    call sb_push_cstr
+    call remote_host
+    cmp byte ptr [rax], 0
+    jne 2f
+    lea rax, [rip + .Lq_the_host]
+2:  lea rdi, [rip + stx]
+    mov rsi, rax
+    call sb_push_cstr
+    lea rdi, [rip + stx]
+    mov esi, '.'
+    call sb_push_byte
+    mov rax, [rip + stx + SB_ptr]
+    mov rdx, [rip + stx + SB_len]
     EPILOGUE
 
 # failed_notice(AL*): its start failed: the notice with "Run claude in Terminal", and the wrapper named
@@ -3161,7 +3198,7 @@ FN ev_closed
     mov rdi, [r12 + AS_path]
     test rdi, rdi
     jz 8f
-    call file_missing
+    call unreadable
     test eax, eax
     jnz 8f
     and dword ptr [rbx + AL_flags], ~ALF_NEW
@@ -3193,6 +3230,66 @@ FN ev_closed
     call agent_start
 10: mov dword ptr [rip + g_dirty], 1
     EPILOGUE
+
+# unreadable(path) -> eax 1 when the conversation's file cannot be read again now (ev_closed: rbx AL*): it is
+#   not there, or it is a remote window's whose host is not connected (ALF_REREAD: agent_drv_remote_back
+#   reads it once the host answers; until then the rows the stream fed stay)
+unreadable:
+    PROLOGUE
+    mov r12, rdi
+    cmp dword ptr [rip + g_remote], 0
+    je 1f
+    call remote_is_up
+    test eax, eax
+    jnz 1f
+    or dword ptr [rbx + AL_flags], ALF_REREAD
+    mov eax, 1
+    EPILOGUE
+1:  mov rdi, r12
+    call vfs_missing
+    EPILOGUE
+
+# FN agent_drv_remote_back(): a remote window's host answers again (remoteui.s): each conversation whose
+#   program ended while it was gone (ALF_REREAD) is read again from its file there, as ev_closed would have,
+#   unless its program runs again by now
+FN agent_drv_remote_back
+    PROLOGUE
+    xor r12d, r12d
+1:  cmp r12, [rip + lives + VEC_len]
+    jae 9f
+    mov rax, [rip + lives + VEC_ptr]
+    mov rbx, [rax + r12*8]
+    inc r12
+    test dword ptr [rbx + AL_flags], ALF_REREAD
+    jz 1b
+    and dword ptr [rbx + AL_flags], ~ALF_REREAD
+    mov eax, [rbx + AL_state]
+    cmp eax, ALS_OFF
+    je 2f
+    cmp eax, ALS_FAILED
+    jne 1b
+2:  mov r13, [rbx + AL_as]
+    mov rdi, [r13 + AS_path]
+    test rdi, rdi
+    jz 1b
+    call vfs_missing
+    test eax, eax
+    jnz 1b
+    and dword ptr [rbx + AL_flags], ~ALF_NEW
+    mov rdi, r13
+    call agents_resync
+    cmp dword ptr [rbx + AL_state], ALS_FAILED
+    jne 1b
+    cmp qword ptr [rbx + AL_report + SB_len], 0
+    je 1b
+    mov rdi, r13                # why it failed, after what the file holds (the re-read dropped its row)
+    mov esi, R_ERROR
+    mov rdx, [rbx + AL_report + SB_ptr]
+    mov rcx, [rbx + AL_report + SB_len]
+    xor r8d, r8d
+    call agents_msg_add
+    jmp 1b
+9:  EPILOGUE
 
 # closed_note(n): ev_closed (rbx AL*): when n requests were left unanswered, an info row says so
 closed_note:
@@ -3507,7 +3604,7 @@ FN agent_drv_apply
     mov rdi, [r13 + AS_path]    # the file is the truth now (none yet: the rows the stream fed stay)
     test rdi, rdi
     jz 1b
-    call file_missing
+    call vfs_missing            # (a remote window's: the host's file)
     test eax, eax
     jnz 1b
     mov rdi, r13
@@ -3888,6 +3985,8 @@ opts_failed: .quad .Lo_terminal
 .Lo_trust: .asciz "Trust"
 .Lo_without: .asciz "Continue without"
 .Lq_signin: .asciz "Claude Code is not signed in."
+.Lq_on: .asciz " on "
+.Lq_the_host: .asciz "the host"
 .Lo_signin: .asciz "Sign In"
 .Lq_failed: .asciz "Claude Code could not start."
 .Lq_wrapper: .asciz " The wrapper "

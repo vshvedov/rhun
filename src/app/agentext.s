@@ -2504,20 +2504,12 @@ FN agentext_opened
     call composer_owner
 9:  EPILOGUE
 
-# FN agentext_remote_line(AS*) -> eax 1 when the session shows "Chat is not available in remote windows
-#   yet" where its box would be: a Claude Code conversation in a remote window with the chat on
+# FN agentext_remote_line(AS*) -> eax 1 when the session shows a line where its box would be instead of the
+#   box. Phase 8: never (the chat works in remote windows: its program runs on the host), so every caller
+#   draws the box; kept as the one place a driver that cannot run remotely would say so
 FN agentext_remote_line
     xor eax, eax
-    test rdi, rdi
-    jz 1f
-    cmp dword ptr [rdi + AS_kind], AG_CLAUDE
-    jne 1f
-    cmp dword ptr [rip + cfg_claude_chat], 0
-    je 1f
-    cmp dword ptr [rip + g_remote], 0
-    je 1f
-    inc eax
-1:  ret
+    ret
 
 # FN agentext_open_keep(AS*): that session opens and the box goes with it, its text kept (a copy of the
 #   conversation the box was writing to)

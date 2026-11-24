@@ -3196,6 +3196,15 @@ ENDSTRUCT CN_SIZE
 .equ CN_KILL_MS, 5000   # SIGTERM -> SIGKILL
 .equ CN_DRAIN, 262144   # stdout bytes read per wake-up
 .equ CN_EOF_MS, 5000    # stdout closed but the child still runs -> the stop sequence
+# phase 8, the chat in remote windows: a connection to a program on a remote window's host
+.equ CN_E_NOENT, 9      # the host has no such program (on its login PATH, or at that path)
+.equ CN_E_OFFLINE, 10   # the window's host is not connected
+.equ CN_E_LOST, 11      # the connection to the host went while the program ran
+.equ CNF_REMOTE, 8      # the child runs on the host: CN_fd_in is a second descriptor of CN_fd_out's socket
+.equ CNF_LOST, 16       # the host's connection went: the tick breaks it (CN_E_LOST)
+.equ ALF_REREAD, 32768  # the file could not be read when the program ended (the host was gone): read it
+                        #   again once the host answers (agent_drv_remote_back)
+# end phase 8 remote
 
 # ---- the driver seam (src/app/agent_drv.s): sessions rhun drives through a driver's table ----
 # AH: a message written while a turn ran or others were held (AL_held): shown queued until it starts

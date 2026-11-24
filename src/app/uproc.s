@@ -500,6 +500,18 @@ FN uproc_env_make
     mov r14, rdx
     call uproc_envp
     mov rbx, rax
+    jmp env_merge
+
+# uproc_env_sets(sets, sets2, unsets) -> envp: as uproc_env_make without the login environment under the
+#   lists (nothing waits for the login shell): a program on a remote window's host, which has that host's
+#   login environment, gets only what the lists set (remote_spawn sends no more anyway)
+FN uproc_env_sets
+    PROLOGUE 16
+    mov r12, rdi
+    mov r13, rsi
+    mov r14, rdx
+    lea rbx, [rip + .Lno_env]
+env_merge:
     # room for all of them
     mov rdi, rbx
     call list_len
@@ -759,6 +771,8 @@ FN uproc_signal
 # wait_code(pid, nohang) -> the platform's exit status (see uproc_wait), not taking it off the list
 wait_code:
 .ifdef WINDOWS
+    test edi, REMOTE_PID_TAG    # a remote window's program: its host reports it (remote.s)
+    jnz proc_wait
     jmp win_wait_code
 .else
     sub rsp, 8
@@ -1252,3 +1266,4 @@ FN uproc_dump
 .Ld_failed: .asciz "failed"
 .p2align 3
 .Ld_states: .quad .Ld_unasked, .Ld_asking, .Ld_known
+.Lno_env: .quad 0

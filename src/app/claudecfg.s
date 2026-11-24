@@ -18,7 +18,11 @@
 #                                           or shown outside the config file and the child's environment
 #   claude_exe() -> rax argv prefix [wrapper,] executable, 0-ended, one mem_alloc'd block (strings
 #                   included: mem_free it), edx the count; or rax 0 when the program (or a wrapper
-#                   that is set) is not found
+#                   that is set) is not found. In a remote window it is the host's, as set ("claude" by
+#                   default, "~/" the host's home), looked for only when it starts there
+#   claude_host_place() -> rax a usual place of claude on the remote host that can be run (mem_free), or 0
+#   In a remote window the environment, HOME and CLAUDE_CONFIG_DIR are the host's (host_env: its agent
+#   tells them, remoteui.s); claude_env is the pairs and rhun's values alone, sent to the host
 #   claude_env() -> rax envp: the login environment, the env pairs, rhun's forced values, without the
 #                   variables a surrounding Claude Code sets (uproc_env_make; mem_free the array; its
 #                   strings live until the config is read again)
@@ -466,7 +470,7 @@ FN claude_term_env
     lea rbx, [rax + CONFIG_DIR_LEN]
     jmp 2f
 11: lea rdi, [rip + .Lconfig_dir]
-    call uproc_env_get
+    call host_env
     xor ebx, ebx
     test rax, rax
     jz 2f
@@ -474,7 +478,7 @@ FN claude_term_env
     jmp 2f
 12: mov rbx, rax
 2:  lea rdi, [rip + .Lconfig_dir]   # what the terminal has
-    call uproc_env_get
+    call host_env
     mov r12, rax
     test rbx, rbx
     jz 5f
@@ -497,7 +501,7 @@ FN claude_term_env
     je 8f
     mov rbx, rax
     lea rdi, [rip + .Lhome]
-    call uproc_env_get
+    call host_env
     test rax, rax
     jz 6f
     mov rdi, rbx
@@ -544,12 +548,84 @@ FN claude_env
     mov rdx, rax
     mov rdi, rbx
     lea rsi, [rip + forced]
-    call uproc_env_make
+    call env_lists
     mov r12, rax
     mov rdi, rbx
     call mem_free
     mov rax, r12
     EPILOGUE
+
+# env_lists(sets, sets2, unsets) -> envp: uproc_env_make's; in a remote window uproc_env_sets' (the host has
+#   its login environment: only the lists go, and nothing waits for this machine's login shell)
+env_lists:
+    cmp dword ptr [rip + g_remote], 0
+    jne uproc_env_sets
+    jmp uproc_env_make
+
+# host_env(name cstr) -> rax the value of a variable in the environment claude gets (borrowed), or 0: in a
+#   remote window the host's login environment as its agent told it (HOME, CLAUDE_CONFIG_DIR: remoteui.s),
+#   else uproc_env_get's
+host_env:
+    cmp dword ptr [rip + g_remote], 0
+    jne 1f
+    jmp uproc_env_get
+1:  PROLOGUE
+    mov rbx, rdi
+    lea rsi, [rip + .Lhome]
+    call strcmp_eq
+    lea r12, [rip + g_remote_home]
+    test eax, eax
+    jnz 2f
+    mov rdi, rbx
+    lea rsi, [rip + .Lconfig_dir]
+    call strcmp_eq
+    lea r12, [rip + g_remote_claude_dir]
+    test eax, eax
+    jz 8f
+2:  xor eax, eax
+    cmp byte ptr [r12], 0
+    je 9f
+    mov rax, r12
+9:  EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# FN claude_host_place() -> rax the first of the places installers put claude in on a remote window's host
+#   that can be run there (one request each; mem_free it), or 0: a start whose "claude" the host's PATH
+#   does not have tries it (agent_claude.s)
+FN claude_host_place
+    PROLOGUE
+    lea rbx, [rip + host_places]
+1:  cmp byte ptr [rbx], 0
+    je 8f
+    mov rdi, rbx
+    call expand_home
+    mov r12, rax
+    mov rdi, rax
+    mov esi, 1                  # X_OK
+    call vfs_access
+    test rax, rax
+    jz 7f
+    mov rdi, rbx
+    call strlen
+    lea rbx, [rbx + rax + 1]
+    jmp 1b
+7:  mov rdi, r12
+    call dup_cstr
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# dup_cstr(cstr) -> rax a mem_dup of it
+dup_cstr:
+    push rbx
+    mov rbx, rdi
+    call strlen
+    mov rdi, rbx
+    mov rsi, rax
+    call mem_dup
+    pop rbx
+    ret
 
 # FN claude_dir_pin(cstr or 0): claude_dir gives that folder until it is called with 0
 FN claude_dir_pin
@@ -585,7 +661,7 @@ FN claude_env_dir
     mov rdi, rax
     lea rsi, [rip + pin_forced]
     lea rdx, [rip + unsets]
-    call uproc_env_make
+    call env_lists
     mov r12, rax
     mov rdi, rbx
     call mem_free
@@ -624,7 +700,7 @@ dir_unsets:
     lea rdi, [rip + .Ldir_dropped]
     call log_cstr
 4:  lea rdi, [rip + .Lconfig_dir]   # no pair (that counts): the environment's
-    call uproc_env_get
+    call host_env
     test rax, rax
     jz 8f
     PATH_ABSOLUTE rax, 8f
@@ -638,6 +714,8 @@ dir_unsets:
 # claude_exe() -> rax argv prefix, edx count (see the top of the file)
 FN claude_exe
     PROLOGUE 16
+    cmp dword ptr [rip + g_remote], 0
+    jne .Lce_host
     call claude_env
     mov [rsp], rax
     xor r12d, r12d              # the wrapper's path
@@ -665,6 +743,7 @@ FN claude_exe
 3:  test rax, rax
     jz .Lce_none
     mov r13, rax
+.Lce_block:
     # one block: the array, then the strings
     mov rdi, r13
     call strlen
@@ -710,6 +789,28 @@ FN claude_exe
     xor eax, eax
     xor edx, edx
     EPILOGUE
+.Lce_host:
+    # a remote window: the program runs on the host, found there when it starts (a name on the host's PATH,
+    # a path with "~/" the host's home); nothing here can tell whether it is there
+    mov qword ptr [rsp], 0
+    xor r12d, r12d
+    mov rdi, [rip + cfg_claude_wrapper]
+    cmp byte ptr [rdi], 0
+    je 1f
+    call expand_home
+    mov rdi, rax
+    call dup_cstr
+    mov r12, rax
+1:  lea rdi, [rip + .Lclaude]
+    mov rax, [rip + cfg_claude_executable]
+    cmp byte ptr [rax], 0
+    je 2f
+    mov rdi, rax
+    call expand_home
+    mov rdi, rax
+2:  call dup_cstr
+    mov r13, rax
+    jmp .Lce_block
 
 # find_program(setting cstr, envp) -> rax path (mem_free it) or 0: a path ("~/" is the home folder)
 #   when it can be run, else the name looked up on the environment's PATH
@@ -773,8 +874,7 @@ expand_home:
     jne 8f
     cmp byte ptr [rbx + 1], '/'
     jne 8f
-    lea rdi, [rip + .Lhome]
-    call getenv
+    call vfs_home               # a remote window's: the host's (the program runs there)
     test rax, rax
     jz 8f
     mov r12, rax
@@ -877,7 +977,7 @@ FN claude_dir
     jmp 3f
 1:  lea rdi, [rip + .Lconfig_dir]   # the environment claude gets: only an absolute one is passed on
                                     #   (a pair that is not absolute is not: dir_unsets)
-    call uproc_env_get
+    call host_env
     test rax, rax
     jz 2f
     PATH_ABSOLUTE rax, 11f
@@ -893,7 +993,7 @@ FN claude_dir
     cmp byte ptr [rax], 0
     jne 22f
 21: lea rdi, [rip + .Lhome]
-    call uproc_env_get
+    call host_env
 22:
     test rax, rax
     jz 8f
@@ -982,7 +1082,7 @@ FN claude_transcript
     call sb_push_cstr
     mov rdi, r12
     lea rsi, [rip + rpath]
-    call local_realpath
+    call vfs_realpath           # a remote window's folder is the host's
     lea rsi, [rip + rpath]
     test rax, rax
     cmovle rsi, r12
@@ -1014,9 +1114,7 @@ FN claude_index_envp
     mov rdi, [rip + index_env]
     call mem_free
     mov qword ptr [rip + index_env], 0
-    cmp dword ptr [rip + g_remote], 0       # remote hosts: the host's own folder
-    jne 8f
-    lea rdi, [rip + idx_dir]
+    lea rdi, [rip + idx_dir]    # (a remote window's: the host's folder, claude_dir; the pair is all that goes)
     call sb_clear
     lea rdi, [rip + idx_dir]
     call claude_dir
@@ -1194,6 +1292,11 @@ places:
     .asciz "~/.local/bin/claude", "~/.claude/local/claude", "/opt/homebrew/bin/claude"
     .asciz "/usr/local/bin/claude", "~/.npm-global/bin/claude", "~/.bun/bin/claude"
 .endif
+    .byte 0
+# where installers put claude on a remote window's host (Linux), after its PATH
+host_places:
+    .asciz "~/.local/bin/claude", "~/.claude/local/claude", "/usr/local/bin/claude"
+    .asciz "~/.npm-global/bin/claude", "~/.bun/bin/claude"
     .byte 0
 
 .Lc_print_claude_exe: .asciz "print-claude-exe"

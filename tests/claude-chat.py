@@ -2046,7 +2046,6 @@ TRUST_CARD = ("card=Trust this folder? Claude Code would then use the project's 
               "servers. options=Trust|Continue without")
 FAILED_CARD = 'card=Claude Code could not start. options=Run claude in Terminal'
 TERM_PROMPT = 'prompt=Run in the terminal: Enter, or Esc'
-REMOTE_LINE = 'Chat is not available in remote windows yet'
 
 
 def rhun_link(path):
@@ -2373,26 +2372,6 @@ class EdgeTest(DrivenCase):
             out, ok = self.reply(line)
             self.assertFalse(ok, line)
             self.assertEqual(out, 'Chat with Claude Code is off (Settings > Claude Code).\n', line)
-
-    @unittest.skipUnless(sys.platform.startswith('linux'), 'the local: remote transport is Linux only')
-    def test_remote_window_has_no_chat(self):
-        self.seed()
-        self.start(remote=True)
-        self.command('wait-remote 60')
-        self.command('cmd focus_agents')
-        self.command('wait-agents')
-        rows = [l for l in self.command('print-agents').splitlines() if l.startswith('Claude')]
-        self.assertEqual(len(rows), 1, rows)
-        self.command('print-agents 1')
-        lines = self.command('print-agent-input').splitlines()
-        self.assertTrue(lines[0].endswith(' box=0'), lines)
-        self.assertEqual(lines[1:], ['notice=' + REMOTE_LINE])
-        out, ok = self.reply('agent-prompt x')
-        self.assertFalse(ok)
-        self.assertEqual(out, REMOTE_LINE + '\n')
-        out, ok = self.reply('agent-new claude')
-        self.assertFalse(ok)
-        self.assertEqual(out, REMOTE_LINE + '\n')
 
     def test_the_box_takes_paste_and_input_methods(self):
         self.seed()

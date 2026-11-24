@@ -431,6 +431,42 @@ class WindowTest(TabCase):
         self.assertIn('state=ready pid=1', self.live())      # nothing closed here
 
 
+class PaletteTest(TabCase):
+    def first(self, query):
+        self.command('cmd command_palette')
+        self.command('type ' + query)
+        lines = self.command('print-palette').splitlines()
+        self.command('key Escape')
+        return lines
+
+    def test_found_by_the_drivers_name(self):
+        """The extension's titles ("Claude Code: ...") find rhun's agents commands: the name is the driver's."""
+        self.start()
+        for query, title in (('Claude Code: Open in New Tab', 'Agents: Open in New Tab'),
+                             ('Claude Code: New Conversation', 'Agents: New Conversation'),
+                             ('Claude Code: Show Logs', 'Agents: Show Logs')):
+            lines = self.first(query)
+            self.assertTrue(any(title in l for l in lines[1:3]), (query, lines[:4]))
+
+    def test_not_with_the_chat_off(self):
+        self.start(claude=self.claude_section('chat = false\n'))
+        lines = self.first('Claude Code: New Conversation')
+        self.assertFalse(any('Agents: New Conversation' in l for l in lines), lines[:4])
+
+
+class ListMarkTest(TabCase):
+    def test_a_conversation_in_a_tab_is_marked_in_the_list(self):
+        """5.8: the list's row of a conversation a tab has: a ring around its dot, "Open in a tab"."""
+        self.start()
+        self.to_tab()
+        rows = [l for l in self.command('print-agent-list').splitlines() if l.strip().startswith('row ')]
+        self.assertEqual(len(rows), 1, rows)
+        self.assertIn(' tab', rows[0])
+        self.command('cmd close_tab')
+        rows = [l for l in self.command('print-agent-list').splitlines() if l.strip().startswith('row ')]
+        self.assertNotIn(' tab', ' '.join(rows))
+
+
 class IdleTest(TabCase):
     def passes(self, seconds=3):
         def count():

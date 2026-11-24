@@ -2738,9 +2738,17 @@ FN palette_filter
     test eax, eax
     jns 12f
     cmp dword ptr [rip + pal_mode], PM_COMMANDS
-    je 13f
+    je 14f
     cmp dword ptr [rip + pal_mode], PM_KEYS
     jne 4f
+    jmp 13f
+14: mov rdi, [r12 + IT_label]   # an agents' command by its driver's name (agentcmd.s)
+    mov rsi, [r12 + IT_len]
+    mov rdx, r14
+    mov rcx, r15
+    call agcmd_alias
+    test eax, eax
+    jns 12f
 13: mov rdi, [r12 + IT_detail]
     test rdi, rdi
     jz 4f

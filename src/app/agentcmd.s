@@ -14,6 +14,9 @@
 #   ck_claude_focus, ck_claude_use_terminal   when-clause keys: claudeFocus (the panel or its box has the keys),
 #                                 claudeUseTerminal (agentsInputFocus is agentctx.s's)
 #   agcmd_print_log(out, rest, len)   print-agents-log
+#   agcmd_alias(label, len, query, qlen) -> eax score, -1 none   the palette's: an "Agents: X" command found as
+#                                 "NAME: X" for each available driver's DRV_name ("Claude Code: Open in New Tab",
+#                                 the extension's titles), scored by palette.s's fuzzy
 # (New Conversation, Open in Side Panel are agenttab.s's; Insert @-Mention and Add to Chat agentctx.s's)
 .include "rhun.inc"
 
@@ -23,6 +26,7 @@
 .p2align 3
 lsb: .zero SB_SIZE              # the log
 wsb: .zero SB_SIZE              # a line of it; the log's tab text
+asb: .zero SB_SIZE              # agcmd_alias's "NAME: X"
 
 .text
 
@@ -41,6 +45,56 @@ default_kind:
 2:  mov eax, ebx
     EPILOGUE
 8:  xor eax, eax
+    EPILOGUE
+
+# FN agcmd_alias(label, len, query, qlen) -> eax the best fuzzy score of "NAME: X" for an "Agents: X" label and
+#   each available driver's name, -1 none (another label, no driver, no match)
+FN agcmd_alias
+    PROLOGUE 16
+    mov r12, rdi
+    mov r13, rsi
+    mov r14, rdx
+    mov r15, rcx
+    mov dword ptr [rsp], -1
+    lea rdx, [rip + .La_prefix]
+    mov ecx, 8                  # "Agents: "
+    call str_starts
+    test eax, eax
+    jz 9f
+    mov ebx, 1
+1:  cmp ebx, 4
+    ja 9f
+    mov edi, ebx
+    inc ebx
+    call agent_drv_for_kind
+    test rax, rax
+    jz 1b
+    mov rsi, [rax + DRV_name]
+    test rsi, rsi
+    jz 1b
+    lea rdi, [rip + asb]
+    mov [rsp + 8], rsi
+    call sb_clear
+    lea rdi, [rip + asb]
+    mov rsi, [rsp + 8]
+    call sb_push_cstr
+    lea rdi, [rip + asb]
+    lea rsi, [rip + .La_colon]
+    call sb_push_cstr
+    lea rdi, [rip + asb]
+    lea rsi, [r12 + 8]
+    lea rdx, [r13 - 8]
+    call sb_push
+    mov rdi, [rip + asb + SB_ptr]
+    mov rsi, [rip + asb + SB_len]
+    mov rdx, r14
+    mov rcx, r15
+    call fuzzy
+    cmp eax, [rsp]
+    jle 1b
+    mov [rsp], eax
+    jmp 1b
+9:  mov eax, [rsp]
     EPILOGUE
 
 # FN cmd_agents_blur()
@@ -305,6 +359,8 @@ ck_word:
     ret
 
 .section .rodata
+.La_prefix: .asciz "Agents: "
+.La_colon: .asciz ": "
 .p2align 3
 state_words: .quad .Ls_off, .Ls_starting, .Ls_ready, .Ls_working, .Ls_waiting, .Ls_held, .Ls_failed
 .Ls_off: .asciz "off"

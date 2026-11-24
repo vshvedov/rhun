@@ -493,6 +493,9 @@ FN lightbulb_timeout
     cmp dword ptr [rip + cfg_lightbulb], 0
     je 8f
     push rbx
+    call lf_focused_doc         # the keys elsewhere: the rest waits for them (lightbulb_tick does nothing
+    cmp rax, [rip + lb_doc]     #   until then; a deadline passed meanwhile would wake the loop on every pass)
+    jne 7f
     call time_ms
     mov rcx, [rip + lb_since]
     add rcx, LB_REST
@@ -502,6 +505,7 @@ FN lightbulb_timeout
 1:  mov eax, ecx
     pop rbx
     ret
+7:  pop rbx
 8:  mov eax, -1
     ret
 

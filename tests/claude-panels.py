@@ -312,6 +312,17 @@ class ChromeTest(PanelCase):
         self.assertFalse(any('Install Chrome extension' in l for l in body))
 
 
+class ChromeRowTest(PanelCase):
+    """Row 3.31's header: Claude Code's browser server is "Claude in Chrome [action]"."""
+
+    def test_header(self):
+        self.panel()
+        self.chat('chrome')
+        rows = self.thread()
+        n = next(i + 1 for i, r in enumerate(rows) if r.startswith('tool'))
+        self.assertIn('Claude in Chrome [navigate]', self.command(f'print-agent-row {n}'))
+
+
 class RemoteTest(PanelCase):
     """Row 2.22's Remote Control: never shown as connected unless the program says so."""
 

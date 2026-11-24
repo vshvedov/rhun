@@ -4635,10 +4635,20 @@ in_mcp:
 3:  mov r14, rcx
     lea rdi, [rip + t1]
     call sb_clear
-    mov rdi, r12
+    mov rdi, r12                # p7c: Claude Code's own browser server as the extension names it (3.31)
+    mov rsi, r14
+    lea rdx, [rip + .Lp7c_chrome_srv]
+    call str_eq_cstr
+    test eax, eax
+    jz 31f
+    lea rdi, [rip + t1]
+    lea rsi, [rip + .Lp7c_chrome_name]
+    call sb_push_cstr
+    jmp 32f
+31: mov rdi, r12
     mov rsi, r14
     call humanize
-    lea rdi, [rip + t1]
+32: lea rdi, [rip + t1]
     lea rsi, [rip + .Lbra]
     call sb_push_cstr
     lea rax, [r14 + 2]          # the tool: the rest
@@ -6000,6 +6010,8 @@ answer_tails: .quad .Lvtt1, .Lvtt2, 0
 .Ln_project: .asciz "Send to project"
 .Ln_artifact: .asciz "Artifact"
 .Lmcp: .asciz "mcp__"
+.Lp7c_chrome_srv: .asciz "claude-in-chrome"     # p7c
+.Lp7c_chrome_name: .asciz "Claude in Chrome"
 .Lk_type: .asciz "type"
 .Lk_uuid: .asciz "uuid"
 .Lk_isSidechain: .asciz "isSidechain"

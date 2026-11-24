@@ -4194,6 +4194,19 @@ def remote_control(rid, request):
 
 
 P7C_REQUESTS = {'side_question': side_question, 'get_chrome_dialog': chrome_dialog, 'remote_control': remote_control}
+
+
+def s_chrome(prompt):
+    """`chrome` (UNRECORDED: no Chrome extension was connected): a call of Claude Code's own browser server,
+    mcp__claude-in-chrome__navigate {url}, that runs without asking, then the reply."""
+    mid = message_start()
+    tid = tool_use(mid, 0, 'mcp__claude-in-chrome__navigate', {'url': 'https://example.com/page', 'tabId': 1})
+    message_end('tool_use')
+    tool_result(tid, 'Navigated to https://example.com/page')
+    final('done')
+
+
+SCENARIOS.update({'chrome': s_chrome})
 # ---- end p7c ----
 
 

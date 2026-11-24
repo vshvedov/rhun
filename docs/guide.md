@@ -416,6 +416,55 @@ it does without a card). Both have **Learn more**. Requests of other
 kinds (from hooks, MCP servers, forms or other dialogs) are answered as not supported, so Claude
 never waits for a card that is not there.
 
+### Side questions, bookmarks and the agent map
+
+A panel can sit beside a conversation: beside it at the right when the agents panel is wide (576
+points at the panel's text size), above it otherwise. Drag its edge to make it larger or smaller;
+rhun keeps the share it takes. Escape or its × closes it and gives the keys back to the box.
+
+**Side question.** `/btw QUESTION` asks Claude something without touching the conversation: the
+question goes to Claude Code as a request of its own, with the earlier side questions and answers of
+the conversation, and the answer shows in the panel "Side question" while the conversation goes on.
+`/btw` alone opens the panel with the keys in its field, "Ask a side question"; Enter sends, Shift+Enter
+starts a new line. "✻ Answering…" shows until the answer comes. If Claude Code is not running it is
+started for the question. A side question that is still waiting when Claude Code ends says "Failed to
+get an answer: …", or "Cancelled." when rhun ended it (closing the conversation, **Refresh and
+continue** below); Claude Code is not stopped for being idle while one waits. The trash button
+clears the conversation's side questions. rhun keeps the ten latest of each conversation in its state
+file for the project, so they are there after a restart.
+
+**Bookmarks.** Hover over a reply and press the bookmark at the right of its label line to keep it;
+a kept reply shows the bookmark filled, and pressing it again removes it. `/bookmarks` or
+**Bookmarks** in the command menu opens the panel "Bookmarks": a row per kept reply of the
+conversation; click one, or move to it with Up and Down, to show it under the rows. **Show in
+conversation** (Enter) scrolls the conversation to it; **Remove bookmark** (Delete) forgets it. A
+bookmark keeps the reply's text, so a reply that left the conversation still shows, marked "No
+longer shown in the conversation". Bookmarks are kept per conversation in rhun's state file for the
+project (at most 500 in a project, the oldest going first), not in Claude Code's.
+
+**Agent map.** `/tasks` (or `/bashes`) opens "Agent map": **This session** with the tokens in its
+context and whether it is working, then each agent the conversation started, with its description,
+how many tool calls it made and its state. Pick one for its details: its prompt, its tool calls,
+**Open transcript** (its row in the conversation, with its calls shown) and, while it runs, **Stop
+agent**. The map follows the conversation while it is open. Background shell commands are not listed
+yet.
+
+**Claude in Chrome.** `/chrome` or **Claude in Chrome** in the command menu shows what Claude Code
+says about its Chrome extension: whether it is installed, whether this session is connected, and
+**Enabled by default** (changed in Claude Code itself), with links to install the extension, manage
+its permissions and reconnect it, each asked before it opens.
+
+**Remote Control.** `/remote-control` (or `/rc`) asks the running Claude Code to connect the
+conversation to claude.ai/code; a band above the box says "Connecting to claude.ai/code…", then
+"Remote Control is active" with a link once Claude Code reports it, or "Remote Control error: …".
+The same command turns it off. It needs Claude Code to be running.
+
+**Commands for the terminal.** `/agents` works only in Claude Code's own terminal interface. A card
+asks "Continue in Terminal to configure agents?": **Continue in Terminal** puts `claude /agents` in
+rhun's terminal prompt (press Enter there), and the card becomes "Terminal opened": **Refresh and
+continue** ends the conversation's Claude Code so that the next message starts it again with what you
+changed; **Continue without refreshing** leaves it running.
+
 ### Open somewhere else
 
 Before continuing a conversation, rhun looks in Claude Code's records of its running sessions for

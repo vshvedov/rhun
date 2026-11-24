@@ -252,7 +252,7 @@ build:
     xor r13d, r13d              # "N agent(s) · click an agent for details"
     xor r14d, r14d
 0:  cmp r13, [rbx + AS_msgs + VEC_len]
-    jae 01f
+    jae 71f
     mov rdi, r13
     call at_of
     inc r13
@@ -260,8 +260,8 @@ build:
     jz 0b
     inc r14d
     jmp 0b
-01: test r14d, r14d
-    jz 02f
+71: test r14d, r14d
+    jz 72f
     lea rdi, [rip + msb]
     call sb_clear
     lea rdi, [rip + msb]
@@ -269,9 +269,9 @@ build:
     call sb_push_u64
     lea rsi, [rip + .Lt_nagents]
     cmp r14d, 1
-    jne 03f
+    jne 73f
     lea rsi, [rip + .Lt_nagent]
-03: lea rdi, [rip + msb]
+73: lea rdi, [rip + msb]
     call sb_push_cstr
     lea rdi, [rip + msb]
     lea rsi, [rip + .Lt_hint]
@@ -285,7 +285,7 @@ build:
     mov rdx, [rip + msb + SB_ptr]
     mov rcx, [rip + msb + SB_len]
     call agentdlg_text
-02: xor r13d, r13d              # the row
+72: xor r13d, r13d              # the row
     xor r14d, r14d              # agents listed
 4:  cmp r13, [rbx + AS_msgs + VEC_len]
     jae 6f

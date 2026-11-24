@@ -75,7 +75,7 @@
 .equ FILE_MAX, 4194304
 .equ FIELDS_MAX, 6
 .equ CACHE_N, 32
-.equ CE_SIZE, 40                # a cache entry: AM*, rev 4, booked 4, gen 8, AS* 8, len 8
+.equ CE_SIZE, 48                # a cache entry: AM*, rev 4, booked 4, gen 8, AS* 8, len 8, text 8
 
 STRUCT
 F BMK_sid, 8            # owned cstr
@@ -115,6 +115,10 @@ sp_tf: .zero TF_SIZE            # the side question's field
 bms: .zero VEC_SIZE             # BMK*
 sqs: .zero VEC_SIZE             # SQX*
 blist: .zero VEC_SIZE           # BMK*: the bookmarks of the conversation blist_as
+slist: .zero VEC_SIZE           # SQX*: the exchanges of the conversation slist_as
+slist_as: .quad 0
+sq_gen: .quad 0                 # counts the exchanges added and removed (slist follows it)
+slist_gen: .quad 0
 wsb: .zero SB_SIZE              # the file's text
 fsb: .zero SB_SIZE              # a line's fields, unescaped, each NUL-terminated
 hsb: .zero SB_SIZE              # the history sent with a question
@@ -460,6 +464,7 @@ st_parse:
     mov esi, 8
     call vec_push
     mov [rax], r15
+    inc qword ptr [rip + sq_gen]
     jmp 1b
 9:  EPILOGUE
 
@@ -787,6 +792,8 @@ FN agside_flush
     inc rbx
     jmp 3b
 4:  mov qword ptr [rip + sqs + VEC_len], 0
+    inc qword ptr [rip + sq_gen]
+    mov qword ptr [rip + slist_as], 0
     mov rdi, [rip + st_path]
     call mem_free
     mov qword ptr [rip + st_path], 0
@@ -916,14 +923,14 @@ FN agside_run
 0:  test rbx, rbx
     jnz 1f
     cmp r12d, ACT_BTW           # a draft's question: its conversation first (as any command of a draft)
-    jne 01f
+    jne 5f
     test r14, r14
-    jz 01f
+    jz 5f
     call agentext_draft_own
     mov rbx, rax
     test rax, rax
     jnz 1f
-01: call viewed
+5:  call viewed
     mov rbx, rax
 1:  cmp r12d, ACT_TASKS
     jne 2f
@@ -1415,26 +1422,49 @@ set_scroll:
 
 # ---- the side question ----
 
-# sq_count(AS* or 0) -> eax its exchanges
-sq_count:
+# sq_list(AS*): slist = its exchanges in order (made again when the exchanges or the conversation changed)
+sq_list:
     PROLOGUE
-    xor r13d, r13d
+    mov rbx, rdi
+    cmp [rip + slist_as], rbx
+    jne 1f
+    mov rax, [rip + sq_gen]
+    cmp rax, [rip + slist_gen]
+    je 9f
+1:  mov [rip + slist_as], rbx
+    mov rax, [rip + sq_gen]
+    mov [rip + slist_gen], rax
+    mov qword ptr [rip + slist + VEC_len], 0
+    test rbx, rbx
+    jz 9f
+    mov rdi, rbx
     call sid_of
     mov r14, rax
     mov r15, rdx
-    xor ebx, ebx
-1:  cmp rbx, [rip + sqs + VEC_len]
+    xor r12d, r12d
+2:  cmp r12, [rip + sqs + VEC_len]
     jae 9f
     mov rax, [rip + sqs + VEC_ptr]
-    mov r12, [rax + rbx*8]
-    inc rbx
-    mov rdi, [r12 + SQX_sid]
+    mov r13, [rax + r12*8]
+    inc r12
+    mov rdi, [r13 + SQX_sid]
     mov rsi, r14
     mov rdx, r15
     call sid_is
-    add r13d, eax
-    jmp 1b
-9:  mov eax, r13d
+    test eax, eax
+    jz 2b
+    lea rdi, [rip + slist]
+    mov esi, 8
+    call vec_push
+    mov [rax], r13
+    jmp 2b
+9:  EPILOGUE
+
+# sq_count(AS* or 0) -> eax its exchanges
+sq_count:
+    PROLOGUE
+    call sq_list
+    mov rax, [rip + slist + VEC_len]
     EPILOGUE
 
 # sq_clear(AS*): its exchanges go ("Clear side questions from this editor"); an answer still to come is
@@ -1462,6 +1492,7 @@ sq_clear:
     lea rdi, [rip + sqs]
     mov rsi, rbx
     call vec_del
+    inc qword ptr [rip + sq_gen]
     jmp 1b
 2:  inc rbx
     jmp 1b
@@ -1505,6 +1536,7 @@ sq_trim:
     lea rdi, [rip + sqs]
     mov rsi, r12
     call vec_del
+    inc qword ptr [rip + sq_gen]
     jmp 1b
 9:  EPILOGUE
 
@@ -1552,6 +1584,7 @@ FN agside_ask
     mov esi, 8
     call vec_push
     mov [rax], r14
+    inc qword ptr [rip + sq_gen]
     mov rdi, [r14 + SQX_sid]
     call strlen
     mov rdi, [r14 + SQX_sid]
@@ -1848,7 +1881,10 @@ FN agside_gone
     xor ecx, ecx
     call sq_set
     jmp 1b
-8:  cmp [rip + blist_as], r13
+8:  cmp [rip + slist_as], r13
+    jne 6f
+    mov qword ptr [rip + slist_as], 0
+6:  cmp [rip + blist_as], r13
     jne 7f
     call forget
 7:  mov rdi, r13                # the agent map of it closes (agentmap.s)
@@ -1998,24 +2034,16 @@ sq_md:
 # side_body(AS*): the exchanges of the conversation, the latest at the bottom (followed while sp_follow)
 side_body:
     PROLOGUE 48
-    call sid_of
-    mov [rsp], rax
-    mov [rsp + 8], rdx
+    call sq_list
     call body_w
     mov [rsp + 16], eax         # w
     xor r13d, r13d              # the content's height
     xor ebx, ebx
-1:  cmp rbx, [rip + sqs + VEC_len]
+1:  cmp rbx, [rip + slist + VEC_len]
     jae 2f
-    mov rax, [rip + sqs + VEC_ptr]
+    mov rax, [rip + slist + VEC_ptr]
     mov r12, [rax + rbx*8]
     inc rbx
-    mov rdi, [r12 + SQX_sid]
-    mov rsi, [rsp]
-    mov rdx, [rsp + 8]
-    call sid_is
-    test eax, eax
-    jz 1b
     mov rdi, r12
     mov esi, [rsp + 16]
     call sq_h
@@ -2064,17 +2092,11 @@ side_body:
     mov [rsp + 20], eax         # the next exchange's top
     xor ebx, ebx
     mov dword ptr [rsp + 24], 0 # slots of Markdown
-4:  cmp rbx, [rip + sqs + VEC_len]
+4:  cmp rbx, [rip + slist + VEC_len]
     jae 8f
-    mov rax, [rip + sqs + VEC_ptr]
+    mov rax, [rip + slist + VEC_ptr]
     mov r12, [rax + rbx*8]
     inc rbx
-    mov rdi, [r12 + SQX_sid]
-    mov rsi, [rsp]
-    mov rdx, [rsp + 8]
-    call sid_is
-    test eax, eax
-    jz 4b
     mov eax, [rsp + 20]
     mov ecx, [r12 + SQX_h]
     add [rsp + 20], ecx
@@ -2382,6 +2404,9 @@ booked:
     mov rax, [r12 + AM_len]
     cmp [r13 + 32], rax
     jne 1f
+    mov rax, [r12 + AM_text]
+    cmp [r13 + 40], rax
+    jne 1f
     mov eax, [r13 + 12]
     EPILOGUE
 1:  mov [r13], r12
@@ -2392,6 +2417,8 @@ booked:
     mov [r13 + 24], rbx
     mov rax, [r12 + AM_len]
     mov [r13 + 32], rax
+    mov rax, [r12 + AM_text]
+    mov [r13 + 40], rax
     mov rdi, [r12 + AM_text]
     mov rsi, [r12 + AM_len]
     call hash_of

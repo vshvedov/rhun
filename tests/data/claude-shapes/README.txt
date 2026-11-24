@@ -758,6 +758,35 @@ organization) and the home folder are redacted in what is kept.
     ~/.claude/settings.json had the same SHA-256 before the first run and after the last; left under
     ~/.claude: session-env/<id> of each run; the runs' folders under <config>/projects were deleted.
 
+Phase 7 part 3 (claude-chat-p7c, 2026-11-23): one run of the installed 2.1.330 in the clean environment
+tests/claude-real.py builds (a temporary git repository, --model=haiku --effort=low, no prompt), read-only
+control requests only; ~/.claude/settings.json had the same SHA-256 before and after. Not kept as shape
+files (the answers name the account's cloud sessions).
+
+100. side_question {question} answers {response "ok", synthetic false}, preceded by system/
+     control_request_progress {request_id, status "started", uuid, session_id} (the binary's schema adds
+     status "api_retry" with attempt, max_retries, retry_delay_ms, error_status). history must be an array of
+     {question, response} strings: {question, answer} was refused with the text "undefined is not an object
+     (evaluating 'q.response.endsWith')"; the binary's own words for a bad one are "side_question: question
+     must be a string and history an array of {question, response} strings". It needs no conversation (asked
+     before any prompt) and does not touch the conversation's turn or file. The binary names an error code
+     side_question_busy (as many side questions and title calls as the session may run at once) and a text
+     for no answer, "(No answer available for this side question. Try again, or ask in the main
+     conversation.)"; neither was provoked.
+101. get_chrome_dialog answers {allowed, subscriber, wsl, installed, connected, enabled_by_default,
+     at_startup, urls {install "https://claude.ai/chrome", reconnect "https://clau.de/chrome/reconnect",
+     permissions "https://clau.de/chrome/permissions"}} (this account: installed false, connected false,
+     enabled_by_default true, at_startup true). get_chrome_browsers answers the error "Claude in Chrome is not
+     connected in this session". The initialize answer carries remote_control_available (true here),
+     remote_control_auto_enable, remote_control_auto_on_by_default, remote_control_auto_connect_default
+     (false) and ide_rc_auto_enable_gate; list_cloud_sessions answered {status "ok", sessions [{id, title,
+     updated_at, status, environment_kind, repository {owner, name}, branch, ...}]} on this account (the cloud
+     session list the Web tab and teleport would read). NOT tried, because they act on the account:
+     remote_control {enabled} (it publishes the session to claude.ai/code), set_chrome_setting, teleport.
+     From the binary's schema only (unrecorded): system/bridge_state {state (connected, ready, failed,
+     policy_disabled...), detail, failure_kind (failed), recovered (connected), bridge_epoch}; remote_control's
+     answer has bridge_session_id. The fake's remote_control follows that schema and says so.
+
 Other things learned
 
 - Without --permission-mode the user's settings decide (C1 holds): with defaultMode auto there,

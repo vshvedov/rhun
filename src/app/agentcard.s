@@ -836,7 +836,9 @@ FN agentcard_pick
     js 8f
     mov rdi, r13
     mov rsi, rax
-    call btn_act
+    call btn_live
+    test eax, eax
+    jz 8f                       # (a greyed one does nothing)
     mov esi, eax
     mov rdi, rbx
     call agentcard_answer
@@ -2362,6 +2364,20 @@ btn_act:
     mov eax, [rax + rcx + CDB_act]
 1:  ret
 
+# btn_live(CD*, i) -> eax button i's action when it can be pressed (0: past the end, greyed or hidden)
+btn_live:
+    xor eax, eax
+    cmp rsi, [rdi + CD_btns + VEC_len]
+    jae 1f
+    mov rax, [rdi + CD_btns + VEC_ptr]
+    imul rcx, rsi, CDB_SIZE
+    add rax, rcx
+    test dword ptr [rax + CDB_flags], CDBF_OFF | CDBF_HIDE
+    mov eax, [rax + CDB_act]
+    jz 1f
+    xor eax, eax
+1:  ret
+
 # has_lf(TF*) -> eax 1 when its text has a line feed (Up and Down stay in it then)
 has_lf:
     mov rcx, [rdi + TF_sb + SB_ptr]
@@ -2451,13 +2467,15 @@ bc_key:
     jmp .Lbk_yes
 3:  mov rsi, rax
     mov rdi, r12
-    call btn_act
+    call btn_live
+    test eax, eax
+    jz .Lbk_yes
     mov esi, eax
     jmp .Lbk_answer
 .Lbk_enter:
     movsxd rsi, dword ptr [r12 + CD_focus]
     mov rdi, r12
-    call btn_act
+    call btn_live
     test eax, eax
     jz .Lbk_yes
     mov esi, eax
@@ -2533,7 +2551,9 @@ bc_key:
     test rsi, rsi
     js .Lbk_yes
     mov rdi, r12
-    call btn_act
+    call btn_live
+    test eax, eax
+    jz .Lbk_yes
     mov esi, eax
 .Lbk_answer:
     mov rdi, rbx

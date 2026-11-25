@@ -37,7 +37,10 @@ BOOLS = {
                'folding inline_complete color_swatches highlight_occurrences code_lens inlay_hints '
                'semantic_highlighting'),
     'files': 'trim_trailing_whitespace final_newline format_on_save restore_session restore_project',
-    'agents': 'claude codex grok opencode',
+    'agents': ('claude codex grok opencode ctrl_enter_sends scroll_on_send timestamps focus_view '
+               'attach_selection attach_open_file respect_gitignore autosave continue_after_restart'),   # phase 4 tasks
+    'claude': ('chat allow_bypass_permissions prompt_suggestions use_terminal ide '   #   7, 8, 10; p6b; phase 5:
+               'disable_login_prompt python_env'),                                   #   use_terminal, ide; p8
     'git': 'enabled', 'updates': 'check',
     'testing': 'gutter',
     'debug': 'show_on_start keys_in_terminal',
@@ -54,6 +57,14 @@ INTS = {
     ('terminal', 'line_height'): (1., 2.5, .05),
     ('terminal', 'scrollback'): (0, 100000, 1000), ('terminal', 'height'): (80, 2000, 10),
     ('debug', 'console_lines'): (1000, 100000, 1000),
+    ('agents', 'idle_stop_minutes'): (0, 240, 5),
+    ('agents', 'archive_after_days'): (0, 365, 1),      # phase 6: the session list's
+}
+# Steppers with steps of their own: (initial, direction, expected). The agents panel's size: 0
+# follows the interface (13 here), + from it goes past the interface's size, - from 8 back to it.
+STEPS = {
+    ('agents', 'font_size'): [(0, '+', 14), (8, '-', 0), (0, '-', 0), (32, '+', 32), (20, '-', 19),
+                              (20, '+', 21), (5, '+', 9)],
 }
 STRINGS = {
     ('ui', 'font'): 'missing font café.ttf', ('editor', 'font'): 'missing mono café.ttf',
@@ -63,13 +74,18 @@ STRINGS = {
     ('terminal', 'shell'): 'missing shell café', ('terminal', 'font'): 'missing term café.ttf',
     ('git', 'commit_model'): 'model:café',
     ('remote', 'agent_binary'): '/opt/rhun café/linux/rhun',
+    ('claude', 'executable'): '/opt/claude café/bin/claude', ('claude', 'wrapper'): 'wrap café',
 }
 CHOICES = {('editor', 'multi_cursor_paste'): ('spread', 'full'),
            ('editor', 'multi_cursor_modifier'): ('alt', 'ctrl'),
            ('ui', 'decorations'): ('auto', 'client', 'server'),
            ('git', 'commit_ai'): ('off', 'claude', 'codex', 'ollama'),
            ('updates', 'extensions'): ('install', 'check', 'off'),
-           ('extensions', 'secrets'): ('system', 'memory', 'file')}
+           ('extensions', 'secrets'): ('system', 'memory', 'file'),
+           # the first is the CLI's own default, written as an empty value
+           ('claude', 'initial_mode'): ('', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'),
+           ('claude', 'spinner_verbs'): ('append', 'replace'),
+           ('agents', 'location'): ('panel', 'tab')}       # phase 4 task 13
 
 
 # Theme shows without Follow system dark mode, the dark and light mode's themes with it.
@@ -103,7 +119,7 @@ class SettingsUI(unittest.TestCase):
             k + ' = ' + v + '\n' for k, v in values.items()) for s, values in data.items()),
             encoding='utf-8')
 
-    def run_editor(self, actions, height=7200, width=1400):   # the whole page: every row
+    def run_editor(self, actions, height=9800, width=1400):   # the whole page: every row (the merged lines' rows)
         script = self.work / 'actions.rsc'
         script.write_text('\n'.join(['cmd settings', *actions, 'quit']) + '\n', encoding='utf-8')
         result = subprocess.run([str(EXE), self.work.as_posix(), '--headless', f'{width}x{height}',
@@ -153,19 +169,19 @@ class SettingsUI(unittest.TestCase):
                 self.configure(section, key, 'original')
                 y = self.compact_row_y(section, key)
                 self.run_editor([f'click 240 {y}', f'key {MOD}+a', 'type ' + value,
-                                 'key Return'], width=480, height=12000)
+                                 'key Return'], width=480, height=15000)
                 self.assertEqual(self.value(section, key), value)
         for (section, key), choices in CHOICES.items():
             for index, value in enumerate(choices):
                 with self.subTest(setting=f'{section}.{key}', value=value):
                     self.configure()
                     y = self.compact_row_y(section, key) + index * 32
-                    self.run_editor([f'click 240 {y}'], width=480, height=12000)
+                    self.run_editor([f'click 240 {y}'], width=480, height=15000)
                     self.assertEqual(self.value(section, key), value)
 
     def test_inventory_requires_cases_for_every_setting(self):
         expected = {(s, k) for s, names in BOOLS.items() for k in names.split()}
-        expected |= set(INTS) | set(STRINGS) | set(CHOICES)
+        expected |= set(INTS) | set(STEPS) | set(STRINGS) | set(CHOICES)
         expected |= set(THEME_ROWS) | {('git', 'ai_setup'), ('updates', 'check_now'),
                                        ('updates', 'check_extensions')}
         self.assertEqual(expected, {(s, k) for s, k, _ in ROWS})
@@ -187,11 +203,12 @@ class SettingsUI(unittest.TestCase):
                                          'true' if initial == 'false' else 'false')
 
     def test_every_stepper_increases_decreases_and_clamps(self):
-        for (section, key), (minimum, maximum, step) in INTS.items():
-            for initial, direction, expected in [(minimum, '+', minimum + step),
-                                                  (maximum, '-', maximum - step),
-                                                  (minimum, '-', minimum),
-                                                  (maximum, '+', maximum)]:
+        cases = {setting: [(minimum, '+', minimum + step), (maximum, '-', maximum - step),
+                           (minimum, '-', minimum), (maximum, '+', maximum)]
+                 for setting, (minimum, maximum, step) in INTS.items()}
+        cases.update(STEPS)
+        for (section, key), steps in cases.items():
+            for initial, direction, expected in steps:
                 with self.subTest(setting=f'{section}.{key}', value=initial, direction=direction):
                     self.configure(section, key, initial)
                     # Scale changes geometry before the first click.
@@ -224,7 +241,10 @@ class SettingsUI(unittest.TestCase):
                   ('ui', 'decorations'): (55, 55, 78),
                   ('git', 'commit_ai'): (45, 92, 59, 116),
                   ('updates', 'extensions'): (67, 84, 45),
-                  ('extensions', 'secrets'): (76, 70, 44)}
+                  ('extensions', 'secrets'): (76, 70, 44),
+                  ('claude', 'initial_mode'): (166, 58, 141, 50, 50, 141),
+                  ('claude', 'spinner_verbs'): (190, 106),
+                  ('agents', 'location'): (78, 76)}      # "Side panel", "Editor tab"
         for (section, key), options in CHOICES.items():
             for index, option in enumerate(options):
                 with self.subTest(setting=f'{section}.{key}', option=option):

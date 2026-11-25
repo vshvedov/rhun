@@ -14,6 +14,11 @@
 #   filesearch_ext_gone(ext)           its program is gone: its runs end without an answer
 #   filesearch_pending(ext) -> eax 1 while a run of it runs or waits (it is not idle)
 #   filesearch_tick(), filesearch_timeout() -> eax ms or -1
+#   filesearch_native(folder id or 0, max, flags FSF_*, cb, ctx) -> rax the run's serial, or 0 (phase 4 task 7:
+#     rhun's own list of the project's files, filelist.s): no extension; cb(ctx, path, len, is_dir, folder id)
+#     gets each path (relative to its folder, "/" separators, a folder's without its "/"), then cb(ctx, 0,
+#     1 when it stopped at max else 0, 0, 0) once at the end. It shares the runs' slots and slice.
+#     filesearch_native_cancel(serial): the run ends without its callback's end
 .include "rhun.inc"
 
 .equ FSR_SLOTS, 20              # 4 run at a time, 16 wait
@@ -43,6 +48,7 @@
 .equ FSF_ICASE, 16
 .equ FSF_WORD, 32
 .equ FSF_REGEX, 64
+.equ FSF_WALK, 128              # (phase 4 task 7) no git listing: the walk, with the exclude setting, without .git
 .equ FSF_FIND_ALL, 15
 .equ FSF_SEARCH_ALL, 0x77
 .equ FSS_WAITING, 1
@@ -97,6 +103,8 @@ F FSR_dnames, SB_SIZE   # FSF_DIRS with a git list: the folders listed, each wit
 F FSR_dtab, 8           # their table (open addressing: offset + 1 into FSR_dnames, 0 free)
 F FSR_dcap, 8
 F FSR_dn, 8
+F FSR_cb, 8             # (phase 4 task 7) a native run's callback and its context; FSR_ext is 0
+F FSR_ctx, 8
 ENDSTRUCT FSR_SIZE
 
 .bss
@@ -484,6 +492,8 @@ FN filesearch_timeout
     cmp dword ptr [rbx + FSR_git], 0
     jne 2f
     mov rax, [rbx + FSR_ext]
+    test rax, rax               # a native run (filesearch_native) has nobody to wait for
+    jz 8f
     mov rdx, [rax + EXT_wq + SB_len]
     sub rdx, [rax + EXT_wq_off]
     cmp rdx, FSR_PAUSE
@@ -563,10 +573,13 @@ fsr_work:
     cmp dword ptr [rbx + FSR_state], FSS_RUNNING
     jne .Lwk_out
     mov rax, [rbx + FSR_ext]
+    test rax, rax               # a native run: no extension to wait for
+    jz 0f
     mov rdx, [rax + EXT_wq + SB_len]
     sub rdx, [rax + EXT_wq_off]
     cmp rdx, FSR_PAUSE
     ja .Lwk_out
+0:
     # a file being searched
     cmp qword ptr [rbx + FSR_text], 0
     je 1f
@@ -640,7 +653,7 @@ fsr_next_folder:
     call mem_dup
     mov [rbx + FSR_root], rax
     mov dword ptr [rbx + FSR_gitlist], 0
-    test dword ptr [rbx + FSR_flags], FSF_IGNORED
+    test dword ptr [rbx + FSR_flags], FSF_IGNORED | FSF_WALK
     jnz 4f
     call fsr_git_list
     test eax, eax
@@ -1045,6 +1058,8 @@ fsr_record:
     PROLOGUE
     mov r12, rdi
     mov r13, rsi
+    cmp qword ptr [rbx + FSR_cb], 0
+    jne .Lrc_native
     lea rdi, [r13 + 32]
     call fsr_room
     lea rdi, [rbx + FSR_batch]
@@ -1073,6 +1088,27 @@ fsr_record:
     mov eax, 1
     EPILOGUE
 8:  xor eax, eax
+    EPILOGUE
+.Lrc_native:                    # (phase 4 task 7) to the callback: the path, a folder's without its "/"
+    xor ecx, ecx
+    test r13, r13
+    jz 1f
+    cmp byte ptr [r12 + r13 - 1], '/'
+    jne 1f
+    dec r13
+    mov ecx, 1
+1:  mov rdi, [rbx + FSR_ctx]
+    mov rsi, r12
+    mov rdx, r13
+    mov r8, [rbx + FSR_fid]
+    call [rbx + FSR_cb]
+    inc qword ptr [rbx + FSR_count]
+    mov rax, [rbx + FSR_count]
+    cmp rax, [rbx + FSR_max]
+    jb 8b
+    mov dword ptr [rbx + FSR_limit], 1
+    call fsr_finish
+    mov eax, 1
     EPILOGUE
 
 # fsr_git_dirs(path, len) with rbx the run -> eax 1 when the run ended: the folders on the way to a
@@ -1342,7 +1378,18 @@ fsr_digits:
 # fsr_finish() with rbx the run: the last batch, the answer, the slot free
 fsr_finish:
     PROLOGUE
-    cmp qword ptr [rbx + FSR_text], 0
+    cmp qword ptr [rbx + FSR_cb], 0     # (phase 4 task 7) a native run: its callback's end
+    je 0f
+    mov rdi, [rbx + FSR_ctx]
+    xor esi, esi
+    mov edx, [rbx + FSR_limit]
+    xor ecx, ecx
+    xor r8d, r8d
+    call [rbx + FSR_cb]
+    mov rdi, rbx
+    call fsr_free
+    EPILOGUE
+0:  cmp qword ptr [rbx + FSR_text], 0
     je 1f
     call fsr_file_end
 1:  call fsr_flush
@@ -1901,6 +1948,74 @@ FN c_print_file_runs
     xor eax, eax
     pop rbx
     ret
+
+# ---- phase 4 task 7: rhun's own runs (filelist.s) ----
+
+# FN filesearch_native(folder id or 0, max, flags, cb, ctx) -> rax the run's serial, or 0 when every slot is
+#   taken: see the top
+FN filesearch_native
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    mov r14d, edx
+    mov r15, rcx
+    lea rbx, [rip + fsr_slots]
+    xor ecx, ecx
+1:  cmp ecx, FSR_SLOTS
+    jae 8f
+    cmp dword ptr [rbx + FSR_state], 0
+    je 2f
+    add rbx, FSR_SIZE
+    inc ecx
+    jmp 1b
+2:  push r8
+    push r8
+    mov rdi, rbx
+    xor eax, eax
+    mov ecx, FSR_SIZE
+    rep stosb
+    pop r8
+    pop r8
+    inc qword ptr [rip + fsr_serial]
+    mov rax, [rip + fsr_serial]
+    mov [rbx + FSR_serial], rax
+    mov dword ptr [rbx + FSR_kind], FSK_FIND
+    mov [rbx + FSR_flags], r14d
+    mov [rbx + FSR_max], r13
+    mov [rbx + FSR_folder], r12
+    mov [rbx + FSR_cb], r15
+    mov [rbx + FSR_ctx], r8
+    test r12, r12
+    jz 3f
+    mov dword ptr [rbx + FSR_single], 1
+3:  mov dword ptr [rbx + FSR_state], FSS_WAITING
+    mov dword ptr [rip + g_dirty], 1
+    mov rax, [rbx + FSR_serial]
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# FN filesearch_native_cancel(serial): that native run ends, its callback not told
+FN filesearch_native_cancel
+    PROLOGUE
+    mov r12, rdi
+    lea rbx, [rip + fsr_slots]
+    xor r13d, r13d
+1:  cmp r13d, FSR_SLOTS
+    jae 9f
+    cmp dword ptr [rbx + FSR_state], 0
+    je 2f
+    cmp qword ptr [rbx + FSR_cb], 0
+    je 2f
+    cmp [rbx + FSR_serial], r12
+    jne 2f
+    mov rdi, rbx
+    call fsr_free
+    jmp 9f
+2:  add rbx, FSR_SIZE
+    inc r13d
+    jmp 1b
+9:  EPILOGUE
 
 # FN filesearch_pending(ext) -> eax 1 while a find or search of the extension runs or waits
 FN filesearch_pending

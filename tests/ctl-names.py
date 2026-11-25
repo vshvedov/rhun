@@ -29,6 +29,12 @@ def table(path, label):
     strings = dict(re.findall(r'^(\.?\w+):\s*\.asciz\s+"([^"]*)"', text, re.M))
     names = []
     for name_label in words[0:-2:2]:
+        if name_label not in strings and not name_label.startswith('.'):
+            # a global name of another file's (the session list's and the dialogs' own tables' words)
+            found = [s for p, t in SOURCES.items()
+                     for s in re.findall(r'^' + re.escape(name_label) + r':\s*\.asciz\s+"([^"]*)"', t, re.M)]
+            if len(found) == 1:
+                strings[name_label] = found[0]
         if name_label not in strings:
             sys.exit(f'{path.relative_to(ROOT)}: {label}: {name_label} is not a string here')
         names.append(strings[name_label])

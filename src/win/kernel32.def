@@ -89,4 +89,7 @@ EXPORTS
     QueryInformationJobObject
     CreateNamedPipeW
     ConnectNamedPipe
+    FileTimeToSystemTime
+    SystemTimeToFileTime
+    SystemTimeToTzSpecificLocalTime
     WaitNamedPipeW

@@ -35,6 +35,7 @@ check clipboard-paste-queue build/clipboard_paste_queue_test
 if [ "$(uname -s)" = Darwin ]; then
     check mac-clipboard-read build/mac_clipboard_read_test
     check mac-clipboard-metadata build/mac_clipboard_metadata_test
+    check mac-clipboard-kinds build/mac_clipboard_kinds_test   # phase 4 tasks 4, 5: files, images, drops
     if python3 tests/mac-clipboard-metadata.py; then :; else fail=1; fi
 fi
 if [ "$(uname -s)" = Linux ]; then
@@ -96,9 +97,19 @@ check syntax-word build/grammar_test --try tests/data/region-word.syn tests/data
 check themes build/theme_test
 check term build/term_test
 check diff build/diff_test
+check edit-apply build/edit_apply_test   # phase 4 task 11: an edit applied as Claude Code applies it
+# agents: connections to a long-lived child (agent_conn.s)
+for s in exit stderr spawnfail echo fill stop linger bigline biglinenl watchfull watchlate guard reopen breaklast; do
+    check agent-conn-$s build/agent_conn_test $s tests/scripts/fake-agent.py
+done
 # debugger: the JSON builder and parser
 check json build/json_test
+check sha1 build/sha1_test
+check base64 build/base64_test   # phase 4 task 2: attachments' encoder
+check urilist build/urilist_test   # phase 4 tasks 4, 5: text/uri-list as paths (X11, Wayland)
+check mention build/mention_test   # phase 4 task 7: mentions, against the extension's own rules
 check images build/image_test $(ls tests/data/images/* | LC_ALL=C sort)
+check thumbhdr build/thumbhdr_test $(ls tests/data/images/* | LC_ALL=C sort)   # phase 4 task 6: Base64, headers
 python3 tests/image-fuzz.py 1 20 || fail=1
 check cpu build/cpu_test
 check cols build/cols_test
@@ -143,6 +154,29 @@ python3 tests/focused-zoom.py || fail=1
 python3 tests/agents.py || fail=1
 python3 tests/opencode.py || fail=1
 python3 tests/agents-refresh.py || fail=1
+python3 tests/agents-markdown.py || fail=1   # replies drawn as Markdown
+python3 tests/agents-font.py || fail=1   # the agents panel's own font size
+python3 tests/fake-claude.py || fail=1   # the fake Claude Code against the recorded shapes
+python3 tests/claude-chat.py || fail=1   # Claude Code's chat against the fake
+python3 tests/claude-controls.py || fail=1   # its controls: settings, lists, menus, modes, models
+python3 tests/claude-cards.py || fail=1   # its cards: permission, questions, plan, dialogs
+python3 tests/claude-review.py || fail=1   # phase 4 tasks 11, 12: an edit's proposed change in the Review tab
+python3 tests/claude-transcript.py || fail=1   # the typed rows: a call's parts, text that opens in a tab (phase 3)
+python3 tests/claude-thread.py || fail=1   # the thread's engine: heights, the view's anchor, keys (phase 3)
+python3 tests/claude-bridge.py || fail=1   # claude in rhun's terminal: the bridge, its tools, terminal mode (phase 5)
+python3 tests/claude-sessions.py || fail=1   # the session list and the chat header (phase 6)
+python3 tests/claude-dialogs.py || fail=1   # the dialog shell and the dialogs that show what Claude Code reports (phase 7)
+python3 tests/claude-dialogs2.py || fail=1  # the dialogs that change Claude Code's configuration (p7b)
+python3 tests/claude-attach.py || fail=1   # a message's parts: attachments, packs, chips, the + menu (phase 4 tasks 2, 3)
+python3 tests/claude-tab.py || fail=1   # a conversation in an editor tab, the status item (phase 4 task 13)
+python3 tests/claude-panels.py || fail=1   # side question, bookmarks, agent map, hand-off, Chrome, Remote Control (p7c)
+python3 tests/claude-images.py || fail=1   # pictures as thumbnails, the picture in a tab (phase 4 task 6)
+python3 tests/claude-paste.py || fail=1    # the clipboard's files and images, long pastes, drops (phase 4 tasks 4, 5)
+python3 tests/claude-mention.py || fail=1   # mentions, the selection chip, the commands that mention (phase 4 tasks 7, 8)
+python3 tests/claude-mcp.py || fail=1      # rhun's MCP server for the chat (phase 4 task 9)
+python3 tests/claude-hooks.py || fail=1    # its hooks: saving before, problems after (phase 4 task 10)
+python3 tests/claude-fork.py || fail=1   # fork from a message, rewind, export, a cut turn after a restart (p6b)
+python3 tests/claude-settings.py || fail=1   # p8: the extension's settings, commands and keys
 python3 tests/ext-agents.py || fail=1
 python3 tests/ext-review.py || fail=1
 python3 tests/ext-tools.py || fail=1
@@ -160,6 +194,8 @@ python3 tests/mac-launch.py || fail=1
 python3 tests/x11-auth.py || fail=1
 python3 tests/linux-clipboard.py || fail=1
 python3 tests/wayland-clipboard.py || fail=1
+python3 tests/linux-clip-kinds.py || fail=1     # phase 4 tasks 4, 5: X11 TARGETS, uri-list, PNG, XDND
+python3 tests/wayland-clip-kinds.py || fail=1   # phase 4 task 4: the Wayland offer's kinds
 python3 tests/explorer-delete.py || fail=1
 python3 tests/explorer-create.py || fail=1
 python3 tests/explorer-tabs.py || fail=1
@@ -260,6 +296,7 @@ python3 tests/ext-fuzz.py 1 4 || fail=1
 for t in debug-launch debug-framing debug-config debug-breakpoints debug-step debug-lifetime debug-view debug-gutter debug-transport debug-terminal debug-feature debug-tasks debug-review debug-sessions debug-questions debug-variables debug-configs debug-threads debug-remote debug-real; do
     python3 tests/$t.py || fail=1
 done
+python3 tests/claude-remote.py || fail=1   # phase 8: the chat in a remote window (docker host; local: on Linux)
 # testing: the test explorer (feature "tests")
 python3 tests/testing.py || fail=1
 python3 tests/testing-real.py || fail=1   # skips without TESTS_DIR (a rhun-editor/tests checkout)

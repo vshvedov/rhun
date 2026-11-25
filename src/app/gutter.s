@@ -803,7 +803,8 @@ gutter_mark_text:
     mov rdx, [rax + MK_end]
     cmp rdx, r14
     jb 1b
-    mov rax, [rax + MK_msg]
+    mov rdi, [rax + MK_msg]     # as shown: cut at MARK_MSG_MAX (phase 4 task 9: marks keep it whole)
+    call extmarks_shown
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE

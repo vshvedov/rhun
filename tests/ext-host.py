@@ -193,16 +193,16 @@ class Host(unittest.TestCase):
         secret = self.work / 'secret.txt'
         secret.write_text('private\n', encoding='utf-8')
         self.env['ECHO_OPEN'] = secret.as_posix()
-        out = self.run_editor(['cmd echo.open', 'wait-ext echo running', 'wait 300', 'print-tabs'])
+        out = self.run_editor(['cmd echo.open', 'wait-ext echo running', 'wait-toast open error', 'print-tabs'])
         self.assertIn('error 1 needs file=read', self.echo_log())
         self.assertIn('tabs=*a.txt', out)
         # An already-open file belongs to documents permission, even outside the project.
-        out = self.run_editor(['cmd echo.open', 'wait-ext echo running', 'wait 300', 'print-tabs'],
+        out = self.run_editor(['cmd echo.open', 'wait-ext echo running', 'wait-toast open ok', 'print-tabs'],
                               files=('a.txt', secret.as_posix()))
         self.assertIn('tabs=a.txt | *secret.txt', out)
         # Explicit home permission allows a closed file there.
         exts = self.manifest_variant('home-open', **{'project = read': 'home = read'})
-        out = self.run_editor(['cmd echo.open', 'wait-ext echo running', 'wait 300', 'print-tabs'], exts=exts)
+        out = self.run_editor(['cmd echo.open', 'wait-ext echo running', 'wait-toast open ok', 'print-tabs'], exts=exts)
         self.assertIn('tabs=a.txt | *secret.txt', out)
 
     @unittest.skipIf(os.name == 'nt', 'creating symlinks requires Windows developer mode')
@@ -211,7 +211,7 @@ class Host(unittest.TestCase):
         secret.write_text('private\n', encoding='utf-8')
         (self.proj / 'outside').symlink_to(self.work, target_is_directory=True)
         self.env['ECHO_OPEN'] = (self.proj / 'outside/secret.txt').as_posix()
-        out = self.run_editor(['cmd echo.open', 'wait-ext echo running', 'wait 300', 'print-tabs'])
+        out = self.run_editor(['cmd echo.open', 'wait-ext echo running', 'wait-toast open error', 'print-tabs'])
         self.assertIn('error 1 needs file=read', self.echo_log())
         self.assertIn('tabs=*a.txt', out)
 
@@ -300,9 +300,10 @@ class Host(unittest.TestCase):
 
     def test_open_request_opens_a_tab_at_a_line(self):
         self.env['ECHO_OPEN'] = (self.proj / 'b.go').as_posix()
-        out = self.run_editor(['cmd echo.open', 'wait-ext echo running', 'wait 400', 'print-tabs', 'print-state'])
-        self.assertEqual(out[1], 'tabs=a.txt | *b.go')
-        self.assertIn('line=2', out[2])      # b.go ends in a newline: line 2 is its empty last line
+        out = self.run_editor(['cmd echo.open', 'wait-ext echo running', 'wait-toast open ok', 'print-tabs',
+                               'print-state'])
+        self.assertEqual(out[2], 'tabs=a.txt | *b.go')
+        self.assertIn('line=2', out[3])      # b.go ends in a newline: line 2 is its empty last line
         log = self.echo_log()
         self.assertIn('ok 1 2', log)
         self.assertIn('0 opened 2 0 Go ' + (self.proj / 'b.go').as_posix(), log)

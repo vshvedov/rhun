@@ -5,3 +5,7 @@ EXPORTS
     ILCreateFromPathW
     ILFree
     SHOpenFolderAndSelectItems
+    DragAcceptFiles
+    DragQueryFileW
+    DragQueryPoint
+    DragFinish

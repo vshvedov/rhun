@@ -141,75 +141,31 @@ worktree_name:
     call path_basename
     EPILOGUE
 
-# claude_root(AW*): session directory for this checkout.
+# claude_root(AW*): session directory for this checkout: <claude dir>/projects/<slug> (claudecfg.s,
+#   one implementation for discovery and the chat)
 claude_root:
     PROLOGUE
     mov rbx, rdi
-    # $CLAUDE_CONFIG_DIR/projects, else ~/.claude/projects, then the checkout's slug
     lea rdi, [rip + tmp]
     call sb_clear
-    lea rdi, [rip + .Lclaude_config_dir]
-    call getenv
-    lea r12, [rip + .Lprojects]
-    test rax, rax
-    jz 1f
-    cmp byte ptr [rax], 0
-    jne 2f
-1:
-    lea rdi, [rip + .Lhome]
-    call getenv
-    test rax, rax
+    lea rdi, [rip + tmp]
+    call claude_dir
+    test eax, eax
     jz 9f
-    lea r12, [rip + .Lclaude_projects]
-2:  lea rdi, [rip + tmp]
-    mov rsi, rax
+    lea rdi, [rip + tmp]
+    lea rsi, [rip + .Lprojects]
     call sb_push_cstr
     lea rdi, [rip + tmp]
-    mov rsi, r12
-    call sb_push_cstr
-    mov r15, [rip + tmp + SB_len]
-    mov rdi, [rip + tmp + SB_ptr]
-    mov r12, [rbx + AW_path]
-    mov rdi, r12
-    call strlen
-    lea r13, [r12 + rax]
-3:  cmp r12, r13
-    jae 4f
-    mov rdi, r12
-    mov rsi, r13
-    sub rsi, r12
-    call utf8_decode
-    add r12, rdx
-    mov r14d, eax
-    mov esi, eax
-    lea ecx, [rax - '0']
-    cmp ecx, 9
-    jbe 31f
-    or eax, 0x20
-    sub eax, 'a'
-    cmp eax, 25
-    jbe 31f
-    mov esi, '-'
-31: lea rdi, [rip + tmp]
-    call sb_push_byte
-    # Claude's JS regex has no Unicode flag: supplementary characters take two '-'.
-    cmp r14d, 0xffff
-    jbe 3b
-    lea rdi, [rip + tmp]
-    mov esi, '-'
-    call sb_push_byte
-    jmp 3b
+    mov rsi, [rbx + AW_path]
+    call claude_slug
     # A folder name over 255 bytes cannot exist (a deep checkout): no folder rather than an open,
     # which Windows fails as an invalid name, not as one too long
-4:  mov rax, [rip + tmp + SB_len]
-    sub rax, r15
     cmp rax, 255
     ja 9f
     mov rdi, [rip + tmp + SB_ptr]
     mov rsi, [rip + tmp + SB_len]
     call mem_dup
     mov [rbx + AW_claude], rax
-    mov rdi, rax
 9:
     EPILOGUE
 
@@ -2038,7 +1994,6 @@ sort_sift:
 .Lclaude_config_dir: .asciz "CLAUDE_CONFIG_DIR"
 .Lcodex_home: .asciz "CODEX_HOME"
 .Lprojects: .asciz "/projects/"
-.Lclaude_projects: .asciz "/.claude/projects/"
 .Lcodex_sessions: .asciz ".codex/sessions"
 .Lcodex_worktrees: .ascii "/.codex/worktrees/"
 .Ljsonl: .ascii ".jsonl"

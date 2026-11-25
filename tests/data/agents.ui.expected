@@ -12,9 +12,11 @@ Codex: Fix the tab bar scrolling
 Claude: Status bar work
 Grok [model: grok-4.7]: Word count in the status bar
 user Add a status bar
+thinking(-) hmm
 agent I'll look at the layout code first.
 tool(Bash) grep -n status src/app/app.s
 result 123: statusbar_draw
+user /clear
 tool(Edit) src/app/app.s
 agent Done — the status bar shows "Ln, Col".
 Codex: Fix the tab bar scrolling

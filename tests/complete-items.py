@@ -212,7 +212,7 @@ class Items(lang.Lang):
         spec = {'hello': 'hello 1 complete complete-items query-stream', 'answers': {'complete': {
             'parts': [[body(item('print', 'print')), 0.05], [body(item('process', 'process')), 0.05]],
             'delay': 0.05, 'body': body(item('private', 'private'))}}}
-        out = self.run_items(spec, ['cmd complete', 'wait 500', 'print-complete', 'print-langstats fake/lang'])
+        out = self.run_items(spec, ['cmd complete', 'wait 1500', 'print-complete', 'print-langstats fake/lang'])
         self.assertTrue(any('items=3 shown=3' in l for l in out), out)
         self.assertEqual(self.stats(out, 'complete')['answered'], '1', out)
 

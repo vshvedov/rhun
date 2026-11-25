@@ -2,6 +2,8 @@
 """Markdown documents (markdown.s): blocks, inline styles, links and the layout, through the
 headless print-md WIDTH PATH (md_dump's lines)."""
 import os
+from pathlib import Path
+import subprocess
 import sys
 import unittest
 
@@ -187,9 +189,10 @@ class Markdown(ViewsBase):
         self.assertTrue(390 <= w <= 400, w)
         self.assertEqual(h, w * 100 // 1200)
         t = [self_text(l) for l in self.texts(out)]
-        self.assertIn('remote', t)                                      # alt text: not fetched
-        self.assertIn('missing', t)
+        self.assertNotIn('remote', t)                                   # not fetched: a chip, not its alt text
+        self.assertNotIn('missing', t)
         self.assertNotIn('red', t)
+        self.assertEqual([self_text(l) for l in out if l.startswith('item chip ')], ['[Image]', '[Image]'])
         # drawn: the red box in the demo
         shot = self.work / 'shot.ppm'
         out = self.run_editor([f'md-demo-body {path}', 'wait 100', f'shot {shot}'], exts=None, start=False)
@@ -292,6 +295,164 @@ class Markdown(ViewsBase):
         bs = [l for l in out if l.startswith('item text ') and l.endswith(' text=b')]
         self.assertEqual(len(bs), 2, out)
         self.assertTrue(all(self.field(l, 'style') == '2' for l in bs), bs)
+
+    # ---- a reply's Markdown (phase 3, task 3): the same in the editor's own documents ----
+
+    def items(self, out, kind):
+        return [l for l in out if l.startswith('item %s ' % kind)]
+
+    def test_footnotes(self):
+        md = ('Text with a note[^b], another[^a] and again[^b]; [^none] stays.\n\n'
+              '[^a]: The second note.\n'
+              '[^b]: The first note, with **bold**\n'
+              'and a lazy line.\n'
+              '[^unused]: Never cited.\n\n'
+              'After the notes.\n')
+        out = self.dump(md)
+        blocks = self.blocks(out)
+        # the body's blocks first, then the definitions in order of first use; one never cited is left out
+        self.assertEqual([self.field(' ' + b, 'fn') for b in blocks], ['0', '0', '1', '2'], blocks)
+        t = self.texts(out)
+        sups = [l for l in t if int(self.field(l, 'style')) & 256]
+        self.assertEqual([self_text(l) for l in sups], ['1', '2', '1'])
+        word = [l for l in t if self_text(l) == 'note'][0]
+        for l in sups:
+            self.assertEqual(self.field(l, 'face'), '7')                 # three quarters of the text's
+            self.assertEqual(self.field(l, 'y'), self.field(word, 'y'))
+            self.assertLess(int(self.field(l, 'base')), int(self.field(word, 'base')))  # raised
+            self.assertTrue(int(self.field(l, 'style')) & 16)            # a link
+        links = [l for l in out if l.startswith('link ')]
+        targets = {int(self.field(l, 'link')): None for l in sups}
+        self.assertEqual(sorted(l.split(' ', 2)[2] for l in links if int(l.split(' ')[1]) in targets),
+                         ['#^a', '#^b', '#^b'])
+        self.assertIn('[^none]', [self_text(l) for l in t])               # an unknown id stays text
+        texts = [self_text(l) for l in t]
+        self.assertNotIn('Never', texts)
+        # the definitions: numbered, under a thin rule after the last block
+        first = int(self.field(' ' + blocks[2], 'line'))
+        self.assertEqual(first, 3)                                        # [^b]'s line
+        self.assertIn('1.', texts)
+        self.assertIn('2.', texts)
+        after = [l for l in t if self_text(l) == 'After'][0]
+        first_note = [l for l in t if self_text(l) == 'first'][0]
+        rules = [l for l in self.items(out, 'fill') if self.field(l, 'h') == '1' and
+                 int(self.field(after, 'y')) < int(self.field(l, 'y')) < int(self.field(first_note, 'y'))]
+        self.assertEqual(len(rules), 1, out)
+        self.assertIn('bold', texts)
+        self.assertIn('lazy', texts)
+        # md-anchor scrolls to a definition, as to a heading
+        path = self.work / 'doc.md'
+        path.write_text(md, encoding='utf-8')
+        out = self.run_editor([f'md-demo {path}', 'wait 50', 'md-anchor #^b', 'md-anchor #^a', 'md-anchor #^A',
+                               'md-anchor #^none', 'md-anchor #^unused'], exts=None, start=False)
+        ys = [int(l.split(' ')[2]) for l in out if l.startswith('anchor ')]
+        self.assertGreater(ys[0], 0)
+        self.assertGreater(ys[1], ys[0])
+        self.assertEqual(ys[2], ys[1])                                    # labels compare without case
+        self.assertEqual(ys[3:], [-1, -1])
+
+    def test_footnotes_keep_a_table_after_them_whole(self):
+        md = '[^x]: a note\n\nSee[^x].\n\n| a | b |\n|---|---|\n| 1 | 2 |\n'
+        out = self.dump(md)
+        kinds = [b.split(' ')[0] for b in self.blocks(out)]
+        self.assertEqual(kinds, ['type=para', 'type=row', 'type=row', 'type=para'])
+        self.assertIn('2', [self_text(l) for l in self.texts(out)])        # the row's cells laid out
+
+    def test_insight_lines(self):
+        rule = '─' * 45
+        md = (f'`★ Insight {rule}`\n- one point\n- two points\n`{rule}`\n\n'
+              f'`★ Insight {rule}`\nPlain point text.\n`{rule}`\n\n'
+              'A short `───` and [a link](https://x.example) stay as they are.\n')
+        out = self.dump(md, 400)
+        t = self.texts(out)
+        accent = self.field([l for l in t if self_text(l) == 'a'][0], 'color')   # a link's colour
+        labels = [l for l in t if self_text(l) == '★ Insight']
+        self.assertEqual(len(labels), 2, t)
+        for l in labels:
+            self.assertEqual(self.field(l, 'color'), accent)
+            self.assertEqual(self.field(l, 'face'), '0')                   # the text's face, not code
+            self.assertEqual(self.field(l, 'x'), '0')
+        self.assertNotIn(rule, ' '.join(self_text(l) for l in t))          # no rule as text
+        fills = self.items(out, 'fill')
+        thin = [l for l in fills if self.field(l, 'h') == '1']
+        # each label has a rule after it on its line, each closing line is a rule over the width
+        for l in labels:
+            y = int(self.field(l, 'y'))
+            after = [f for f in thin if int(self.field(l, 'x')) + int(self.field(l, 'w')) < int(self.field(f, 'x'))
+                     and y < int(self.field(f, 'y')) < y + int(self.field(l, 'h'))]
+            self.assertEqual(len(after), 1, (l, thin))
+        on_label = lambda f: any(int(self.field(l, 'y')) <= int(self.field(f, 'y')) <
+                                 int(self.field(l, 'y')) + int(self.field(l, 'h')) for l in labels)
+        wide = [f for f in thin if not on_label(f) and int(self.field(f, 'w')) > 250]
+        self.assertEqual(len(wide), 2, thin)       # the first is in the list item it follows lazily
+        # the second form: the point is a line of its own between them
+        plain = [l for l in t if self_text(l) == 'Plain'][0]
+        self.assertGreater(int(self.field(plain, 'y')), int(self.field(labels[1], 'y')))
+        self.assertEqual(self.field(plain, 'x'), '0')
+        short = [l for l in t if self_text(l) == '───'][0]
+        self.assertEqual(self.field(short, 'style'), '4')                  # still a code span
+
+    def test_display_math_is_shown_as_source(self):
+        md = ('Before\n\n$$\nE = mc^2\n\\int_0^1 x\\,dx\n$$\n\nAfter $x$ inline, $$ y $$ too.\n\n'
+              '$$\nunclosed\n')
+        out = self.dump(md)
+        kinds = [b.split(' ')[0] for b in self.blocks(out)]
+        self.assertEqual(kinds, ['type=para', 'type=code', 'type=para', 'type=code'])
+        t = self.texts(out)
+        texts = [self_text(l) for l in t]
+        code = [l for l in t if self.field(l, 'face') == '4']
+        self.assertFalse([l for l in code if '$$' in self_text(l)], code)   # the delimiters are not shown
+        self.assertEqual(' '.join(self_text(l) for l in code).replace(' ', ''),
+                         'E=mc^2\\int_0^1x\\,dxunclosed')
+        fg = self.field([l for l in t if self_text(l) == 'Before'][0], 'color')
+        self.assertTrue(all(self.field(l, 'color') == fg for l in code))  # no language: no colours
+        self.assertIn('$x$', texts)
+        self.assertIn('$$', texts)                                         # inline: text
+        self.assertEqual(len([l for l in out if l.startswith('copy-action ')]), 2)
+
+    def test_dollar_amounts_stay_text(self):
+        out = self.dump('It costs $5 and $10 today, $$ not math.\n')
+        self.assertEqual([b.split(' ')[0] for b in self.blocks(out)], ['type=para'])
+        t = self.texts(out)
+        self.assertEqual([self_text(l) for l in t], ['It', 'costs', '$5', 'and', '$10', 'today,', '$$', 'not',
+                                                     'math.'])
+        self.assertTrue(all(self.field(l, 'style') == '0' for l in t))
+
+    def test_remote_image_is_blocked(self):
+        md = 'See ![a chart](https://example.com/chart.png "title") here.\n'
+        out = self.dump(md)
+        chips = self.items(out, 'chip')
+        self.assertEqual(len(chips), 1, out)
+        self.assertEqual(self_text(chips[0]), '[Image]')
+        texts = [self_text(l) for l in self.texts(out)]
+        self.assertEqual(texts, ['See', 'here.'])                         # the alt text is not drawn
+        see = [l for l in self.texts(out) if self_text(l) == 'See'][0]
+        self.assertEqual(self.field(chips[0], 'y'), self.field(see, 'y'))  # in the line
+        self.assertIn('link 0 https://example.com/chart.png', out)         # the tip names it
+        # in a table's cell too
+        out = self.dump('| a | b |\n|---|---|\n| ![pic](https://e.example/p.png) | x |\n')
+        self.assertEqual(len(self.items(out, 'chip')), 1, out)
+        self.assertNotIn('pic', [self_text(l) for l in self.texts(out)])
+
+    def test_data_image_is_a_chip(self):
+        md = '![dot](data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==)\n'
+        out = self.dump(md)
+        chips = self.items(out, 'chip')
+        self.assertEqual([self_text(l) for l in chips], ['[Image]'])
+        self.assertEqual(self.texts(out), [])
+        self.assertEqual(self.items(out, 'image'), [])                    # no thumbnail yet (phase 4)
+
+    def test_link_at_a_point(self):
+        """md_link_at, the link under a point, by the assembly unit check tests/markdown_test.s"""
+        exe = Path(__file__).resolve().parents[1] / 'build/markdown_test'
+        if not exe.exists():
+            self.skipTest('build/markdown_test is not built')
+        res = subprocess.run([str(exe)], capture_output=True, timeout=60)
+        out = res.stdout + res.stderr
+        expected = (Path(__file__).resolve().parent / 'data/markdown.expected').read_bytes()
+        self.assertEqual(out, expected, out.decode(errors='replace'))
+        self.assertEqual(res.returncode, 0)
+
 
 def self_text(line):
     return line.split(' text=', 1)[1]

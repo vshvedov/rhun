@@ -1,0 +1,11 @@
+lf(recorded) found=1 alpha\nBRAVO\ncharlie\ndelta\necho\n
+crlf-lf-strings(recorded) found=1 one\nTWO\nthree\nfour\nfive\n
+crlf-whole-file-lf(recorded) found=1 one\nTWO\nTHREE\nfour\nfive\n
+crlf-crlf-strings(not-recorded) found=1 one\nTWO\nTHREE\nfour\nfive\n
+replace-all(not-recorded) found=1 a y\nb y\nc y\n
+replace-first(not-recorded) found=1 a y\nb x\nc x\n
+no-final-lf(not-recorded) found=1 x\nz
+not-there(not-recorded) found=0 a\nb\nc\n
+removed-line-takes-its-lf(not-recorded) found=1 a\nc\n
+no-old-text(not-recorded) found=1 whole\n
+removed-with-its-lf-already(not-recorded) found=1 a\nc\n

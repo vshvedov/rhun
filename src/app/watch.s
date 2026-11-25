@@ -32,6 +32,7 @@ wd_native: .zero 8 * MAXWD       # native descriptor + 1, zero for a free logica
 evbuf: .zero 16384
 wait_path: .zero 4096
 next_tick: .quad 0              # earliest pending reload or fade frame; 0 means no timer
+tree_gen: .quad 0               # (phase 4 task 7) moves with each create, delete or move in a project folder
 .data
 ino_fd: .long -1
 in_remote_len: .long 0          # remote hosts: events in evbuf from vfs_tick (-1: handled)
@@ -727,7 +728,12 @@ on_inotify:
     call git_fs_event
     pop rcx
     pop rcx
-7:  test ecx, WK_EXPLORER
+7:  test ecx, WK_EXPLORER | WK_WORKTREE    # (phase 4 task 7) made, deleted, moved: rhun's file list is
+    jz 71f                                  #   stale (filelist.s, watch_tree_gen)
+    test r15d, IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO
+    jz 71f
+    inc qword ptr [rip + tree_gen]
+71: test ecx, WK_EXPLORER
     jz 1f
     test r15d, IN_CREATE | IN_DELETE | IN_MOVED_FROM | IN_MOVED_TO
     jz 1f
@@ -942,6 +948,12 @@ FN watch_timeout
     ret
 
 # watch_tick(): only scan tabs while reloads or fades are pending, never poll files while idle
+# FN watch_tree_gen() -> rax (phase 4 task 7): moves when a watched folder of the project saw a file or folder
+#   made, deleted or moved (not a write)
+FN watch_tree_gen
+    mov rax, [rip + tree_gen]
+    ret
+
 FN watch_tick
     PROLOGUE
     cmp qword ptr [rip + next_tick], 0

@@ -17,6 +17,7 @@
 .equ ID_TRUST_X, 0x200d           # and its close button
 .equ PM_RECENT, 3                 # the project menu's first recent folder
 .equ ID_TAB, 0x2100              # + index
+.equ TABS_AT_MAX, 64             # tabs whose drawn place print-tabs-at names
 .equ ID_TABX, 0x2400             # + index
 .equ ID_SPLIT_L, 0x2700
 .equ ID_SPLIT_R, 0x2701
@@ -81,8 +82,13 @@ tab_drag_w: .long 0
 .p2align 3
 tab_drag_kind: .quad 0           # the tab pressed: a drag follows it while it is the one at g_active
 tab_drag_doc: .quad 0
+tab_drag_slot: .quad 0           #   and its TAB_flags >> TF_VIEW_SHIFT (views, Markdown tabs: no document)
 menu_tab_kind: .quad 0           # the tab whose menu is open (tab_menu_tab)
 menu_tab_doc: .quad 0
+menu_tab_slot: .quad 0
+.globl g_tabs_cx, g_tabs_cy
+g_tabs_cx: .zero 4 * TABS_AT_MAX # each tab's middle as drawn last (print-tabs-at), the first TABS_AT_MAX
+g_tabs_cy: .zero 4 * TABS_AT_MAX           # its TAB_flags >> TF_VIEW_SHIFT: which of the tabs without a document it is
 g_side_px: .long 0
 g_agents_px: .long 0
 dlg_kind: .long 0                # 0 none, 1 close tab, 2 quit, 3 open another project, 4 app_confirm, 5 close all
@@ -268,7 +274,10 @@ set_project:
 # icon of its own) and this one keeps its project. It runs this program with the same environment,
 # in a session of its own as a copy started from a terminal is, and is reaped when it quits.
 # RHUN_NEW_WINDOW names another program to run (tests); without it a headless rhun starts none.
+# app_new_window_link(folder, link or 0) passes a link after the folder (phase 4 task 13: a conversation).
 FN app_new_window
+    xor esi, esi
+FN app_new_window_link
 .ifdef WINDOWS
     PROLOGUE
     cmp dword ptr [rip + g_headless], 0
@@ -282,6 +291,7 @@ FN app_new_window
 .else
     PROLOGUE 32
     mov rbx, rdi
+    mov r14, rsi
     lea rdi, [rip + .Lenv_new_window]
     call getenv
     test rax, rax
@@ -337,7 +347,8 @@ FN app_new_window
     lea rax, [rip + nw_exe]
     mov [rsp], rax
     mov [rsp + 8], rbx
-    mov qword ptr [rsp + 16], 0
+    mov [rsp + 16], r14         # the link, or the end
+    mov qword ptr [rsp + 24], 0
     lea rdi, [rsp]
     mov rsi, [rip + g_envp]
     xor edx, edx
@@ -1422,7 +1433,15 @@ FN app_tab_label
     jne 4f
     mov rdi, [rcx + TAB_flags]
     jmp extview_title
-4:  ret
+4:  cmp qword ptr [rcx + TAB_kind], TAB_MDDOC    # plan review: a Markdown tab of rhun's own (mdtab.s)
+    jne 5f
+    mov rdi, [rcx + TAB_flags]
+    jmp mdtab_label
+5:  cmp qword ptr [rcx + TAB_kind], TAB_AGENT    # phase 4 task 13: a conversation tab (agenttab.s)
+    jne 6f
+    mov rdi, [rcx + TAB_flags]
+    jmp agtab_label
+6:  ret
 
 # app_detect_lang(doc)
 FN app_detect_lang
@@ -1481,7 +1500,23 @@ FN app_close_tab_now
     call nb_tab_closed          # its extension hears it, its cells go
     pop rax
     pop rax
-70: mov rbx, [rax + TAB_doc]
+70: cmp qword ptr [rax + TAB_kind], TAB_MDDOC
+    jne 71f
+    push rax
+    push rax
+    mov rdi, [rax + TAB_flags]
+    call mdtab_tab_closed       # plan review: its owner hears it, its prompt and document go (mdtab.s)
+    pop rax
+    pop rax
+71: cmp qword ptr [rax + TAB_kind], TAB_AGENT
+    jne 72f
+    push rax
+    push rax
+    mov rdi, [rax + TAB_flags]
+    call agtab_tab_closed       # phase 4 task 13: the view goes back to the panel (agenttab.s)
+    pop rax
+    pop rax
+72: mov rbx, [rax + TAB_doc]
     test rbx, rbx
     jz 1f
     mov rdi, rbx
@@ -1681,7 +1716,13 @@ FN app_save_close
     mov edi, 1
     xor esi, esi
 save_doc:
-    READONLY_RET
+    push rax                    # phase 4 task 12: an offer's edit is not saved (review.s)
+    call review_scratch_save
+    pop rcx
+    test eax, eax
+    jz 0f
+    ret
+0:  READONLY_RET
     PROLOGUE
     mov r13d, edi
     mov r14d, esi
@@ -2081,7 +2122,13 @@ FN app_after_save
     EPILOGUE
 
 FN cmd_save_as
-    READONLY_RET
+    push rax                    # phase 4 task 12: an offer's edit is not saved (review.s)
+    call review_scratch_save
+    pop rcx
+    test eax, eax
+    jz 0f
+    ret
+0:  READONLY_RET
     call nb_active              # notebooks: the notebook's document
     test rax, rax
     jz 3f
@@ -2202,6 +2249,7 @@ FN app_apply_settings
     call app_sync_panels
     call git_apply
     call agents_apply_settings
+    call agent_drv_apply        # agents: [claude] chat switched off ends what it drives (agent_drv.s)
     call ai_apply
     call vim_sync
     call watch_apply_settings
@@ -2251,6 +2299,7 @@ FN app_on_button
     push rdx
     call time_ms
     mov [rip + g_blink_t0], rax
+    mov [rip + g_input_ms], rax # agents: no thumbnail decoded within 300 ms of a click (agentimg.s)
     pop rdx
     pop rsi
     pop rdi
@@ -2347,11 +2396,17 @@ FN app_on_paste
     jmp 9f
 0:  cmp dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
     jne 5f
-    mov rdi, rbx                # and an agent's prompt box
+    mov rdi, rbx                # and an agent's prompt box (a paste is typing: agentext_box_paste)
     mov rsi, r12
-    call agentext_paste
+    call agentext_box_paste
     jmp 9f
-5:  mov rdi, rbx                # an extension's version control message box (scmpanel.s)
+5:  cmp dword ptr [rip + g_focus], FOCUS_AGENTS
+    jne 51f
+    mov rdi, rbx                # the side question's field (p7c: agentside.s), else the panel's dialog's
+    mov rsi, r12                #   field, else the session list's, else its card's (agentdlg.s,
+    call agside_paste           #   agentlist.s, agentcard.s)
+    jmp 9f
+51: mov rdi, rbx                # an extension's version control message box (scmpanel.s)
     mov rsi, r12
     call scmpanel_paste
     test eax, eax
@@ -2409,6 +2464,8 @@ FN focused_field
     je vim_field
     cmp eax, FOCUS_AGENT_INPUT
     je agentext_field
+    cmp eax, FOCUS_AGENTS
+    je agside_field             # the side question's field, else the dialog's, the session list's or the card's
     xor eax, eax
     ret
 1:  sub rsp, 8                  # an extension's version control message box (scmpanel.s), else a
@@ -2444,6 +2501,7 @@ FN app_on_key
     mov dword ptr [rip + g_dirty], 1
     call time_ms
     mov [rip + g_blink_t0], rax
+    mov [rip + g_input_ms], rax # agents: nor of a key (agentimg.s)
     # a chord waiting for its second stroke takes the key first (keys.s)
     mov edi, r12d
     mov esi, r13d
@@ -2477,7 +2535,11 @@ FN app_on_key
     jz 10f
     call extbar_close
     jmp 9f
-10: # focused components get the first chance
+10: mov edi, r12d               # a menu opened by the keys takes its keys (task 10: explorer.s)
+    call ctx_menu_key
+    test eax, eax
+    jnz 9f
+    # focused components get the first chance
     mov eax, [rip + g_focus]
     cmp eax, FOCUS_QUICK        # an extension's quick input (quick.s)
     jne 12f
@@ -2633,6 +2695,12 @@ FN app_on_key
     mov esi, r13d
     mov edx, r14d
     call nb_key
+    test eax, eax
+    jnz 9f
+    mov edi, r12d               # plan review: a Markdown tab's keys, Ctrl+Enter its Comment (mdtab.s)
+    mov esi, r13d
+    mov edx, r14d
+    call mdtab_key
     test eax, eax
     jnz 9f
     mov edi, r12d
@@ -2870,6 +2938,7 @@ FN app_timeout
 # app_timeout's parts: each fn() -> eax milliseconds until it needs a tick, or -1; 0-ended
 timeout_fns:
     .quad agents_timeout
+    .quad agimg_timeout         # agents: thumbnails to decode once the keys rest (agentimg.s)
     .quad git_timeout
     .quad gitrepos_timeout      # and the other workspace folders' repositories (gitrepos.s)
     .quad scmext_timeout        # source control: quick-diff requests' time
@@ -2892,6 +2961,9 @@ timeout_fns:
     .quad ext_provider_timeout
     .quad save_timeout
     .quad uproc_timeout
+    .quad agent_conn_timeout    # agents: connections to their programs (agent_conn.s)
+    .quad agent_drv_timeout     # agents: sessions rhun drives (agent_drv.s)
+    .quad filelist_timeout      # phase 4 task 7: the mention menu's file list and query (filelist.s)
     .quad termproto_timeout     # tasks: terminal output waiting for its budget (termproto.s)
     .quad query_timeout
     .quad testing_timeout
@@ -2906,6 +2978,8 @@ timeout_fns:
     .quad ce_timeout              # custom editors: requests waiting for their program
     .quad newext_timeout          # New Extension: quick input events to take (newext.s)
     .quad submitext_timeout       # and Submit to Index's (submitext.s)
+    .quad ide_timeout             # Claude chat phase 5: the bridge for terminal claude (ide_server.s)
+    .quad review_timeout          # phase 4 tasks 11, 12: offers' outcomes for their owners (review.s)
     .quad 0
 .text
 
@@ -2931,8 +3005,13 @@ FN app_tick
     mov qword ptr [rip + g_toast_until], 0
     mov dword ptr [rip + g_dirty], 1
 2:  call agents_tick
+    call agimg_tick             # agents: a picture to open, thumbnails to make (agentimg.s)
     call uproc_tick
+    call agent_conn_tick        # agents: connections to their programs (agent_conn.s)
+    call agent_drv_tick         # agents: sessions rhun drives: starts that waited (agent_drv.s)
+    call filelist_tick          # phase 4 task 7: the mention menu's file list and query (filelist.s)
     call term_tick
+    call ide_tick               # Claude chat phase 5: the bridge for terminal claude (ide_server.s)
     call problems_tick          # documents opened since get their problems' marks
     call termproto_tick         # extensions' terminal output
     call git_tick
@@ -2958,6 +3037,7 @@ FN app_tick
     call keys_tick              # a chord's pause (keys.s)
     call newext_tick            # New Extension's steps (newext.s)
     call submitext_tick         # Submit to Index's steps (submitext.s)
+    call review_tick            # phase 4 tasks 11, 12: offers' outcomes for their owners (review.s)
     EPILOGUE
 
 # ---------------- rendering ----------------
@@ -3072,7 +3152,7 @@ FN app_render
     mov ecx, [rsp + 24]
     call splitter_hit
     mov [rip + split_r_bits], eax
-32:
+32: call agtab_sync              # phase 4 task 13: the active conversation tab takes the view (agenttab.s)
     # sidebar
     cmp dword ptr [rip + g_show_side], 0
     je 4f
@@ -3218,6 +3298,7 @@ FN app_render
     call tip_commit             # after every button with a tooltip has been drawn
     call tip_draw
     call places_frame_end       # views hear focus and visibility changes once a frame
+    call drop_frame             # phase 4 task 5: a drop nobody took opens; an in-app drag follows (drop.s)
     mov edi, [rsp + 36]
     test edi, edi
     jz 2f
@@ -3509,13 +3590,31 @@ FN center_draw
     call extview_draw
 14: EPILOGUE
 13: cmp qword ptr [rax + TAB_kind], TAB_NOTEBOOK
-    jne 2f
+    jne 15f
     mov edi, [rip + g_editor_rect]
     mov esi, [rip + g_editor_rect + 4]
     mov edx, [rip + g_editor_rect + 8]
     mov ecx, [rip + g_editor_rect + 12]
     call nb_draw
     call find_draw
+    EPILOGUE
+15: cmp qword ptr [rax + TAB_kind], TAB_MDDOC    # plan review: a Markdown tab of rhun's own (mdtab.s)
+    jne 16f
+    mov rdi, [rip + g_tab_cur]
+    mov esi, [rip + g_editor_rect]
+    mov edx, [rip + g_editor_rect + 4]
+    mov ecx, [rip + g_editor_rect + 8]
+    mov r8d, [rip + g_editor_rect + 12]
+    call mdtab_draw
+    EPILOGUE
+16: cmp qword ptr [rax + TAB_kind], TAB_AGENT    # phase 4 task 13: a conversation tab (agenttab.s)
+    jne 2f
+    mov rdi, [rip + g_tab_cur]
+    mov esi, [rip + g_editor_rect]
+    mov edx, [rip + g_editor_rect + 4]
+    mov ecx, [rip + g_editor_rect + 8]
+    mov r8d, [rip + g_editor_rect + 12]
+    call agtab_draw
     EPILOGUE
 2:  mov rbx, [rip + g_doc]
     mov rdi, rbx
@@ -4394,6 +4493,7 @@ tab_new_last:
 # tab_width(i) -> eax: its name, and room for the button after it
 tab_width:
     PROLOGUE
+    mov r12, rdi
     call app_tab_label
     mov rbx, rax
     mov rdi, rax
@@ -4404,6 +4504,12 @@ tab_width:
     call text_width
     add eax, [rip + g_mt + 4*MI_40]
     add eax, [rip + g_mt + 4*MI_12]
+    mov r13d, eax
+    mov rdi, r12                # phase 4 task 13: a conversation tab's dot (agenttab.s)
+    call tab_at
+    mov rdi, rax
+    call agtab_dot_w
+    add eax, r13d
     EPILOGUE
 
 # tab_draw(i, x, y, w, h, lifted) -> eax 1 when the strip changed under it (the tab closed or was
@@ -4417,7 +4523,21 @@ tab_draw:
     mov [rsp + 8], ecx
     mov [rsp + 12], r8d
     mov [rsp + 32], r9d
-    mov dword ptr [rsp + 16], 0 # UB_* of the tab
+    cmp rbx, TABS_AT_MAX        # its middle, as drawn last (print-tabs-at)
+    jae 0f
+    test r9d, r9d
+    jnz 0f
+    mov eax, ecx
+    shr eax, 1
+    add eax, esi
+    lea r10, [rip + g_tabs_cx]
+    mov [r10 + rbx*4], eax
+    mov eax, r8d
+    shr eax, 1
+    add eax, edx
+    lea r10, [rip + g_tabs_cy]
+    mov [r10 + rbx*4], eax
+0:  mov dword ptr [rsp + 16], 0 # UB_* of the tab
     mov dword ptr [rsp + 28], 0 # and of its button
     mov rdi, rbx
     call tab_at
@@ -4449,6 +4569,9 @@ tab_draw:
     mov [rip + tab_drag_kind], rax
     mov rax, [r15 + TAB_doc]
     mov [rip + tab_drag_doc], rax
+    mov rax, [r15 + TAB_flags]
+    shr rax, TF_VIEW_SHIFT
+    mov [rip + tab_drag_slot], rax
     mov rdi, rbx
     call app_activate_tab
 1:  test dword ptr [rsp + 16], UB_RPRESS
@@ -4537,9 +4660,19 @@ tab_draw:
     cmp rbx, [rip + g_tab_cur]
     jne 88f
     COLOR r9d, T_FG
-88: lea rdi, [rip + g_face_ui]
+88: mov [rsp + 40], r9d
+    mov rdi, r15                # phase 4 task 13: a conversation tab's dot before its label (agenttab.s)
     mov esi, [rsp]
     add esi, [rip + g_mt + 4*MI_16]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 12]
+    call agtab_tab_dot
+    mov [rsp + 36], eax
+    mov r9d, [rsp + 40]
+    lea rdi, [rip + g_face_ui]
+    mov esi, [rsp]
+    add esi, [rip + g_mt + 4*MI_16]
+    add esi, [rsp + 36]
     mov edx, [rsp + 4]
     mov ecx, [rsp + 12]
     mov r8, r13
@@ -4705,6 +4838,10 @@ tab_drag_step:
     mov rcx, [rax + TAB_doc]
     cmp rcx, [rip + tab_drag_doc]
     jne .Lds_end
+    mov rcx, [rax + TAB_flags]
+    shr rcx, TF_VIEW_SHIFT
+    cmp rcx, [rip + tab_drag_slot]
+    jne .Lds_end
     cmp dword ptr [rip + tab_drag], 0
     jne 1f
     mov eax, [rip + g_mx]
@@ -4824,6 +4961,7 @@ tab_drag_step:
     # let go: the tab settles in its place, in full view
     cmp dword ptr [rip + tab_drag], 0
     je .Lds_none
+    call drag_tab_released      # phase 4 task 5: a file's tab let go over a conversation is a mention (drop.s)
     mov dword ptr [rip + tab_drag], 0
     mov dword ptr [rip + g_tabscroll_reveal], 1
     mov dword ptr [rip + g_dirty], 1
@@ -4840,16 +4978,23 @@ tab_menu_open:
     mov [rip + menu_tab_kind], rcx
     mov rcx, [rax + TAB_doc]
     mov [rip + menu_tab_doc], rcx
+    mov rcx, [rax + TAB_flags]
+    shr rcx, TF_VIEW_SHIFT
+    mov [rip + menu_tab_slot], rcx
     lea rdi, [rip + tab_menu]
     test dword ptr [rax + TAB_flags], TF_PIN
     jz 1f
     lea rdi, [rip + tab_menu_pinned]
-1:  mov rsi, rbx
+1:  mov rsi, rbx                # phase 4 task 12: a Review tab's menu gains its five commands (review.s)
+    call review_tab_menu
+    mov rdi, rax
+    mov rsi, rbx
     call menu_open_tab          # with the extensions' items (menu.s)
     mov dword ptr [rip + g_menu_keys], 1
     EPILOGUE
 
-# tab_menu_tab() -> the index of the tab the menu is for, or -1 once it closed
+# tab_menu_tab() -> the index of the tab the menu is for, or -1 once it closed: its kind, its document and,
+#   for tabs without one that come in numbers (an extension's views, rhun's Markdown tabs), its slot
 tab_menu_tab:
     xor eax, eax
     mov rcx, [rip + g_tabs + VEC_ptr]
@@ -4860,6 +5005,10 @@ tab_menu_tab:
     jne 2f
     mov rdx, [rcx + TAB_doc]
     cmp rdx, [rip + menu_tab_doc]
+    jne 2f
+    mov rdx, [rcx + TAB_flags]
+    shr rdx, TF_VIEW_SHIFT
+    cmp rdx, [rip + menu_tab_slot]
     je 4f
 2:  add rcx, TAB_SIZE
     inc rax
@@ -4923,6 +5072,22 @@ FN statusbar_draw
     mov esi, [rsp + 4]
     mov edx, [rsp + 12]
     call notify_status_draw     # progress (notify.s), left of the updater's item
+    mov edi, eax
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 12]
+    mov ecx, [rsp + 8]          # (it gives way in a narrow bar: left of 60 % of it, not drawn)
+    imul ecx, ecx, 60
+    push rdx
+    push rdx
+    mov eax, ecx
+    xor edx, edx
+    mov r8d, 100
+    div r8d
+    mov ecx, eax
+    pop rdx
+    pop rdx
+    add ecx, [rsp]
+    call agents_status_item     # phase 4 task 13: the agents' item (agenttab.s)
     mov edi, eax
     mov esi, [rsp + 4]
     mov edx, [rsp + 12]
@@ -6562,10 +6727,15 @@ FN cmd_zoom_reset
     xor esi, esi
     jmp zoom_focused
 
-# zoom_focused(dir): zoom only the focused terminal, otherwise the editor or image.
+# zoom_focused(dir): zoom only the focused terminal or agents panel (its list, its conversation or its
+# prompt box: agentfont.s), otherwise the editor or image.
 zoom_focused:
     cmp dword ptr [rip + g_focus], FOCUS_TERMINAL
     je .Lzoom_term
+    cmp dword ptr [rip + g_focus], FOCUS_AGENTS
+    je .Lzoom_agents
+    cmp dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
+    je .Lzoom_agents
     call image_zoom
     jnz .Lzoom_done
     lea rdi, [rip + cfg_font_size]
@@ -6589,6 +6759,9 @@ zoom_focused:
     mov dword ptr [rip + g_dirty], 1
 .Lzoom_done:
     ret
+.Lzoom_agents:
+    mov edi, esi
+    jmp agents_font_zoom
 
 # image_zoom(dir) -> ZF clear when an image tab took the zoom command (1 in, -1 out, 0 fit)
 image_zoom:
@@ -6908,6 +7081,10 @@ FN app_open_path
     PROLOGUE 16
     mov rbx, rdi
     call links_open_path        # resources group: a rhun://ext/ link goes to its extension (links.s)
+    test eax, eax
+    jnz 9f
+    mov rdi, rbx                # phase 4 task 13: rhun://NAME/open, an agent's conversation (agenttab.s)
+    call agtab_link
     test eax, eax
     jnz 9f
     mov rdi, rbx

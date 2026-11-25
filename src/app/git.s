@@ -34,6 +34,7 @@ ENDSTRUCT GE_SIZE
 
 .bss
 .p2align 3
+files_gen: .quad 0              # (phase 4 task 7) git_files_gen
 .globl g_git_on, g_git_ver, g_git_changes, g_git_root, g_git_rootlen, g_git_paused, g_project_link
 .globl g_git_paused_text
 .globl g_git_head, g_git_ahead, g_git_behind, g_git_upstream, g_worktree
@@ -56,6 +57,7 @@ touch_kind: .long 0             # 1 status, 2 HEAD moved
 sudirs: .long 0                 # untracked folders in the table
 run_flags: .long 0              # run_git: run_piped_input's errors flag
 run_any: .long 0                # run_git: git_start_in: no repository of this module needed
+run_nolit: .long 0              # run_git: no --literal-pathspecs (git_start_in_plain: check-ignore refuses it)
 .p2align 3
 run_cap: .quad 0                # run_git: JB_cap
 run_cwd: .quad 0                # run_git: where git runs (git_start_in), 0: the work tree
@@ -719,6 +721,8 @@ FN git_run_all
 # git_start_in(root, args, cb, ctx, cap) -> rax the job, or 0: git_start in another folder (another
 #   workspace folder's repository, gitrepos.s), whatever repository this module follows; ctx owned
 FN git_start_in
+    mov dword ptr [rip + run_nolit], 0
+git_start_in_body:
     PROLOGUE 16
     mov [rsp], rdi
     mov rbx, rsi
@@ -763,6 +767,12 @@ FN git_start_in
     xor eax, eax
     EPILOGUE
 
+# FN git_start_in_plain(root, args, cb, ctx, cap) -> as git_start_in, without --literal-pathspecs (phase 4
+#   task 8: `git check-ignore` refuses that magic and exits 128; it reads its paths as paths anyway)
+FN git_start_in_plain
+    mov dword ptr [rip + run_nolit], 1
+    jmp git_start_in_body
+
 # git_start(args, cb, ctx, input ptr, input len, cap) -> rax the job (for git_job_kill), or 0: git_run with
 #   input of any length (copied; written as git reads it), and at most cap output bytes (0: no limit): a
 #   program that writes more is ended, and cb gets status -1 and no output
@@ -787,6 +797,10 @@ run_git:
     lea rax, [rip + .Lno_locks]
     mov [rsp + 8], rax
     lea rax, [rip + .Lliteral]
+    cmp dword ptr [rip + run_nolit], 0
+    je 19f
+    lea rax, [rip + .Lno_locks]  # (git_start_in_plain: the option said twice in its place)
+19: mov dword ptr [rip + run_nolit], 0
     mov [rsp + 16], rax
     lea rax, [rip + .Ldash_c]
     mov [rsp + 24], rax
@@ -1261,6 +1275,7 @@ on_status:
     mov rsi, r12
     call status_fill
     add [rip + g_git_changes], eax
+    call files_hash             # (phase 4 task 7) git_files_gen
 .Los_again:
     inc dword ptr [rip + g_git_ver]
     cmp dword ptr [rip + st_again], 0
@@ -1269,6 +1284,75 @@ on_status:
     call git_touch
 9:  call gitdata_status_done      # extensions waiting for it, and "0 git changed"
     mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# ---- phase 4 task 7: the set of new, added, deleted and renamed paths (rhun's file list, filelist.s) ----
+
+# FN git_files_gen() -> rax a hash of the paths git's last status called untracked, added, deleted or renamed: it
+#   moves when a file appears or goes for git, so the file list made from git's listing is made again
+FN git_files_gen
+    mov rax, [rip + files_gen]
+    ret
+
+# files_hash(): files_gen from the status table's records ("XY path\0", a rename's old name after it)
+files_hash:
+    PROLOGUE
+    mov rbx, [rip + stbuf + SB_ptr]
+    mov r12, [rip + stbuf + SB_len]
+    add r12, rbx
+    mov r13, 0xcbf29ce484222325
+    mov r14, 0x100000001b3
+    test rbx, rbx
+    jz 8f
+1:  lea rax, [rbx + 3]
+    cmp rax, r12
+    ja 8f
+    movzx r15d, word ptr [rbx]  # X and Y
+    lea rdi, [rbx + 3]
+    call strlen
+    lea rcx, [rbx + 3]
+    lea rbx, [rcx + rax + 1]
+    mov edx, r15d
+    and edx, 0xff
+    cmp edx, 'R'
+    je 2f
+    cmp edx, 'C'
+    jne 3f
+2:  push rcx                    # the old name follows
+    push rax
+    mov rdi, rbx
+    call strlen
+    lea rbx, [rbx + rax + 1]
+    pop rax
+    pop rcx
+3:  mov edx, r15d               # '?', 'A', 'D' or 'R' in X or Y
+    mov r8d, 2
+4:  mov r9d, edx
+    and r9d, 0xff
+    cmp r9d, '?'
+    je 5f
+    cmp r9d, 'A'
+    je 5f
+    cmp r9d, 'D'
+    je 5f
+    cmp r9d, 'R'
+    je 5f
+    shr edx, 8
+    dec r8d
+    jnz 4b
+    jmp 1b
+5:  xor edx, edx                # the path's bytes, then its status
+6:  cmp rdx, rax
+    jae 7f
+    movzx r9d, byte ptr [rcx + rdx]
+    xor r13, r9
+    imul r13, r14
+    inc rdx
+    jmp 6b
+7:  xor r13, r15
+    imul r13, r14
+    jmp 1b
+8:  mov [rip + files_gen], r13
     EPILOGUE
 
 # status_fill(ptr, len) -> eax changes: the "XY path\0" records into the (cleared) table

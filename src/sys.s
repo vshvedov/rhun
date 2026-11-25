@@ -11,6 +11,7 @@ ts_buf: .zero 16
 stat_buf: .zero 144
 tmp_path: .zero 4096
 save_serial: .quad 0
+fw_private: .long 0               # file_write_private: owner only
 
 .text
 
@@ -453,6 +454,16 @@ FN file_read_limited
     xor eax, eax
     EPILOGUE
 
+# file_write_private(path, ptr, len) -> 0 or -errno: file_write_all, the file readable and writable by
+#   its owner alone (0600 when new; an existing one loses its group's and others' bits)
+FN file_write_private
+    mov dword ptr [rip + fw_private], 1
+    push rbx
+    call file_write_all
+    mov dword ptr [rip + fw_private], 0
+    pop rbx
+    ret
+
 # file_write_all(path, ptr, len) -> 0 or -errno
 # Follow final symlinks, then replace the target through an exclusively created sibling.
 FN file_write_all
@@ -527,7 +538,10 @@ FN file_write_all
     mov dword ptr [rsp + 8192], 1
     mov r15d, [rip + stat_buf + 24]
     and r15d, 07777
-1:  mov ebx, 128                # bounded retries if stale temporary files exist
+1:  cmp dword ptr [rip + fw_private], 0
+    je 2f
+    and r15d, 0700              # file_write_private: the owner's bits only
+2:  mov ebx, 128                # bounded retries if stale temporary files exist
 .Lfw_temp:
     mov rdi, r12
     call strlen

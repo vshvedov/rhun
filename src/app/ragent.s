@@ -2612,7 +2612,7 @@ ag_cwd:
     call ag_error
     EPILOGUE
 
-# info 0 -> "home=PATH\nshell=PATH\nuser=NAME\nhost=NAME\n"
+# info 0 -> "home=PATH\nshell=PATH\nuser=NAME\nclaude_config_dir=PATH\nhost=NAME\n" (each that is set)
 ag_info:
     PROLOGUE
     mov r12, rdi
@@ -3851,7 +3851,8 @@ ag_verbs:
     .quad .Lv_freeport, ag_freeport     # [debugger group]
     .quad 0, 0
 .Linfo_keys:
-    .quad .Lk_home_env, .Lk_home, .Lk_shell_env, .Lk_shell, .Lk_user_env, .Lk_user, 0, 0
+    .quad .Lk_home_env, .Lk_home, .Lk_shell_env, .Lk_shell, .Lk_user_env, .Lk_user
+    .quad .Lk_cdir_env, .Lk_cdir, 0, 0   # the chat in remote windows: where Claude Code keeps its files
 .Lv_spawn: .asciz "spawn"
 .Lv_kill: .asciz "kill"
 .Lv_resize: .asciz "resize"
@@ -3887,6 +3888,8 @@ ag_verbs:
 .Lk_shell: .asciz "shell="
 .Lk_user: .asciz "user="
 .Lk_host: .asciz "host="
+.Lk_cdir_env: .asciz "CLAUDE_CONFIG_DIR"
+.Lk_cdir: .asciz "claude_config_dir="
 .Lhello: .asciz "hello rhun-remote "
 .Lhex: .ascii "0123456789abcdef"
 .Lself: .asciz "/proc/self/exe"

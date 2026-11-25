@@ -46,7 +46,18 @@ FN closed_note
     mov rcx, [rax + TAB_kind]
     cmp rcx, TAB_VIEW
     je 9f                       # an extension's view: it is gone with its extension's picture
+    cmp rcx, TAB_MDDOC
+    je 9f                       # plan review: a Markdown tab of rhun's own is gone with its owner (mdtab.s)
     mov [rbx + CT_kind], rcx
+    cmp rcx, TAB_AGENT          # phase 4 task 13: a conversation tab, by its kind and file (agenttab.s)
+    jne 10f
+    mov rdi, rax
+    call agtab_line
+    test rax, rax
+    jz 9f                       # (a draft: nothing to bring back)
+    mov [rbx + CT_path], rax
+    jmp .Lcn_push
+10:
     mov r13, [rax + TAB_doc]
     test r13, r13
     jz .Lcn_push                # Settings, the history
@@ -174,7 +185,14 @@ reopen_probe:
     je .Lrp_git
     cmp rax, CK_DIFF
     je .Lrp_diff
-    # a file, as long as it is still there
+    cmp rax, TAB_AGENT          # phase 4 task 13: a conversation tab (agenttab.s)
+    jne 10f
+    mov rdi, [rbx + CT_path]
+    call agtab_reopen_line
+    test rax, rax
+    js 8f
+    jmp .Lrp_place
+10: # a file, as long as it is still there
     mov rdi, [rbx + CT_path]
     call vfs_type
     test eax, eax
@@ -256,7 +274,12 @@ probe_open:
     je 1f
     cmp r13, CK_DIFF
     je 1f
+    cmp r13, TAB_AGENT          # phase 4 task 13 (agenttab.s)
+    jne 11f
     mov rdi, [r12 + CT_path]
+    call agtab_find_line
+    EPILOGUE
+11: mov rdi, [r12 + CT_path]
     call app_find_tab
     EPILOGUE
 1:  xor ebx, ebx

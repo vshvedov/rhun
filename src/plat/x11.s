@@ -9,6 +9,13 @@
 .equ AUTH_FAMILY_WILD, 65535
 .equ EVMASK, 0x0001 | 0x0002 | 0x0004 | 0x0008 | 0x0010 | 0x0020 | 0x0040 | 0x8000 | 0x20000 | 0x200000 | 0x400000
 # KeyPress KeyRelease ButtonPress ButtonRelease EnterWindow LeaveWindow PointerMotion Exposure StructureNotify FocusChange PropertyChange
+# XDND's states (phase 4 task 5: x_drop_*)
+.equ XD_IDLE, 0
+.equ XD_OVER, 1                 # a drag is over the window (its source known)
+.equ XD_CONVERT, 2              # dropped: the selection's conversion asked for
+.equ XD_GET, 3                  # its property asked for
+.equ XD_INCR, 4                 #   arriving in pieces
+.equ XD_ATOMS, 11
 
 .bss
 .p2align 4
@@ -88,6 +95,15 @@ a_sel_prop: .long 0
 .globl x_paste_incr_atom
 x_paste_incr_atom:
 a_incr: .long 0
+# phase 4 tasks 4 and 5: the clipboard's files and images, XDND (x11 drops: x_drop_*)
+.globl x_uri_atom, x_png_atom, x_paste_kinds, x_paste_imgmax
+x_uri_atom:
+a_uri_list: .long 0             # text/uri-list
+x_png_atom:
+a_png: .long 0                  # image/png
+x_paste_kinds: .long 0          # the request's CLIPK_* and its image's most bytes (x_clip_get)
+x_paste_imgmax: .long 0
+x_paste_over: .long 0           # the attempt stopped at its limit
 a_net_wm_state: .long 0
 a_max_h: .long 0
 a_max_v: .long 0
@@ -372,6 +388,8 @@ x_message:
     mov rdi, rbx
     call x_paste_error
     mov rdi, rbx
+    call x_drop_error
+    mov rdi, rbx
     mov esi, 32
     call xim_reply
 .Lxm_error_waited:
@@ -400,6 +418,11 @@ x_message:
     mov rdi, rbx
     mov esi, r12d
     call x_paste_reply
+    test eax, eax
+    jnz .Lxm_ret
+    mov rdi, rbx                # a drop's transfer, its type list, its coordinates (phase 4 task 5)
+    mov esi, r12d
+    call x_drop_reply
     test eax, eax
     jnz .Lxm_ret
     mov rdi, rbx
@@ -558,11 +581,19 @@ x_message:
     jmp .Lxm_ret
 .Lxm_selnotify:
     mov rdi, rbx
+    call x_drop_notify
+    test eax, eax
+    jnz .Lxm_ret
+    mov rdi, rbx
     call x_paste_notify
     jmp .Lxm_ret
 .Lxm_client:
     mov rdi, rbx
     call xim_client
+    test eax, eax
+    jnz .Lxm_ret
+    mov rdi, rbx                # XDND (phase 4 task 5)
+    call x_drop_client
     test eax, eax
     jnz .Lxm_ret
     mov eax, [rbx + 8]
@@ -589,6 +620,8 @@ x_message:
     call x_send_property
     mov rdi, rbx
     call x_paste_property
+    mov rdi, rbx
+    call x_drop_property
     mov eax, [rbx + 4]
     cmp eax, [rip + win]
     jne 1f
@@ -627,6 +660,14 @@ x_message:
     EPILOGUE
 
 x_motion_from:
+    movsx eax, word ptr [rbx + 20]  # the window's origin on the root, as the pointer shows it (XDND)
+    movsx ecx, word ptr [rbx + 24]
+    sub eax, ecx
+    mov [rip + xd_px], eax
+    movsx eax, word ptr [rbx + 22]
+    movsx ecx, word ptr [rbx + 26]
+    sub eax, ecx
+    mov [rip + xd_py], eax
     movsx edi, word ptr [rbx + 24]
     movsx esi, word ptr [rbx + 26]
     push rbx
@@ -1587,6 +1628,13 @@ FN x_open_window
     lea rdi, [rip + .La_gtk_variant]
     call x_intern
     mov [rip + a_gtk_variant], eax
+    lea rdi, [rip + .La_uri_list]   # phase 4 tasks 4 and 5: files and images, XDND
+    call x_intern
+    mov [rip + a_uri_list], eax
+    lea rdi, [rip + .La_png]
+    call x_intern
+    mov [rip + a_png], eax
+    call x_drop_atoms
     call x_cursor_init
     # window
     call x_new_id
@@ -1690,6 +1738,7 @@ FN x_open_window
     call x_change_prop
     mov rdi, r15
     call x_title
+    call x_drop_aware           # XdndAware: files may be dropped on the window (phase 4 task 5)
     test r14d, r14d
     jz 1f
     # StaticGravity keeps the saved client origin stable across native decorations.
@@ -1805,7 +1854,15 @@ x_timeout:
     push rbx
     call x_paste_timeout
     mov ebx, eax
-    call x_send_timeout
+    call x_drop_timeout
+    cmp eax, -1
+    je 5f
+    cmp ebx, -1
+    je 6f
+    cmp eax, ebx
+    jae 5f
+6:  mov ebx, eax
+5:  call x_send_timeout
     cmp ebx, -1
     je 2f
     cmp eax, -1
@@ -1827,6 +1884,7 @@ x_tick:
     jne .Lxt_quit
     push rbx
     call x_paste_tick
+    call x_drop_tick
     call x_send_tick
 1:  cmp dword ptr [rip + xs_stale], 0
     je 2f
@@ -2473,8 +2531,11 @@ x_clip_claim:
     mov dword ptr [rip + own_clip], 1
     EPILOGUE
 
-# Each receive has a private requestor window and a bounded, owned payload.
+# Each receive has a private requestor window and a bounded, owned payload. (kinds CLIPK_*, an image's most
+# bytes): more than text asks the owner's TARGETS first (phase 4 task 4)
 x_clip_get:
+    mov [rip + x_paste_kinds], edi
+    mov [rip + x_paste_imgmax], esi
     jmp x_paste_begin
 
 FN x_paste_begin
@@ -2526,7 +2587,14 @@ FN x_paste_begin
     jmp .Lxp_begin_done
 .Lxp_begin_foreign:
     mov rdi, [rsp + 48]
-    mov esi, [rip + a_clip_native]
+    test dword ptr [rip + x_paste_kinds], CLIPK_FILES | CLIPK_IMAGE
+    jz 1f
+    mov esi, [rip + a_targets]  # files or an image wanted: which targets the owner has, first
+    test esi, esi
+    jz 1f
+    call x_paste_start
+    jmp .Lxp_begin_done
+1:  mov esi, [rip + a_clip_native]
     test esi, esi
     cmovz esi, [rip + a_utf8]
     call x_paste_start
@@ -2545,6 +2613,7 @@ x_paste_start:
     PROLOGUE 64
     lea rbx, [rip + x_paste_record]
     inc qword ptr [rip + x_paste_generation]
+    mov dword ptr [rip + x_paste_over], 0
     mov [rbx + XR_token], rdi
     mov [rbx + XR_type], esi
     call time_ms
@@ -2590,9 +2659,32 @@ x_paste_start:
     mov [rbx + XR_convert_seq], eax
     EPILOGUE
 
-# An invalid/refused native attempt may try plain once. Expiry/cancel never retries.
+# An invalid/refused native attempt may try plain once. Expiry/cancel never retries. TARGETS, a file list or
+# an image refused or invalid tries the text (phase 4 task 4); an image past its limit says so instead.
 x_paste_fallback:
-    mov eax, [rip + a_clip_native]
+    mov eax, [rip + x_paste_record + XR_type]
+    test eax, eax
+    jz 3f
+    cmp eax, [rip + a_targets]
+    je x_paste_text_instead
+    cmp eax, [rip + a_uri_list]
+    je x_paste_text_instead
+    cmp eax, [rip + a_png]
+    jne 3f
+    cmp dword ptr [rip + x_paste_over], 0
+    je x_paste_text_instead
+    PROLOGUE
+    mov r12, [rip + x_paste_record + XR_token]
+    mov rax, [rip + x_paste_record + XR_buffer + SB_len]
+    mov [rip + g_clip_read], rax
+    call x_paste_dispose
+    mov rdi, r12
+    mov esi, CLIPK_IMAGE
+    xor edx, edx
+    mov rcx, CLIP_TOO_BIG
+    call app_clip_complete_kind
+    EPILOGUE
+3:  mov eax, [rip + a_clip_native]
     test eax, eax
     jz x_paste_cancel
     cmp eax, [rip + x_paste_record + XR_type]
@@ -2604,6 +2696,20 @@ x_paste_fallback:
     jne 1f
     mov rdi, r12
     mov esi, [rip + a_utf8]
+    call x_paste_start
+1:  EPILOGUE
+
+# x_paste_text_instead(): this attempt goes; the owner's text is asked for in its place (same token)
+x_paste_text_instead:
+    PROLOGUE
+    mov r12, [rip + x_paste_record + XR_token]
+    call x_paste_dispose
+    cmp r12, [rip + app_clip_active_token]
+    jne 1f
+    mov rdi, r12
+    mov esi, [rip + a_clip_native]
+    test esi, esi
+    cmovz esi, [rip + a_utf8]
     call x_paste_start
 1:  EPILOGUE
 
@@ -2658,7 +2764,21 @@ x_paste_limit:
     mov ecx, [rip + x_paste_record + XR_type]
     test ecx, ecx
     jz 1f
-    cmp ecx, [rip + a_clip_native]
+    cmp ecx, [rip + a_png]      # an image: what the request reads, never more
+    jne 2f
+    mov edx, [rip + x_paste_imgmax]
+    test edx, edx
+    cmovnz eax, edx
+    ret
+2:  cmp ecx, [rip + a_uri_list]
+    jne 3f
+    mov eax, CLIP_FILES_MAX
+    ret
+3:  cmp ecx, [rip + a_targets]
+    jne 4f
+    mov eax, XR_PAGE
+    ret
+4:  cmp ecx, [rip + a_clip_native]
     jne 1f
     mov eax, CLW_MAX
 1:  ret
@@ -2754,12 +2874,22 @@ FN x_paste_reply
     mov eax, [r12 + 8]
     cmp eax, [rip + a_incr]
     je .Lxp_reply_marker
-    cmp eax, [rbx + XR_type]
+    mov ecx, [rbx + XR_type]
+    cmp ecx, [rip + a_targets]  # TARGETS: a list of atoms, format 32 (phase 4 task 4)
+    jne 5f
+    cmp eax, 4                  # ATOM
+    jne .Lxp_reply_bad
+    cmp byte ptr [r12 + 1], 32
+    jne .Lxp_reply_bad
+    mov r14d, [r12 + 16]
+    shl r14, 2
+    jmp 6f
+5:  cmp eax, ecx
     jne .Lxp_reply_bad
     cmp byte ptr [r12 + 1], 8
     jne .Lxp_reply_bad
     mov r14d, [r12 + 16]
-    cmp r14, XR_PAGE
+6:  cmp r14, XR_PAGE
     ja .Lxp_reply_bad
     lea rax, [r14 + 3]
     and rax, -4
@@ -2772,7 +2902,7 @@ FN x_paste_reply
     lea rax, [r14 + r15]
     sub rdx, [rbx + XR_buffer + SB_len]
     cmp rax, rdx
-    ja .Lxp_reply_bad
+    ja .Lxp_reply_over
     cmp qword ptr [rbx + XR_remaining], -1
     je 1f
     cmp rax, [rbx + XR_remaining]
@@ -2823,7 +2953,7 @@ FN x_paste_reply
     mov r14d, [r12 + 32]
     call x_paste_limit
     cmp r14, rax
-    ja .Lxp_reply_bad
+    ja .Lxp_reply_over
     mov [rbx + XR_lower], r14
     mov dword ptr [rbx + XR_incr], 1
     mov dword ptr [rbx + XR_state], XR_CHUNK
@@ -2835,6 +2965,18 @@ FN x_paste_reply
     cmp rsi, [rbx + XR_lower]
     jb .Lxp_reply_bad
     mov eax, [rbx + XR_type]
+    test eax, eax
+    jz 7f
+    cmp eax, [rip + a_targets]  # phase 4 task 4: the owner's targets, a file list, an image
+    je 8f
+    cmp eax, [rip + a_uri_list]
+    je 8f
+    cmp eax, [rip + a_png]
+    jne 7f
+8:  mov rdi, [rsp]
+    call x_paste_kind_done
+    jmp .Lxp_reply_claimed
+7:  mov eax, [rbx + XR_type]
     test eax, eax
     jz .Lxp_reply_plain_validate
     cmp eax, [rip + a_clip_native]
@@ -2876,6 +3018,8 @@ FN x_paste_reply
     mov rdi, r14
     call mem_free
     jmp .Lxp_reply_claimed
+.Lxp_reply_over:
+    mov dword ptr [rip + x_paste_over], 1
 .Lxp_reply_bad:
     call x_paste_fallback
 .Lxp_reply_claimed:
@@ -2884,6 +3028,93 @@ FN x_paste_reply
 .Lxp_reply_other:
     xor eax, eax
     EPILOGUE
+
+# x_paste_kind_done(generation): a whole TARGETS, text/uri-list or image/png answer (phase 4 task 4). TARGETS
+# chooses what to ask next: files when wanted and offered, else an image, else the text. A file list's file://
+# URIs become paths (uri_list_paths); none: the text instead. An image's bytes go as they are (no UTF-8 check).
+x_paste_kind_done:
+    PROLOGUE 16
+    mov [rsp], rdi
+    call x_paste_tick
+    mov rax, [rsp]
+    cmp rax, [rip + x_paste_generation]
+    jne 9f
+    lea rbx, [rip + x_paste_record]
+    mov r12, [rbx + XR_token]
+    mov r13d, [rbx + XR_type]
+    cmp r13d, [rip + a_targets]
+    jne 4f
+    mov rdi, [rbx + XR_buffer + SB_ptr] # the atoms: the best target wanted
+    mov rsi, [rbx + XR_buffer + SB_len]
+    shr rsi, 2
+    xor r14d, r14d              # bit 1 uri-list offered, bit 2 png offered
+    xor ecx, ecx
+1:  cmp rcx, rsi
+    jae 2f
+    mov eax, [rdi + rcx*4]
+    cmp eax, [rip + a_uri_list]
+    jne 11f
+    or r14d, CLIPK_FILES
+11: cmp eax, [rip + a_png]
+    jne 12f
+    or r14d, CLIPK_IMAGE
+12: inc rcx
+    jmp 1b
+2:  and r14d, [rip + x_paste_kinds]
+    call x_paste_dispose
+    cmp r12, [rip + app_clip_active_token]
+    jne 9f
+    mov esi, [rip + a_uri_list]
+    test r14d, CLIPK_FILES
+    jnz 3f
+    mov esi, [rip + a_png]
+    test r14d, CLIPK_IMAGE
+    jnz 3f
+    mov esi, [rip + a_clip_native]
+    test esi, esi
+    cmovz esi, [rip + a_utf8]
+3:  mov rdi, r12
+    call x_paste_start
+    jmp 9f
+4:  mov r14, [rbx + XR_buffer + SB_ptr] # the bytes are this function's now
+    mov r15, [rbx + XR_buffer + SB_len]
+    mov qword ptr [rbx + XR_buffer + SB_ptr], 0
+    call x_paste_dispose
+    cmp r13d, [rip + a_png]
+    jne 5f
+    mov rdi, r12
+    mov esi, CLIPK_IMAGE
+    mov rdx, r14
+    mov rcx, r15
+    test r14, r14
+    jnz 41f
+    xor ecx, ecx
+41: call app_clip_complete_kind
+    jmp 8f
+5:  mov rdi, r14                # a file list
+    mov rsi, r15
+    call uri_list_paths
+    test rax, rax
+    jz 6f
+    mov r13, rax
+    mov rdi, r12
+    mov esi, CLIPK_FILES
+    mov rcx, rdx
+    mov rdx, rax
+    call app_clip_complete_kind
+    mov rdi, r13
+    call mem_free
+    jmp 8f
+6:  cmp r12, [rip + app_clip_active_token]  # no file in it: the text
+    jne 8f
+    mov rdi, r12
+    mov esi, [rip + a_clip_native]
+    test esi, esi
+    cmovz esi, [rip + a_utf8]
+    call x_paste_start
+8:  mov rdi, r14
+    call mem_free
+9:  EPILOGUE
 
 FN x_paste_property
     PROLOGUE
@@ -2974,6 +3205,610 @@ FN x_paste_timeout
     ret
 2:  xor eax, eax
     ret
+
+# ---- XDND version 5, the target side (phase 4 task 5) ----
+# A drag from another program: XdndEnter (the source and up to three types, or its XdndTypeList), XdndPosition
+# (the pointer on the root: answered by XdndStatus, which accepts a copy when text/uri-list is offered),
+# XdndLeave, XdndDrop (the XdndSelection converted to text/uri-list on the window's own property, a transfer of
+# its own: never the paste's record), then XdndFinished. The root's coordinates become the window's through a
+# TranslateCoordinates asked at the enter (the pointer's last event until it answers). A transfer that stalls
+# ends after XR_MILLISECONDS; one of more than CLIP_FILES_MAX bytes keeps its whole lines up to there.
+.bss
+.p2align 3
+.globl xd_state, xd_source, xd_files, xd_buf, xd_atoms
+xd_buf: .zero SB_SIZE           # the uri-list received
+xd_deadline: .quad 0
+xd_state: .long 0
+xd_source: .long 0              # the drag's source window
+xd_files: .long 0               # it offers text/uri-list
+xd_version: .long 0
+xd_ox: .long 0                  # the window's origin on the root (TranslateCoordinates)
+xd_oy: .long 0
+xd_known: .long 0               #   known
+xd_x: .long 0                   # the drag's point in the window
+xd_y: .long 0
+xd_time: .long 0
+xd_off: .long 0                 # where the next GetProperty reads, in 4-byte units (a value read in pages)
+xd_full: .long 0                # the list reached CLIP_FILES_MAX: later pieces are not kept
+.globl xd_px, xd_py
+xd_px: .long 0                  # the origin as the pointer's events show it
+xd_py: .long 0
+xd_atoms:                       # the atoms (x_drop_atoms), in .Lxd_names' order
+a_xd_aware: .long 0
+a_xd_enter: .long 0
+a_xd_position: .long 0
+a_xd_status: .long 0
+a_xd_leave: .long 0
+a_xd_drop: .long 0
+a_xd_finished: .long 0
+a_xd_selection: .long 0
+a_xd_copy: .long 0
+a_xd_typelist: .long 0
+a_xd_prop: .long 0
+.data
+.p2align 2
+xd_get_seq: .long -1            # the GetProperty answered by x_drop_reply (-1 none)
+xd_list_seq: .long -1           #   the type list's
+xd_xlate_seq: .long -1          #   TranslateCoordinates'
+.text
+
+# x_drop_atoms(): XDND's atoms (at the window's opening)
+x_drop_atoms:
+    PROLOGUE
+    xor ebx, ebx
+1:  lea rax, [rip + .Lxd_names]
+    mov rdi, [rax + rbx*8]
+    call x_intern
+    lea rcx, [rip + xd_atoms]
+    mov [rcx + rbx*4], eax
+    inc ebx
+    cmp ebx, XD_ATOMS
+    jb 1b
+    EPILOGUE
+
+# x_drop_aware(): XdndAware = 5 on the window
+x_drop_aware:
+    PROLOGUE 16
+    mov dword ptr [rsp], 5
+    mov edi, [rip + win]
+    mov esi, [rip + a_xd_aware]
+    mov edx, 4                  # ATOM
+    mov ecx, 32
+    mov r8, rsp
+    mov r9d, 1
+    call x_change_prop
+    EPILOGUE
+
+# xd_send(type atom, l1, l4): a ClientMessage of that type to the source: l0 the window, l1, l2 = l3 = 0, l4
+xd_send:
+    PROLOGUE 48
+    mov ebx, edi
+    mov r12d, esi
+    mov r13d, edx
+    mov rdi, rsp
+    xor esi, esi
+    mov edx, 44
+    call memset
+    mov byte ptr [rsp], 25      # SendEvent
+    mov word ptr [rsp + 2], 11
+    mov eax, [rip + xd_source]
+    mov [rsp + 4], eax
+    mov byte ptr [rsp + 12], 33 # ClientMessage, format 32
+    mov byte ptr [rsp + 13], 32
+    mov [rsp + 16], eax
+    mov [rsp + 20], ebx
+    mov eax, [rip + win]
+    mov [rsp + 24], eax
+    mov [rsp + 28], r12d
+    mov [rsp + 40], r13d
+    mov rdi, rsp
+    mov esi, 44
+    call x_req
+    EPILOGUE
+
+# xd_reset(): the drag is over; its buffer goes
+xd_reset:
+    sub rsp, 8
+    mov dword ptr [rip + xd_state], XD_IDLE
+    mov dword ptr [rip + xd_source], 0
+    mov dword ptr [rip + xd_files], 0
+    mov dword ptr [rip + xd_get_seq], -1
+    mov dword ptr [rip + xd_list_seq], -1
+    mov dword ptr [rip + xd_xlate_seq], -1
+    mov dword ptr [rip + xd_off], 0
+    mov dword ptr [rip + xd_full], 0
+    lea rdi, [rip + xd_buf]
+    call sb_free
+    add rsp, 8
+    ret
+
+# xd_finish(accepted): XdndFinished to the source, the drag forgotten
+xd_finish:
+    PROLOGUE
+    mov ebx, edi
+    cmp dword ptr [rip + xd_source], 0
+    je 1f
+    xor edx, edx
+    test ebx, ebx
+    jz 2f
+    mov edx, [rip + a_xd_copy]
+2:  mov edi, [rip + a_xd_finished]
+    mov esi, ebx
+    call xd_send
+1:  call xd_reset
+    EPILOGUE
+
+# xd_point(root x, root y): the window's point into xd_x, xd_y
+xd_point:
+    mov eax, [rip + xd_ox]
+    mov ecx, [rip + xd_oy]
+    cmp dword ptr [rip + xd_known], 0
+    jne 1f
+    mov eax, [rip + xd_px]
+    neg eax
+    mov ecx, [rip + xd_py]
+    neg ecx
+1:  add edi, eax
+    add esi, ecx
+    mov [rip + xd_x], edi
+    mov [rip + xd_y], esi
+    ret
+
+# FN x_drop_client(event) -> eax 1 when it was XDND's
+FN x_drop_client
+    PROLOGUE 64
+    mov rbx, rdi
+    mov eax, [rbx + 8]
+    test eax, eax
+    jz .Lxdc_no
+    cmp eax, [rip + a_xd_enter]
+    je .Lxdc_enter
+    cmp eax, [rip + a_xd_position]
+    je .Lxdc_position
+    cmp eax, [rip + a_xd_leave]
+    je .Lxdc_leave
+    cmp eax, [rip + a_xd_drop]
+    je .Lxdc_drop
+.Lxdc_no:
+    xor eax, eax
+    EPILOGUE
+.Lxdc_enter:
+    cmp dword ptr [rip + xd_state], XD_CONVERT  # a transfer under way finishes first
+    jae .Lxdc_yes
+    call xd_reset
+    mov eax, [rbx + 12]
+    mov [rip + xd_source], eax
+    mov eax, [rbx + 16]
+    shr eax, 24
+    mov [rip + xd_version], eax
+    mov dword ptr [rip + xd_state], XD_OVER
+    xor ecx, ecx                # text/uri-list among the three types
+1:  mov eax, [rbx + 20 + rcx*4]
+    test eax, eax
+    jz 2f
+    cmp eax, [rip + a_uri_list]
+    jne 2f
+    mov dword ptr [rip + xd_files], 1
+2:  inc ecx
+    cmp ecx, 3
+    jb 1b
+    cmp dword ptr [rip + xd_files], 0
+    jne 3f
+    test dword ptr [rbx + 16], 1    # more types: the source's XdndTypeList
+    jz 3f
+    mov rdi, rsp
+    xor esi, esi
+    mov edx, 24
+    call memset
+    mov byte ptr [rsp], 20      # GetProperty
+    mov word ptr [rsp + 2], 6
+    mov eax, [rip + xd_source]
+    mov [rsp + 4], eax
+    mov eax, [rip + a_xd_typelist]
+    mov [rsp + 8], eax
+    mov dword ptr [rsp + 12], 4 # ATOM
+    mov dword ptr [rsp + 20], 256
+    mov rdi, rsp
+    mov esi, 24
+    call x_req
+    movzx eax, word ptr [rip + seq]
+    mov [rip + xd_list_seq], eax
+3:  mov rdi, rsp                # where the window is on the root
+    xor esi, esi
+    mov edx, 16
+    call memset
+    mov dword ptr [rip + xd_known], 0
+    mov byte ptr [rsp], 40      # TranslateCoordinates root (0, 0) to the window
+    mov word ptr [rsp + 2], 4
+    mov eax, [rip + root]
+    mov [rsp + 4], eax
+    mov eax, [rip + win]
+    mov [rsp + 8], eax
+    mov rdi, rsp
+    mov esi, 16
+    call x_req
+    movzx eax, word ptr [rip + seq]
+    mov [rip + xd_xlate_seq], eax
+    jmp .Lxdc_yes
+.Lxdc_position:
+    cmp dword ptr [rip + xd_state], XD_OVER
+    jne .Lxdc_yes
+    mov eax, [rbx + 12]
+    cmp eax, [rip + xd_source]
+    jne .Lxdc_yes
+    mov edi, [rbx + 20]
+    shr edi, 16
+    movzx esi, word ptr [rbx + 20]
+    call xd_point
+    xor esi, esi                # XdndStatus: a copy accepted for files, refused else; positions always
+    xor edx, edx
+    cmp dword ptr [rip + xd_files], 0
+    je 4f
+    mov esi, 3
+    mov edx, [rip + a_xd_copy]
+4:  mov edi, [rip + a_xd_status]
+    call xd_send
+    cmp dword ptr [rip + xd_files], 0
+    je .Lxdc_yes
+    mov edi, DROP_MOVE
+    mov esi, [rip + xd_x]
+    mov edx, [rip + xd_y]
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+    jmp .Lxdc_yes
+.Lxdc_leave:
+    mov eax, [rbx + 12]
+    cmp eax, [rip + xd_source]
+    jne .Lxdc_yes
+    cmp dword ptr [rip + xd_state], XD_OVER
+    jne .Lxdc_yes
+    call xd_reset
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+    jmp .Lxdc_yes
+.Lxdc_drop:
+    mov eax, [rbx + 12]
+    cmp eax, [rip + xd_source]
+    jne .Lxdc_yes
+    cmp dword ptr [rip + xd_state], XD_OVER
+    jne .Lxdc_yes
+    cmp dword ptr [rip + xd_files], 0
+    jne 5f
+    xor edi, edi                # nothing rhun takes: finished, not accepted
+    call xd_finish
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+    jmp .Lxdc_yes
+5:  mov eax, [rbx + 20]
+    mov [rip + xd_time], eax
+    mov rdi, rsp                # ConvertSelection XdndSelection to text/uri-list on the window's own property
+    xor esi, esi
+    mov edx, 24
+    call memset
+    mov byte ptr [rsp], 24
+    mov word ptr [rsp + 2], 6
+    mov eax, [rip + win]
+    mov [rsp + 4], eax
+    mov eax, [rip + a_xd_selection]
+    mov [rsp + 8], eax
+    mov eax, [rip + a_uri_list]
+    mov [rsp + 12], eax
+    mov eax, [rip + a_xd_prop]
+    mov [rsp + 16], eax
+    mov eax, [rip + xd_time]
+    mov [rsp + 20], eax
+    mov rdi, rsp
+    mov esi, 24
+    call x_req
+    mov dword ptr [rip + xd_state], XD_CONVERT
+    call time_ms
+    add rax, XR_MILLISECONDS
+    mov [rip + xd_deadline], rax
+.Lxdc_yes:
+    mov eax, 1
+    EPILOGUE
+
+# xd_get(): GetProperty of the window's drop property from xd_off, a page of XR_PAGE bytes (the input buffer
+#   holds a page's reply, never a whole list), deleting it once the last page is read
+xd_get:
+    PROLOGUE 32
+    mov rdi, rsp
+    xor esi, esi
+    mov edx, 24
+    call memset
+    mov byte ptr [rsp], 20
+    mov byte ptr [rsp + 1], 1   # delete
+    mov word ptr [rsp + 2], 6
+    mov eax, [rip + win]
+    mov [rsp + 4], eax
+    mov eax, [rip + a_xd_prop]
+    mov [rsp + 8], eax
+    mov eax, [rip + xd_off]
+    mov [rsp + 16], eax
+    mov dword ptr [rsp + 20], XR_PAGE / 4
+    mov rdi, rsp
+    mov esi, 24
+    call x_req
+    movzx eax, word ptr [rip + seq]
+    mov [rip + xd_get_seq], eax
+    call time_ms
+    add rax, XR_MILLISECONDS
+    mov [rip + xd_deadline], rax
+    EPILOGUE
+
+# FN x_drop_notify(event) -> eax 1 when it answers the drop's conversion
+FN x_drop_notify
+    xor eax, eax
+    cmp dword ptr [rip + xd_state], XD_CONVERT
+    jne 9f
+    mov ecx, [rdi + 8]          # requestor
+    cmp ecx, [rip + win]
+    jne 9f
+    mov ecx, [rdi + 12]
+    cmp ecx, [rip + a_xd_selection]
+    jne 9f
+    sub rsp, 8
+    cmp dword ptr [rdi + 20], 0
+    jne 1f
+    xor edi, edi                # refused: finished, not accepted, the veil gone
+    call xd_finish
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+    jmp 2f
+1:  mov dword ptr [rip + xd_state], XD_GET
+    mov dword ptr [rip + xd_off], 0
+    call xd_get
+2:  add rsp, 8
+    mov eax, 1
+9:  ret
+
+# xd_done(): the whole list: dropped (app_on_drop DROP_FILES at the drag's last point), then XdndFinished
+xd_done:
+    PROLOGUE
+    mov rdi, [rip + xd_buf + SB_ptr]
+    mov rsi, [rip + xd_buf + SB_len]
+    xor ebx, ebx
+    xor r12d, r12d
+    test rdi, rdi
+    jz 1f
+    call uri_list_paths
+    mov rbx, rax
+    mov r12, rdx
+1:  mov r13d, [rip + xd_x]
+    mov r14d, [rip + xd_y]
+    xor edi, edi
+    test rbx, rbx
+    setnz dil
+    call xd_finish
+    mov edi, DROP_FILES
+    mov esi, r13d
+    mov edx, r14d
+    mov rcx, rbx
+    mov r8, r12
+    test rbx, rbx
+    jnz 2f
+    mov edi, DROP_LEAVE
+2:  call app_on_drop
+    mov rdi, rbx
+    call mem_free
+    EPILOGUE
+
+# xd_take(ptr, len): a piece of the list; past CLIP_FILES_MAX only its whole lines up to there are kept, and
+#   nothing after (xd_full: a later piece's line would join a cut one)
+xd_take:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    cmp dword ptr [rip + xd_full], 0
+    jne 9f
+    mov rax, [rip + xd_buf + SB_len]
+    add rax, r12
+    cmp rax, CLIP_FILES_MAX
+    jbe 2f
+    mov dword ptr [rip + xd_full], 1
+    mov r12, CLIP_FILES_MAX     # cut, then back to its last line feed
+    sub r12, [rip + xd_buf + SB_len]
+1:  test r12, r12
+    jz 9f
+    cmp byte ptr [rbx + r12 - 1], 10
+    je 2f
+    dec r12
+    jmp 1b
+2:  lea rdi, [rip + xd_buf]
+    mov rsi, rbx
+    mov rdx, r12
+    call sb_push
+9:  EPILOGUE
+
+# FN x_drop_reply(packet, length) -> eax 1 when it was the drop's (the property, the type list, the origin)
+FN x_drop_reply
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    cmp r12, 32
+    jb .Lxdr_no
+    movzx eax, word ptr [rbx + 2]
+    cmp eax, [rip + xd_xlate_seq]
+    je .Lxdr_xlate
+    cmp eax, [rip + xd_list_seq]
+    je .Lxdr_list
+    cmp eax, [rip + xd_get_seq]
+    jne .Lxdr_no
+    mov dword ptr [rip + xd_get_seq], -1
+    mov eax, [rbx + 8]          # the type
+    cmp eax, [rip + a_incr]
+    jne 1f
+    mov dword ptr [rip + xd_state], XD_INCR    # pieces follow, each announced by a PropertyNotify
+    jmp .Lxdr_yes
+1:  cmp byte ptr [rbx + 1], 8
+    jne 3f
+    mov esi, [rbx + 16]         # its bytes
+    lea rax, [rsi + 32]
+    cmp rax, r12
+    ja 3f
+    lea rdi, [rbx + 32]
+    push rsi
+    push rsi
+    call xd_take
+    pop rsi
+    pop rsi
+    cmp dword ptr [rbx + 12], 0 # bytes after this page: the next page (a full list's whole value ends
+    je 2f                       #   here; an INCR piece is read to its end, which deletes it for the next)
+    cmp dword ptr [rip + xd_full], 0
+    je 1f
+    cmp dword ptr [rip + xd_state], XD_INCR
+    jne 2f
+1:  shr esi, 2
+    add [rip + xd_off], esi
+    call xd_get
+    jmp .Lxdr_yes
+2:  mov dword ptr [rip + xd_off], 0
+    cmp dword ptr [rip + xd_state], XD_INCR
+    jne 3f                      # whole (what did not fit was cut at a line)
+    test esi, esi
+    jnz .Lxdr_yes               # an INCR piece; an empty one ends it
+3:  call xd_done
+    jmp .Lxdr_yes
+.Lxdr_xlate:
+    mov dword ptr [rip + xd_xlate_seq], -1
+    cmp byte ptr [rbx], 1
+    jne .Lxdr_yes
+    movsx eax, word ptr [rbx + 12]
+    mov [rip + xd_ox], eax
+    movsx eax, word ptr [rbx + 14]
+    mov [rip + xd_oy], eax
+    mov dword ptr [rip + xd_known], 1
+    jmp .Lxdr_yes
+.Lxdr_list:
+    mov dword ptr [rip + xd_list_seq], -1
+    cmp byte ptr [rbx], 1
+    jne .Lxdr_yes
+    cmp byte ptr [rbx + 1], 32
+    jne .Lxdr_yes
+    mov ecx, [rbx + 16]         # atoms
+    lea rax, [rcx*4 + 32]
+    cmp rax, r12
+    ja .Lxdr_yes
+    xor edx, edx
+4:  cmp edx, ecx
+    jae .Lxdr_yes
+    mov eax, [rbx + 32 + rdx*4]
+    cmp eax, [rip + a_uri_list]
+    jne 5f
+    mov dword ptr [rip + xd_files], 1
+5:  inc edx
+    jmp 4b
+.Lxdr_yes:
+    mov eax, 1
+    EPILOGUE
+.Lxdr_no:
+    xor eax, eax
+    EPILOGUE
+
+# FN x_drop_property(event): a PropertyNotify (new value) of the drop's property during an INCR transfer
+FN x_drop_property
+    cmp dword ptr [rip + xd_state], XD_INCR
+    jne 9f
+    test byte ptr [rdi], 0x80
+    jnz 9f
+    mov eax, [rdi + 4]
+    cmp eax, [rip + win]
+    jne 9f
+    mov eax, [rdi + 8]
+    cmp eax, [rip + a_xd_prop]
+    jne 9f
+    cmp byte ptr [rdi + 16], 0  # PropertyNewValue
+    jne 9f
+    cmp dword ptr [rip + xd_get_seq], -1
+    jne 9f
+    jmp xd_get
+9:  ret
+
+# FN x_drop_error(packet): an error answering one of the drop's requests ends the drop, unaccepted
+FN x_drop_error
+    cmp dword ptr [rip + xd_state], XD_GET
+    jb 9f
+    movzx eax, word ptr [rdi + 2]
+    cmp eax, [rip + xd_get_seq]
+    jne 9f
+    sub rsp, 8
+    xor edi, edi
+    call xd_finish
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+    add rsp, 8
+9:  ret
+
+# FN x_drop_tick(): a transfer that stalled ends (unaccepted)
+FN x_drop_tick
+    cmp dword ptr [rip + xd_state], XD_CONVERT
+    jb 9f
+    sub rsp, 8
+    call time_ms
+    add rsp, 8
+    cmp rax, [rip + xd_deadline]
+    jb 9f
+    sub rsp, 8
+    xor edi, edi
+    call xd_finish
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+    add rsp, 8
+9:  ret
+
+# FN x_drop_timeout() -> eax ms until a stalled transfer ends, -1 none
+FN x_drop_timeout
+    mov eax, -1
+    cmp dword ptr [rip + xd_state], XD_CONVERT
+    jb 9f
+    sub rsp, 8
+    call time_ms
+    add rsp, 8
+    mov rcx, [rip + xd_deadline]
+    sub rcx, rax
+    jbe 1f
+    mov eax, ecx
+    ret
+1:  xor eax, eax
+9:  ret
+
+.section .rodata
+.Lxd_n_aware: .asciz "XdndAware"
+.Lxd_n_enter: .asciz "XdndEnter"
+.Lxd_n_position: .asciz "XdndPosition"
+.Lxd_n_status: .asciz "XdndStatus"
+.Lxd_n_leave: .asciz "XdndLeave"
+.Lxd_n_drop: .asciz "XdndDrop"
+.Lxd_n_finished: .asciz "XdndFinished"
+.Lxd_n_selection: .asciz "XdndSelection"
+.Lxd_n_copy: .asciz "XdndActionCopy"
+.Lxd_n_typelist: .asciz "XdndTypeList"
+.Lxd_n_prop: .asciz "RHUN_DROP"
+.p2align 3
+.Lxd_names: .quad .Lxd_n_aware, .Lxd_n_enter, .Lxd_n_position, .Lxd_n_status, .Lxd_n_leave, .Lxd_n_drop
+    .quad .Lxd_n_finished, .Lxd_n_selection, .Lxd_n_copy, .Lxd_n_typelist, .Lxd_n_prop
+.text
 
 # Legacy STRING is printable Latin1 plus TAB and LF, never raw UTF8 bytes.
 # x_string_supported(ptr, count) -> bool. No allocation or clipboard mutation.
@@ -3145,6 +3980,8 @@ x_minimize:
 .La_clip_native: .asciz "application/x-rhun-clipboard-v1"
 .La_clipboard: .asciz "CLIPBOARD"
 .La_targets: .asciz "TARGETS"
+.La_uri_list: .asciz "text/uri-list"
+.La_png: .asciz "image/png"
 .La_sel_prop: .asciz "RHUN_SELECTION"
 .La_incr: .asciz "INCR"
 .La_net_wm_state: .asciz "_NET_WM_STATE"

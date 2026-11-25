@@ -102,6 +102,39 @@ FN win_filetime
     div rcx
     imul rdx, rdx, 100
     ret
+# FN win_tz_offset(unix seconds) -> rax the local zone's offset east of UTC at that time, in seconds: the
+#   time as a FILETIME, FileTimeToSystemTime, SystemTimeToTzSpecificLocalTime with the current zone (its
+#   rules for that year, not only this year's), SystemTimeToFileTime, the difference; 0 when Windows cannot say
+FN win_tz_offset
+    PROLOGUE 112
+    imul rax, rdi, 10000000
+    mov rcx, 116444736000000000
+    add rax, rcx
+    mov [rsp + 32], rax         # the FILETIME, UTC
+    lea rcx, [rsp + 32]
+    lea rdx, [rsp + 48]         # its SYSTEMTIME
+    API FileTimeToSystemTime
+    test eax, eax
+    jz 8f
+    xor ecx, ecx                # the current zone
+    lea rdx, [rsp + 48]
+    lea r8, [rsp + 64]          # the local SYSTEMTIME
+    API SystemTimeToTzSpecificLocalTime
+    test eax, eax
+    jz 8f
+    lea rcx, [rsp + 64]
+    lea rdx, [rsp + 80]         # the local FILETIME
+    API SystemTimeToFileTime
+    test eax, eax
+    jz 8f
+    mov rax, [rsp + 80]
+    sub rax, [rsp + 32]
+    cqo
+    mov ecx, 10000000
+    idiv rcx
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
 FN ws_sleep
     PROLOGUE 96
     mov rcx, [rdi]

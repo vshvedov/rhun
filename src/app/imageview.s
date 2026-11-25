@@ -23,6 +23,9 @@ F IV_pad, 4
 F IV_bytes, 8                   # file size
 F IV_err, 8                     # why it cannot be shown
 F IV_mips, 8*MAXMIP             # halved copies: [i] is level i + 1
+F IV_src, 8                     # a picture without a file (iv_open_bytes): its own bytes, else 0
+F IV_srclen, 8
+F IV_title, 8                   #   and its title (owned; the document's DOC_name)
 ENDSTRUCT IV_SIZE
 
 # what the composed view shows
@@ -96,6 +99,10 @@ FN iv_free
     push rbx
     mov rbx, rdi
     call iv_reload
+    mov rdi, [rbx + IV_src]
+    call mem_free
+    mov rdi, [rbx + IV_title]
+    call mem_free
     mov rdi, rbx
     call mem_free
     pop rbx
@@ -143,12 +150,74 @@ FN iv_cache_free
     pop rbx
     ret
 
-# iv_load(doc): read and decode the file
+# iv_open_bytes(title cstr, ptr, len) -> eax the tab's index, -1: a picture without a file (a conversation's)
+#   in an image tab of its own: the view owns a copy of the bytes and decodes them when first shown, as a
+#   file's tab does. The document has no path: no watch, no session line, no Reopen Closed Tab, no git;
+#   Save, Reload and Save As find no text document (g_doc is 0 for an image tab) and do nothing
+FN iv_open_bytes
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    mov r14, rdx
+    mov eax, -1
+    test r13, r13
+    jz 9f
+    test r14, r14
+    jz 9f
+    call doc_new
+    mov rbx, rax
+    call iv_new
+    mov r15, rax
+    mov [rbx + DOC_img], r15
+    mov rdi, r13
+    mov rsi, r14
+    call mem_dup
+    mov [r15 + IV_src], rax
+    mov [r15 + IV_srclen], r14
+    mov [r15 + IV_bytes], r14
+    mov rdi, r12
+    call strlen
+    mov rdi, r12
+    mov rsi, rax
+    call mem_dup
+    mov [r15 + IV_title], rax
+    mov [rbx + DOC_name], rax
+    mov rdi, rbx
+    mov esi, TAB_IMAGE
+    call app_add_tab
+9:  EPILOGUE
+
+# iv_load(doc): read and decode the file (a picture without one: its own bytes)
 iv_load:
     PROLOGUE
     mov r15, rdi
     mov rbx, [rdi + DOC_img]
-    mov rdi, [r15 + DOC_path]
+    mov rax, [rbx + IV_src]
+    test rax, rax
+    jz 1f
+    mov r12, rax
+    mov r13, [rbx + IV_srclen]
+    mov rdi, rax
+    mov rsi, r13
+    xor edx, edx
+    call image_sniff
+    lea rcx, [rip + .Lnot_image]
+    test eax, eax
+    jz 2f
+    mov rdi, r12
+    mov rsi, r13
+    mov edx, eax
+    lea rcx, [rbx + IV_img]
+    call image_decode
+    mov rcx, [rip + g_img_err]
+    test eax, eax
+    jnz 2f
+    mov dword ptr [rbx + IV_state], IVS_OK
+    EPILOGUE
+2:  mov [rbx + IV_err], rcx     # (the bytes stay: they are the view's)
+    mov dword ptr [rbx + IV_state], IVS_FAILED
+    EPILOGUE
+1:  mov rdi, [r15 + DOC_path]
     call vfs_read_all
     test rax, rax
     jz 7f

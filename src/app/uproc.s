@@ -24,6 +24,10 @@
 #   uproc_end(pid, grace ms)                  the caller is done with it: SIGHUP and SIGTERM to the
 #                                             group now, SIGKILL at the deadline, reaped here
 #   uproc_env_failed() -> 1 when the login shell could not tell its environment (rhun's own is used)
+#   uproc_env_ready() -> 1 once uproc_envp() would not block (asks the login shell when nobody has)
+#   uproc_env_known() -> 1 once the environment programs start from is settled (asks nobody)
+#   uproc_env_get(name) -> rax a variable's value in it (borrowed) or 0: the login shell's once known,
+#                                             rhun's own before (asks nobody, never blocks)
 .include "rhun.inc"
 
 .equ UP_MAX, 128
@@ -383,6 +387,73 @@ FN uproc_env_failed
     mov eax, [rip + env_fail]
     ret
 
+# uproc_env_ready() -> eax 1 once uproc_envp() would not block: the login environment is known, or
+#   was given up on. It asks the login shell itself when nobody has yet (as uproc_envp does) and is 0
+#   while the shell answers; past the shell's time it gives up on it, as uproc_envp would. Callers
+#   that must not block the loop (the chat's start) wait for it in their tick
+FN uproc_env_ready
+    PROLOGUE
+    cmp dword ptr [rip + env_state], 0
+    jne 1f
+    call uproc_env_start
+1:
+.ifndef WINDOWS
+    cmp dword ptr [rip + env_state], 1
+    jne 8f
+    call time_ms
+    cmp rax, [rip + env_deadline]
+    jb 7f
+    mov dword ptr [rip + env_fail], 1
+    call env_done
+    jmp 8f
+7:  xor eax, eax
+    EPILOGUE
+.endif
+8:  mov eax, 1
+    EPILOGUE
+
+# FN uproc_env_known() -> eax 1 once the environment programs start from is settled: the login shell's
+#   known, given up on, or not needed (started from a terminal)
+FN uproc_env_known
+    xor eax, eax
+    cmp dword ptr [rip + env_state], 2
+    sete al
+    ret
+
+# FN uproc_env_get(name cstr) -> rax the variable's value (borrowed) or 0: in the login environment once
+#   it is known, else in rhun's own (what a program started now would get once the shell answers may
+#   differ: uproc_env_known says when it cannot any more)
+FN uproc_env_get
+    PROLOGUE
+    mov rbx, rdi
+    cmp dword ptr [rip + env_state], 2
+    jne 8f
+    mov r12, [rip + env_list]
+    test r12, r12
+    jz 8f
+    mov rdi, rbx
+    call strlen
+    mov r13, rax
+1:  mov r14, [r12]
+    test r14, r14
+    jz 7f
+    add r12, 8
+    mov rdi, r14
+    mov rsi, rbx
+    mov rdx, r13
+    call memeq
+    test eax, eax
+    jz 1b
+    cmp byte ptr [r14 + r13], '='
+    jne 1b
+    lea rax, [r14 + r13 + 1]
+    EPILOGUE
+7:  xor eax, eax
+    EPILOGUE
+8:  mov rdi, rbx
+    call getenv
+    EPILOGUE
+
 # uproc_envp() -> the environment programs start from: the login shell's once known (waiting for the
 #   rest of its 5 s when it is still telling), else rhun's own
 FN uproc_envp
@@ -429,6 +500,18 @@ FN uproc_env_make
     mov r14, rdx
     call uproc_envp
     mov rbx, rax
+    jmp env_merge
+
+# uproc_env_sets(sets, sets2, unsets) -> envp: as uproc_env_make without the login environment under the
+#   lists (nothing waits for the login shell): a program on a remote window's host, which has that host's
+#   login environment, gets only what the lists set (remote_spawn sends no more anyway)
+FN uproc_env_sets
+    PROLOGUE 16
+    mov r12, rdi
+    mov r13, rsi
+    mov r14, rdx
+    lea rbx, [rip + .Lno_env]
+env_merge:
     # room for all of them
     mov rdi, rbx
     call list_len
@@ -688,6 +771,8 @@ FN uproc_signal
 # wait_code(pid, nohang) -> the platform's exit status (see uproc_wait), not taking it off the list
 wait_code:
 .ifdef WINDOWS
+    test edi, REMOTE_PID_TAG    # a remote window's program: its host reports it (remote.s)
+    jnz proc_wait
     jmp win_wait_code
 .else
     sub rsp, 8
@@ -1181,3 +1266,4 @@ FN uproc_dump
 .Ld_failed: .asciz "failed"
 .p2align 3
 .Ld_states: .quad .Ld_unasked, .Ld_asking, .Ld_known
+.Lno_env: .quad 0

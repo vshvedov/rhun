@@ -100,6 +100,46 @@ cfg_update_check: .long 1
 cfg_secrets: .long 0
 .globl cfg_ext_updates
 cfg_ext_updates: .long 0         # [updates] extensions: XM_INSTALL, XM_CHECK or XM_OFF (extension management)
+# Claude Code's chat ([claude]; the env pairs, finding the program: claudecfg.s)
+.globl cfg_claude_chat, cfg_claude_initial_mode, cfg_agents_idle_stop, cfg_claude_executable, cfg_claude_wrapper
+cfg_claude_chat: .long 1
+cfg_claude_initial_mode: .long 0 # g_claude_mode_opts: 0 the CLI's own default
+cfg_agents_idle_stop: .long 10   # [agents] idle_stop_minutes: a conversation's process stops after them, 0 never
+.globl cfg_agents_font_size
+cfg_agents_font_size: .long 0   # [agents] font_size: the panel's text, 0 the interface's (agentfont.s)
+.globl cfg_claude_allow_bypass, cfg_claude_prompt_suggestions, cfg_agents_ctrl_enter_sends
+.globl cfg_agents_scroll_on_send
+cfg_claude_allow_bypass: .long 0        # [claude] allow_bypass_permissions: rhun's gate on bypassPermissions
+cfg_claude_prompt_suggestions: .long 1  # [claude] prompt_suggestions: initialize asks for them
+cfg_agents_ctrl_enter_sends: .long 0    # [agents] ctrl_enter_sends: Enter a new line, Ctrl+Enter sends
+cfg_agents_scroll_on_send: .long 1      # [agents] scroll_on_send: sending scrolls to the end
+.globl cfg_agents_continue
+cfg_agents_continue: .long 1            # p6b: [agents] continue_after_restart: a turn quitting cut off goes on
+.globl cfg_agents_timestamps, cfg_claude_spinner_verbs
+cfg_agents_timestamps: .long 1          # [agents] timestamps: prompts and replies show their time, days a pill
+cfg_claude_spinner_verbs: .long 0       # [claude] spinner_verbs: 0 the spinner_verb lines are added, 1 they replace
+ts_seen: .long 1                        # cfg_agents_timestamps as the last read left it (a reload that changes it)
+.globl cfg_agents_focus_view
+.globl cfg_agents_location                  # phase 4 task 13
+cfg_agents_location: .long 0            # [agents] location: 0 the side panel, 1 an editor tab
+cfg_agents_focus_view: .long 0          # [agents] focus_view: runs of tool calls and thinking fold into a line
+fv_seen: .long 0                        # cfg_agents_focus_view as the last read left it
+# Claude chat phase 4 task 10
+.globl cfg_agents_autosave
+cfg_agents_autosave: .long 1            # [agents] autosave: an open file is saved before the agent reads or edits it
+# Claude chat phase 5: the bridge for terminal claude (ide_server.s) and terminal mode (claudeterm.s)
+.globl cfg_claude_ide, cfg_claude_use_terminal
+cfg_claude_ide: .long 1                 # [claude] ide: claude in rhun's terminal connects to rhun
+cfg_claude_use_terminal: .long 0        # [claude] use_terminal: Claude: Open starts claude in a terminal
+# phase 4 tasks 7 and 8: mentions and the selection chip (agentctx.s, filelist.s)
+.globl cfg_agents_attach_selection, cfg_agents_attach_open_file, cfg_agents_respect_gitignore
+cfg_agents_attach_selection: .long 1    # [agents] attach_selection: the editor's selection goes with a message
+cfg_agents_attach_open_file: .long 1    # [agents] attach_open_file: else the open file's name does
+cfg_agents_respect_gitignore: .long 1   # [agents] respect_gitignore: mentions and the chip leave out ignored files
+# p8: the extension's [claude] settings not built by another line (agent_claude.s, claudecfg.s)
+.globl cfg_claude_disable_login_prompt, cfg_claude_python_env
+cfg_claude_disable_login_prompt: .long 0    # [claude] disable_login_prompt: no sign-in check before a start
+cfg_claude_python_env: .long 1          # [claude] python_env: the project's .venv or venv on claude's PATH
 .p2align 3
 cfg_theme: .quad cfg_def_theme
 cfg_dark_theme: .quad cfg_def_theme
@@ -116,6 +156,8 @@ cfg_commit_model: .quad .Ldefault_model
 cfg_save_actions: .quad .Lempty
 .globl cfg_remote_agent_binary
 cfg_remote_agent_binary: .quad .Lempty  # remote hosts: the Linux rhun to start on hosts (remote.s)
+cfg_claude_executable: .quad .Lempty    # [claude] executable: empty finds claude (claudecfg.s)
+cfg_claude_wrapper: .quad .Lempty       # [claude] wrapper: started with claude and its arguments after it
 .Lcfg_strings_end:
 cfg_agent_sources: .quad .Ldef_sources  # the switched-on providers' names, for the discovery worker
 
@@ -284,7 +326,15 @@ FN setting_assign
     call scmext_ai_config
     test eax, eax
     jnz 9f
-20: xor r15d, r15d
+20: lea rax, [rip + cfg_claude_initial_mode]   # Claude Code: empty and manual (claudecfg.s)
+    cmp r14, rax
+    jne 23f
+    mov rdi, r12
+    mov rsi, r13
+    call claude_mode_alias
+    mov r12, rax
+    mov r13, rdx
+23: xor r15d, r15d
 21: mov rdi, [rbx + SET_opts]
     mov esi, r15d
     call choice_entry
@@ -415,6 +465,7 @@ FN config_load
 2:  mov qword ptr [rip + g_keylines + VEC_len], 0
     mov dword ptr [rip + old_sources], 0
     call agentext_config_reset  # AI: the extension sources switched off come from this read
+    call claudecfg_reset        # Claude Code: the [claude] env pairs too (claudecfg.s)
     call ce_config_reset        # custom editors: the [editors] choices too (customed.s)
     # taken before the read: a write that lands during it still counts as a change
     call config_path
@@ -476,6 +527,15 @@ FN config_load
     call setting_find
     test rax, rax
     jnz 3f
+    mov rdi, [rip + it + INI_sec]   # Claude Code: [claude] env.NAME = value (claudecfg.s)
+    mov rsi, [rip + it + INI_seclen]
+    mov rdx, [rip + it + INI_key]
+    mov rcx, [rip + it + INI_keylen]
+    mov r8, [rip + it + INI_val]
+    mov r9, [rip + it + INI_vallen]
+    call claudecfg_key
+    test eax, eax
+    jnz .Lcl_next
     mov rdi, [rip + it + INI_sec]   # AI: [agents] OWNER/NAME = false (agentext.s)
     mov rsi, [rip + it + INI_seclen]
     mov rdx, [rip + it + INI_key]
@@ -510,6 +570,18 @@ FN config_load
     mov dword ptr [rip + cfg_agents_grok], 1
 1:  call config_agent_sources
     call agentext_config_done   # AI: the extension sources' switches from this read
+    call claudecfg_done         # Claude Code: the spinner's verbs from this read (claudecfg.s)
+    mov eax, [rip + cfg_agents_timestamps]  # the agents panel's heights follow a changed [agents] timestamps
+    cmp eax, [rip + ts_seen]
+    je 2f
+    mov [rip + ts_seen], eax
+    call agents_view_changed
+2:  mov eax, [rip + cfg_agents_focus_view]  # and its folds a changed [agents] focus_view (agentfold.s)
+    cmp eax, [rip + fv_seen]
+    je 3f
+    mov [rip + fv_seen], eax
+    call agfold_view_changed
+3:
     mov rdi, r15
     call mem_free
     EPILOGUE
@@ -684,6 +756,8 @@ FN config_save
     call choice_entry
     test rax, rax
     jz 5f
+    cmp word ptr [rax], 0x20    # the value " " is written empty ([claude] initial_mode)
+    je 5f
     lea rdi, [rsp]
     mov rsi, rax
     call sb_push_cstr
@@ -694,11 +768,16 @@ FN config_save
 5:  lea rdi, [rsp]
     mov esi, 10
     call sb_push_byte
-    lea rax, [rip + cfg_agents_opencode]
+    lea rax, [rip + cfg_agents_idle_stop]
     cmp [rbx + SET_ptr], rax
-    jne .Lcs_skip
+    jne 51f
     lea rdi, [rsp]              # AI: the extension sources switched off (agentext.s)
     call agentext_config_save
+51: lea rax, [rip + cfg_claude_spinner_verbs]         # the last [claude] row
+    cmp [rbx + SET_ptr], rax
+    jne .Lcs_skip
+    lea rdi, [rsp]              # Claude Code: the env pairs (claudecfg.s)
+    call claudecfg_save
 .Lcs_skip:
     add rbx, SET_SIZE
     jmp .Lcs_next
@@ -733,12 +812,18 @@ FN config_save
     call config_dir
     lea rdi, [rip + cfg_dir_buf]
     call mkdir_p
+    call claudecfg_pairs        # [claude] env.* values may be keys: then only the owner reads the file
+    mov ebx, eax
     call config_path
     mov rdi, rax
     mov rsi, [rsp + SB_ptr]
     mov rdx, [rsp + SB_len]
-    call file_write_all
-    mov rbx, rax
+    test ebx, ebx
+    jz 8f
+    call file_write_private
+    jmp 81f
+8:  call file_write_all
+81: mov rbx, rax
     call config_path
     mov rdi, rax
     call file_mtime_ns
@@ -866,6 +951,7 @@ legacy_names: .quad .Ln_claude, cfg_agents_claude, .Ln_codex, cfg_agents_codex, 
 .Ls_testing: .asciz "testing"
 .Ls_debug: .asciz "debug"
 .Ls_extensions: .asciz "extensions"
+.Ls_claude: .asciz "claude"
 
 .macro SETTING sec, key, type, ptr, min, max, step, dec, label, desc, opts=0, live_desc=0
     .quad \sec, 1f, \ptr, 2f
@@ -960,6 +1046,37 @@ g_settings:
     SETTING .Ls_agents, codex, ST_BOOL, cfg_agents_codex, 0, 1, 1, 0, "Codex", "Show Codex sessions in the agents panel."
     SETTING .Ls_agents, grok, ST_BOOL, cfg_agents_grok, 0, 1, 1, 0, "Grok Build", "Show Grok Build sessions in the agents panel."
     SETTING .Ls_agents, opencode, ST_BOOL, cfg_agents_opencode, 0, 1, 1, 0, "OpenCode", "Show OpenCode sessions in the agents panel."
+    SETTING .Ls_agents, idle_stop_minutes, ST_INT, cfg_agents_idle_stop, 0, 240, 5, 0, "Stop idle agents after", "Minutes without activity before a conversation's process is stopped. 0 never stops it."
+    SETTING .Ls_agents, font_size, ST_INT, cfg_agents_font_size, 0, 32, 1, 0, "Font size", "Text size of the agents panel. 0 follows the interface."
+    SETTING .Ls_agents, ctrl_enter_sends, ST_BOOL, cfg_agents_ctrl_enter_sends, 0, 1, 1, 0, "Ctrl+Enter sends", "Enter starts a new line; Ctrl+Enter (Cmd+Enter on macOS) sends."
+    SETTING .Ls_agents, scroll_on_send, ST_BOOL, cfg_agents_scroll_on_send, 0, 1, 1, 0, "Scroll to the end on send", "Sending a prompt scrolls the conversation to its end."
+    SETTING .Ls_agents, timestamps, ST_BOOL, cfg_agents_timestamps, 0, 1, 1, 0, "Timestamps", "Show the time on prompts and replies, and a line where the day changes."
+    SETTING .Ls_agents, focus_view, ST_BOOL, cfg_agents_focus_view, 0, 1, 1, 0, "Focus view", "Show only your prompts and the replies; tool calls and thinking fold into one line."
+    SETTING .Ls_agents, archive_after_days, ST_INT, cfg_agents_archive_days, 0, 365, 1, 0, "Archive sessions after", "Days without activity before a session moves to Archived sessions. 0 never moves one."
+    # phase 4 tasks 7 and 8: mentions and the selection chip
+    SETTING .Ls_agents, attach_selection, ST_BOOL, cfg_agents_attach_selection, 0, 1, 1, 0, "Attach the selection", "Send the lines selected in the editor with your next message. The chip above the box shows them first."
+    SETTING .Ls_agents, attach_open_file, ST_BOOL, cfg_agents_attach_open_file, 0, 1, 1, 0, "Attach the open file", "Without a selection, send the open file's path with your next message."
+    SETTING .Ls_agents, respect_gitignore, ST_BOOL, cfg_agents_respect_gitignore, 0, 1, 1, 0, "Leave out ignored files", "Files that .gitignore ignores are not offered by @ and their selected text is never sent."
+    # Claude chat phase 4 task 10
+    SETTING .Ls_agents, autosave, ST_BOOL, cfg_agents_autosave, 0, 1, 1, 0, "Save files before the agent reads or edits them", "An open file with unsaved changes is saved, as Ctrl+S saves it, before the agent reads or edits it."
+    # phase 4 task 13: where Agents: Open and new conversations go (agenttab.s)
+    SETTING .Ls_agents, location, ST_CHOICE, cfg_agents_location, 0, 1, 1, 0, "Open conversations in", "Where Agents: Open and new conversations show. Follows your last Open in New Tab or Open in Side Panel.", agtab_loc_opts
+    SETTING .Ls_agents, continue_after_restart, ST_BOOL, cfg_agents_continue, 0, 1, 1, 0, "Continue after a restart", "A step the agent was taking when rhun quit goes on when its conversation opens again within an hour."
+    # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
+    SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
+    SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."
+    SETTING .Ls_claude, wrapper, ST_STR, cfg_claude_wrapper, 0, 0, 0, 0, "Wrapper program", "A program that is started with claude and its arguments after it."
+    SETTING .Ls_claude, initial_mode, ST_CHOICE, cfg_claude_initial_mode, 0, 5, 1, 0, "Permission mode", "The mode a conversation starts in.", g_claude_mode_opts
+    SETTING .Ls_claude, allow_bypass_permissions, ST_BOOL, cfg_claude_allow_bypass, 0, 1, 1, 0, "Allow bypass permissions", "Offer Bypass permissions in the mode picker. Claude then runs commands without asking for approval."
+    SETTING .Ls_claude, prompt_suggestions, ST_BOOL, cfg_claude_prompt_suggestions, 0, 1, 1, 0, "Prompt suggestions", "Claude suggests your next prompt after a reply. Tab takes it."
+    # Claude chat phase 5: the bridge for terminal claude and terminal mode
+    SETTING .Ls_claude, use_terminal, ST_BOOL, cfg_claude_use_terminal, 0, 1, 1, 0, "Use the terminal", "Claude: Open and Ctrl+Esc start claude in a new terminal instead of the chat."
+    SETTING .Ls_claude, ide, ST_BOOL, cfg_claude_ide, 0, 1, 1, 0, "Connect claude in the terminal", "claude started in rhun's terminal connects to rhun: it sees your selection, and its edits open as diffs to accept or reject."
+    # p8: the rest of the extension's settings
+    SETTING .Ls_claude, disable_login_prompt, ST_BOOL, cfg_claude_disable_login_prompt, 0, 1, 1, 0, "No sign-in check", "Start claude without asking it first whether it is signed in: for an API key or a cloud provider set in its environment."
+    SETTING .Ls_claude, python_env, ST_BOOL, cfg_claude_python_env, 0, 1, 1, 0, "Use the project's Python environment", "A .venv or venv folder in a trusted project goes first on claude's PATH, with VIRTUAL_ENV set."
+    # the last [claude] row: the env pairs and the spinner_verb lines follow it (config_save, settings_dump)
+    SETTING .Ls_claude, spinner_verbs, ST_CHOICE, cfg_claude_spinner_verbs, 0, 1, 1, 0, "Spinner verbs", "How the spinner_verb lines of the config file are used.", .Lspin_opts
     SETTING .Ls_terminal, shell, ST_STR, cfg_term_shell, 0, 0, 0, 0, "Shell", "Program the terminal runs. Empty uses $SHELL."
     SETTING .Ls_terminal, font_size, ST_INT, cfg_term_font_size, 8, 40, 1, 0, "Terminal font size", "Font size of the terminal panel."
     SETTING .Ls_terminal, font, ST_STR, cfg_term_font, 0, 0, 0, 0, "Terminal font", "Path to a monospace .ttf file. Empty uses the editor font."
@@ -988,6 +1105,7 @@ g_settings:
 .Lextup_opts: .asciz "install", "Install", "check", "Show only", "off", "Off", ""
 .Lextup_label: .asciz "Check extensions now"
 .Lpaste_opts: .asciz "spread", "Spread lines", "full", "Full text", ""
+.Lspin_opts: .asciz "append", "Add to the built-in verbs", "replace", "Use only mine", ""
 .Lmodifier_opts: .asciz "alt", "Alt", "ctrl", "Ctrl", ""
 .Ldeco_opts: .asciz "auto", "Auto", "client", "rhun", "server", "Desktop", ""
 

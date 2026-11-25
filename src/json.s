@@ -1136,6 +1136,144 @@ jv_write:
     call jw_end_obj
     EPILOGUE
 
+# FN json_pretty(sb, jv): the value appended as JSON.stringify(v, null, 2) writes it: a member or an item a
+#   line, two blanks a level, ": " after a key, "[]" and "{}" for empty ones; a container more than 64
+#   levels deep is "…". Strings are escaped as jw_quote escapes them. It does not touch the builder's state
+FN json_pretty
+    xor edx, edx
+    jmp jp_write
+
+# jp_write(sb, jv, depth): json_pretty's recursion
+jp_write:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13d, edx
+    test r12, r12
+    jz .Ljp_null
+    mov eax, [r12 + JV_type]
+    cmp eax, JT_STR
+    je .Ljp_str
+    cmp eax, JT_NUM
+    je .Ljp_num
+    cmp eax, JT_TRUE
+    je .Ljp_true
+    cmp eax, JT_FALSE
+    je .Ljp_false
+    cmp eax, JT_ARR
+    je .Ljp_cont
+    cmp eax, JT_OBJ
+    je .Ljp_cont
+.Ljp_null:
+    lea rsi, [rip + .Ls_null]
+    jmp 1f
+.Ljp_true:
+    lea rsi, [rip + .Ls_true]
+    jmp 1f
+.Ljp_false:
+    lea rsi, [rip + .Ls_false]
+1:  mov rdi, rbx
+    call sb_push_cstr
+    EPILOGUE
+.Ljp_str:
+    mov rdi, rbx
+    mov rsi, [r12 + JV_ptr]
+    mov edx, [r12 + JV_n]
+    call jw_quote
+    EPILOGUE
+.Ljp_num:
+    mov rdi, rbx
+    mov rsi, [r12 + JV_ptr]
+    mov edx, [r12 + JV_n]
+    call sb_push
+    EPILOGUE
+.Ljp_cont:
+    mov r15d, '['
+    cmp eax, JT_ARR
+    je 2f
+    mov r15d, '{'
+2:  cmp dword ptr [r12 + JV_n], 0
+    jne 3f
+    mov rdi, rbx                # empty: "[]", "{}"
+    mov esi, r15d
+    call sb_push_byte
+    mov rdi, rbx
+    lea esi, [r15 + 2]
+    call sb_push_byte
+    EPILOGUE
+3:  cmp r13d, 64
+    jb 4f
+    mov rdi, rbx
+    lea rsi, [rip + .Ljp_cut]
+    call sb_push_cstr
+    EPILOGUE
+4:  mov rdi, rbx
+    mov esi, r15d
+    call sb_push_byte
+    xor r14d, r14d
+5:  cmp r14d, [r12 + JV_n]
+    jae 8f
+    test r14d, r14d
+    jz 51f
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+51: lea esi, [r13 + 1]
+    mov rdi, rbx
+    call jp_indent
+    mov rax, [r12 + JV_ptr]
+    cmp r15d, '['
+    jne 6f
+    mov rsi, [rax + r14*8]
+    jmp 7f
+6:  mov rcx, r14                # a member: its key, ": ", its value
+    shl rcx, 4
+    mov rdx, [rax + rcx]
+    mov rcx, [rax + rcx + 8]
+    mov [rsp], rcx
+    mov rdi, rbx
+    mov rsi, [rdx + JV_ptr]
+    mov edx, [rdx + JV_n]
+    call jw_quote
+    mov rdi, rbx
+    lea rsi, [rip + .Ljp_colon]
+    call sb_push_cstr
+    mov rsi, [rsp]
+7:  mov rdi, rbx
+    lea edx, [r13 + 1]
+    call jp_write
+    inc r14d
+    jmp 5b
+8:  mov rdi, rbx
+    mov esi, r13d
+    call jp_indent
+    mov rdi, rbx
+    lea esi, [r15 + 2]
+    call sb_push_byte
+    EPILOGUE
+
+# jp_indent(sb, depth): a line feed and two blanks a level
+jp_indent:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov esi, 10
+    call sb_push_byte
+    add r12d, r12d
+1:  test r12d, r12d
+    jz 9f
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    dec r12d
+    jmp 1b
+9:  EPILOGUE
+
+.section .rodata
+.Ljp_cut: .asciz "…"
+.Ljp_colon: .asciz ": "
+.text
+
 # jw_line(sb): the record terminator
 FN jw_line
     mov esi, 10

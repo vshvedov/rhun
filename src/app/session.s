@@ -614,7 +614,7 @@ FN session_save
     call tab_at
     mov r12, [rax + TAB_doc]
     test r12, r12
-    jz 2f
+    jz 20f
     cmp qword ptr [r12 + DOC_path], 0
     je 2f
     cmp rbx, [rip + g_tab_cur]
@@ -642,6 +642,37 @@ FN session_save
     lea rsi, [rip + out]
     call fold_session_out
     lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    jmp 2f
+20: mov rdi, rbx                # phase 4 task 13: a conversation tab, "<TAB>agent<TAB>KIND<TAB>FILE" (agenttab.s;
+    call tab_at                 #   an older rhun reads an empty path and passes over it)
+    mov rdi, rax
+    call agtab_line
+    test rax, rax
+    jz 2f
+    mov r14, rax
+    cmp rbx, [rip + g_tab_cur]
+    jne 21f
+    lea rdi, [rip + out]
+    mov esi, '*'
+    call sb_push_byte
+21: lea rdi, [rip + out]
+    lea rsi, [rip + .Lagent_line]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov rsi, r14
+    call sb_push_cstr
+    mov rdi, r14
+    call mem_free
+    mov rdi, rbx
+    call tab_pinned
+    test eax, eax
+    jz 22f
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Lpin]
+    call sb_push_cstr
+22: lea rdi, [rip + out]
     mov esi, 10
     call sb_push_byte
 2:  inc rbx
@@ -688,7 +719,22 @@ FN session_restore
     inc rbx
     mov ecx, 1
 4:  mov [rsp + 8], ecx
-    # split at the tab
+    cmp byte ptr [rbx], 9       # phase 4 task 13: a conversation tab's line (agenttab.s)
+    jne 41f
+    lea rdi, [rbx + 1]
+    call strlen
+    lea rdi, [rbx + 1]
+    mov rsi, rax
+    lea rdx, [rip + .Lagent_word]
+    mov ecx, 6
+    call str_starts
+    test eax, eax
+    jz 41f
+    lea rdi, [rbx + 7]
+    mov esi, [rsp + 8]
+    call agtab_restore_line
+    jmp 7f
+41: # split at the tab
     mov rdi, rbx
 5:  mov al, [rdi]
     test al, al
@@ -761,6 +807,8 @@ FN session_restore
     jmp 1b
 8:  mov rdi, r12
     call mem_free
+    mov rdi, [rsp]              # phase 4 task 13: no file was active: the conversation tab that was
+    call agtab_restored
     mov rdi, [rsp]
     test rdi, rdi
     jz 9f
@@ -782,6 +830,8 @@ FN session_restore
 .Lpercent: .asciz "%%25"
 .Lempty: .asciz ""
 .Lpin: .asciz "\tpin"
+.Lagent_line: .asciz "\tagent\t"     # phase 4 task 13
+.Lagent_word: .asciz "agent\t"
 
 .ifdef WINDOWS
 .text

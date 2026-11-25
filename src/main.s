@@ -182,6 +182,8 @@ FN main
 1:
     call dap_shutdown           # debugger: sessions disconnect, adapters are stopped
     call bp_save
+    call agent_drv_shutdown     # agents: the sessions rhun drives end with their programs
+    call agent_conn_shutdown    # agents: their programs' pipes close, SIGTERM now
     call uproc_quit_begin       # programs run as the user: SIGTERM now, up to 300 ms with the extensions
     call testexec_quit          # testing: test processes do not outlive rhun
     call ext_shutdown
@@ -189,6 +191,7 @@ FN main
     call remote_shutdown        # remote hosts: the askpass socket
     call ws_journal_cleanup     # wsedit: nothing can undo this session's workspace edits now
     call agents_shutdown
+    call ide_shutdown           # Claude chat phase 5: the bridge's lock file goes (ide_server.s)
     call ai_shutdown
     call session_remember_project
     call session_save

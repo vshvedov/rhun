@@ -5,6 +5,9 @@
 # hot path pays one compare when no extension uses any of this.
 .include "rhun.inc"
 
+.equ MSG_KEEP, 4000              # a mark keeps its message whole up to this (filediag.s FDG_MSG_MAX); shown cut at MARK_MSG_MAX
+.equ LANGS_MAX, 64
+
 .bss
 .p2align 3
 .globl g_ext_hooks, g_hover_doc, g_hover_pos, g_hover_text, g_hover_since, g_hover_sent
@@ -24,6 +27,13 @@ newmarks: .zero VEC_SIZE        # a diagnostics request's marks while its lines 
 target: .quad 0                 # the VEC mark_parse appends to
 badpos_seen: .long 0            # mark_parse: the line parsed but a position was outside the text
 rec: .zero 80
+# ---- Claude chat phase 4 task 9: a generation, the languages ever marked, a message as shown ----
+.p2align 3
+mk_gen: .quad 0                 # extmarks_gen: moves when a document's marks are set, added or dropped
+langs: .zero 8 * LANGS_MAX      # the grammars (DOC_lang, 0 plain text) of documents that ever had marks
+nlangs: .quad 0
+shown: .zero MARK_MSG_MAX + 8   # extmarks_shown's copy
+# ---- end ----
 
 .text
 
@@ -355,6 +365,8 @@ FN extmarks_set
     mov [rbx + DOC_xmarks], rax
 1:  mov dword ptr [rip + g_marks_ever], 1
     call ext_hooks_update
+    mov rdi, rbx
+    call marks_noted
     xor r13d, r13d
 4:  cmp r13, [rip + newmarks + VEC_len]
     jae 5f
@@ -461,13 +473,13 @@ mark_parse:
     js 8f
     mov r15d, eax
     mov [rsp + 56], edx         # its tags
-    # the message: the rest, trimmed, cut at MARK_MSG_MAX
+    # the message: the rest, trimmed, kept whole up to MSG_KEEP (shown cut at MARK_MSG_MAX: extmarks_shown)
     mov rdi, [rsp]
     mov rsi, [rsp + 8]
     call trim
     mov rdi, rdx
     mov rsi, rax
-    mov edx, MARK_MSG_MAX
+    mov edx, MSG_KEEP
     push rax
     push rax
     call utf8_cut
@@ -653,7 +665,8 @@ marks_drop_owner:
     jmp 1b
 2:  inc rcx
     jmp 1b
-9:  EPILOGUE
+9:  inc qword ptr [rip + mk_gen]
+    EPILOGUE
 
 # extmarks_clear_owner(owner): the extension stopped: its marks go, on every open document
 FN extmarks_clear_owner
@@ -708,6 +721,7 @@ FN extmarks_language_changed
     jmp 1b
 2:  mov [r12 + VEC_len], r14
     mov dword ptr [rip + g_dirty], 1
+    inc qword ptr [rip + mk_gen]
 9:  EPILOGUE
 
 # extmarks_drop_all(doc): every mark goes, the store's too (the document is closing)
@@ -971,7 +985,8 @@ FN extmarks_at
     call mark_live
     test eax, eax
     jz 1b
-    mov rax, [r14 + MK_msg]
+    mov rdi, [r14 + MK_msg]
+    call extmarks_shown
     EPILOGUE
 8:  xor eax, eax
     EPILOGUE
@@ -1205,7 +1220,7 @@ mark_live:
     ret
 
 # extmarks_add_source(doc, source, start, end, SEV_*, message cstr): a mark of the Problems store
-#   (problems.s), its message copied (cut at MARK_MSG_MAX bytes)
+#   (problems.s), its message copied whole (up to MSG_KEEP bytes; shown cut at MARK_MSG_MAX)
 FN extmarks_add_source
     PROLOGUE 32
     mov rbx, rdi
@@ -1225,11 +1240,14 @@ FN extmarks_add_source
     jae 9f
     mov dword ptr [rip + g_marks_ever], 1
     call ext_hooks_update
+    mov rdi, rbx
+    call marks_noted
     mov rdi, [rsp + 8]
     call strlen
-    cmp rax, MARK_MSG_MAX
-    jbe 2f
-    mov eax, MARK_MSG_MAX
+    mov rdi, rax
+    mov rsi, [rsp + 8]
+    mov edx, MSG_KEEP
+    call utf8_cut
 2:  mov rdi, [rsp + 8]
     mov rsi, rax
     call mem_dup
@@ -1285,3 +1303,72 @@ sev_names: .quad .Lsv_error, .Lsv_warning, .Lsv_info, .Lsv_hint, 0
 .Le_badmark: .asciz "syntax a diagnostics line is not L1 C1 L2 C2 SEVERITY MESSAGE"
 .Le_badpos_mark: .asciz "badpos a diagnostics range is outside the document or inside a character"
 .Le_count: .asciz "syntax the body does not have N lines"
+
+# ---- Claude chat phase 4 task 9: a generation, the languages ever marked, a message as shown ----
+.text
+# marks_noted(doc): marks were set or added on it: the generation moves, its language is remembered
+marks_noted:
+    inc qword ptr [rip + mk_gen]
+    mov rax, [rdi + DOC_lang]
+    xor ecx, ecx
+1:  cmp rcx, [rip + nlangs]
+    jae 2f
+    lea rdx, [rip + langs]
+    cmp [rdx + rcx*8], rax
+    je 9f
+    inc rcx
+    jmp 1b
+2:  cmp rcx, LANGS_MAX
+    jae 9f
+    lea rdx, [rip + langs]
+    mov [rdx + rcx*8], rax
+    inc qword ptr [rip + nlangs]
+9:  ret
+
+# FN extmarks_gen() -> rax a number that moves whenever a document's marks are set, added or dropped
+FN extmarks_gen
+    mov rax, [rip + mk_gen]
+    ret
+
+# FN extmarks_lang_marked(doc) -> eax 1 when a document of its language (DOC_lang) ever had marks
+FN extmarks_lang_marked
+    mov rax, [rdi + DOC_lang]
+    xor ecx, ecx
+1:  cmp rcx, [rip + nlangs]
+    jae 8f
+    lea rdx, [rip + langs]
+    cmp [rdx + rcx*8], rax
+    je 9f
+    inc rcx
+    jmp 1b
+8:  xor eax, eax
+    ret
+9:  mov eax, 1
+    ret
+
+# FN extmarks_shown(msg cstr or 0) -> rax the message as a tooltip, the hover card, the status text and the
+#   dumps show it: itself, or (longer than MARK_MSG_MAX bytes) a copy cut there at a character's start,
+#   valid until the next call
+FN extmarks_shown
+    PROLOGUE
+    mov rbx, rdi
+    test rdi, rdi
+    jz 8f
+    call strlen
+    cmp rax, MARK_MSG_MAX
+    jbe 8f
+    mov rdi, rax
+    mov rsi, rbx
+    mov edx, MARK_MSG_MAX
+    call utf8_cut
+    mov r12, rax
+    lea rdi, [rip + shown]
+    mov rsi, rbx
+    mov rdx, r12
+    call memcpy
+    lea rax, [rip + shown]
+    mov byte ptr [rax + r12], 0
+    EPILOGUE
+8:  mov rax, rbx
+    EPILOGUE
+# ---- end ----

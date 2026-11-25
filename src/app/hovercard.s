@@ -978,6 +978,12 @@ collect:
     lea rcx, [rip + sev_words]
     mov rsi, [rcx + rax*8]
     mov rdi, [r13 + MK_msg]
+    push rsi                    # the message as shown: cut at MARK_MSG_MAX (phase 4 task 9: marks keep it whole)
+    push rsi
+    call extmarks_shown
+    pop rsi
+    pop rsi
+    mov rdi, rax
     call dbuf_add
     test rdx, rdx
     jz 1b

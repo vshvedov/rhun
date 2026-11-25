@@ -664,6 +664,57 @@ with tempfile.TemporaryDirectory(prefix='rhun-windows-', dir=OUT) as temporary:
         check('agents/windows-session-paths', agents)
         check('git/status-and-diff', git)
 
+    def claude_chat():
+        # the chat's own tests (tests/claude-chat.py and the others) need the control socket
+        name = 'claude-chat'
+        env = {k: v for k, v in environment(name).items() if not k.startswith(('CLAUDE', 'ANTHROPIC'))}
+        home = temp / name / 'home'
+        project = temp / 'claude project'
+        project.mkdir()
+        claude = '[claude]\n'
+        if args.wine:
+            # Wine gives a program its own profile folder whatever HOME says; it has no Windows python
+            # for the fake CLI (a Linux one starts outside Wine's processes: no job, no resume), so
+            # the prompt there gets the missing program's error row
+            env['CLAUDE_CONFIG_DIR'] = winpath(home / '.claude')
+        else:
+            claude += (f'wrapper = {Path(sys.executable).resolve().as_posix()}\n'
+                       f'executable = {(ROOT / "tests/scripts/fake-claude.py").as_posix()}\n')
+            env['TERM'] = 'dumb'
+        config = temp / name / 'config/rhun/config'
+        config.parent.mkdir(parents=True)
+        config.write_text('[files]\nrestore_session = false\nrestore_project = false\n'
+                          '[updates]\ncheck = false\n[git]\nenabled = false\n'
+                          '[ui]\nsidebar = false\nagents_panel = true\nagents_width = 380\n'
+                          '[agents]\nfont_size = 20\n' + claude, encoding='utf-8')
+        folder = home / '.claude/projects' / re.sub('[^A-Za-z0-9]', '-', winpath(project))
+        folder.mkdir(parents=True)
+        reply = '## Plan\n\nSome **bold** words.\n\n- one\n- two\n\n```sh\necho hi\n```'
+        records = [{'type': 'user', 'message': {'role': 'user', 'content': 'go'}, 'cwd': winpath(project),
+                    'sessionId': 's1'},
+                   {'type': 'assistant', 'message': {'role': 'assistant', 'content': [{'type': 'text', 'text': reply}]}},
+                   {'type': 'custom-title', 'customTitle': 'Plan it', 'sessionId': 's1'}]
+        (folder / 's1.jsonl').write_text(''.join(json.dumps(r) + '\n' for r in records), encoding='utf-8')
+        output = run('rhun.com', winpath(project), '--headless', '1400x860', '--script',
+                     'tests/windows/claude-chat.rsc', env=env, timeout=90).stdout
+        lines = output.decode('utf-8', 'replace').replace('\r\n', '\n').split('\n')
+        # the list, then the list and the open conversation
+        equal(lines[:5], ['Claude: Plan it', 'Claude: Plan it', 'user go', 'agent ## Plan',
+                          'input= focus=0 new=- pending=0 box=1'])
+        assert lines[5].startswith('size=20 points=20 px=20 '), output
+        assert lines[6].startswith('size=21 points=21 px=21 '), output
+        assert lines[7].startswith('row=2 role=agent ') and ' parsed=1 ' in lines[7], output
+        equal(lines[8:14], ['heading:2 Plan', 'para Some bold words.', 'list 2 items', '  item one',
+                            '  item two', 'code:sh 1 lines'])
+        equal(lines[14], 'input= focus=1 new=claude pending=0 box=1')
+        if args.wine:
+            assert lines[15].startswith('state=failed ') and 'Claude Code was not found' in lines[16], output
+            assert lines[-2].startswith('error Claude Code was not found'), output
+        else:
+            assert lines[15].startswith('state=ready pid=1 '), output
+            assert 'user hello' in lines and 'agent(claude-opus-5-5) ok: hello' in lines, output
+    check('agents/claude-chat-box-font-markdown', claude_chat)
+
     def commit_ai(provider, cancel=False):
         name = 'commit-ai-' + provider + ('-cancel' if cancel else '')
         project = temp / (name + " 'quoted $; café")

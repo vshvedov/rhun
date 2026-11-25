@@ -21,6 +21,8 @@ ru_fw_msg: .zero 300
 ru_ps_pid: .long 0              # docker ps / podman ps for Attach to Container
 .globl g_remote_shell
 g_remote_shell: .zero 256       # the user's shell on the host (its name names terminal tabs)
+.globl g_remote_claude_dir
+g_remote_claude_dir: .zero 4096 # CLAUDE_CONFIG_DIR of the host's login environment, or empty
 ru_sb: .zero SB_SIZE            # scratch: the bar's text
 ru_names: .zero SB_SIZE         # the pick list's names, NUL-terminated one after another
 ru_offs: .zero VEC_SIZE         # their offsets (8 bytes each)
@@ -65,6 +67,7 @@ FN remote_connected
     call remote_call
     test rax, rax
     js 3f
+    mov byte ptr [rip + g_remote_claude_dir], 0
     # home=... shell=... lines
     mov rbx, [rip + g_remote_reply + SB_ptr]
     mov r12, [rip + g_remote_reply + SB_len]
@@ -103,7 +106,19 @@ FN remote_connected
     lea rdx, [r13 - 6]
     mov ecx, 255
     call ru_copy_line
-22: lea rax, [r13 + 1]
+22: mov rdi, rbx                # the login environment's CLAUDE_CONFIG_DIR (claudecfg.s claude_dir)
+    mov rsi, r13
+    lea rdx, [rip + .Lk_cdir]
+    mov ecx, 18
+    call str_starts
+    test eax, eax
+    jz 23f
+    lea rdi, [rip + g_remote_claude_dir]
+    lea rsi, [rbx + 18]
+    lea rdx, [r13 - 18]
+    mov ecx, 4000
+    call ru_copy_line
+23: lea rax, [r13 + 1]
     add rbx, rax
     sub r12, rax
     jg 1b
@@ -128,6 +143,7 @@ FN remote_connected
 8:  call remote_attach          # programs that outlived the connection (remote.s)
     call vfs_reconnected        # watches again, documents compared with the host's files
     call ru_save_pending
+    call agent_drv_remote_back  # conversations whose end could not be read then (agent_drv.s)
 9:  call remote_ext_connected   # extensions that waited for the host (remoteext.s)
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
@@ -2398,6 +2414,7 @@ FN remote_askpass_main
 .Lcolon: .ascii ":"
 .Lk_home: .ascii "home="
 .Lk_shell: .ascii "shell="
+.Lk_cdir: .ascii "claude_config_dir="
 .Lroot: .asciz "/"
 .Llocal_name: .asciz "local"
 .Lcolon_sp: .asciz ": "

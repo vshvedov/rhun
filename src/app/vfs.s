@@ -1658,7 +1658,19 @@ FN vfs_pty_spawn
     shl eax, 24
     or ecx, eax
     or ecx, 1
-    mov rdi, r12
+    test r12, r12               # argv[0] with a "/" is a path on the host, kept as given (a configured
+    jz 7f                       #   program's, such as Claude: Open in Terminal's); a name is looked up
+    mov rax, [r12]              #   in the host's PATH
+    test rax, rax
+    jz 7f
+6:  movzx edx, byte ptr [rax]
+    inc rax
+    test edx, edx
+    jz 7f
+    cmp edx, '/'
+    jne 6b
+    or ecx, 2
+7:  mov rdi, r12
     mov rsi, r13
     mov rdx, r14
     mov r8d, -1

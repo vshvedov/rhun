@@ -51,6 +51,21 @@ FN settings_reset
     lea rdi, [rip + set_search]
     jmp tf_clear
 
+# FN settings_open_search(ptr, len): Settings in front, its search field holding the text (the rows that
+#   match it shown: a section's config name, "claude." say)
+FN settings_open_search
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    call cmd_settings
+    lea rdi, [rip + set_search]
+    mov rsi, r12
+    mov rdx, r13
+    call tf_set
+    mov dword ptr [rip + set_scroll], 0
+    mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
 # settings_take_find() -> eax 1 when the settings tab is in front: Find goes to its search field, the
 #   query selected so typing replaces it
 FN settings_take_find
@@ -101,11 +116,16 @@ FN settings_dump
     mov rdi, r12
     mov esi, 10
     call sb_push_byte
-    lea rax, [rip + cfg_agents_opencode]
+    lea rax, [rip + cfg_agents_idle_stop]
     cmp [rbx + SET_ptr], rax
-    jne 2f
+    jne 3f
     mov rdi, r12                # AI: the extension sources (agentext.s)
     call agentext_settings_dump
+3:  lea rax, [rip + cfg_claude_spinner_verbs]         # the last [claude] row
+    cmp [rbx + SET_ptr], rax
+    jne 2f
+    mov rdi, r12                # Claude Code: the env pairs, never their values (claudecfg.s)
+    call claudecfg_dump
 2:  add rbx, SET_SIZE
     jmp 1b
 9:  EPILOGUE
@@ -161,9 +181,29 @@ FN setting_applied
     cmp rdx, 12                 # one of the four provider switches
     ja 4f
     call config_agent_sources
-    call agents_set_project
+    call agents_sources_changed     # a provider switched off ends what rhun drives of it, no other
     jmp 9f
-4:  lea rcx, [rip + cfg_git]
+4:  lea rcx, [rip + cfg_claude_chat]
+    cmp rax, rcx
+    jne 41f
+    call agent_drv_apply        # switched off: the conversations rhun drives end with their programs
+    jmp 9f
+41: lea rcx, [rip + cfg_agents_timestamps]
+    cmp rax, rcx
+    jne 45f
+    call agents_view_changed    # a time line above every prompt, a pill where the day changes
+    jmp 9f
+45: lea rcx, [rip + cfg_agents_focus_view]
+    cmp rax, rcx
+    jne 42f
+    call agfold_view_changed    # focus view: the folds' lines (agentfold.s)
+    jmp 9f
+42: lea rcx, [rip + cfg_claude_spinner_verbs]
+    cmp rax, rcx
+    jne 43f
+    call claudecfg_done         # the spinner's verbs
+    jmp 9f
+43: lea rcx, [rip + cfg_git]
     cmp rax, rcx
     jne 5f
     call git_apply
@@ -438,6 +478,9 @@ section_title:
     je 1f
     lea rax, [rip + .Lt_debug]          # debugger
     cmp byte ptr [rdi], 'd'
+    je 1f
+    lea rax, [rip + .Lt_claude]
+    cmp byte ptr [rdi], 'c'
     je 1f
     lea rax, [rip + .Lt_agents]
 1:  ret
@@ -1124,7 +1167,18 @@ FN settings_draw
     jz 5f
     mov rax, [rbx + SET_ptr]
     mov ecx, [rax]
-    sub ecx, [rbx + SET_step]
+    lea rdx, [rip + cfg_agents_font_size]
+    cmp rax, rdx
+    jne 40f
+    test ecx, ecx               # the agents panel's size: 0 is its least, 8 steps down to it
+    jle 5f
+    mov edi, ecx
+    mov esi, -1
+    call agents_font_step
+    mov ecx, eax
+    mov rax, [rbx + SET_ptr]
+    jmp 41f
+40: sub ecx, [rbx + SET_step]
     cmp ecx, [rbx + SET_min]
     jge 41f
     mov ecx, [rbx + SET_min]
@@ -1143,7 +1197,16 @@ FN settings_draw
     jz .Lsd_next
     mov rax, [rbx + SET_ptr]
     mov ecx, [rax]
-    add ecx, [rbx + SET_step]
+    lea rdx, [rip + cfg_agents_font_size]
+    cmp rax, rdx
+    jne 50f
+    mov edi, ecx                # the agents panel's size: 0 steps up to 8 or past the interface's
+    mov esi, 1
+    call agents_font_step
+    mov ecx, eax
+    mov rax, [rbx + SET_ptr]
+    jmp 51f
+50: add ecx, [rbx + SET_step]
     cmp ecx, [rbx + SET_max]
     jle 51f
     mov ecx, [rbx + SET_max]
@@ -1317,7 +1380,7 @@ FN settings_draw
     call gfx_clip_pop
     add r12d, r13d
     add r12d, [rip + g_mt + 4*MI_8]
-    lea rax, [rip + cfg_agents_opencode]
+    lea rax, [rip + cfg_agents_idle_stop]
     cmp [rbx + SET_ptr], rax
     jne .Lsd_skip
     mov edi, [rsp + 20]         # AI: a switch per extension source (agentext.s)
@@ -1583,6 +1646,7 @@ FN ui_text_v_fit
 .Lt_git: .asciz "Git"
 .Lt_updates: .asciz "Updates"
 .Lt_debug: .asciz "Debugger"
+.Lt_claude: .asciz "Claude Code"
 .Lwebsite: .asciz "https://rhun.app"
 .Lemail: .asciz "hi@rhun.app"
 .Lfeedback: .asciz "Feedback and issues: GitHub"

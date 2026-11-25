@@ -723,10 +723,27 @@ c_agents_page:
     ret
 
 # print-agents-runs: "runs=N", discovery runs started so far
+# print-agents-runs [busy]: "runs=N"; with busy, " busy=0|1" before the line end (a run started and not
+#   answered yet, or one waiting to start: an idle window measured then counts its answer's wake-ups)
 c_agents_runs:
     lea rdi, [rip + out]
     call agents_runs_dump
-    xor eax, eax
+    test r12, r12
+    jz 9f
+    dec qword ptr [rip + out + SB_len]      # (its line feed)
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Lc_busy]
+    call sb_push_cstr
+    call agents_busy
+    xor esi, esi
+    test eax, eax
+    setnz sil
+    lea rdi, [rip + out]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+9:  xor eax, eax
     ret
 
 # wait-grep: until find in files has read the project's files
@@ -1137,6 +1154,26 @@ c_print_complete:
     xor eax, eax
     EPILOGUE
 
+# wait-complete: until the completion list shows items (10 s at most), then print-complete's lines
+c_wait_complete:
+    PROLOGUE
+    call time_ms
+    lea r13, [rax + 10000]
+1:  cmp dword ptr [rip + cp_open], 2
+    je 2f
+    call time_ms
+    cmp rax, r13
+    jae 2f
+    mov edi, 20
+    call loop_poll
+    call app_tick
+    jmp 1b
+2:  call flush_frame
+    lea rdi, [rip + out]
+    call complete_dump
+    xor eax, eax
+    EPILOGUE
+
 c_print_extbar:
     PROLOGUE
     call flush_frame
@@ -1314,8 +1351,10 @@ c_print_marks:
     lea rdi, [rip + out]
     mov esi, ' '
     call sb_push_byte
+    mov rdi, [r13 + MK_msg]     # as shown: cut at MARK_MSG_MAX (phase 4 task 9: marks keep it whole)
+    call extmarks_shown
     lea rdi, [rip + out]
-    mov rsi, [r13 + MK_msg]
+    mov rsi, rax
     call sb_push_cstr
     lea rdi, [rip + out]
     mov esi, 10
@@ -1471,6 +1510,26 @@ c_print_frames:
     xor eax, eax
     ret
 
+# print-loop-stats: the main loop's passes and the frames it drew, since rhun started
+c_print_loop_stats:
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_passes]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov rsi, qword ptr [rip + g_loop_passes]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    lea rsi, [rip + .Ls_draws]
+    call sb_push_cstr
+    lea rdi, [rip + out]
+    mov rsi, qword ptr [rip + g_loop_draws]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    ret
+
 # print-update: the updater's state, the running and the latest version, the last error, and the
 # Check now row's text in Settings on a second line (desc=)
 c_print_update:
@@ -1522,6 +1581,38 @@ c_print_project:
 
 # print-tabs: "tabs=^a | *b | c", the tab strip in order with pinned tabs marked ^ and the active tab
 #   starred
+# print-tabs-at: "X,Y" for each tab (the first 64), its middle as the strip drew it last, space-separated
+c_print_tabs_at:
+    PROLOGUE
+    xor ebx, ebx
+1:  cmp rbx, [rip + g_tabs + VEC_len]
+    jae 4f
+    cmp ebx, 64
+    jae 4f
+    test ebx, ebx
+    jz 2f
+    lea rdi, [rip + out]
+    mov esi, ' '
+    call sb_push_byte
+2:  lea rdi, [rip + out]
+    lea rax, [rip + g_tabs_cx]
+    mov esi, [rax + rbx*4]
+    call sb_push_u64
+    lea rdi, [rip + out]
+    mov esi, ','
+    call sb_push_byte
+    lea rdi, [rip + out]
+    lea rax, [rip + g_tabs_cy]
+    mov esi, [rax + rbx*4]
+    call sb_push_u64
+    inc ebx
+    jmp 1b
+4:  lea rdi, [rip + out]
+    mov esi, 10
+    call sb_push_byte
+    xor eax, eax
+    EPILOGUE
+
 c_print_tabs:
     PROLOGUE
     lea rdi, [rip + out]
@@ -2320,6 +2411,7 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Lc_agents_more: .asciz "agents-more"
 .Lc_agents_page: .asciz "print-agents-page"
 .Lc_agents_runs: .asciz "print-agents-runs"
+.Lc_busy: .asciz " busy="
 .Lc_wait_grep: .asciz "wait-grep"
 .Lc_wait_term: .asciz "wait-term"
 .Lc_print_gitlog: .asciz "print-gitlog"
@@ -2329,6 +2421,7 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Lc_wait_update: .asciz "wait-update"
 .Lc_print_update: .asciz "print-update"
 .Lc_print_frames: .asciz "print-frames"
+.Lc_print_loop_stats: .asciz "print-loop-stats"
 .Lc_apply_document: .asciz "apply-document"
 .Lc_provider_set: .asciz "provider-set"
 .Lc_print_providers: .asciz "print-providers"
@@ -2351,6 +2444,7 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Lc_ext_menu: .asciz "ext-menu"
 .Lc_print_views: .asciz "print-views"
 .Lc_print_complete: .asciz "print-complete"
+.Lc_wait_complete: .asciz "wait-complete"
 .Lc_menu_pick: .asciz "menu-pick"
 .Lc_ext_remove: .asciz "ext-remove"
 
@@ -2374,6 +2468,7 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Lc_print_project: .asciz "print-project"
 .Lc_print_panels: .asciz "print-panels"
 .Lc_print_tabs: .asciz "print-tabs"
+.Lc_print_tabs_at: .asciz "print-tabs-at"
 .Lc_print_palette: .asciz "print-palette"
 .Lc_print_menu: .asciz "print-menu"
 .Lc_print_tip: .asciz "print-tip"
@@ -2392,6 +2487,8 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Ls_agents_eq: .asciz " agents="
 .Ls_toast: .asciz "toast="
 .Ls_frames: .asciz "frames="
+.Ls_passes: .asciz "passes="
+.Ls_draws: .asciz " draws="
 .Ls_term: .asciz " term="
 .Ls_hidden: .asciz " hidden"
 .Ls_builtin: .asciz "built-in"
@@ -2421,6 +2518,7 @@ ctl_tables:
     .quad tasks_ctl             # tasks and terminals (runctl.s)
     .quad test_ctl              # testing (testview.s)
     .quad ai_ctl                # AI: agent sessions, the Review tab, tools (aictl.s)
+    .quad claude_ctl            # Claude Code: its program and its conversations' paths (claudecfg.s)
     .quad md_ctl                # Markdown rendering (views group: mdctl.s)
     .quad views_ctl             # views group: places and retained views (viewsctl.s)
     .quad nb_ctl                # notebooks (nbctl.s)
@@ -2433,6 +2531,9 @@ ctl_tables:
     .quad res_commands          # resources, workspaces, secrets and lifecycle (extres.s)
     .quad newext_ctl            # New Extension (newext.s)
     .quad submitext_ctl         # Submit to Index (submitext.s)
+    .quad ide_ctl               # Claude chat phase 5: the bridge for terminal claude (ide_server.s)
+    .quad clipdrop_ctl          # phase 4 tasks 4-5: the headless clipboard's kinds, drops (drop.s)
+    .quad claude_mcp_ctl        # Claude chat phase 4 tasks 9, 10: rhun's server and hooks for the chat (claude_mcp.s)
     .quad 0
 ctl_table:
     .quad .Lc_key_up, c_key_up, .Lc_key, c_key, .Lc_modifiers, c_modifiers, .Lc_type, c_type, .Lc_move, c_move, .Lc_click, c_click, .Lc_tap, c_tap
@@ -2450,8 +2551,9 @@ ctl_table:
     .quad .Lc_print_scm, c_print_scm
     .quad .Lc_wait_ai, c_wait_ai, .Lc_print_ai, c_print_ai
     .quad .Lc_wait_update, c_wait_update, .Lc_print_update, c_print_update
-    .quad .Lc_print_frames, c_print_frames, .Lc_print_project, c_print_project
-    .quad .Lc_print_panels, c_print_panels, .Lc_print_tabs, c_print_tabs
+    .quad .Lc_print_frames, c_print_frames, .Lc_print_loop_stats, c_print_loop_stats
+    .quad .Lc_print_project, c_print_project
+    .quad .Lc_print_panels, c_print_panels, .Lc_print_tabs, c_print_tabs, .Lc_print_tabs_at, c_print_tabs_at
     .quad .Lc_print_palette, c_print_palette, .Lc_print_menu, c_print_menu
     .quad .Lc_print_tip, c_print_tip, .Lc_print_toast, c_print_toast, .Lc_print_link, c_print_link
     .quad .Lc_print_term_cell, c_print_term_cell, .Lc_print_scroll, c_print_scroll
@@ -2469,7 +2571,7 @@ ctl_table:
     .quad .Lc_ext_setting, c_ext_setting, .Lc_print_ext_page, c_print_ext_page
     .quad .Lc_print_extbar, c_print_extbar, .Lc_ext_page, c_ext_page, .Lc_ext_remove, c_ext_remove
     .quad .Lc_ext_menu, c_ext_menu, .Lc_menu_pick, c_menu_pick, .Lc_print_views, c_print_views
-    .quad .Lc_focus, c_focus, .Lc_print_complete, c_print_complete
+    .quad .Lc_focus, c_focus, .Lc_print_complete, c_print_complete, .Lc_wait_complete, c_wait_complete
     .quad 0, 0
 appearance_rows:
     .quad .Ls_theme_eq, cfg_theme, .Ls_dark_eq, cfg_dark_theme, .Ls_light_eq, cfg_light_theme, 0

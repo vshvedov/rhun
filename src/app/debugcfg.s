@@ -15,7 +15,7 @@ F CN_lkind, 4           # a leaf: 's' string, 'n' number, 'b' true/false, 'z' nu
 F CN_kid, 4             # first child, -1
 F CN_next, 4            # next sibling, -1
 F CN_index, 8           # an array element's index (elements stay in index order)
-ENDSTRUCT CN_SIZE
+ENDSTRUCT CN_NODE_SIZE
 .equ CN_LEAVES_MAX, 4096
 .equ CN_PATH_MAX, 256
 .equ CN_SEGS_MAX, 16
@@ -1884,7 +1884,7 @@ FN cn_reset
     call sb_push_byte
     mov dword ptr [rip + cn_leaves], 0
     lea rdi, [rip + cn]
-    mov esi, CN_SIZE
+    mov esi, CN_NODE_SIZE
     call vec_push
     mov dword ptr [rax + CN_kind], 1
     mov dword ptr [rax + CN_kid], -1
@@ -1895,7 +1895,7 @@ FN cn_reset
 # cn_node(index) -> CN*
 cn_node:
     mov eax, edi
-    imul rax, rax, CN_SIZE
+    imul rax, rax, CN_NODE_SIZE
     add rax, [rip + cn + VEC_ptr]
     ret
 
@@ -2002,7 +2002,7 @@ cn_child:
     call cs_add
     mov [rsp + 16], eax
     lea rdi, [rip + cn]
-    mov esi, CN_SIZE
+    mov esi, CN_NODE_SIZE
     call vec_push
     mov ecx, [rsp + 16]
     mov [rax + CN_name], ecx

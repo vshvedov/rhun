@@ -56,7 +56,7 @@ class Transforms(snippets.Snippets):
         extra=snippets.metadata(FIELDS)+wire(payload(((2,b'x\n\ty'),)))
         root=self.extensions(text='a a b',fields=FIELDS,extra=extra,transforms_feature=True,
             complete_range='1 3 1 6',edits=b'edit 1 1 1 1 1\n!')
-        out=self.run_editor(['wait 250','cmd complete','wait 300','key Return','key Tab','print-doc','cmd undo','print-doc'],exts=root)
+        out=self.run_editor(['wait 250','cmd complete','wait-complete','key Return','key Tab','print-doc','cmd undo','print-doc'],exts=root)
         self.assertIn('!  a x',out);self.assertIn('    y b',out);self.assertIn('!  a a b',out)
     def test_choices_and_variants(self):
         fields=((1,0,1,0),(1,2,4,0),(2,5,6,0))
@@ -77,7 +77,7 @@ class Transforms(snippets.Snippets):
                 self.assertTrue(any(x.startswith('error 20 syntax') for x in self.trace()),self.trace())
                 self.reset_extension()
                 root=self.extensions(text='a a b',fields=FIELDS,extra=extra,transforms_feature=True)
-                out=self.run_editor(['wait 250','cmd complete','wait 300','key Return','type q','print-doc'],exts=root)
+                out=self.run_editor(['wait 250','cmd complete','wait-complete','key Return','type q','print-doc'],exts=root)
                 if suffix in (valid[:-1],valid+b'garbage'): self.assertNotIn('a a bq',out)
                 else: self.assertIn('a a bq',out)
     def test_missing_feature_is_atomic_or_plain(self):
@@ -87,7 +87,7 @@ class Transforms(snippets.Snippets):
             self.assertIn('dirty=0 ',self.states(out)[0])
             self.reset_extension()
             root=self.extensions(text='a a b',fields=FIELDS,extra=snippets.metadata(FIELDS)+wire(),features=features,transforms_feature=transforms)
-            out=self.run_editor(['wait 250','cmd complete','wait 300','key Return','type q','print-doc'],exts=root)
+            out=self.run_editor(['wait 250','cmd complete','wait-complete','key Return','type q','print-doc'],exts=root)
             self.assertIn('a a bq',out)
     def test_stale_and_readonly(self):
         for kw,code in (({'version_add':1},'stale'),({'needs':'read'},'needs')):

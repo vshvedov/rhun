@@ -33,7 +33,7 @@ class Variants(snippets.Snippets):
         self.assertIn('next next',out)
     def test_completion_adopts_variants(self):
         root=self.extensions(text='a ABC',fields=FIELDS,extra=snippets.metadata(FIELDS)+b'variant 2 0\n',variants_feature=True)
-        out=self.run_editor(['wait 250','cmd complete','wait 100','key Return','print-doc','type x','print-doc'],exts=root)
+        out=self.run_editor(['wait 250','cmd complete','wait-complete','key Return','print-doc','type x','print-doc'],exts=root)
         self.assertIn('a ABC',out);self.assertIn('x x',out)
     def test_invalid_explicit_is_atomic(self):
         for suffix in (b'variant 1 0\n',b'variant 3 0\n',b'variant 4 0\n',b'variant 0 0\n',
@@ -54,12 +54,12 @@ class Variants(snippets.Snippets):
         self.assertNotIn('a ABC',out);self.assertIn('dirty=0 ',self.states(out)[0])
     def test_unnegotiated_completion_falls_back(self):
         root=self.extensions(text='a ABC',fields=FIELDS,extra=snippets.metadata(FIELDS)+b'variant 2 0\n')
-        out=self.run_editor(['wait 250','cmd complete','wait 100','key Return','type x','print-doc'],exts=root)
+        out=self.run_editor(['wait 250','cmd complete','wait-complete','key Return','type x','print-doc'],exts=root)
         self.assertIn('a ABCx',out)
     def test_invalid_completion_keeps_outer_links(self):
         data=b'a ABC';extra=snippets.metadata(FIELDS)+b'variant 2 0\n'
         completion=f'1 0\n1 1 1 4 snippet 3 5 0 {len(extra)}\n'.encode()+b'one'+data+extra
-        out=self.run_snippet(['cmd complete','wait 100','key Return','print-doc','type x','print-doc'],completion=completion)
+        out=self.run_snippet(['cmd complete','wait-complete','key Return','print-doc','type x','print-doc'],completion=completion)
         self.assertIn('a ABC two a ABC',out);self.assertIn('a ABCx two a ABCx',out)
     def test_stale_and_readonly_variants(self):
         out=self.variant(['print-doc'],version_add=1)

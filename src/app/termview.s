@@ -202,6 +202,16 @@ term_metrics:
 9:  pop rbx
     ret
 
+# ---- Claude chat phase 5 ----
+# FN term_env_ide(cstr or 0): every terminal's program gets this "NAME=value" (the bridge for terminal claude's
+#   CLAUDE_CODE_SSE_PORT, ide_server.s), or nothing more: the shells' environment is made again for the next one
+FN term_env_ide
+    mov [rip + env_extras + 24], rdi
+    mov rdi, [rip + env]
+    mov qword ptr [rip + env], 0
+    jmp mem_free
+# ---- end ----
+
 # term_spawn() -> 1 if a shell started
 FN term_spawn
     PROLOGUE 48
@@ -5333,6 +5343,117 @@ FN term_count
     mov rax, [rip + sessions + VEC_len]
     ret
 
+# ---- phase 4 task 7: a terminal for a mention (@terminal:NAME, agentatt.s and filelist.s) ----
+
+# FN term_title_at(i, sb) -> eax 1 when session i exists: its tab's label (a shell's title from its program,
+#   else its name; another's label) appended to sb
+FN term_title_at
+    PROLOGUE
+    mov r12, rsi
+    xor eax, eax
+    cmp rdi, [rip + sessions + VEC_len]
+    jae 9f
+    call sess
+    mov rbx, rax
+    cmp dword ptr [rbx + TS_kind], TK_SHELL
+    jne 2f
+    mov r13, [rbx + TS_term]
+    mov rsi, [r13 + TM_title + SB_ptr]
+    mov rdx, [r13 + TM_title + SB_len]
+    test rdx, rdx
+    jz 1f
+    mov rdi, r12
+    call sb_push
+    jmp 8f
+1:  lea rsi, [rbx + TS_name]
+    jmp 3f
+2:  mov rsi, [rbx + TS_title]
+    test rsi, rsi
+    jz 8f
+3:  mov rdi, r12
+    call sb_push_cstr
+8:  mov eax, 1
+9:  EPILOGUE
+
+# FN term_tail(name ptr, len, lines, sb) -> eax 1 when a terminal's label with its spaces made "_" is the name:
+#   its last lines (scrollback and screen, trailing blank lines left out) appended to sb; 0 none (the first such
+#   terminal, as the extension's terminals.find)
+FN term_tail
+    PROLOGUE 16
+    mov r12, rdi
+    mov r13, rsi
+    mov [rsp], edx
+    mov [rsp + 8], rcx
+    xor r14d, r14d
+1:  cmp r14, [rip + sessions + VEC_len]
+    jae .Ltl_none
+    lea rdi, [rip + tl_sb]
+    call sb_clear
+    mov rdi, r14
+    lea rsi, [rip + tl_sb]
+    call term_title_at
+    inc r14
+    cmp [rip + tl_sb + SB_len], r13
+    jne 1b
+    mov rdi, [rip + tl_sb + SB_ptr]
+    xor ecx, ecx
+2:  cmp rcx, r13
+    jae 4f
+    movzx eax, byte ptr [rdi + rcx]
+    cmp eax, ' '
+    jne 3f
+    mov eax, '_'
+3:  cmp al, [r12 + rcx]
+    jne 1b
+    inc rcx
+    jmp 2b
+4:  lea rdi, [r14 - 1]
+    call sess
+    mov rbx, [rax + TS_term]
+    lea rdi, [rip + tl_sb]
+    call sb_clear
+    mov rdi, rbx                # every row: the scrollback's, then the screen's
+    lea rsi, [rip + tl_sb]
+    mov edx, [rbx + TM_sblen]
+    neg edx
+    xor ecx, ecx
+    mov r8d, [rbx + TM_rows]
+    dec r8d
+    mov r9d, [rbx + TM_cols]
+    call term_text
+    mov r15, [rip + tl_sb + SB_len]     # the trailing blank lines off
+    mov rbx, [rip + tl_sb + SB_ptr]
+5:  test r15, r15
+    jz 6f
+    movzx eax, byte ptr [rbx + r15 - 1]
+    cmp eax, ' '
+    ja 6f
+    dec r15
+    jmp 5b
+6:  mov rcx, r15                # the last lines
+    mov edx, [rsp]
+7:  test rcx, rcx
+    jz 8f
+    cmp byte ptr [rbx + rcx - 1], 10
+    jne 71f
+    dec edx
+    jz 8f
+71: dec rcx
+    jmp 7b
+8:  mov rdi, [rsp + 8]
+    lea rsi, [rbx + rcx]
+    mov rdx, r15
+    sub rdx, rcx
+    call sb_push
+    mov eax, 1
+    EPILOGUE
+.Ltl_none:
+    xor eax, eax
+    EPILOGUE
+
+.bss
+.p2align 3
+tl_sb: .zero SB_SIZE            # (phase 4 task 7) term_tail's text
 .data
 rep_cell: .long -1
 
@@ -5422,8 +5543,13 @@ rep_cell: .long -1
 .Lm_paste: .asciz "Paste"
 .Lm_clear: .asciz "Clear"
 .Lm_kill: .asciz "Kill Terminal"
+# Claude chat phase 5: the fourth entry is CLAUDE_CODE_SSE_PORT=N while the bridge for terminal claude
+#   listens (ide_server.s, term_env_ide), else 0
+.data
 .p2align 3
-env_extras: .quad .Lenv_term, .Lenv_color, .Lenv_prog, 0
+env_extras: .quad .Lenv_term, .Lenv_color, .Lenv_prog, 0, 0
+.section .rodata
+.p2align 3
 term_menu:
     .quad .Lm_copy, cmd_term_copy, .Lm_paste, cmd_term_paste, .Lm_clear, cmd_clear_terminal
     .quad .Lm_kill, cmd_kill_terminal, 0, 0

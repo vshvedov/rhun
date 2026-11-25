@@ -78,7 +78,9 @@ FN links_url_ok
 9:  mov eax, 1
     EPILOGUE
 
-# FN links_host(url cstr, buf, cap): the URL's host (after "://", up to "/", "?", "#" or ":")
+# FN links_host(url cstr, buf, cap): the URL's host: after "://", in the authority (up to "/", "?", "#" or "\\"),
+#   after its last "@" (a user and password are not the host: "https://good.example:x@evil.example/" opens
+#   evil.example, phase 3 task 10), up to a ":" (the port; inside "[...]" an IPv6 address keeps its own)
 FN links_host
     mov rax, rdi
 1:  cmp byte ptr [rax], 0
@@ -94,35 +96,60 @@ FN links_host
 2:  inc rax
     jmp 1b
 3:  mov rax, rdi
-4:  dec rdx
+4:  mov r9, rax                 # the authority's end, and its last "@"
+    mov r10, rax
+41: movzx r8d, byte ptr [r9]
+    test r8d, r8d
+    jz 43f
+    cmp r8d, '/'
+    je 43f
+    cmp r8d, '?'
+    je 43f
+    cmp r8d, '#'
+    je 43f
+    cmp r8d, '\\'
+    je 43f
+    cmp r8d, '@'
+    jne 42f
+    lea r10, [r9 + 1]
+42: inc r9
+    jmp 41b
+43: mov rax, r10
+    dec rdx
     xor ecx, ecx
+    xor r11d, r11d              # inside "[...]"
 5:  cmp rcx, rdx
     jae 6f
+    lea r8, [rax + rcx]
+    cmp r8, r9
+    jae 6f
     movzx r8d, byte ptr [rax + rcx]
-    test r8d, r8d
+    cmp r8d, '['
+    jne 51f
+    mov r11d, 1
+51: cmp r8d, ']'
+    jne 52f
+    xor r11d, r11d
+52: cmp r8d, ':'
+    jne 53f
+    test r11d, r11d
     jz 6f
-    cmp r8d, '/'
-    je 6f
-    cmp r8d, '?'
-    je 6f
-    cmp r8d, '#'
-    je 6f
-    cmp r8d, ':'
-    je 6f
-    mov [rsi + rcx], r8b
+53: mov [rsi + rcx], r8b
     inc rcx
     jmp 5b
 6:  mov byte ptr [rsi + rcx], 0
     ret
 
-# FN links_open(url cstr): the default browser opens it; in a --extensions session RHUN_OPEN_URL
-# names a program run with the URL instead (tests)
+# FN links_open(url cstr): the default browser opens it; in a --extensions or a --headless session
+# RHUN_OPEN_URL names a program run with the URL instead (tests)
 FN links_open
     PROLOGUE 48
     mov rbx, rdi
     cmp qword ptr [rip + g_ext_dir], 0
+    jne 0f
+    cmp dword ptr [rip + g_headless], 0
     je 8f
-    lea rdi, [rip + .Lenv_open]
+0:  lea rdi, [rip + .Lenv_open]
     call getenv
     test rax, rax
     jz 8f
@@ -145,6 +172,123 @@ FN links_open
     EPILOGUE
 8:  mov rdi, rbx
     call desktop_open
+9:  EPILOGUE
+
+# FN links_ask_label(sb, who cstr, url cstr): "WHO wants to open HOST in your browser: URL" into sb (cleared
+#   first): what the user is asked before a URL opens (an extension's open-url, a reply's link)
+FN links_ask_label
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    call sb_clear
+    mov rdi, rbx
+    mov rsi, r12
+    call sb_push_cstr
+    mov rdi, rbx
+    lea rsi, [rip + .Lask_wants]
+    call sb_push_cstr
+    mov rdi, r13
+    lea rsi, [rip + lk_ask_host]
+    mov edx, 200
+    call links_host
+    mov rdi, rbx
+    lea rsi, [rip + lk_ask_host]
+    call sb_push_cstr
+    mov rdi, rbx
+    lea rsi, [rip + .Lask_browser]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, r13
+    call sb_push_cstr
+    EPILOGUE
+
+# FN links_ask_open(who cstr, url cstr): an http or https URL that came from WHO (a conversation's agent)
+#   opens only once the user says so: the chooser "WHO wants to open HOST in your browser: URL" with Open,
+#   Copy Link and Cancel (links_chose answers it; an extension's open-url has its own, with Always). Any
+#   other URL: nothing
+FN links_ask_open
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, r12
+    call strlen
+    mov r13, rax
+    mov rdi, r12
+    mov rsi, r13
+    call links_url_ok
+    test eax, eax
+    jz 9f
+    mov rdi, [rip + lk_ask_url]
+    call mem_free
+    mov rdi, r12
+    mov rsi, r13
+    call mem_dup
+    mov [rip + lk_ask_url], rax
+    lea rdi, [rip + lk_ask_sb]
+    mov rsi, rbx
+    mov rdx, r12
+    call links_ask_label
+    mov rsi, [rip + lk_ask_sb + SB_ptr]  # its first line, 200 bytes at most, as the palette's label
+    mov rdx, [rip + lk_ask_sb + SB_len]
+    xor ecx, ecx
+1:  cmp rcx, rdx
+    jae 2f
+    cmp byte ptr [rsi + rcx], 10
+    je 2f
+    inc rcx
+    jmp 1b
+2:  mov rdi, rcx
+    mov edx, 200
+    call utf8_cut
+    mov rsi, [rip + lk_ask_sb + SB_ptr]
+    lea rdi, [rip + lk_ask_label]
+    xor ecx, ecx
+3:  cmp rcx, rax
+    jae 4f
+    mov dl, [rsi + rcx]
+    mov [rdi + rcx], dl
+    inc rcx
+    jmp 3b
+4:  mov byte ptr [rdi + rcx], 0
+    call palette_links_open
+    lea rdi, [rip + .Lask_open]
+    mov esi, 4
+    mov edx, 1
+    call palette_choose_add
+    lea rdi, [rip + .Lask_copy]
+    mov esi, 9
+    mov edx, 2
+    call palette_choose_add
+    lea rdi, [rip + .Lask_cancel]
+    mov esi, 6
+    mov edx, 3
+    call palette_choose_add
+    call palette_choose_ready
+9:  EPILOGUE
+
+# FN links_chose(n): the answer to links_ask_open's chooser: 1 Open (links_open), 2 Copy Link, else nothing
+FN links_chose
+    PROLOGUE
+    mov rbx, [rip + lk_ask_url]
+    test rbx, rbx
+    jz 9f
+    mov qword ptr [rip + lk_ask_url], 0
+    cmp rdi, 1
+    jne 1f
+    mov rdi, rbx
+    call links_open
+    jmp 8f
+1:  cmp rdi, 2
+    jne 8f
+    mov rdi, rbx
+    call strlen
+    mov rsi, rax
+    mov rdi, rbx
+    xor edx, edx
+    call ed_clip_set
+8:  mov rdi, rbx
+    call mem_free
 9:  EPILOGUE
 
 # lk_opener_done(fd, revents, pid): the test opener's output drained, the program reaped
@@ -907,6 +1051,10 @@ FN c_print_links
 lk_relay_url: .quad 0
 lk_relay_took: .quad 0
 lk_relay_until: .quad 0
+lk_ask_url: .quad 0             # owned cstr: the URL links_ask_open's chooser asks about, or 0
+lk_ask_sb: .zero SB_SIZE
+lk_ask_host: .zero 208
+lk_ask_label: .zero 208         # the chooser's label (the palette keeps the pointer)
 
 .section .rodata
 .Lhttps: .asciz "https://"
@@ -927,3 +1075,8 @@ lk_relay_until: .quad 0
 .Lt_unexpected: .asciz "This link is not expected by any extension (it may have expired)"
 .Lp_links: .asciz "links="
 .Lp_listening: .asciz " listening="
+.Lask_wants: .asciz " wants to open "
+.Lask_browser: .asciz " in your browser: "
+.Lask_open: .asciz "Open"
+.Lask_copy: .asciz "Copy Link"
+.Lask_cancel: .asciz "Cancel"

@@ -134,6 +134,21 @@ sel_offer: .long 0
 wl_paste_mime:
 sel_offer_text: .long 0
 wl_paste_offer_native: .long 0
+.globl wl_paste_offer_new_kinds, wl_paste_offer_kinds, wl_paste_kinds, wl_paste_imgmax
+.globl wl_drop_offer, wl_drop_fd, wl_ddm_ver
+wl_ddm_ver: .long 0                 # the data device manager's bound version
+wl_drop_offer: .long 0              # phase 4 task 5: the drag's offer while it carries files and is over us
+wl_drop_x: .long 0                  #   where it is (window pixels)
+wl_drop_y: .long 0
+.p2align 3
+wl_drop_sb: .zero SB_SIZE           #   the list received
+wl_drop_deadline: .quad 0
+wl_drop_gen: .quad 0
+wl_paste_offer_new_kinds: .long 0   # phase 4 task 4: CLIPK_FILES (text/uri-list), CLIPK_IMAGE (image/png) offered
+wl_paste_offer_kinds: .long 0       #   by the new offer, by the selection's
+wl_paste_kinds: .long 0             # the request's kinds and its image's most bytes (wl_clip_get)
+wl_paste_imgmax: .long 0
+wl_paste_over: .long 0              # the receive stopped at its limit
 .p2align 3
 .globl wl_paste_offer_generation
 wl_paste_offer_generation: .quad 0
@@ -896,6 +911,7 @@ FN wl_dispatch
     mov [rip + offer_new], eax
     mov dword ptr [rip + offer_new_text], 0
     mov dword ptr [rip + wl_paste_offer_new_native], 0
+    mov dword ptr [rip + wl_paste_offer_new_kinds], 0
     jmp .Ld_ret
 1:  cmp r12d, 5                   # selection
     jne 2f
@@ -914,28 +930,30 @@ FN wl_dispatch
 3:  mov [rip + sel_offer], eax
     inc qword ptr [rip + wl_paste_offer_generation]
     mov dword ptr [rip + wl_paste_offer_native], 0
+    mov dword ptr [rip + wl_paste_offer_kinds], 0
     xor ecx, ecx
     cmp eax, [rip + offer_new]
     jne 4f
     mov ecx, [rip + wl_paste_offer_new_native]
     mov [rip + wl_paste_offer_native], ecx
+    mov ecx, [rip + wl_paste_offer_new_kinds]
+    mov [rip + wl_paste_offer_kinds], ecx
     mov ecx, [rip + offer_new_text]
 4:  mov [rip + sel_offer_text], ecx
     jmp .Ld_ret
-2:  cmp r12d, 1                   # dnd enter: not supported, drop the offer
-    jne .Ld_ret
-    cmp r14, 20
-    jne .Ld_ret
-    mov eax, [r13 + 16]
-    test eax, eax
-    jz .Ld_ret
-    MSG eax, 2
-    END
+2:  mov edi, r12d                 # drag and drop: enter, leave, motion, drop (phase 4 task 5)
+    mov rsi, r13
+    mov rdx, r14
+    call wl_drop_event
     jmp .Ld_ret
 
 .Ld_offer:
     test r12d, r12d
     jnz .Ld_ret
+    mov rdi, r13                  # phase 4 tasks 4 and 5: files and images offered
+    mov rsi, r14
+    call wl_offer_kind
+    or [rip + wl_paste_offer_new_kinds], eax
     mov rdi, r13
     mov rsi, r14
     call wl_paste_decode_mime
@@ -990,11 +1008,345 @@ FN wl_dispatch
 .Ld_ret:
     EPILOGUE
 
+# wl_offer_kind(wire string args, len) -> eax CLIPK_FILES for text/uri-list, CLIPK_IMAGE for image/png, else 0
+FN wl_offer_kind
+    PROLOGUE
+    xor eax, eax
+    cmp rsi, 4
+    jb 9f
+    mov ecx, [rdi]
+    test ecx, ecx
+    jz 9f
+    lea rdx, [rcx + 3]
+    and rdx, -4
+    add rdx, 4
+    cmp rdx, rsi
+    jne 9f
+    lea rbx, [rdi + 4]
+    lea r12d, [rcx - 1]
+    mov rdi, rbx
+    mov esi, r12d
+    lea rdx, [rip + .Lmime_uri]
+    call str_eq_cstr
+    test eax, eax
+    jz 1f
+    mov eax, CLIPK_FILES
+    jmp 9f
+1:  mov rdi, rbx
+    mov esi, r12d
+    lea rdx, [rip + .Lmime_png]
+    call str_eq_cstr
+    test eax, eax
+    jz 9f
+    mov eax, CLIPK_IMAGE
+9:  EPILOGUE
+
+# ---- drag and drop, the target side (phase 4 task 5) ----
+# wl_data_device's events 1 to 4: enter (serial, surface, x, y, offer): an offer that has text/uri-list is
+# kept, accepted for that type with a copy (set_actions from version 3), anything else destroyed; motion; leave
+# (the offer destroyed); drop: the list received on a pipe of its own (never the paste's), read as it comes
+# (on_drop_readable), at most CLIP_FILES_MAX bytes and XR-like 30 s, then finish (version 3) and destroy.
+
+# FN wl_drop_event(opcode, args, len)
+FN wl_drop_event
+    PROLOGUE 16
+    mov r12d, edi
+    mov r13, rsi
+    mov r14, rdx
+    cmp r12d, 1
+    jne 2f
+    cmp r14, 20                   # enter
+    jne 9f
+    cmp dword ptr [rip + wl_drop_fd], -1      # a list still being read keeps its offer
+    jne 0f
+    cmp dword ptr [rip + wl_drop_offer], 0
+    je 0f
+    call wl_drop_forget           # (a drag that left without a leave: it is over)
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+0:  mov ebx, [r13 + 16]
+    test ebx, ebx
+    jz 9f
+    cmp ebx, [rip + offer_new]
+    jne 1f
+    test dword ptr [rip + wl_paste_offer_new_kinds], CLIPK_FILES
+    jz 1f
+    cmp dword ptr [rip + wl_drop_fd], -1      # a list still being read: this drag is not taken
+    jne 1f
+    mov [rip + wl_drop_offer], ebx
+    MSG ebx, 0                    # accept(serial, "text/uri-list")
+    ARG [r13]
+    SARG .Lmime_uri
+    END
+    cmp dword ptr [rip + wl_ddm_ver], 3
+    jb 11f
+    MSG ebx, 4                    # set_actions(copy, copy)
+    ARG 1
+    ARG 1
+    END
+11: mov edi, [r13 + 8]
+    mov esi, [r13 + 12]
+    call wl_drop_point
+    mov edi, DROP_ENTER
+    jmp 8f
+1:  MSG ebx, 2                    # not files: the offer goes
+    END
+    jmp 9f
+2:  cmp r12d, 2                   # leave
+    jne 3f
+    cmp dword ptr [rip + wl_drop_offer], 0
+    je 9f
+    call wl_drop_forget
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+    jmp 9f
+3:  cmp r12d, 3                   # motion(time, x, y)
+    jne 4f
+    cmp r14, 12
+    jne 9f
+    cmp dword ptr [rip + wl_drop_offer], 0
+    je 9f
+    mov edi, [r13 + 4]
+    mov esi, [r13 + 8]
+    call wl_drop_point
+    mov edi, DROP_MOVE
+    jmp 8f
+4:  cmp r12d, 4                   # drop
+    jne 9f
+    mov ebx, [rip + wl_drop_offer]
+    test ebx, ebx
+    jz 9f
+    mov rdi, rsp
+    mov esi, O_CLOEXEC
+    SYS SYS_pipe2
+    test rax, rax
+    js 7f
+    MSG ebx, 1                    # receive("text/uri-list", fd)
+    SARG .Lmime_uri
+    END
+    mov edi, [rsp + 4]
+    call wl_flush_fd
+    mov edi, [rsp + 4]
+    SYS SYS_close
+    mov edi, [rsp]
+    call wl_drop_receive
+    test eax, eax
+    jnz 9f
+7:  call wl_drop_forget           # could not receive: as a leave
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+    jmp 9f
+8:  mov esi, [rip + wl_drop_x]
+    mov edx, [rip + wl_drop_y]
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+9:  EPILOGUE
+
+# wl_drop_point(x fixed, y fixed): the window's pixels into wl_drop_x, wl_drop_y
+wl_drop_point:
+    push rbx
+    mov ebx, esi
+    call fixed_to_phys
+    mov [rip + wl_drop_x], eax
+    mov edi, ebx
+    call fixed_to_phys
+    mov [rip + wl_drop_y], eax
+    pop rbx
+    ret
+
+# FN wl_drop_forget(): the drag's offer goes (finished when the list was taken), its read ends
+FN wl_drop_forget
+    PROLOGUE
+    mov ebx, [rip + wl_drop_offer]
+    mov dword ptr [rip + wl_drop_offer], 0
+    mov r12d, [rip + wl_drop_fd]
+    mov dword ptr [rip + wl_drop_fd], -1
+    inc qword ptr [rip + wl_drop_gen]
+    test r12d, r12d
+    js 1f
+    mov edi, r12d
+    call watch_remove
+    mov edi, r12d
+    SYS SYS_close
+1:  lea rdi, [rip + wl_drop_sb]
+    call sb_free
+    test ebx, ebx
+    jz 9f
+    MSG ebx, 2                    # destroy
+    END
+9:  EPILOGUE
+
+# wl_drop_receive(read fd) -> eax 1: the dropped list is read as it comes; 0 and the fd closed when it cannot
+wl_drop_receive:
+    PROLOGUE
+    mov ebx, edi
+    mov edi, ebx
+    mov esi, 3                  # F_GETFL
+    SYS SYS_fcntl
+    test rax, rax
+    js 8f
+    mov rdx, rax
+    or edx, O_NONBLOCK
+    mov edi, ebx
+    mov esi, F_SETFL
+    SYS SYS_fcntl
+    test rax, rax
+    js 8f
+    inc qword ptr [rip + wl_drop_gen]
+    mov edi, ebx
+    mov esi, POLLIN
+    lea rdx, [rip + on_drop_readable]
+    mov rcx, [rip + wl_drop_gen]
+    call watch_try_add
+    test eax, eax
+    jz 8f
+    mov [rip + wl_drop_fd], ebx
+    call time_ms
+    add rax, WCL_TIMEOUT
+    mov [rip + wl_drop_deadline], rax
+    mov eax, 1
+    EPILOGUE
+8:  mov edi, ebx
+    SYS SYS_close
+    xor eax, eax
+    EPILOGUE
+
+# FN on_drop_readable(fd, events, generation): a piece of the dropped list; at its end the files are dropped
+FN on_drop_readable
+    PROLOGUE 16
+    mov ebx, edi
+    cmp ebx, [rip + wl_drop_fd]
+    jne 9f
+    cmp rdx, [rip + wl_drop_gen]
+    jne 9f
+    mov edx, CLIP_FILES_MAX + 1  # never more than the cap and one byte
+    sub rdx, [rip + wl_drop_sb + SB_len]
+    jbe 7f
+    cmp rdx, 65536
+    jbe 1f
+    mov edx, 65536
+1:  mov r12, rdx
+    lea rdi, [rip + wl_drop_sb]
+    mov rsi, rdx
+    call sb_reserve
+    mov edi, ebx
+    mov rsi, rax
+    mov rdx, r12
+    SYS SYS_read
+    test rax, rax
+    jz 7f
+    js 5f
+    add [rip + wl_drop_sb + SB_len], rax
+    call time_ms
+    add rax, WCL_TIMEOUT
+    mov [rip + wl_drop_deadline], rax
+    jmp 9f
+5:  cmp rax, -EINTR
+    je 9f
+    cmp rax, -EAGAIN
+    je 9f
+    call wl_drop_forget         # a broken pipe: as a leave
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+    jmp 9f
+7:  mov rdi, [rip + wl_drop_sb + SB_ptr]   # the end (or the cap): whole lines only past the cap
+    mov rsi, [rip + wl_drop_sb + SB_len]
+    cmp rsi, CLIP_FILES_MAX
+    jbe 72f
+    mov rsi, CLIP_FILES_MAX
+71: test rsi, rsi
+    jz 72f
+    cmp byte ptr [rdi + rsi - 1], 10
+    je 72f
+    dec rsi
+    jmp 71b
+72: xor r12d, r12d
+    xor r13d, r13d
+    test rdi, rdi
+    jz 73f
+    call uri_list_paths
+    mov r12, rax
+    mov r13, rdx
+73: mov ebx, [rip + wl_drop_offer]  # finish (version 3), then the offer goes
+    test r12, r12
+    jz 74f
+    cmp dword ptr [rip + wl_ddm_ver], 3
+    jb 74f
+    MSG ebx, 3
+    END
+74: call wl_drop_forget
+    mov edi, DROP_FILES
+    mov esi, [rip + wl_drop_x]
+    mov edx, [rip + wl_drop_y]
+    mov rcx, r12
+    mov r8, r13
+    test r12, r12
+    jnz 75f
+    mov edi, DROP_LEAVE
+75: call app_on_drop
+    mov rdi, r12
+    call mem_free
+9:  EPILOGUE
+
+# FN wl_drop_tick(): a list that stalled ends, unaccepted (as a leave)
+FN wl_drop_tick
+    cmp dword ptr [rip + wl_drop_fd], -1
+    je 9f
+    sub rsp, 8
+    call time_ms
+    add rsp, 8
+    cmp rax, [rip + wl_drop_deadline]
+    jb 9f
+    sub rsp, 8
+    call wl_drop_forget
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+    add rsp, 8
+9:  ret
+
+# FN wl_drop_timeout() -> eax ms until a stalled list ends, -1 none
+FN wl_drop_timeout
+    mov eax, -1
+    cmp dword ptr [rip + wl_drop_fd], -1
+    je 9f
+    sub rsp, 8
+    call time_ms
+    add rsp, 8
+    mov rcx, [rip + wl_drop_deadline]
+    sub rcx, rax
+    jbe 1f
+    mov eax, ecx
+    ret
+1:  xor eax, eax
+9:  ret
+
 # Focus loss invalidates the selected offer before any application callback.
 FN wl_paste_offer_clear
     PROLOGUE
     mov ebx, [rip + sel_offer]
     mov dword ptr [rip + sel_offer], 0
+    mov dword ptr [rip + wl_paste_offer_kinds], 0
     mov dword ptr [rip + sel_offer_text], 0
     mov dword ptr [rip + wl_paste_offer_native], 0
     inc qword ptr [rip + wl_paste_offer_generation]
@@ -1108,6 +1460,12 @@ wl_on_global:
     ARG [rsp + 4]
     END
     mov rax, [rbx + 8]
+    lea rcx, [rip + id_ddm]       # the data device's version: drops use set_actions and finish from 3
+    cmp rax, rcx
+    jne 1f
+    mov eax, [rsp]
+    mov [rip + wl_ddm_ver], eax
+1:  mov rax, [rbx + 8]
     lea rcx, [rip + id_seat]
     cmp rax, rcx
     jne .Lg_ret
@@ -2093,7 +2451,15 @@ wl_timeout:
     push rbx
     call wl_paste_timeout
     mov ebx, eax
-    call wl_send_timeout
+    call wl_drop_timeout          # a dropped list being read (phase 4 task 5)
+    cmp eax, -1
+    je 5f
+    cmp ebx, -1
+    je 6f
+    cmp eax, ebx
+    jae 5f
+6:  mov ebx, eax
+5:  call wl_send_timeout
     cmp ebx, -1
     je 3f
     cmp eax, -1
@@ -2132,6 +2498,7 @@ wl_repeat_timeout:
 wl_tick:
     sub rsp, 8
     call wl_paste_tick
+    call wl_drop_tick
     call wl_send_tick
     call wl_repeat_tick
     add rsp, 8
@@ -2518,6 +2885,8 @@ wl_clip_snapshot:
 # clipboard: one counted receive for the currently submitted shared request.
 FN wl_clip_get
     PROLOGUE 32
+    mov [rip + wl_paste_kinds], edi     # (kinds CLIPK_*, an image's most bytes: phase 4 task 4)
+    mov [rip + wl_paste_imgmax], esi
     mov rax, [rip + app_clip_active_token]
     mov [rsp + 8], rax
     call wl_paste_tick
@@ -2574,7 +2943,16 @@ FN wl_clip_get
     cmp dword ptr [rip + wl_paste_offer_native], 0
     je 1f
     mov r15d, 4
-1:  mov rdi, [rsp + 8]
+1:  mov eax, [rip + wl_paste_offer_kinds]   # files wanted and offered (5), else an image (6)
+    and eax, [rip + wl_paste_kinds]
+    test eax, CLIPK_FILES
+    jz 11f
+    mov r15d, 5
+    jmp 12f
+11: test eax, CLIPK_IMAGE
+    jz 12f
+    mov r15d, 6
+12: mov rdi, [rsp + 8]
     mov esi, r12d
     mov edx, r15d
     mov ecx, r13d
@@ -2583,7 +2961,7 @@ FN wl_clip_get
     test eax, eax
     jnz .Lwpg_done
     cmp r15d, 4
-    jne .Lwpg_rejected
+    jb .Lwpg_rejected
     mov rdi, [rsp + 8]
     mov esi, r12d
     mov edx, r13d
@@ -2619,7 +2997,7 @@ FN wl_paste_start
     cmp r15, [rip + wl_paste_offer_generation]
     jne .Lwps_fail
     lea eax, [r13 - 1]
-    cmp eax, 3
+    cmp eax, 5
     ja .Lwps_fail
     mov rdi, rsp
     mov esi, O_CLOEXEC
@@ -2635,7 +3013,12 @@ FN wl_paste_start
     mov [rip + wl_paste_attempt_offer], r12d
     mov [rip + wl_paste_attempt_generation], r15
     mov [rip + wl_paste_plain], r14d
+    mov dword ptr [rip + wl_paste_over], 0
     MSG r12d, 1
+    cmp r13d, 5
+    je .Lwps_uri
+    cmp r13d, 6
+    je .Lwps_png
     cmp r13d, 4
     je .Lwps_native
     cmp r13d, 2
@@ -2652,6 +3035,12 @@ FN wl_paste_start
     jmp .Lwps_send
 .Lwps_string:
     SARG .Lmime_utf8str
+    jmp .Lwps_send
+.Lwps_uri:
+    SARG .Lmime_uri
+    jmp .Lwps_send
+.Lwps_png:
+    SARG .Lmime_png
 .Lwps_send:
     END
     mov edi, [rsp + 4]
@@ -2791,8 +3180,21 @@ FN wl_paste_reject
     jne .Lwpre_done
     test ebx, ebx
     js .Lwpre_done
-    cmp dword ptr [rip + wl_paste_format], 4
-    jne .Lwpre_cancel
+    cmp dword ptr [rip + wl_paste_format], 6  # an image past its limit: said so (phase 4 task 4)
+    jne 1f
+    cmp dword ptr [rip + wl_paste_over], 0
+    je 1f
+    mov rax, [rip + paste_sb + SB_len]
+    mov [rip + g_clip_read], rax
+    call wl_paste_dispose
+    mov rdi, r12
+    mov esi, CLIPK_IMAGE
+    xor edx, edx
+    mov rcx, CLIP_TOO_BIG
+    call app_clip_complete_kind
+    jmp .Lwpre_done
+1:  cmp dword ptr [rip + wl_paste_format], 4  # native, a file list, an image: the text instead
+    jb .Lwpre_cancel
     mov r13d, [rip + wl_paste_attempt_offer]
     mov r14, [rip + wl_paste_attempt_generation]
     mov r15d, [rip + wl_paste_plain]
@@ -2834,7 +3236,11 @@ FN wl_paste_complete
     mov [rsp + CWB_SIZE], eax
     mov rdi, r12
     mov rsi, r13
-    cmp eax, 4
+    cmp eax, 5                  # a file list or an image: no UTF-8 check (phase 4 task 4)
+    jb 0f
+    mov eax, 1
+    jmp 2f
+0:  cmp eax, 4
     jne 1f
     mov rdx, rsp
     call clip_wire_decode
@@ -2864,7 +3270,20 @@ FN wl_paste_complete
     mov rdi, r15
     mov rsi, r12
     mov rdx, r13
-    cmp dword ptr [rsp + CWB_SIZE], 4
+    cmp dword ptr [rsp + CWB_SIZE], 6
+    jne 41f
+    mov esi, CLIPK_IMAGE
+    mov rdx, r12
+    mov rcx, r13
+    call app_clip_complete_kind
+    jmp 5f
+41: cmp dword ptr [rsp + CWB_SIZE], 5
+    jne 42f
+    mov rsi, r12
+    mov rdx, r13
+    call wl_paste_files_done
+    jmp 5f
+42: cmp dword ptr [rsp + CWB_SIZE], 4
     jne 4f
     call app_clip_complete_native
     jmp 5f
@@ -2881,10 +3300,54 @@ FN wl_paste_complete
 # Counted cap depends on the selected MIME, never on untrusted payload fields.
 FN wl_paste_limit
     mov eax, WCL_LIMIT
-    cmp dword ptr [rip + wl_paste_format], 4
+    cmp dword ptr [rip + wl_paste_format], 6    # an image: what the request reads, never more
+    jne 2f
+    mov ecx, [rip + wl_paste_imgmax]
+    test ecx, ecx
+    cmovnz eax, ecx
+    ret
+2:  cmp dword ptr [rip + wl_paste_format], 5
+    jne 3f
+    mov eax, CLIP_FILES_MAX
+    ret
+3:  cmp dword ptr [rip + wl_paste_format], 4
     jne 1f
     mov eax, CLW_MAX
 1:  ret
+
+# wl_paste_files_done(token, ptr, len): a whole text/uri-list: its local files (uri_list_paths), or, with none,
+#   the selection's text asked for in its place (phase 4 task 4)
+wl_paste_files_done:
+    PROLOGUE
+    mov rbx, rdi
+    mov rdi, rsi
+    mov rsi, rdx
+    call uri_list_paths
+    test rax, rax
+    jz 1f
+    mov r12, rax
+    mov rdi, rbx
+    mov esi, CLIPK_FILES
+    mov rcx, rdx
+    mov rdx, rax
+    call app_clip_complete_kind
+    mov rdi, r12
+    call mem_free
+    EPILOGUE
+1:  mov rdi, rbx
+    mov esi, [rip + sel_offer]
+    mov edx, [rip + sel_offer_text]
+    mov ecx, edx
+    mov r8, [rip + wl_paste_offer_generation]
+    call wl_paste_start
+    test eax, eax
+    jnz 9f
+    mov rdi, rbx
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    call app_clip_complete
+9:  EPILOGUE
 
 # Bounded send jobs retain the source record, not the current clipboard view.
 FN wl_send_find
@@ -3414,6 +3877,8 @@ global_table:
 .Lmime_native: .asciz "application/x-rhun-clipboard-v1"
 .Lmime_plain: .asciz "text/plain"
 .Lmime_utf8str: .asciz "UTF8_STRING"
+.Lmime_uri: .asciz "text/uri-list"
+.Lmime_png: .asciz "image/png"
 .Lproto_err: .asciz "wayland protocol error: "
 .Ldisconnected: .asciz "rhun: wayland connection closed"
 .Lsend_err: .asciz "rhun: wayland send failed"
@@ -3430,6 +3895,7 @@ rep_delay: .long 400
 .globl wl_paste_fd
 wl_paste_fd:
 paste_fd: .long -1
+wl_drop_fd: .long -1                # phase 4 task 5: the dropped list's pipe while it is read
 .globl g_csd, g_dpi_scale
 g_csd: .long 1
 deco_applied: .long -1
@@ -3467,7 +3933,7 @@ FN on_paste_readable
     call wl_paste_limit
     mov r14, rax
     sub r14, [rip + paste_sb + SB_len]
-    jc .Lwread_cancel
+    jc .Lwread_over
     xor r13d, r13d
     test r14, r14
     jz .Lwread_probe
@@ -3501,7 +3967,8 @@ FN on_paste_readable
     mov edx, r13d
     call wl_paste_read_result
     jmp .Lwread_done
-.Lwread_cancel:
+.Lwread_over:
+    mov dword ptr [rip + wl_paste_over], 1
     call wl_paste_reject
 .Lwread_done:
     EPILOGUE
@@ -3529,12 +3996,12 @@ FN wl_paste_read_result
     js .Lwresult_error
     jz .Lwresult_eof
     test r13d, r13d
-    jnz .Lwresult_cancel
+    jnz .Lwresult_over
     call wl_paste_limit
     sub rax, [rip + paste_sb + SB_len]
-    jc .Lwresult_cancel
+    jc .Lwresult_over
     cmp r12, rax
-    ja .Lwresult_cancel
+    ja .Lwresult_over
     mov rax, [rip + paste_sb + SB_ptr]
     test rax, rax
     jz .Lwresult_cancel
@@ -3552,6 +4019,9 @@ FN wl_paste_read_result
     je .Lwresult_done
     cmp r12, -EAGAIN
     je .Lwresult_done
+    jmp .Lwresult_cancel        # a broken pipe is no paste, not a too-big one
+.Lwresult_over:
+    mov dword ptr [rip + wl_paste_over], 1
 .Lwresult_cancel:
     call wl_paste_reject
     jmp .Lwresult_done

@@ -437,7 +437,8 @@ F P_tick, 8             # ()
 F P_draw, 8             # () renders if possible
 F P_cursor, 8           # (shape)
 F P_clip_set, 8         # (ptr, len) -> 1 accepted write request, 0 known failure
-F P_clip_get, 8         # () snapshots app_clip_active_token, completes through app_clip_complete
+F P_clip_get, 8         # (CLIPK_* wanted, an image's most bytes) snapshots app_clip_active_token, completes
+                        #   through app_clip_complete (text) or app_clip_complete_kind (files, an image)
 F P_move, 8             # ()
 F P_resize, 8           # (edges)
 F P_minimize, 8         # ()
@@ -1391,6 +1392,10 @@ ENDSTRUCT WE_SIZE
 .macro M reg, idx
     mov \reg, [rip + g_mt + 4*(\idx)]
 .endm
+# PM: a metric inside the agents panel, in proportion to its own text size (agentfont.s)
+.macro PM reg, idx
+    mov \reg, [rip + g_pmt + 4*(\idx)]
+.endm
 
 # ui_btn result bits
 .equ UB_HOVER, 1
@@ -1410,8 +1415,11 @@ F TF_id, 4
 F TF_top, 4             # text area: the first visual row shown
 F TF_width, 4           # text area: available text width in pixels
 F TF_prefx, 4           # text area: preferred x for vertical motion, -1 = none
-F TF_pad, 4
+F TF_ring, 4            # text area: its frame's colour while it has the keys, a theme slot + 1 (0: T_ACCENT)
 F TF_revision, 8        # content or destination lifecycle mutation
+F TF_face, 8            # text area: the face it measures and draws in, 0 the interface's
+F TF_paint, 8           # text area: 0, or ranges {start 8, end 8, kind 4, pad 4} ending start -1 drawn
+                        #   in the cycling colours (PAINT_RAINBOW)
 ENDSTRUCT TF_SIZE
 
 # Owned destination snapshot and queued clipboard request. No document pointers retained.
@@ -1434,7 +1442,9 @@ ENDSTRUCT TF_SIZE
 .equ CPR_putkind, 120
 .equ CPR_putcount, 128
 .equ CPR_putmode, 136
-.equ CPR_SIZE, 144
+.equ CPR_kinds, 144              # CLIPK_* the request takes (phase 4 task 4)
+.equ CPR_imgmax, 148             #   and the most bytes of an image it reads
+.equ CPR_SIZE, 152
 .equ CPR_COUNT, 16
 .equ CPX_DOCUMENT, 1
 .equ CPX_FIELD, 2
@@ -1616,7 +1626,13 @@ ENDSTRUCT TF_SIZE
 .equ IC_DBG_OVER, 170
 .equ IC_DBG_INTO, 171
 .equ IC_DBG_OUT, 172
-.equ IC_COUNT, 173
+.equ IC_SPIN0, 173
+.equ IC_SPIN1, 174
+.equ IC_SPIN2, 175
+.equ IC_SPIN3, 176
+.equ IC_SPIN4, 177
+.equ IC_SPIN5, 178
+.equ IC_COUNT, 179
 # end of the icons from SVG files
 
 # explorer header buttons; the title bar's tooltips name them too
@@ -2418,6 +2434,13 @@ ENDSTRUCT CRF_SIZE
     # remote hosts (remote.s): "ssh", "docker", "podman", "wsl", "local" in a remote window, else empty
     CTXKEY CTX_REMOTE_NAME, "remoteName", 0
     CTXKEY CTX_REMOTE_HOST, "remoteHost", 0
+    # phase 4 task 12: the active tab is a Review tab with something undecided (review.s)
+    CTXKEY CTX_VIEWING_PROPOSED, "viewingProposedChange", ck_viewing_proposed
+    # phase 4 task 8: the agents panel's prompt box has the keys
+    CTXKEY CTX_AGENTS_INPUT_FOCUS, "agentsInputFocus", ck_agents_input_focus
+    # p8: the extension's other when-clause keys (agentcmd.s)
+    CTXKEY CTX_CLAUDE_FOCUS, "claudeFocus", ck_claude_focus
+    CTXKEY CTX_CLAUDE_USE_TERMINAL, "claudeUseTerminal", ck_claude_use_terminal
 .endm
 # when.s expands the list as records: FN, the name, padding to 8 bytes
 .macro CTXKEY sym, name, fn
@@ -2815,6 +2838,261 @@ ENDSTRUCT TM_SIZE
 .endif
 .endm
 
+# ---- a conversation's rows (agents.s; typed rows: agentrows.s) ----
+# AM: a row, by value in AS_msgs (a row's address changes when a row is added: keep indices)
+STRUCT
+F AM_role, 4            # R_*
+F AM_h, 4
+F AM_w, 4
+F AM_rev, 4             # its text's revision: agents_msg_changed counts the changes
+F AM_text, 8
+F AM_len, 8
+F AM_name, 8
+F AM_doc, 8             # a reply's Markdown (md_new), parsed when it is first measured exactly, or 0
+F AM_drev, 4            # the revision AM_doc was parsed from
+F AM_dpx, 4             # the text size AM_doc was given (md_set_size)
+F AM_hrev, 4            # what AM_h was measured for, beside AM_w: the revision, the text size,
+F AM_hpx, 4             #   g_face_gen and whether its document gave it (1) or its plain text (0)
+F AM_hgen, 4
+F AM_hdoc, 4
+F AM_dx, 4              # where it was drawn last (its text's left, its top on screen), in which
+F AM_dy, 4              #   frame of the conversation (th_serial)
+F AM_dser, 4
+F AM_flags, 4           # AMF_*
+F AM_qid, 8             # a queued row's message (agent_queued): a held one's uuid's first 8 bytes, a
+                        #   waiting prompt's serial; 0 none
+F AM_mute, 8            # as drawn last: the byte its text is muted from (a prompt's truncation marker), -1
+F AM_x, 8               # AT* of a typed tool row, or 0 (a simple row: drawn as before phase 3)
+F AM_t, 8               # unix milliseconds of its record, 0 unknown
+F AM_nl, 4              # line feeds in AM_text (kept by add_msg, agents_msg_append, agents_msg_set)
+F AM_turn, 4            # the index of its turn's prompt row, -1
+F AM_fold, 4            # focus view: its fold in AS_folds, -1 not foldable
+F AM_ms, 4              # thinking: how long, milliseconds, -1 unknown
+F AM_n, 4               # thinking: the live token estimate; a compaction marker: thousands of tokens freed
+F AM_hag, 4             # the view's generation (ag_gen) AM_h was measured for
+ENDSTRUCT AM_SIZE
+.equ R_USER, 1                  # AM_role (role_names in agents.s by the same numbers)
+.equ R_ASSIST, 2
+.equ R_TOOL, 3
+.equ R_RESULT, 4
+.equ R_ERROR, 5                 # extension sessions (agentext.s): an error and a notice, drawn as results
+.equ R_INFO, 6
+.equ R_THINK, 7
+.equ R_META, 8
+.equ R_COMPACT, 9
+.equ R_UNKNOWN, 10
+.equ AMF_PILL, 1                # a centred one-line pill ("Switched to NAME")
+.equ AMF_QUEUED, 2              # a message that has not started yet: after the thread, muted, "queued"
+.equ AMF_EST, 4                 # AM_h is an estimate
+.equ AMF_LIVE, 8                # still streaming
+.equ AMF_DAY, 16                # a day pill above it
+.equ AMF_OPEN, 32               # a compaction marker or a prompt shown whole
+.equ AMF_FAILED, 64             # a reply the agent marked failed
+.equ AMF_NOTICE, 128            # a wrapped notice: hidden in focus view
+.equ AMF_MANUAL, 256            # a compaction asked for
+.equ AMF_ECHO, 512              # a slash command's echo
+.equ AMF_CHIPS, 1024            # AM_name holds its chips, LF between them
+.equ AMF_FMS, 2048              # a thinking row's time is counted in its fold's (agentfold.s)
+# HX: the sums of 64 rows (AS_hx; agents.s keeps them)
+STRUCT
+F HX_sum, 4             # its rows' heights and gaps, for the key (HXF_ROWS), else from the aggregates
+F HX_fix, 4             # the pixels of its rows that do not depend on the width (gaps included)
+F HX_lines, 4           # of those that do: their lines (AM_nl + 1) and bytes, summed
+F HX_bytes, 4
+F HX_flags, 4           # HXF_*
+F HX_ffix, 4            # the same three as focus view shows its rows (agentfold.s agfold_parts): a toggle
+F HX_flines, 4          #   picks the other three, nothing is summed again
+F HX_fbytes, 4
+ENDSTRUCT HX_SIZE
+.equ HXF_ROWS, 1                # HX_sum is its rows' own heights
+.equ HXF_AGG, 2                 # both sets of aggregates are valid for the text size and ag_gen
+.equ HX_SHIFT, 6                # 64 rows a chunk
+# AC: a call of AS_calls (open addressing, a power of two slots, doubled at half full)
+STRUCT
+F AC_hash, 8            # hash_line of the call's id; 0 empty, 1 deleted
+F AC_at, 8              # AT*
+ENDSTRUCT AC_SIZE
+# ATI: a todo item of a call
+STRUCT
+F ATI_text, 8           # owned cstr
+F ATI_state, 4          # TODO_*
+F ATI_pad, 4
+ENDSTRUCT ATI_SIZE
+.equ TODO_PENDING, 0
+.equ TODO_ACTIVE, 1
+.equ TODO_DONE, 2
+# AF: a fold of focus view (AS_folds, agentfold.s)
+STRUCT
+F AF_first, 4           # rows
+F AF_last, 4
+F AF_calls, 4
+F AF_failed, 4
+F AF_thinks, 4
+F AF_other, 4
+F AF_ms, 4              # its thinking's milliseconds, -1 when one is unknown
+F AF_flags, 4           # AFF_*
+ENDSTRUCT AF_SIZE
+.equ AFF_OPEN, 1
+# AT: a tool call (mem_alloc'd, never moved; owned by its row's AM_x or by its parent's AT_kids). A driver or
+#   a reader fills its neutral parts through agrow_* (agentrows.s); the renderer draws the parts that are set
+#   and never looks at a tool's name
+STRUCT
+F AT_id, 8              # owned cstr
+F AT_up, 8              # AT* it ran under, 0
+F AT_row, 4             # its top-level row
+F AT_state, 4           # ATS_*
+F AT_flags, 4           # ATF_*
+F AT_depth, 4
+F AT_name, 8            # owned cstrs or 0: at most 400 bytes each, cut for showing only
+F AT_second, 8
+F AT_tail, 8
+F AT_desc, 8
+F AT_note, 8
+F AT_find, 8
+F AT_title, 8
+F AT_link, 8            # owned cstr or 0: at most AT_LINK_MAX bytes, never cut (a longer target is no link)
+F AT_aux, 8             # owned cstr or 0: the mapper's own (a subagent's id)
+F AT_l0, 4              # the lines a file link opens at, 1-based, 0 none
+F AT_l1, 4
+F AT_in, SB_SIZE        # what is kept: a preview, or what streamed
+F AT_out, SB_SIZE
+F AT_a, SB_SIZE
+F AT_b, SB_SIZE
+F AT_size, 32           # each part's whole bytes, by ATX_IN..ATX_B
+F AT_lines, 16          # and its lines
+F AT_file, 8            # owned path of the file its records are in, 0 the session's
+F AT_uoff, 8            # the call's line there, -1 none
+F AT_ulen, 8
+F AT_roff, 8            # its result's line
+F AT_rlen, 8
+F AT_items, VEC_SIZE    # ATI
+F AT_kids, VEC_SIZE     # AT*
+F AT_nkids, 4           # the count its result gave, -1 unknown
+F AT_big, 4             # a bit per text part (1 << (ATX - ATX_IN)): longer than 250 UTF-16 units or than 3
+                        #   lines (the extension's V7): a button that opens it in a tab
+F AT_t0, 8              # time_ms it was made live, 0 from a file
+F AT_diff, 8            # agentdiff.s's record, or 0
+F AT_h, 4               # the layout cached for a width; -1 none
+F AT_w, 4
+F AT_rev, 4
+F AT_fold, 4            # what its fold counts of it (agentfold.s): 1 a call, 2 a failed one
+F AT_nfail, 4           # its children that failed (task 11: the count line's " · M failed")
+F AT_kpad, 4
+F AT_pics, 8            # (phase 4 task 6) owned cstr or 0: its result's images as a chips text ("i TAB [Image]
+                        #   TAB TARGET" lines: "@OFF:LEN:N" a place in the session's file, "#ID" a picture kept)
+ENDSTRUCT AT_SIZE
+.equ ATS_RUNNING, 0
+.equ ATS_OK, 1
+.equ ATS_FAILED, 2
+.equ ATS_DENIED, 3
+.equ ATS_STOPPED, 4
+.equ ATF_HIDDEN, 1              # no row at all
+.equ ATF_SHELL, 2               # IN is a command: a Copy button
+.equ ATF_PRE, 4                 # AT_b is a file's text under the note
+.equ ATF_DIFF, 8                # AT_a to AT_b is a diff
+.equ ATF_WAIT, 16               # no result yet
+.equ ATF_BG, 32                 # runs in the background
+.equ ATF_CANBG, 64              # may be sent there while it runs
+.equ ATF_KIDS, 128              # its children are listed
+.equ ATF_MD, 256                # IN is Markdown: its tab is a Markdown tab
+.equ ATF_PARENT, 512            # may get children: stays in AS_calls
+.equ ATF_LOADED, 1024           # its children were read from their file
+.equ AT_PREVIEW, 600            # a row from a file keeps of IN and OUT: bytes, lines
+.equ AT_PREVIEW_LINES, 6
+.equ AT_SIDE, 2048              # of a diff's sides and a file's text
+.equ AT_SIDE_LINES, 12
+.equ AT_LIVE_MAX, 16384         # a streamed part keeps
+.equ AT_REREAD_MAX, 16777216    # a line read again at most
+.equ AT_LINK_MAX, 4000
+.equ AT_ITEMS_MAX, 200
+.equ AT_KIDS_MAX, 1000
+.equ AT_DEPTH_MAX, 8
+.equ AT_SHORT_MAX, 400          # the other text parts are cut here (for showing only)
+.equ ATX_NAME, 0                # agrow_set's which
+.equ ATX_SECOND, 1
+.equ ATX_LINK, 2
+.equ ATX_TAIL, 3
+.equ ATX_DESC, 4
+.equ ATX_NOTE, 5
+.equ ATX_FIND, 6
+.equ ATX_TITLE, 7
+.equ ATX_AUX, 8
+.equ ATX_IN, 9
+.equ ATX_OUT, 10
+.equ ATX_A, 11
+.equ ATX_B, 12
+.equ ATV_STATE, 0               # agrow_num's which
+.equ ATV_SET, 1                 # flags on
+.equ ATV_CLEAR, 2               # flags off
+.equ ATV_L0, 3
+.equ ATV_L1, 4
+.equ ATV_NKIDS, 5
+.equ ID_AG_PART, 0x600000       # + (slot << 6) + part: a typed row's buttons (slot 0..255 from agrow_slot)
+.equ PART_LINK, 1
+.equ PART_IN, 2
+.equ PART_OUT, 3
+.equ PART_PRE, 4
+.equ PART_DIFF, 5
+.equ PART_NOTE, 6
+.equ PART_TOGGLE, 7
+.equ PART_COPY, 8
+.equ PART_KIDS, 9
+.equ PART_MORE, 10
+.equ PART_STOP, 11
+.equ PART_BG, 12
+.equ PART_FOLD, 13              # focus view: a fold's line (agentfold.s)
+.equ PART_COLLAPSE, 14          #   and its "Collapse" line
+.equ PART_CHIP, 16              # + n, n < 16
+.equ PART_ERR, 32               # + n, n < 8
+.equ PART_PIC, 40               # + n, n < PICS_MAX: a picture of a call's result (phase 4 task 6)
+.equ PICS_MAX, 4
+# phase 3 task 10 (agentsel.s): what holds a selection, a reply's Copy response (free parts of a unit's ids)
+.equ SELP_MD, 0                 # the row's Markdown (its document holds it); else PART_IN, PART_OUT or:
+.equ SELP_PROMPT, 60            #   a prompt's text
+.equ SELP_META, 61              #   a meta line's
+.equ PART_RESP, 62              # has_action's part of a reply that ends its turn: Copy response
+.equ ING_FILE, 0                # the reader's flags (agent_ingest): a line of the file
+.equ ING_LIVE, 1                # the stream's record: the driver made the reply text rows and the user's
+                                #   own prompts itself
+.equ ING_REPLAY, 2              # a replayed user record of the stream (isReplay): only what the agent said
+                                #   in the user's place (a command's output, a task's notification)
+.equ AGK_STOP, 1                # DRV_task's what
+.equ AGK_BG, 2
+# ---- task 11: background tasks and agents (agenttask.s): AK, a task of a conversation (AS_tasks, by value) ----
+STRUCT
+F AK_id, 8              # owned cstr
+F AK_call, 8            # owned cstr or 0: the call it runs for
+F AK_label, 8           # owned cstr or 0: its description
+F AK_act, 8             # owned cstr or 0: what it does now (cut at 120 characters)
+F AK_err, 8             # owned cstr or 0: why it failed (cut at 120 characters)
+F AK_t0, 8              # time_ms it started
+F AK_seen, 8            # time_ms of its last record: the idle stop's hold counts from it
+F AK_tokens, 8          # the tokens it used, 0 unknown
+F AK_kind, 4            # AKK_*
+F AK_state, 4           # AKS_*
+F AK_bg, 4              # it runs in the background: it has a line under the turn
+F AK_uses, 4            # its tool calls, -1 unknown
+ENDSTRUCT AK_SIZE
+.equ AKK_AGENT, 0
+.equ AKK_SHELL, 1
+.equ AKS_WORKING, 0
+.equ AKS_WAITING, 1
+.equ AKS_FAILED, 2
+.equ AKS_FINISHED, 3
+.equ AKS_STOPPED, 4
+.equ AKX_CALL, 0                # agtask_text's which
+.equ AKX_LABEL, 1
+.equ AKX_ACT, 2
+.equ AKX_ERR, 3
+.equ AKN_KIND, 0                # agtask_num's which
+.equ AKN_STATE, 1
+.equ AKN_BG, 2
+.equ AKN_USES, 3
+.equ AKN_TOKENS, 4
+.equ AK_MAX, 256                # tasks kept a conversation (the oldest finished one goes first)
+.equ ID_AG_TASK, 0x620000       # + (line << 2) + 1: a task line's Stop
+.equ TASK_HOLD_MS, 3600000      # an unfinished task holds the idle stop off this long after its last record
+
 # ---- agent session metadata and transcript state ----
 STRUCT
 F AS_path, 8
@@ -2823,7 +3101,7 @@ F AS_mtime, 8
 F AS_off, 8             # bytes parsed
 F AS_msgs, VEC_SIZE     # AM
 F AS_part, SB_SIZE      # incomplete trailing line
-F AS_kind, 4            # 1 claude, 2 codex, 3 grok, 4 opencode
+F AS_kind, 4            # AG_CLAUDE 1, AG_CODEX 2, AG_GROK 3, AG_OPENCODE 4, AS_KIND_EXT 5
 F AS_loaded, 4          # messages parsed (opened at least once)
 F AS_titled, 4          # has a custom title
 F AS_pad, 4
@@ -2847,14 +3125,830 @@ F AS_shown_model, 8     # parse: the model on the last reply labeled with one
 # and worktree in the fields above
 F AS_ext, 8             # kind 5: the extension that lists it (EXT*)
 F AS_sid, 8             # kind 5: its session id, cstr
-F AS_state, 4           # kind 5: AGS_*
+F AS_state, 4           # kind 5: AGS_*; a session rhun drives: kept in step by agent_state_set
 F AS_xflags, 4          # kind 5: AXF_*
 F AS_total, 8           # kind 5: messages the extension says the session has
 F AS_dirty, 8           # kind 5: the first message to fetch again, -1 when the copy is current
 F AS_req, 8             # kind 5: the agent-transcript request in flight (its id), 0 when none
 F AS_from, 8            # kind 5: the FROM of that request
-F AS_ask, 8             # kind 5 (D4): the open card, an AK record, or 0
+F AS_ask, 8             # D4: the open card (an AXK record, agentext.s), or 0
+F AS_live, 8            # the live record of a session rhun drives (AL*, agent_drv.s), or 0
+F AS_draft, 8           # owned cstr: the box's text while the box belongs to another session, or 0
+# phase 3: the thread's engine (agents.s) and the typed rows (agentrows.s); AS_todo, AS_sticky and AS_day
+#   start at -1 when the first row is added
+F AS_hx, VEC_SIZE       # HX per 64 rows
+F AS_hkey, 16           # what the sums are for: width 4, text pixels 4, the faces (agents.s face_key) 4, ag_gen 4
+F AS_calls, 8           # the calls by id: AC slots (mem_alloc'd), a power of two of them, or 0
+F AS_ncalls, 4          # entries in use (deleted ones not counted)
+F AS_ccap, 4            # slots
+F AS_wait, VEC_SIZE     # AT*: the calls of the turn being read or run that wait for a result
+F AS_folds, VEC_SIZE    # AF
+F AS_todo, 4            # the latest row whose call has todo items, -1
+F AS_sticky, 4          # the turn row pinned in the last frame, -1
+F AS_now, 8             # unix ms of the record being read: the rows added next get it (agents_stamp); 0 none
+F AS_day, 8             # the local day of the last stamped row, -1 none yet
+F AS_line, 8            # where the line being read is in the session's file (session_update sets them
+F AS_linelen, 8         #   before ingest_line); a length of 0: no place (the stream feeds it)
+F AS_tasks, VEC_SIZE    # AK (agenttask.s, task 11)
+F AS_rdata, 8           # the reader's own for this conversation (one mem_alloc'd block, freed when the rows go)
+F AS_fview, 4           # focus view (agentfold.s): the setting the chunks' own sums are for
+F AS_fask, 4            # the fold a waiting request holds open, + 1 (0 none), as the sums have it
+F AS_ftodo, 4           # the todo row the folds' counts leave out (AS_todo as they follow it), + 1 (0 none)
+F AS_fpad, 4
+F AS_parts, 8           # phase 4 task 2: AP*: the box's pack while the box belongs to another session, or 0
+F AS_ctx_off, 8         # phase 4 task 8 (agentctx.s): the selection chip's dismissal (the selection's hash, the
+F AS_ctx_offp, 8        #   path's), what the conversation last sent (a hash), whether it took the draft's marks
+F AS_ctx_sent, 8
+F AS_ctx_init, 4
+F AS_ctx_pad, 4
 ENDSTRUCT AS_SIZE
+.equ AG_CLAUDE, 1               # AS_kind of the built-in sources (AS_KIND_EXT 5: an extension's)
+.equ AG_CODEX, 2
+.equ AG_GROK, 3
+.equ AG_OPENCODE, 4
+
+# ---- agent connections (src/app/agent_conn.s): a long-lived child on three pipes (embedded, caller's) ----
+STRUCT
+F CN_pid, 4             # the child (uproc.s)
+F CN_fd_in, 4           # rhun writes the child's stdin here; -1 once closed
+F CN_fd_out, 4          # its stdout; -1 after EOF
+F CN_fd_err, 4          # its stderr; -1 after EOF
+F CN_state, 4           # CN_IDLE, CN_UP, CN_STOPPING, CN_DEAD
+F CN_exit, 4            # exit status once reaped; -1 before, and for a child that was not ours any more
+F CN_gen, 4             # incremented by every conn_open
+F CN_err, 4             # CN_E_* of the end, or of the failed open
+F CN_rbuf, SB_SIZE      # stdout bytes not yet delivered (a partial line)
+F CN_scanned, 8         # bytes at the front of CN_rbuf known to hold no newline
+F CN_ebuf, SB_SIZE      # the last CN_ERR_KEEP bytes of stderr (kept after the end, for error rows)
+F CN_wbuf, SB_SIZE      # bytes queued for stdin
+F CN_wpos, 8            # bytes at the front of CN_wbuf already written
+F CN_on_line, 8         # (CN*, ptr, len): one stdout line, without its newline
+F CN_on_close, 8        # (CN*, err): once, when the child is reaped or the connection broke
+F CN_ctx, 8             # the caller's
+F CN_moved, 8           # time_ms when the queue last moved (stall detection)
+F CN_stop_at, 8         # time_ms of the stop sequence's next signal, 0 none
+F CN_eof_at, 8          # time_ms stdout reached its end, 0 before
+F CN_flags, 4           # CNF_*
+F CN_pad, 4
+F CN_reap_from, 8       # time_ms reaping began or a signal went: uproc_wait each tick for 500 ms after
+F CN_reap_at, 8         # then at this time_ms (1 s steps)
+ENDSTRUCT CN_SIZE
+.equ CN_IDLE, 0
+.equ CN_UP, 1
+.equ CN_STOPPING, 2     # its input ended or is ending: no more writes; lines still come
+.equ CN_DEAD, 3         # on_close was delivered; buffers stay until conn_close or conn_open
+.equ CNF_ENDIN, 1       # close stdin once the queue drained (conn_end_input)
+.equ CNF_TERM, 2        # SIGTERM went
+.equ CNF_KILL, 4        # SIGKILL went
+.equ CN_E_NONE, 0
+.equ CN_E_SPAWN, 1      # argv[0] is not there, or no pipe or process could be made
+.equ CN_E_WATCH, 2      # the event loop's watch table is full
+.equ CN_E_LINE, 3       # a line above CN_LINE_MAX
+.equ CN_E_STALL, 4      # the queue did not move for g_conn_stall_ms
+.equ CN_E_WRITE, 5      # EPIPE or another error writing stdin
+.equ CN_E_READ, 6
+.equ CN_E_EXIT, 7       # the child is gone; CN_exit holds its status
+.equ CN_E_GUARD, 8      # g_conn_max connections are open
+.equ CN_MAX, 32
+.equ CN_LINE_MAX, 64 << 20
+.equ CN_QUEUE_MAX, 16 << 20
+.equ CN_STALL_MS, 30000
+.equ CN_ERR_KEEP, 65536
+.equ CN_TERM_MS, 2000   # input closed -> SIGTERM
+.equ CN_KILL_MS, 5000   # SIGTERM -> SIGKILL
+.equ CN_DRAIN, 262144   # stdout bytes read per wake-up
+.equ CN_EOF_MS, 5000    # stdout closed but the child still runs -> the stop sequence
+# phase 8, the chat in remote windows: a connection to a program on a remote window's host
+.equ CN_E_NOENT, 9      # the host has no such program (on its login PATH, or at that path)
+.equ CN_E_OFFLINE, 10   # the window's host is not connected
+.equ CN_E_LOST, 11      # the connection to the host went while the program ran
+.equ CNF_REMOTE, 8      # the child runs on the host: CN_fd_in is a second descriptor of CN_fd_out's socket
+.equ CNF_LOST, 16       # the host's connection went: the tick breaks it (CN_E_LOST)
+.equ ALF_REREAD, 32768  # the file could not be read when the program ended (the host was gone): read it
+                        #   again once the host answers (agent_drv_remote_back)
+# end phase 8 remote
+
+# ---- the driver seam (src/app/agent_drv.s): sessions rhun drives through a driver's table ----
+# AH: a message written while a turn ran or others were held (AL_held): shown queued until it starts
+STRUCT
+F AH_uuid, 40           # cstr: the uuid it was written with
+F AH_text, 8            # owned
+F AH_len, 8
+F AH_chips, 8           # phase 4 task 2: owned cstr: its row's chips text (agatt_chips), or 0
+F AH_pack, 8            #   AP*, slimmed (agatt_slim): given back with its text when it will not run, or 0
+ENDSTRUCT AH_SIZE
+.equ AH_MAX, 16                 # held messages at most; one more stays in the box (SEND_TOOMANY)
+# AGU: a conversation's context and prompt-cache numbers (ev_usage)
+STRUCT
+F AGU_used, 8           # tokens in the context
+F AGU_window, 8         # the context window in tokens, 0 unknown
+F AGU_cache_at, 8       # time_ms the prompt cache was last written, 0 unknown
+F AGU_cache_ttl, 8      # its lifetime in ms
+F AGU_cold, 4           # CCOLD_*
+F AGU_pad, 4
+F AGU_key, 8            # the driver's: which message the cache numbers came from (a hash), 0 none
+F AGU_asked, 8          # the driver's: time_ms its last request went out, 0 none (the cache's clock starts there)
+ENDSTRUCT AGU_SIZE
+.equ CCOLD_NONE, 0
+.equ CCOLD_EXPIRED, 1
+.equ CCOLD_COMPACTED, 2
+.equ CACHE_NONE, 0              # agent_cache_state (agentfoot.s): no clock, warm, expired, compacted away
+.equ CACHE_WARM, 1
+.equ CACHE_EXPIRED, 2
+.equ CACHE_COMPACTED, 3
+.equ BK_ERROR, 0                # the bands above the box (AL_bands, ev_band), by kind
+.equ BK_SETTINGS, 1
+.equ BK_AUTH, 2
+.equ BK_RATE, 3
+.equ BK_NOTICE, 4
+.equ BK_COUNT, 5
+.equ FS_OFF, 0                  # fast mode (AL_fast, AGC_fast)
+.equ FS_ON, 1
+.equ FS_COOLDOWN, 2
+# AL: a driven session's live record (AS_live), made on its first use and freed with its row
+STRUCT
+F AL_as, 8              # its session
+F AL_drv, 8             # DRV*
+F AL_cn, CN_SIZE        # the connection to its program (agent_conn.s)
+F AL_state, 4           # ALS_*
+F AL_flags, 4           # ALF_*
+F AL_sid, 40            # cstr: the conversation's id
+F AL_mode, 32           # cstr: the permission mode the agent reports, or empty
+F AL_queue, VEC_SIZE    # owned prompt texts (cstr, 8-byte slots) waiting for "ready"
+F AL_reqs, VEC_SIZE     # AQ*: the requests the agent waits on, the oldest first (its card shows)
+F AL_live_from, 8       # the first AS_msgs index the stream fed
+F AL_msgid, 64          # cstr: the message the stream is in
+F AL_block, 8           # the content block text streams into
+F AL_row, 8             # the AM index text is streaming into, -1 none
+F AL_used, 8            # time_ms of the last turn, card or key (the idle stop)
+F AL_report, SB_SIZE    # why it failed (shown as an error row, print-agent-live)
+F AL_out, VEC_SIZE      # requests rhun sent and awaits: {n, act} 16-byte slots
+F AL_next, 8            # the number of rhun's next request
+F AL_hold_until, 8      # time_ms the wait for another holder ends (agent_holder.s)
+F AL_cfg, 8             # the driver's own (Claude's: CLP_* bits, claude_session.s)
+F AL_turns, 8           # prompts written whose turn has not ended (READY when none is left)
+F AL_rowkey, 80         # cstr: the item key of AL_row (ev_text), empty when no row takes more text
+F AL_own, 8             # AQ*: rhun's own card on the session (held, trust, sign-in, a failed start), or 0
+F AL_hold_at, 8         # time_ms the holder is read again (ALF_HOLDWAIT)
+F AL_fork, 40           # cstr: a copy's source conversation (ALF_FORK)
+F AL_cdir, 8            # owned cstr: the Claude folder its program was first started with, or 0
+F AL_unsent, 8          # owned cstr: prompts that never went, for its box when it is opened again, or 0
+F AL_model, 64          # cstr: the model in effect, the driver's value, or empty
+F AL_effort, 16         # cstr: the effort level in effect, or empty
+F AL_ultra, 4           # Ultracode: -1 not offered (or not known), 0 off, 1 on
+F AL_think, 4           # thinking: 1 on
+F AL_fast, 4            # FS_*
+F AL_bandoff, 4         # a bit per band kind the user dismissed with its x (its text stays in AL_bands)
+F AL_held, VEC_SIZE     # AH: messages written and not started yet, the oldest first
+F AL_suggest, 8         # owned cstr: the prompt the agent suggests next, or 0
+F AL_usage, AGU_SIZE    # the context and cache numbers
+F AL_bands, 8*BK_COUNT      # owned cstr or 0 per band kind (BK_*)
+F AL_word, 16           # cstr: the word the box paints, "" none
+F AL_keyed, 8           # time_ms of the box's last key (the card focus rule)
+F AL_blinks, 8*BK_COUNT # owned "LABEL\0URL\0" or 0 per band kind: the band's link (ev_band_link)
+F AL_dprev, 32          # the driver's own, per conversation: cstr, the mode before a pick it asked for (a
+F AL_dpend, 32          #   refusal puts it back); cstr, a mode picked while its program started;
+F AL_dpicks, 288        #   4 x {request number 8, cstr 64}: models asked of the running program, each
+                        #   kept and named once its own answer says it applied;
+F AL_dwait, 8           #   time_ms the prompts held for its first settings answer go anyway
+F AL_dseen, 8           # the driver's own (one mem_alloc'd block, freed with the live record): Claude's
+                        #   table of the record uuids the stream gave
+F AL_forkat, 40         # phase 6 (p6b): cstr, a copy's last kept entry (the driver's id), empty: its whole source
+F AL_rc, 4              # rows 2.22, 4.14: its program's Remote Control as the driver said last (RCS_*, ev_remote)
+F AL_rcpad, 4
+F AL_rctip, 8           #   owned cstr: the footer pill's tooltip, or 0
+F AL_rcurl, 8           #   owned cstr: what a click on the pill opens (asked first), or 0
+ENDSTRUCT AL_SIZE
+.equ TE_DONE, 0                 # ev_turn_end's reasons
+.equ TE_ERROR, 1
+.equ TE_INTERRUPTED, 2
+.equ WS_PRIMARY, 1              # wfold_flags (workspace.s): the primary folder
+.equ WS_TRUSTED, 2              # opened by hand, or trusted
+.equ ALS_OFF, 0                 # no process
+.equ ALS_STARTING, 1
+.equ ALS_READY, 2
+.equ ALS_WORKING, 3
+.equ ALS_WAITING, 4             # a card is up
+.equ ALS_HELD, 5                # a start waits for an answer to rhun's own card (open elsewhere, trust)
+.equ ALS_FAILED, 6
+.equ ALF_NEW, 1                 # no transcript yet
+.equ ALF_STOP_ASKED, 2
+.equ ALF_RESYNC, 4
+.equ ALF_FORK, 8                # a copy of AL_fork: its first start forks that conversation
+.equ ALF_ENVWAIT, 16            # a start waits for the login environment (the tick starts it)
+.equ ALF_DRAFT, 32              # a new conversation that never got a prompt: left, it goes
+.equ ALF_ENDING, 64             # rhun asked its program to end: the end is no failure
+.equ ALF_CAPWAIT, 128           # a start waits for another program to end (g_conn_max)
+.equ ALF_UNANSWERED, 256        # the last turn ended with requests unanswered (the re-read says so again)
+.equ ALF_HOLDWAIT, 512          # a start waits for another holder of the conversation to let go
+.equ ALF_HOLDOK, 1024           # this start is past the holder check (none, or Open here anyway)
+.equ ALF_AUTHWAIT, 2048         # a start waits for the sign-in state (DRV_auth)
+.equ ALF_ASKAGAIN, 4096         # a start the user asked for: a cached "not signed in" is asked again
+.equ ALF_RESTART, 8192          # a prompt came while its program was ending: a new start when it is gone
+.equ ALF_ERRGONE, 16384         # the error block was dismissed (its "×"): until the next failure
+.equ AL_QUEUE_MAX, 4            # prompts waiting for "ready"
+# AQ: a request the agent waits on (the plan's PR: that prefix is the Problems tab's)
+STRUCT
+F AQ_kind, 4            # AQK_*
+F AQ_state, 4
+F AQ_id, 8              # owned cstr: the agent's request id as JSON text (a string or a number, echoed)
+F AQ_tool, 8            # owned cstr
+F AQ_input, 8           # the tool input as JSON text, owned (echoed back on allow)
+F AQ_inlen, 8
+F AQ_q, 8               # owned cstr: the card's prompt (AQK_PERMISSION)
+F AQ_tuid, 8            # owned cstr: the tool call's id (every answer's toolUseID), or 0
+F AQ_n, 8               # AQK_QUESTION: the question its card shows (from 0)
+F AQ_count, 8           # AQK_QUESTION: how many it asks
+F AQ_picks, SB_SIZE     # AQK_QUESTION: the option picked for each question answered, a byte each
+F AQ_flags, 4           # AQF_*
+F AQ_pad, 4
+F AQ_sugg, 8            # permission_suggestions as JSON text at answer depth, owned, or 0
+F AQ_sugglen, 8
+F AQ_card, 8            # CD* while its rich card exists (agentcard.s), or 0
+F AQ_dkind, 8           # owned cstr: a dialog's dialog_kind (AQK_DIALOG), or 0
+F AQ_tab, 8             # the plan tab's ctx (mdtab.s), or 0
+F AQ_offer, 8           # phase 4 task 11: its proposed change's id in the Review tab (agentoffer.s), or 0
+ENDSTRUCT AQ_SIZE
+.equ AQF_NOSAVE, 1              # suppress_always_allow_rule
+.equ AQF_DEFNO, 2               # default_to_no
+.equ AQF_CLAIMED, 4             # a dialog card whose answer waits for something else (Turn on Remote Control)
+.equ AQ_MAX, 32                 # requests waiting at most (AL_reqs); one more gets an error reply
+.equ AQK_PERMISSION, 1
+.equ AQK_QUESTION, 2
+.equ AQK_PLAN, 3
+.equ AQK_HELD, 4                # rhun's own cards (AL_own): the conversation is open somewhere else,
+.equ AQK_TRUST, 5               #   the project is not trusted, the program is not signed in, its start
+.equ AQK_SIGNIN, 6              #   failed
+.equ AQK_FAILED, 7
+.equ AQK_DIALOG, 8              # a dialog the agent asks for (a rich card)
+# DRV: a driver's table (read-only)
+STRUCT
+F DRV_kind, 4           # the AS_kind it drives
+F DRV_caps, 4           # DRVC_*
+F DRV_name, 8           # cstr: "Claude Code"
+F DRV_start, 8          # (AL*) -> eax 1 started, 0 failed with AL_report set
+F DRV_send, 8           # (AL*, ptr, len, uuid cstr, AP* or 0) -> eax 1 written (phase 4: the message's parts;
+                        #   an extension's session: (AS*, ptr, len) -> SEND_*, no parts)
+F DRV_stop, 8           # (AL*): interrupt the turn
+F DRV_answer, 8         # (AL*, AQ*, n) -> eax 1: option n (from 0) of that request
+F DRV_release, 8        # (AL*): end the process politely (the stop sequence)
+F DRV_held, 8           # (AL*) -> eax HOLDER_*
+F DRV_auth, 8           # (AL*, again) -> eax AUTH_*: whether its program is signed in (asked in the
+                        #   background; again 1: a "no" is asked again, the user's next Send)
+F DRV_terminal, 8       # (AL*, what): its program in rhun's terminal prompt: 0 alone, 1 its sign-in,
+                        #   2 its sign-out
+# the lists and controls a driver supplies (the extension's: stubs answering 0)
+F DRV_modes, 8          # (AS*, AMD** out) -> eax n: the modes offered now, in Shift+Tab order; 0 none
+F DRV_set_mode, 8       # (AL*, id cstr) -> eax 1 asked
+F DRV_set_model, 8      # (AL*, value cstr) -> eax 1 asked
+F DRV_set_effort, 8     # (AL*, id cstr) -> eax 1 asked
+F DRV_set_ultra, 8      # (AL*, esi on) -> eax 1 asked
+F DRV_set_thinking, 8   # (AL*, esi on) -> eax 1 asked
+F DRV_reply, 8          # (AL*, AQ*, CD*) -> eax 1 written: a rich card's answer (the card holds the choice)
+F DRV_action, 8         # (AL*, esi ACT_*, rdx arg ptr, rcx len) -> eax 1 done: its part of a local command
+F DRV_menu, 8           # (AS* or 0, APM** out) -> eax n: the command menu's actions (agentpop.s), 0 none
+F DRV_hint, 8           # cstr: the box's placeholder until the window's first Send of this driver, or 0
+F DRV_ended, 8          # (AL*): the record went OFF or FAILED (agent_state_set): what the driver kept for
+                        #   a start or a run of its program goes (a Stop, a failed start, a dead process)
+F DRV_brand, 8          # its colour, 0xAARRGGBB, 0 none
+F DRV_verbs, 8          # cstr*, 0-ended: its spinner verbs; 0: its sessions have no spinner line
+F DRV_tips, 8           # cstr*, 0-ended: the empty conversation's tips, or 0
+F DRV_task, 8           # (AL*, esi AGK_*, rdx id cstr) -> eax 1 asked: stop a task, send a running call to
+                        #   the background
+F DRV_words, 8          # phase 4: cstr*: the driver's words for generic places, by DW_*; 0: the generic words
+F DRV_glyph, 4          #   its icon (IC_*), 0 none
+F DRV_pad, 4
+# ---- phase 8 (p8): how a driver's sessions are listed and opened (agent_src_*, agent_drv.s); all 0: its
+#   kind's files are read ----
+F DRV_src, 4            # SRCF_*
+F DRV_src_pad, 4
+F DRV_open, 8           # (AS*): the conversation opened: its source is asked for what it does not have yet
+F DRV_src_name, 8       # (AS*) -> rax cstr: the source's name, its row's kind label and badge
+F DRV_key, 8            # (AS*, sb) -> eax 1 when its key in rhun's state file was written
+F DRV_loading, 8        # (AS*) -> eax 1 while its messages are being fetched
+F DRV_rows, 8           # (cb): cb(AS*) for each row its sources list now
+F DRV_icon, 8           # (AS*, x, y, size): its source's icon in its row's badge
+F DRV_list_top, 8       # row 5.14: (x, y, w, sb or 0) -> eax h: what the conversation list shows above its rows
+                        #   (drawn, or its lines written to sb), 0 none; the table's 0: nothing
+# ---- end p8 ----
+ENDSTRUCT DRV_SIZE
+.equ SRCF_PUSHED, 1             # p8: its source sends its rows and messages: no file read, stamped or watched
+.equ SRCF_STATE, 2              #   AS_state is its source's: live while it works or waits, without a record
+.equ SRCF_OWN, 4                #   no built-in kind: no lists, menus or side panels of a kind
+# AMD: a permission mode (a driver's static table)
+STRUCT
+F AMD_id, 8             # cstr
+F AMD_label, 8          # cstr
+F AMD_desc, 8           # cstr
+F AMD_color, 4          # the theme slot of the box's frame in this mode
+F AMD_flags, 4          # AMDF_*
+ENDSTRUCT AMD_SIZE
+.equ AMDF_CURRENT, 1
+.equ DRVC_NEW, 1                # can start a conversation
+.equ DRVC_RESUME, 2
+.equ DRVC_FORK, 4
+.equ DRVC_SESSION, 8            # keeps no live record: its functions take the AS* where the others take
+                                # the AL*, and send returns SEND_* (an extension's: it keeps the state)
+.equ DRVC_TRUST, 16             # its program reads the project's own settings: an untrusted project asks
+.equ DRVC_QUEUE, 32             # takes messages during a turn (held, shown queued)
+.equ DRVC_MODES, 64             # DRV_modes, DRV_set_mode
+.equ DRVC_MODELS, 128           # a model list (agentcfg), DRV_set_model
+.equ DRVC_EFFORT, 256           # DRV_set_effort
+.equ DRVC_THINKING, 512         # DRV_set_thinking
+.equ DRVC_SUGGEST, 1024         # suggests the next prompt (ev_suggest)
+.equ DRVC_CARDS, 2048           # its requests are rich cards answered through DRV_reply
+.equ AUTH_IN, 0                 # DRV_auth: signed in (or it cannot tell: the program will say)
+.equ AUTH_WAIT, 1               #   the answer is not there yet
+.equ AUTH_OUT, 2                #   not signed in
+.equ HOLDER_NONE, 0
+.equ HOLDER_OTHER, 1
+.equ HOLDER_UNKNOWN, 2
+.equ SEND_OK, 0
+.equ SEND_QUEUED, 1
+.equ SEND_FULL, 2
+.equ SEND_REFUSED, 3
+.equ SEND_FAILED, 4
+.equ SEND_EMPTY, 5
+.equ SEND_HELD, 6               # written during a turn or while others are held: shown queued
+.equ SEND_TOOMANY, 7            # AH_MAX are held already: the text stays in the box
+# ---- phase 4 task 2: a message's parts (src/app/agentatt.s): driver-neutral; a driver with DRVC_PARTS writes
+#   them in its own shapes (Claude: content blocks, agent_claude.s) ----
+.equ DRVC_PARTS, 4096           # takes files (MPK_IMAGE, MPK_PDF, MPK_TEXT): the box has "+" and chips
+.equ DRVC_CONTEXT, 8192         # takes the editor's selection and open file (MPK_SELECTION, MPK_OPENFILE)
+.equ DRVC_MENTIONS, 16384       # expands "@path" in the text itself
+.equ DW_UNFOCUS, 0              # DRV_words' indices
+.equ DW_MENTION_REFUSED, 1
+.equ DW_SELTIP, 2               # phase 4 task 8: the selection chip's tip ("Showing Claude your current file selection")
+.equ DW_SIDE_EMPTY, 3           # a side question with no answer ("Claude didn't return an answer for this side question.")
+.equ DW_BUSY, 4                 # a Send refused while a turn runs ("Claude is still working. ...")
+.equ DW_COUNT, 5
+# MP: one part of a message (by value in AP_parts)
+STRUCT
+F MP_kind, 4            # MPK_*
+F MP_flags, 4           # MPF_*
+F MP_name, 8            # owned cstr: what its chip says (a file's name, "Image", a terminal's name)
+F MP_path, 8            # owned cstr: the absolute path it came from, or 0
+F MP_mime, 8            # static cstr ("image/png", ..., "application/pdf", "text/plain"), or 0
+F MP_data, 8            # owned bytes (a NUL after them): a file's bytes as read, a selection's or terminal's text,
+                        #   or 0 (MPK_OPENFILE; a slimmed part that has a path)
+F MP_len, 8             # its bytes (kept when slimmed: what it will be once read again)
+F MP_l0, 4              # MPK_SELECTION: its first and last line, from 1
+F MP_l1, 4
+F MP_thumb, 8           # the thumbnail's id (agentimg.s, task 6), 0 none
+ENDSTRUCT MP_SIZE
+.equ MPK_IMAGE, 1
+.equ MPK_PDF, 2
+.equ MPK_TEXT, 3                # a text file
+.equ MPK_SELECTION, 4
+.equ MPK_OPENFILE, 5
+.equ MPK_TERMINAL, 6
+.equ MPK_PASTE, 7               # a long paste the prompt still holds (task 4; Claude: inline_pastes, finding 43)
+.equ MPF_PASTED, 1              # from the clipboard: no path
+.equ MPF_AUTO, 2                # added at Send by a hook (the selection, the open file, a terminal): never kept
+# AP: a message's parts (mem_alloc'd; one owner at a time: a box, a waiting or held message, nobody once written)
+STRUCT
+F AP_parts, VEC_SIZE    # MP
+F AP_bytes, 8           # the MP_len of its file parts (image, PDF, text), summed
+F AP_flags, 4           # APF_*
+F AP_pad, 4
+ENDSTRUCT AP_SIZE
+.equ APF_SLIM, 1                # a held prompt's: the parts that have a path have no bytes
+.equ AP_MAX_PARTS, 20           # rhun's own limits (the extension has none): a message is one line of at most
+.equ AP_MAX_BYTES, 10485760     #   16 MiB in the connection's queue, echoed back whole
+.equ MP_IMAGE_MAX, 10485760     # finding 39: 10 MiB of file bytes gave a normal turn (the CLI re-encodes)
+.equ MP_PDF_MAX, 10485760
+.equ MP_TEXT_MAX, 262144        # finding 40: a text of 1 MiB was "Prompt is too long": 256 KiB, well under it
+.equ MP_SEL_MAX, 1048576
+.equ ATT_OK, 0                  # agatt_add_*'s answers (agentatt.s makes the words)
+.equ ATT_UNSUPPORTED, 1
+.equ ATT_EMPTY, 2
+.equ ATT_BIG, 3
+.equ ATT_TOTAL, 4
+.equ ATT_FULL, 5
+.equ ATT_READ, 6
+.equ ATT_FOLDER, 7
+.equ ATT_NOTFILE, 8
+.equ ID_AG_CHIP, 0x700000       # the box's chips: + part * 2 (+ 1 its x)
+
+# ---- phase 4 tasks 4 and 5: the clipboard's files and images, files dropped on the window (clippaste.s,
+#   drop.s, agentpaste.s; the platform layers) ----
+.equ CLIPK_TEXT, 1              # a clipboard request's kinds, and an answer's kind (app_clip_complete_kind)
+.equ CLIPK_FILES, 2             #   absolute paths, a NUL after each
+.equ CLIPK_IMAGE, 4             #   an image file's bytes (PNG, or what the system gave that rhun takes)
+.equ CLIPK_ALL, 7
+.equ CLIP_TOO_BIG, -1           # app_clip_complete_kind's len with ptr 0: more than the request reads
+.equ CLIP_NOT_TAKEN, -2         #   an image in a form rhun cannot attach (Windows: a bitmap alone)
+.equ CLIP_FILES_MAX, 1048576    # a file list's bytes at most (the platforms stop reading past it)
+.equ DROP_ENTER, 1              # app_on_drop's events
+.equ DROP_MOVE, 2
+.equ DROP_LEAVE, 3
+.equ DROP_FILES, 4
+.equ DROP_PATHS_MAX, 1000       # a drop's paths taken at most, and their bytes
+.equ DROP_BYTES_MAX, 1048576
+
+# ---- a driver's lists and the project's choices, per driver kind and project (src/app/agentcfg.s) ----
+STRUCT
+F AEL_id, 8             # owned cstr: an effort level's id
+F AEL_label, 8          # owned cstr
+ENDSTRUCT AEL_SIZE
+STRUCT
+F AMO_value, 8          # owned cstr: the value the driver passes
+F AMO_label, 8          # owned cstr
+F AMO_desc, 8           # owned cstr
+F AMO_levels, VEC_SIZE  # AEL
+F AMO_flags, 4          # AMOF_*
+F AMO_pad, 4
+F AMO_resolved, 8       # owned cstr: the id the program reports for it ("claude-opus-5-5"), or 0
+ENDSTRUCT AMO_SIZE
+.equ AMOF_OFF, 1                # unavailable: greyed, not picked
+.equ AMOF_THINKOFF, 2           # thinking can be switched off
+.equ AMOF_AUTO, 4               # supports auto mode
+.equ AMOF_FAST, 8               # supports fast mode
+.equ AMOF_EFFORT, 32            # has effort levels
+STRUCT
+F ACM_name, 8           # owned cstr, without "/"
+F ACM_desc, 8           # owned cstr
+F ACM_hint, 8           # owned cstr: its argument hint
+F ACM_aliases, 8        # owned cstr: space-separated, or 0
+F ACM_origin, 8         # owned cstr: a plugin's name, or 0
+F ACM_act, 4            # ACT_*
+F ACM_flags, 4          # ACMF_*
+ENDSTRUCT ACM_SIZE
+.equ ACMF_LOCAL, 1              # the driver's own table: runs ACM_act
+.equ ACMF_CLI, 2                # the program advertises it
+STRUCT
+F ACH_sid, 40           # cstr: a conversation's id
+F ACH_mode, 32          # cstr: its mode
+ENDSTRUCT ACH_SIZE
+.equ ACT_SEND, 0                # what a command does (ACM_act, DRV_action)
+.equ ACT_CLEAR, 1
+.equ ACT_NEW, 2
+.equ ACT_MODEL, 3
+.equ ACT_MODES, 4
+.equ ACT_THINKING, 5
+.equ ACT_EFFORT, 6
+.equ ACT_FAST, 7
+.equ ACT_PLAN, 8
+.equ ACT_COPY, 9
+.equ ACT_SIGNIN, 10
+.equ ACT_SIGNOUT, 11
+.equ ACT_TERMINAL, 12
+.equ ACT_SETTINGS, 13
+.equ ACT_HELP, 14
+.equ ACT_UNAVAILABLE, 15
+.equ ACT_ULTRA, 16
+.equ ACT_FOCUSVIEW, 17          # focus view (agentfold.s, task 9)
+.equ ACT_RESUME, 18             # phase 6, sessions: "Resume conversation", /resume: the history dropdown
+# phase 7, the dialogs (claude-chat-p7: agentdlg.s, claude_dlg.s): the commands that open them
+.equ ACT_STATUS, 19             # Status (/status)
+.equ ACT_USAGE, 20              # Account & usage (/usage, the rate band's "View usage")
+.equ ACT_CONTEXT, 21            # Context usage (/context)
+.equ ACT_OSTYLE, 22             # Output styles
+.equ ACT_SKILLS, 23             # Slash commands (/skills, /help)
+.equ ACT_MEMORY, 24             # Memory (/memory)
+.equ ACT_INSTRUCT, 25           # Instructions
+# phase 4 task 3, attachments (agentatt.s)
+.equ ACT_ATTACH, 26             # Attach file... (the path browser)
+.equ ACT_MENTION, 27            #   Mention file from this project... ("@" at the caret)
+# phase 7, the dialogs that change Claude Code's configuration (claude-chat-p7b: claude_dlg2.s and the files
+#   beside it)
+.equ ACT_MCP, 28                # MCP servers (/mcp)
+.equ ACT_HOOKS, 29              # Hooks (/hooks)
+.equ ACT_PERMS, 30              # Permissions (/permissions, /allowed-tools)
+.equ ACT_SANDBOX, 31            # Sandbox (/sandbox, /sandbox exclude PATTERN)
+.equ ACT_PLUGINS, 32            # Manage plugins (/plugin, /plugins, /marketplace)
+# phase 7 part 3 (claude-chat-p7c: agentside.s, agentmap.s, claude_side.s): the side panels, the agent map,
+#   Remote Control, Claude in Chrome, the hand-off to the terminal. They stay the last acts: claude_action
+#   passes every act from ACT_BTW to claude_side_action
+.equ ACT_BTW, 33                # /btw [QUESTION]: the side question (generic: agentside.s through agentpop_run)
+.equ ACT_BOOKMARKS, 34          # /bookmarks, the menu's Bookmarks: the bookmarks panel (generic)
+.equ ACT_TASKS, 35              # /tasks, /bashes: the agent map (generic: agentmap.s)
+.equ ACT_REMOTE, 36             # /remote-control, /rc: Remote Control of the conversation's program (DRV_action)
+.equ ACT_CHROME, 37             # /chrome, the menu's Claude in Chrome: its dialog (DRV_action)
+.equ ACT_SIDEQ, 38              # DRV_action(AL*, ACT_SIDEQ, question ptr, len) -> eax its request + 1, 0 not sent
+.equ ACT_HANDOFF, 39            # a command for the terminal's Claude Code (/agents): the hand-off card (DRV_action)
+.equ ACT_HANDANS, 40            # DRV_action(AL*, ACT_HANDANS, n): the hand-off card's option n (own_answer)
+.equ ID_AGSIDE, 0x9600          # the side panels' controls: + SID_* (agentside.s), to 0x97ff
+.equ AQK_HANDOFF, 9             # rhun's own card: Continue in Terminal (own_answer -> DRV_action ACT_HANDANS)
+.equ OA_SIDE_FIRST, 40          # agent_claude.s's answers from here are claude_side.s's (claude_side_answer)
+.equ OA_SIDE_Q, 40              #   side_question
+.equ OA_SIDE_CHROME, 41         #   get_chrome_dialog
+.equ OA_SIDE_REMOTE, 42         #   remote_control {enabled: true}
+.equ OA_SIDE_REMOTE_OFF, 43     #   remote_control {enabled: false}
+.equ ACT_BASHES, 41             # /bashes: /tasks under another name (not listed in the menu)
+.equ ACT_RC, 42                 # /rc: /remote-control under another name (not listed)
+# ---- phase 6 (claude-chat-p6b: agentfork.s, claude_fork.s): fork from a message, rewind, export, a turn cut off by
+#   quitting continued after a restart. The acts are the driver's (DRV_action), claude_action passes them to
+#   claude_fork_action ----
+.equ ACT_REWIND, 43             # Rewind, /rewind, /checkpoint, /undo, Escape twice on an empty box: the picker
+.equ ACT_EXPORT, 44             # Export conversation, /export [NAME] (a name: straight to the file)
+.equ ACT_MSGACT, 45             # DRV_action(AL*, ACT_MSGACT, row, MSG_*): a prompt row's action (its context menu)
+.equ ACT_CUT, 46                # DRV_action(AL*, ACT_CUT): its turn is cut off by rhun quitting (agent_drv_shutdown)
+.equ ACT_OPENED, 47             # DRV_action(AL*, ACT_OPENED): its conversation was opened (a cut turn may go on)
+.equ MSG_FORK, 0                # ACT_MSGACT's actions: Fork conversation from here
+.equ MSG_REWIND, 1              #   Rewind code to here
+.equ MSG_BOTH, 2                #   Fork conversation and rewind code
+.equ DRVC_REWIND, 32768         # forks from a message, rewinds files, exports (ACT_REWIND .. ACT_MSGACT)
+.equ ALF_RERUN, 65536           # this start continues the turn rhun's quitting cut off (the driver's)
+.equ OA_FORK_FIRST, 60          # agent_claude.s's answers from here are claude_fork.s's (claude_fork_answer)
+.equ OA_FORK_CHECK, 60          #   rewind_files dry_run
+.equ OA_FORK_REWIND, 61         #   rewind_files
+.equ OA_FORK_EXPORT, 62         #   export_conversation
+.equ ACT_PLUGIN_LINK, 48       # DRV_action(0, ACT_PLUGIN_LINK, "PLUGIN\0SOURCE\0", len): a rhun://NAME/install-plugin
+                                #   link (agenttab.s): Manage Plugins on that plugin for the box's conversation
+.equ ACT_COUNT, 50              # (ACT_RCALL, 49: rows 2.22, 4.14's block)
+# (end of phase 6's p6b block)
+# the dialog shell (agentdlg.s): a row (DGR), its kinds and flags, a button's flags, a dialog's ops table
+.equ ID_AGDLG, 0x8e00           # the dialog's controls: + DID_* (agentdlg.s), to 0x8fff
+STRUCT
+F DGR_kind, 4            # DGK_*
+F DGR_flags, 4           # DGF_*
+F DGR_act, 4             # its act (Enter, a click), 0 none
+F DGR_act2, 4            # a DGF_STATE row's pill's act (Space, a click on the pill)
+F DGR_val, 8             # a bar's percent, a swatch's ARGB
+F DGR_arg, 8             # passed with its acts
+F DGR_t1, 8              # owned cstrs (agentdlg_text)
+F DGR_t2, 8
+F DGR_t3, 8
+F DGR_y, 4               # the layout's (agentdlg.s)
+F DGR_h, 4
+F DGR_m, 4
+F DGR_pad, 4
+ENDSTRUCT DGR_SIZE
+.equ DGK_HEAD, 1
+.equ DGK_PAIR, 2
+.equ DGK_TEXT, 3
+.equ DGK_BAR, 4
+.equ DGK_ITEM, 5
+.equ DGK_TOGGLE, 6
+.equ DGK_COLS, 7
+.equ DGK_LINK, 8
+.equ DGK_GAP, 9
+.equ DGF_MUTED, 1
+.equ DGF_ERROR, 2
+.equ DGF_CHECK, 4
+.equ DGF_OFF, 8                 # greyed, takes no focus
+.equ DGF_FILTER, 16             # shown only while it matches the filter
+.equ DGF_ON, 32                 # a switch that is on
+.equ DGF_SWATCH, 64             # COLS: DGR_val is an ARGB square before t1
+.equ DGF_SMALL, 128             # TEXT: the small face
+.equ DGF_STATE, 256             # ITEM: t3 is a pill (DGR_act2)
+# claude-chat-p7b (agentdlg2.s): the form rows. FIELD: t1 its label, t2 its placeholder, t3 a hint under it
+#   (DGF_ERROR: an error), DGR_val its TF (the dialog's, kept across rebuilds), DGR_act what Enter does in a
+#   one-line field (0: the focus moves on); OPTION: a choice of a group (t1, t2 a description under it,
+#   DGF_ON the one chosen); TABS: t1 the tabs' labels joined by 0x1f, DGR_val the one shown, DGR_act gets the
+#   tab picked as its arg
+.equ DGK_FIELD, 10
+.equ DGK_OPTION, 11
+.equ DGK_TABS, 12
+.equ DGF_MULTI, 512             # FIELD: lines (Enter is a new line)
+.equ DGF_SECRET, 1024           # FIELD: drawn and dumped as bullets (a password-like value)
+.equ DGF_SECRETV, 2048          # FIELD: lines of NAME=value or Name: value; the dump hides each value
+.equ DBF_PRIMARY, 1
+.equ DBF_NUM, 2                 # the footer's buttons are numbered; digits press them
+.equ DGO_act, 0                 # a dialog's ops: (act, arg, DR* or 0)
+.equ DGO_free, 8                #   (): it closes
+.equ DA_CLOSE, -1               # an act that closes the dialog
+.equ DA_ASK, -2                 # DGO_act: the driver it waited for is ready (agentdlg_pend)
+STRUCT
+F AGC_kind, 4           # the driver kind (AS_kind)
+F AGC_flags, 4          # AGCF_*
+F AGC_path, 8           # owned cstr: the state file, resolved when the record is made, or 0
+F AGC_models, VEC_SIZE  # AMO*
+F AGC_cmds, VEC_SIZE    # ACM*
+F AGC_version, 24       # cstr: the program's version
+F AGC_model, 64         # cstr: the project's model, empty none
+F AGC_effort, 16        # cstr: the project's effort level, empty none
+F AGC_ultra, 4          # the project's Ultracode: -1 unset, 0, 1
+F AGC_think, 4          # the project's thinking: -1 unset, 0, 1
+F AGC_fast, 4           # the program's fast mode (FS_*)
+F AGC_pad, 4
+F AGC_fastwhy, 32       # cstr: why fast mode is off, empty none
+F AGC_dest, 24          # cstr: the last permission destination picked
+F AGC_newmode, 32       # cstr: the user's last picked default mode
+F AGC_convs, VEC_SIZE   # ACH: each conversation's mode, the oldest first
+F AGC_omodels, VEC_SIZE # the lists being replaced (agentcfg_lists_begin to _end)
+F AGC_ocmds, VEC_SIZE
+F AGC_lmask, 4          # AGL_*: which lists agentcfg_lists_begin replaces
+F AGC_pad2, 4
+ENDSTRUCT AGC_SIZE
+.equ AGCF_READ, 1               # the state file was read (or there is none to read)
+.equ AGCF_DIRTY, 2              # something changed since it was written
+.equ AGCF_NOFILE, 4             # no project: the record lives in memory only
+.equ AGL_MODELS, 1              # agentcfg_lists_begin's lists
+.equ AGL_CMDS, 2
+.equ AGF_MODEL, 1               # agentcfg_set's fields (the int ones take the value in rdx)
+.equ AGF_EFFORT, 2
+.equ AGF_ULTRA, 3
+.equ AGF_THINK, 4
+.equ AGF_DEST, 5
+.equ AGF_NEWMODE, 6
+.equ AGF_VERSION, 7
+.equ AGF_FAST, 8
+.equ AGF_FASTWHY, 9
+
+# ---- the panel's popup list (src/app/agentpop.s) ----
+.equ APP_MENU, 1
+.equ APP_MODES, 2
+.equ APP_MODELS, 3
+STRUCT
+F APR_kind, 4           # APK_*
+F APR_flags, 4          # APRF_*
+F APR_label, 8
+F APR_desc, 8
+F APR_trail, 8
+F APR_act, 4
+F APR_sec, 4            # APS_*: its section
+F APR_arg, 8            # ACM*, AMO*, AMD*
+ENDSTRUCT APR_SIZE
+.equ APK_SECTION, 1
+.equ APK_ROW, 2
+.equ APK_SWITCH, 3
+.equ APK_LEVELS, 4
+.equ APK_EMPTY, 5
+.equ APK_FOOT, 6
+.equ APRF_OFF, 1
+.equ APRF_CHECK, 2
+.equ APRF_ON, 4
+.equ APRF_FILTERONLY, 8
+.equ APRF_SLASH, 16             # a slash command's row (APR_arg: its ACM*)
+# APM: an action of the command menu (a driver's static table, DRV_menu)
+STRUCT
+F APM_sec, 4            # APS_*
+F APM_act, 4            # ACT_*
+F APM_label, 8          # cstr
+F APM_desc, 8           # cstr
+F APM_kind, 4           # APK_ROW, APK_SWITCH, APK_LEVELS
+F APM_flags, 4          # APRF_FILTERONLY
+F APM_shows, 8          # (AS* or 0, driver kind) -> eax 1 shown, rdx its trail (a levels row: the
+                        #   label's "(Level)") or 0, ecx APRF_ON (a switch that is on), r8 a levels
+                        #   row's level id or 0, r9 a levels row's model (AMO*: its levels); 0:
+                        #   always shown, nothing trailing
+ENDSTRUCT APM_SIZE
+.equ APS_CONTEXT, 1             # the command menu's sections, in their order
+.equ APS_MODEL, 2
+.equ APS_CUSTOMIZE, 3
+.equ APS_SETTINGS, 4
+.equ APS_SUPPORT, 5
+.equ APS_SLASH, 6
+.equ APS_COUNT, 7
+.equ ID_AGPOP, 0x8800           # the panel's popup: + its row (0 .. 0x3fe), + 0x3ff its filter field
+.equ ID_AGBAND, 0x8c00          # the bands above the box: + BK_* their x
+.equ ID_AGFOOT, 0x8d00          # the footer under the box: + FOOT_* its controls (agentfoot.s)
+
+# ---- rich cards of driven sessions (src/app/agentcard.s) ----
+STRUCT
+F CDB_label, 8          # owned cstr
+F CDB_act, 4            # CBA_*
+F CDB_flags, 4          # CDBF_*
+ENDSTRUCT CDB_SIZE
+.equ CBA_YES, 1
+.equ CBA_RULE, 2
+.equ CBA_NO, 3
+.equ CBA_YES_AUTO, 4
+.equ CBA_YES_MANUAL, 5
+.equ CBA_FEEDBACK, 6
+.equ CBA_SUBMIT, 7
+.equ CBA_DIALOG, 16             # + n: a dialog's result n
+.equ CDBF_DEST, 1               # the label ends with the place
+.equ CDBF_HIDE, 8               # plan review: not shown now (a plan card's buttons follow its comments)
+.equ CDBF_CLOSE, 2              # the dialog cards: the card's × (drawn at its top right, not as a button)
+.equ CDBF_OFF, 4                #   a greyed button: drawn dimmed, no action, no focus stop
+.equ CD_LINK, -5                #   CD_focus on the card's link (CD_link, "Learn more")
+STRUCT
+F CDD_id, 8
+F CDD_label, 8
+F CDD_tip, 8
+ENDSTRUCT CDD_SIZE
+STRUCT
+F CDO_label, 8
+F CDO_desc, 8
+F CDO_preview, 8        # MD* or 0
+ENDSTRUCT CDO_SIZE
+STRUCT
+F CDQ_header, 8
+F CDQ_text, 8
+F CDQ_multi, 4
+F CDQ_picks, 4          # a bit per option, 16 at most
+F CDQ_sel, 4
+F CDQ_otheron, 4
+F CDQ_other, TF_SIZE
+F CDQ_opts, VEC_SIZE    # CDO
+ENDSTRUCT CDQ_SIZE
+STRUCT
+F CDC_quote, 8
+F CDC_text, 8
+ENDSTRUCT CDC_SIZE
+STRUCT
+F CD_kind, 4            # CDK_*
+F CD_flags, 4           # CDF_*
+F CD_token, 8           # AQ*
+F CD_title, 8           # owned cstrs or 0
+F CD_hint, 8
+F CD_detail, 8
+F CD_desc, 8
+F CD_note, 8
+F CD_json, 8
+F CD_link, 8
+F CD_btns, VEC_SIZE     # CDB
+F CD_dests, VEC_SIZE    # CDD
+F CD_dest, 4
+F CD_focus, 4           # a button index, CD_FIELD, CD_EDIT
+F CD_chosen, 4
+F CD_pad, 4
+F CD_born, 8            # time_ms
+F CD_scroll, 4
+F CD_tab, 4
+F CD_edit, TF_SIZE
+F CD_field, TF_SIZE
+F CD_qs, VEC_SIZE       # CDQ*
+F CD_comments, VEC_SIZE # CDC
+F CD_extra, VEC_SIZE    # owned cstrs: the lines under the rule button
+F CD_ph, 8              # owned cstr: the reject field's placeholder (the driver's wording), or 0
+F CD_room, 4            # the height it was last drawn in (less than its own: it scrolls)
+F CD_lastw, 4           # the width it was last drawn at
+# the question card: CD_tab the question shown, CD_qs its questions
+F CD_advto, 4           # the tab a single choice moves to once CD_advat comes
+F CD_qpx, 4             # the text size its previews were given (md_set_size)
+F CD_advat, 8           # time_ms of that move, 0 none waiting
+F CD_why, 4             # phase 4 task 11: where the answer came from (CDW_*): the card, or its Review tab
+F CD_whypad, 4
+ENDSTRUCT CD_SIZE
+.equ CDK_PERMISSION, 1
+.equ CDK_QUESTIONS, 2
+.equ CDK_PLAN, 3
+.equ CDK_DIALOG, 4
+.equ CDF_DEFNO, 1
+.equ CDF_FOLDED, 2
+.equ CDF_EDIT, 4
+.equ CDF_JSON, 8                # the Details disclosure is open
+.equ CDF_LIVE, 16               # its lock is over and the wake-up that redraws it was given
+.equ CDF_SHOWN, 32              # ev_card showed it once (a second showing keeps its lock and focus)
+.equ CDF_WHEEL, 64              # the wheel scrolled it: the focused control is not kept in view until a key
+.equ CD_FIELD, -2
+.equ CD_EDIT, -3
+.equ CD_OPTS, -4                # the question card: the keyboard on its options (the row: CDQ_sel)
+.equ CDT_TITLE, 0               # agentcard_text's fields
+.equ CDT_HINT, 1
+.equ CDT_DETAIL, 2
+.equ CDT_DESC, 3
+.equ CDT_NOTE, 4
+.equ CDT_JSON, 5
+.equ CDT_LINK, 6
+.equ CDT_EDIT, 7
+.equ CDT_PH, 8                  # the reject field's placeholder
+.equ ID_AGCARD, 0x8300          # a rich card's controls: + CID_* (agentcard.s), to 0x87ff
+.equ CARD_LOCK_MS, 500          # a card's buttons and keys are dead this long after it shows
+.equ CARD_KEYED_MS, 500         # a card takes no keyboard from a box that had a key this recently
+# ---- phase 4 tasks 11 and 12: a proposed change offered in the Review tab (review.s, agentoffer.s) ----
+.equ OFFER_ACCEPT, 1            # an offer's outcome (RVO_done)
+.equ OFFER_REJECT, 2
+.equ OFFER_CLOSED, 3
+.equ OFFER_REVERTED, 4          #   accepted with every change taken out: the text before
+.equ OFF_NOREAD, 1              # ev_offer's flags: the file was not read (outside the project, unreadable)
+.equ OFF_PARTIAL, 2             #   the edit's old text is not in the file: the edit's texts alone
+.equ CDW_CARD, 0                # CD_why
+.equ CDW_TAB_ACCEPT, 1
+.equ CDW_TAB_REJECT, 2
+.equ CDW_TAB_CLOSED, 3
+.equ CDW_REVERTED, 4
+# RVO: an offer's owner (static; review.s review_offer): the permission card (agentoffer.s), the bridge
+#   (edtools.s)
+STRUCT
+F RVO_done, 8           # fn(rdi ctx, esi OFFER_*, rdx text ptr, rcx len, r8d edited) -> eax 1 taken, 0 again
+                        #   later; called from review_tick (or at once for the owner's review_offer_reject)
+F RVO_locked, 8         # fn(rdi ctx) -> eax ms no decision may be taken yet (a card's lock), 0 none; or 0
+F RVO_name, 8           # cstr or 0: the owner, as the Review tab's title names it
+F RVO_flags, 8          # RVOF_*
+ENDSTRUCT RVO_SIZE
+.equ RVOF_DECIDED_ENDS, 1       # the last change decided one at a time decides the offer (no final Accept)
+# OT: an offer's two texts, before and after (review_offer copies them; not TX: wstx.s's transactions)
+STRUCT
+F OT_old, 8
+F OT_oldlen, 8
+F OT_new, 8
+F OT_newlen, 8
+ENDSTRUCT OT_SIZE
+# ---- end of tasks 11 and 12 ----
+.equ CARD_ADVANCE_MS, 300       # the question card: a single choice moves to the next question after this
+.equ CDQ_OPTS_MAX, 16           # the question card: options a question may have (more: not shown)
+.equ CDQ_MAX, 16                #   questions a card may have
+
+# ---- the box's behaviour (src/app/agentcompose.s) and a Markdown tab of rhun's own (src/app/mdtab.s) ----
+.equ CW_SEND, 0                 # composer_check's reasons
+.equ CW_PASTE, 1
+.equ PAINT_RAINBOW, 1           # TF_paint's kinds
+# phase 4 task 7: mentions (agentmention.s, filelist.s, agentpop.s)
+.equ PAINT_CHIP, 2              # TF_paint: a mention, a tinted box behind its bytes
+.equ APP_MENTION, 4             # agentpop.s: the mention menu (typed "@token")
+.equ TAB_MDDOC, 7
+.equ TAB_AGENT, 8                # phase 4 task 13: a conversation tab (src/app/agenttab.s)
+.equ ID_MDTAB, 0x6c3000         # + 0xfff: its links, Comment, scrollbar
+.equ PROMPT_MD_COMMENT, 110
+STRUCT
+F MDO_comment, 8        # (ctx, quote ptr, len, text ptr, len), 0: no Comment button
+F MDO_closed, 8         # (ctx)
+ENDSTRUCT MDO_SIZE
 
 # ---- debugger (DAP client): debugcfg.s, dapwire.s, dap.s, bp.s, debugconsole.s, debugctl.s ----
 .equ NEEDS_DEBUG, 0x10000           # [needs] debug = yes: start debug adapters that run as the user
@@ -3962,3 +5056,68 @@ ENDSTRUCT VI_SIZE
 .equ VTM_RIGHT, 1
 .equ VTM_CARET, 2
 .equ VT_LINE_MAX, 256           # inlays on one line
+# ---- Claude chat phase 5, the bridge for terminal claude (ide_server.s, mcpsrv.s, edtools.s): begin ----
+# an offer for the bridge: RVO, OT and OFFER_* are with phase 4's (review.s review_offer)
+# an MCP server (mcpsrv.s): a static table of tools, shared by every transport
+STRUCT
+F MS_name, 8            # cstr: serverInfo.name
+F MS_version, 8         # cstr: serverInfo.version
+F MS_tools, 8           # MT*
+F MS_ntools, 8
+ENDSTRUCT MS_SIZE
+STRUCT
+F MT_name, 8            # cstr
+F MT_desc, 8            # cstr or 0
+F MT_schema, 8          # cstr: its inputSchema as JSON text
+F MT_flags, 4           # MTF_*
+F MT_pad, 4
+F MT_title, 8           # cstr or 0: annotations.title
+F MT_fn, 8              # fn(rdi args jv or 0, rsi sb out, rdx token) -> eax MCP_OK, MCP_ERROR (out: the
+                        #   message) or MCP_LATER (the tool calls mcp_later_done(token, sb, flags) once)
+ENDSTRUCT MT_SIZE
+.equ MTF_READONLY, 1    # annotations.readOnlyHint
+.equ MTF_RAW, 2         # out holds the result's content array as JSON, not a text
+.equ MCP_OK, 0
+.equ MCP_ERROR, 1
+.equ MCP_LATER, 2
+.equ MCPT_IDE, 1        # a token's transport (its top byte): the bridge for terminal claude
+# ---- Claude chat phase 5: end ----
+# ---- phase 6, sessions: the session list's own marks (agentgroups.s, agentlist.s, agenthead.s) ----
+STRUCT
+F SGR_id, 4              # a group of the session list: its id (never 0, never reused in a project)
+F SGR_flags, 4           # SGRF_*
+F SGR_name, 8            # owned cstr
+ENDSTRUCT SGR_SIZE
+.equ SGRF_COLLAPSED, 1
+.equ SF_ARCH, 1                 # a session's marks: archived by hand
+.equ SF_KEPT, 2                 #   unarchived by hand (also one quiet for archive_after_days)
+.equ SF_UNREAD, 4               #   unread
+.equ SF_ALL, 7
+.equ LF_NEEDS, 1                # the status filter: needs input, working, completed (any of them),
+.equ LF_WORKING, 2
+.equ LF_DONE, 4
+.equ LF_OPEN, 8                 #   open, closed (any of them),
+.equ LF_CLOSED, 16
+.equ LF_ACTIVE, 32              #   active (needs input, working or unread)
+.equ SH_UNGROUPED_SHUT, 1       # the sections' state: Ungrouped collapsed, Archived shown open
+.equ SH_ARCHIVED_OPEN, 2
+# ---- end of phase 6, sessions ----
+# ---- Claude chat phase 4 tasks 9, 10: the editor's tools for the chat (edtools.s, claude_mcp.s, claude_hooks.s) ----
+.equ EDF_PRETTY, 1      # edtool_diagnostics: as JSON.stringify(list, null, 2) writes it (else compact)
+.equ EDF_PROJECT, 2     # edtool_diagnostics: files of the project only (edtool_in_project)
+.equ EDS_NOTOPEN, 0     # edtool_save, edtool_saved: no document of the file is open
+.equ EDS_CLEAN, 1       #   nothing unsaved
+.equ EDS_SAVING, 2      #   its save runs
+.equ EDS_FAILED, 3      #   not saved (read-only, changed on disk, or the save failed)
+# ---- Claude chat phase 4 tasks 9, 10: end ----
+# ---- claude-chat rows 2.22, 4.14 (Remote Control): AL_rc's states (ev_remote, agent_drv.s; the footer's pill) ----
+.equ RCS_OFF, 0                 # off: no pill
+.equ RCS_CONNECTING, 1          # asked, not connected yet
+.equ RCS_ON, 2                  # connected: the pill opens AL_rcurl
+.equ RCS_ERROR, 3               # failed: the pill says why until it is dismissed
+# Remote Control for all sessions (row 1.24's Settings switch, the extension's remote-control-at-startup;
+#   claude_side.s): the act, and its two requests to each running program
+.equ ACT_RCALL, 49              # the switch: Claude Code's user settings' remoteControlAtStartup (DRV_action)
+.equ OA_SIDE_RCFLAG, 44         #   apply_flag_settings {remoteControlAtStartup} after the switch wrote it
+.equ OA_SIDE_RCGET, 45          #   get_settings: then Remote Control follows the setting (the extension's uqe)
+# ---- end rows 2.22, 4.14 ----

@@ -1,0 +1,64 @@
+text src/a.c	0	0
+text src/a.c	5	0
+text src/a.c	5	5
+text src/a.c	2	3
+text a b.txt	0	0
+text a b.txt	2	3
+text src/	0	0
+text src//	0	0
+text /abs/path/x.py	0	0
+text /abs/dir/	0	0
+text /	0	0
+text a#b.txt	0	0
+text say "hi".txt	0	0
+text a @b	0	0
+text x。@y	0	0
+text @terminal:zsh	0	0
+text x @browser	0	0
+text  lead.txt	0	0
+text trail.txt 	0	0
+text ~	0	0
+text ~/notes.txt	0	0
+text x (agent)	0	0
+text 	0	0
+text agent-notes.md	0	0
+text browser	0	0
+text Makefile	0	0
+text a:b.txt	0	0
+text a.	0	0
+text file-	0	0
+text dir/sub-	0	0
+text C:\x\y.txt	0	0
+text \win\dir\	0	0
+text héllo.txt	0	0
+text naïve	0	0
+text 日本語.md	0	0
+text tab\there	0	0
+text non breaking	0	0
+text x_	0	0
+text .env	0	0
+text .github/	0	0
+text a.b/	0	0
+text x(1).txt	0	0
+text x(1)	0	0
+text report (final) v2.txt	0	0
+text a,b	0	0
+text dir/	3	7
+text /	2	2
+chips look at @src/a.c please
+chips @"a b.txt" and @terminal:zsh
+chips @types/node @you @x (agent)
+chips @"x (agent)" @src/a.c#L2-4 @b.txt#2 @c.md:10
+chips end with @src/a.c.
+chips (@src/a.c) and @README.md, ok
+chips @~/notes.txt @.env @Makefile
+chips no@src/a.c here
+chips first\n@src/b.c second\t@src/c.c
+chips @babel/core @eslint/x @tanstack/q @my/pkg
+chips @browser:1:2:x @browser @terminal:my_shell
+chips @"unclosed and @dir/ @dir/sub/
+chips 日本語。@src/日本.md！ok
+chips @ alone @/ @/abs/x.c
+chips @"a b.txt"#L2 @a.c#heading
+chips @@src/a.c @a.c@b.c
+chips @src/a.c?q=1 @a.c! @a.c;

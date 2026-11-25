@@ -1179,6 +1179,7 @@ rm_lost:
     cmp r12d, MUX_MAXCH
     jb 3b
     call vfs_remote_lost
+    call agent_conn_remote_lost # the chat's programs there end with it (agent_conn.s)
     call rm_rq_fail_all
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
@@ -3062,6 +3063,17 @@ rm_pid_chan:
     jne 8f
     ret
 8:  xor eax, eax
+    ret
+
+# remote_pid_host(tagged pid) -> eax the program's pid on the host, 0 when it names none (any more): what a
+#   record on the host names it by (agent_holder.s)
+FN remote_pid_host
+    call rm_pid_chan
+    test rax, rax
+    jz 9f
+    mov eax, [rax + CH_pid]
+    ret
+9:  xor eax, eax
     ret
 
 # rm_confine_reply(): "PID LEVEL REASON" (spawn MODE 3) into g_remote_confined and

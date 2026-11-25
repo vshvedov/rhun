@@ -12,6 +12,10 @@
 #                                           a file relative to the base: a tab)
 #   md_set_base(m, ptr, len)                the absolute folder relative links name
 #   md_set_flat(m)                         code blocks use the containing surface
+#   md_set_size(m, px)                      its text at px (0: the interface's faces), its other
+#                                           faces in proportion; md_set_compact(m, 1): headings
+#                                           little bigger than the text (the agents panel)
+#   i = md_link_at(m, x, y, scroll)         the link under a point of a document drawn (-1 none)
 #   m = md_from_body(ext, ptr, len)         a rich-document body ("doc LEN" + Markdown, "base
 #                                           LEN" + folder: views design 3.8.4), or 0
 #   md_free(m)
@@ -19,9 +23,16 @@
 # Blocks: ATX and setext headings, paragraphs (soft wrap, hard breaks), bullet and ordered lists
 # nested by indentation, task items, block quotes, fenced and indented code (colored with rhun's
 # grammars by the info string's first word), thematic breaks, pipe tables, reference definitions,
-# hidden HTML comments. Inline: emphasis, strong, strikethrough, code spans, links (inline,
-# reference, autolinks, bare http(s) URLs), images (their alt text, as a link), backslash escapes
-# and the entities &amp; &lt; &gt; &quot; &apos; &nbsp; &#N; &#xN;. Other HTML shows as text.
+# hidden HTML comments, footnotes ("[^id]" a small raised number linking to "#^id"; the definitions
+# "[^id]: text" cited, numbered in order of first use, after the last block under a thin rule), display
+# math ("$$" alone on a line opens and closes it: shown as its source, as code without a language;
+# "$" is never math). Inline: emphasis, strong, strikethrough, code spans (one holding "★" and
+# "Insight" is a line of its own, that label in the accent and a thin rule after it; one of 20 or more
+# "─" alone is a thin rule: the Explanatory output style's frame), links (inline, reference,
+# autolinks, bare http(s) URLs), images (an img: handle or a file under the base drawn; any other,
+# a data: URI too, is a chip "[Image]", its tip "Image blocked: URL" unless it is a data: URI),
+# backslash escapes and the entities &amp; &lt; &gt; &quot; &apos; &nbsp; &#N; &#xN;. Other HTML
+# shows as text.
 .include "rhun.inc"
 
 .equ MDB_PARA, 1
@@ -38,6 +49,9 @@
 .equ MS_IMAGE, 32
 .equ MS_BREAK, 64               # a hard line break (a run without text)
 .equ MS_CELL, 128               # a table cell ends here (a run without text)
+.equ MS_SUP, 256                # a footnote's number: small and raised
+.equ MS_INSIGHT, 512            # a code span with "★" and "Insight": a line, its label in the accent
+.equ MS_IRULE, 1024             # a code span of 20 or more "─" alone: a thin rule (the Explanatory style)
 
 .equ MDK_TEXT, 1
 .equ MDK_FILL, 2
@@ -46,7 +60,12 @@
 .equ MDK_LINE, 5                # a 1 px line (strikethrough, underline, rules)
 .equ MDK_IMAGE, 6               # an image; MDI_style its MD_imgs entry
 .equ MDK_COPY, 7                # a code block's native Copy button; MDI_link its action
+.equ MDK_CHIP, 8                # "[Image]" for an image not shown; MDI_link its source (the tip names it)
 .equ MDL_COPY, 0x80000000       # a link's length flag: copy code, never follow its text as a URL
+.equ MD_FNS_MAX, 1000           # footnote definitions kept (more: text)
+.equ MD_TIP_URL, 1000           # bytes of a blocked image's source its tip shows
+.equ MD_TIP_HEAD, 15            # "Image blocked: "
+.equ MD_CHIP_LEN, 7             # "[Image]"
 .equ MD_IMG_FILE_MAX, 8388608   # an image file's bytes
 .equ MD_IMG_SIDE_MAX, 4096
 .equ MD_IMG_BYTES, 33554432     # decoded images per document
@@ -57,6 +76,9 @@
 .equ MDF_HUGE, 3
 .equ MDF_CODE, 4
 .equ MDF_EM, 5                  # emphasis: the ui face sheared (em_face)
+.equ MDF_H3, 6                  # a compact document's level 3 heading (md_set_compact)
+.equ MDF_SUP, 7                 # a footnote's number: the text's font at three quarters of its size
+.equ MDF_COUNT, 8
 
 .equ MD_LISTS, 8                # nesting kept for lists
 .equ MD_COLS, 32                # table columns
@@ -94,12 +116,31 @@ F MD_slugh, 8           # an open-addressing table of MD_slugv index + 1
 F MD_slughcap, 4
 F MD_slugdone, 4
 F MD_imgs, VEC_SIZE     # MDM: images, resolved when first laid out
+F MD_size, 4            # its text's pixels (md_set_size), 0 for the interface's faces
+F MD_compact, 4         # headings at 1.4, 1.25 and 1.1 times the text (md_set_compact)
+F MD_fns, VEC_SIZE      # MDN: footnote definitions, by their labels (the first pass)
+F MD_fnused, 4          # footnote numbers given (in order of first use)
+F MD_fnpad, 4
+F MD_muted, 4           # its text in the muted colour where it would be the text colour (md_set_muted)
+F MD_tint, 4            # the theme slot its text takes where it would be the text colour, 0 none (md_set_tint)
+F MD_mutedpad, 4
+F MD_datafn, 8          # md_set_data_images: fn(link ptr, len) -> a picture's id (agentimg.s), or 0
+F MD_tparse, 8          # MD_text's length once parsed: a layout's own text (list numbers) goes after it
 ENDSTRUCT MD_SIZE
+
+# a footnote definition (MD_fns)
+STRUCT
+F MDN_label, 4          # in MD_src
+F MDN_len, 4
+F MDN_num, 4            # its number, 0 while nothing cites it
+F MDN_block, 4          # its paragraph (the first definition of the label), -1 none yet
+ENDSTRUCT MDN_SIZE
 
 # an image (MD_imgs)
 STRUCT
 F MDM_link, 4           # its link (the source)
-F MDM_kind, 4           # 0 none (its alt text shows), 1 an img: handle, 2 a file decoded
+F MDM_kind, 4           # 0 none (its alt text shows), 1 an img: handle, 2 a file decoded, 3 a data: image
+                        #   (MDM_id: agentimg.s's id; laid out at its thumbnail's size once that is made)
 F MDM_id, 4             # the handle
 F MDM_w, 4              # its size, pixels
 F MDM_h, 4
@@ -128,6 +169,7 @@ F MDB_aligns, 4
 F MDB_hdr, 4            # 1 for a table's header row
 F MDB_y, 4              # its top, laid out
 F MDB_copy, 4           # code: its Copy action's link index, -1 without one
+F MDB_fn, 4             # a footnote's definition: its number (1 while parsing), else 0
 ENDSTRUCT MDB_SIZE
 
 # a run of text in one style
@@ -173,6 +215,9 @@ ENDSTRUCT MDI_SIZE
 pm: .quad 0                     # the document being parsed or laid out
 body_rr: .zero RR_SIZE          # md_from_body's record
 em_face: .zero FACE_SIZE        # emphasis: the ui face, oblique (em_face_init)
+sup_face: .zero FACE_SIZE       # footnotes' numbers: the ui face at three quarters (sup_face_init)
+tip_img: .zero MD_TIP_URL + 64  # a blocked image's tip (img_tip)
+sz_faces: .zero FACE_SIZE * MDF_COUNT   # the faces of documents with a size (sized_faces), by MDF_*
 slug_buf: .zero SB_SIZE         # md_anchor: a heading's slug, and an earlier one's
 slug_buf2: .zero SB_SIZE
 hc_mem: .zero 96                # has_closer's failures: ptr, len, from, n for * _ ~
@@ -199,6 +244,9 @@ code_line: .long 0
 code_lang: .long 0              # its info word in MD_text
 code_langlen: .long 0
 comment_open: .long 0
+para_fn: .long 0                # the paragraph open is a footnote's definition (fn_ent's)
+pend_fn: .long 0                # the paragraph about to open is one
+fn_ent: .long 0                 # its MD_fns entry
 tbl_open: .long 0
 tbl_hdr: .long 0                # the header row's block
 tbl_quote: .long 0
@@ -236,7 +284,17 @@ tbuf: .zero 64
 .data
 .p2align 2
 em_gen: .long -1                # g_face_gen when em_face was made, -1 never
+sup_gen: .long -1               # and sup_face
+sz_px: .long 0                  # what sz_faces were made for: the size, compact, g_face_gen after
+sz_compact: .long 0
+sz_gen: .long -1
+cur_sized: .long 0              # the document laid out, drawn or pointed at has a size (use_doc)
+.p2align 3
+sz_tab: .zero 8 * MDF_COUNT     # its faces by MDF_*: sz_faces' or the interface's (sized_faces)
 in_link: .long -1
+keep_sel: .long 0               # md_layout: the selection before the items were made again (task 10)
+.p2align 3
+keep_n: .quad 0                 #   and how many there were
 
 .text
 
@@ -285,6 +343,8 @@ FN md_new
     call sb_push_byte
 5:  mov rdi, rbx
     call md_parse
+    mov rax, [rbx + MD_text + SB_len]
+    mov [rbx + MD_tparse], rax
     mov rax, rbx
     EPILOGUE
 
@@ -305,6 +365,8 @@ FN md_free
     lea rdi, [rbx + MD_links]
     call vec_free
     lea rdi, [rbx + MD_refs]
+    call vec_free
+    lea rdi, [rbx + MD_fns]
     call vec_free
     lea rdi, [rbx + MD_items]
     call vec_free
@@ -346,6 +408,16 @@ FN md_link
     mov rax, [rdi + MD_text + SB_ptr]
     add rax, rcx
 9:  ret
+
+# md_is_copy(m, i) -> eax 1 when link i is a code block's Copy action (md_open_link copies the code)
+FN md_is_copy
+    xor eax, eax
+    cmp rsi, [rdi + MD_links + VEC_len]
+    jae 1f
+    mov rcx, [rdi + MD_links + VEC_ptr]
+    test dword ptr [rcx + rsi*8 + MDL_len], MDL_COPY
+    setnz al
+1:  ret
 
 # md_open_link(m, i) -> eax 1 when rhun followed it: http and https in the browser, rhun:// in rhun
 FN md_open_link
@@ -555,10 +627,26 @@ md_image:
     call md_link
     test rdx, rdx
     jz 8f
-    cmp rdx, 1000
-    ja 8f
     mov r14, rax
     mov r15, rdx
+    cmp qword ptr [rbx + MD_datafn], 0  # a data: image: its picture's record (no decode here)
+    je 0f
+    cmp r15, 5
+    jb 0f
+    cmp dword ptr [r14], 0x61746164     # "data"
+    jne 0f
+    cmp byte ptr [r14 + 4], ':'
+    jne 0f
+    mov rdi, r14
+    mov rsi, r15
+    call [rbx + MD_datafn]
+    test rax, rax
+    jz 8f
+    mov [r13 + MDM_id], eax
+    mov dword ptr [r13 + MDM_kind], 3
+    jmp 8f
+0:  cmp r15, 1000
+    ja 8f
     cmp r15, 4                  # img:N
     jbe 3f
     cmp dword ptr [r14], 0x3a676d69     # "img:"
@@ -662,6 +750,15 @@ image_run:
     cmp dword ptr [rax + MDM_kind], 0
     je 8f
     mov r13, rax
+    cmp dword ptr [r13 + MDM_kind], 3   # a data: image: its thumbnail's size, a chip until it has one
+    jne 0f
+    mov edi, [r13 + MDM_id]
+    call agimg_size
+    test eax, eax
+    jz 8f
+    mov [r13 + MDM_w], eax
+    mov [r13 + MDM_h], edx
+0:  mov rax, r13
     sub rax, [rbx + MD_imgs + VEC_ptr]
     xor edx, edx
     mov ecx, MDM_SIZE
@@ -757,6 +854,12 @@ FN md_focus
     mov eax, [rdi + MD_focus]
     ret
 
+# FN md_set_data_images(m, fn): its data: images ask fn(link ptr, len) -> a picture's id or 0 when first laid
+#   out, and are drawn as that picture's thumbnail once it is made (agentimg.s); without fn, or for 0, the chip
+FN md_set_data_images
+    mov [rdi + MD_datafn], rsi
+    ret
+
 # md_set_ext(m, ext): the extension whose img: handles its images name
 FN md_set_ext
     mov [rdi + MD_ext], rsi
@@ -783,8 +886,105 @@ FN md_link_y
 2:  mov eax, [rdx + MDI_y]
 9:  ret
 
+# md_link_at(m, x, y, scroll) -> eax the link under the point, or -1: x and y from the top left of the
+#   document as md_draw drew it with that scroll. A link's words, and the gap between two of them on
+#   one line, are the link; a code block's Copy and an image's chip are not links. Walks the items
+#   laid out once per call (a click's, not a frame's)
+FN md_link_at
+    add edx, ecx                # the document's y
+    xor r11d, r11d              # the text item of a link before it on its line, 0 none
+    xor r8d, r8d
+1:  cmp r8, [rdi + MD_items + VEC_len]
+    jae 8f
+    imul rax, r8, MDI_SIZE
+    add rax, [rdi + MD_items + VEC_ptr]
+    inc r8
+    cmp dword ptr [rax + MDI_kind], MDK_TEXT
+    jne 1b
+    mov ecx, [rax + MDI_link]
+    test ecx, ecx
+    js 6f
+    cmp edx, [rax + MDI_y]      # its line?
+    jl 6f
+    mov r9d, [rax + MDI_y]
+    add r9d, [rax + MDI_h]
+    cmp edx, r9d
+    jge 6f
+    mov r9d, [rax + MDI_x]      # its words, or the gap after the same link's word before it
+    test r11, r11
+    jz 2f
+    cmp [r11 + MDI_link], ecx
+    jne 2f
+    mov r10d, [r11 + MDI_y]
+    cmp r10d, [rax + MDI_y]
+    jne 2f
+    mov r10d, [r11 + MDI_x]
+    add r10d, [r11 + MDI_w]
+    cmp esi, r10d
+    jge 3f
+2:  cmp esi, r9d
+    jl 5f
+3:  add r9d, [rax + MDI_w]
+    cmp esi, r9d
+    jge 5f
+    mov eax, ecx
+    ret
+5:  mov r11, rax                # the word before the next one
+    jmp 1b
+6:  xor r11d, r11d
+    jmp 1b
+8:  mov eax, -1
+    ret
+
+# FN md_link_step(m, link or -1, dir 1 or -1) -> eax the next link the keys reach that way, round from the end
+#   to the start, -1 when none: a link with words laid out (or a code block's Copy). An image's source, shown or
+#   blocked as a chip, is no stop (phase 3 task 10: Tab then Enter must not open a blocked image's URL)
+FN md_link_step
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13d, edx
+    mov r14, [rbx + MD_links + VEC_len]
+    test r14, r14
+    jz 8f
+    mov r15d, r14d              # tries
+    mov eax, r12d
+    test eax, eax
+    jns 1f
+    mov eax, -1                 # none yet: from before the first, or after the last
+    test r13d, r13d
+    jg 1f
+    mov eax, r14d
+1:  add eax, r13d
+    jns 2f
+    lea eax, [r14 - 1]
+2:  cmp eax, r14d
+    jl 3f
+    xor eax, eax
+3:  mov r12d, eax
+    xor ecx, ecx                # an item of its words, or its Copy
+4:  cmp rcx, [rbx + MD_items + VEC_len]
+    jae 6f
+    imul rdx, rcx, MDI_SIZE
+    add rdx, [rbx + MD_items + VEC_ptr]
+    inc rcx
+    cmp [rdx + MDI_link], r12d
+    jne 4b
+    cmp dword ptr [rdx + MDI_kind], MDK_TEXT
+    je 7f
+    cmp dword ptr [rdx + MDI_kind], MDK_COPY
+    je 7f
+    jmp 4b
+6:  mov eax, r12d
+    dec r15d
+    jnz 1b
+8:  mov eax, -1
+    EPILOGUE
+7:  mov eax, r12d
+    EPILOGUE
+
 # md_line_y(m, line from 0) -> eax the top of the block holding that source line (the last block
-#   starting at or before it), 0 for none
+#   starting at or before it, footnotes' definitions left out: they are moved to the end), 0 for none
 FN md_line_y
     xor eax, eax
     xor ecx, ecx
@@ -792,6 +992,8 @@ FN md_line_y
     jae 9f
     imul rdx, rcx, MDB_SIZE
     add rdx, [rdi + MD_blocks + VEC_ptr]
+    cmp dword ptr [rdx + MDB_fn], 0
+    jne 9f
     cmp [rdx + MDB_line], esi
     jg 9f
     mov eax, [rdx + MDB_y]
@@ -818,7 +1020,8 @@ FN md_y_line
 # md_anchor(m, ptr, len) -> eax the top of the heading whose slug is the text (a leading # left
 #   out), -1 for none. Slugs follow GitHub: lowercase, letters, digits, - and _ kept, spaces to -,
 #   other ASCII left out; a slug already given (a suffixed one too) gets -1, -2, ... until it is
-#   new, in document order. They are made once per document and found by hash.
+#   new, in document order. They are made once per document and found by hash. "^LABEL" (a
+#   footnote's number links there) is the top of that footnote's definition.
 FN md_anchor
     PROLOGUE
     mov rbx, rdi
@@ -830,7 +1033,16 @@ FN md_anchor
     jne 1f
     inc r12
     dec r13
-1:  cmp dword ptr [rbx + MD_slugdone], 0
+1:  test r13, r13
+    jz 11f
+    cmp byte ptr [r12], '^'
+    jne 11f
+    mov rdi, rbx
+    lea rsi, [r12 + 1]
+    lea rdx, [r13 - 1]
+    call fn_anchor
+    EPILOGUE
+11: cmp dword ptr [rbx + MD_slugdone], 0
     jne 2f
     mov rdi, rbx
     call build_slugs
@@ -1068,6 +1280,15 @@ slug_char:
 FN md_select_mouse
     PROLOGUE 16
     mov rbx, rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    call use_doc
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
     mov r12d, esi
     mov r13d, edx
     mov r14d, ecx
@@ -1401,12 +1622,227 @@ FN md_sel_text
 8:  xor eax, eax
     EPILOGUE
 
+# ---- plan review (mdtab.s): a phrase selected by its text, the selection's end ----
+
+# FN md_select_text(m, ptr, len) -> eax 1 when the text was found and selected: its first occurrence in the
+#   laid-out text as md_sel_text joins it (a space or a line feed in the text matches either between words).
+#   Lay the document out first. Locals: [rsp] the joined text (SB), +24 per text item its index and its
+#   start in it (SB of u32 pairs), +48 the match's start
+FN md_select_text
+    PROLOGUE 64
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    lea rdi, [rsp]
+    xor esi, esi
+    mov edx, 48
+    call memset
+    test r13, r13
+    jz .Lmst_no
+    mov r15d, -1                # the last text item taken
+    xor r14d, r14d
+.Lmst_item:
+    cmp r14, [rbx + MD_items + VEC_len]
+    jae .Lmst_find
+    imul rcx, r14, MDI_SIZE
+    add rcx, [rbx + MD_items + VEC_ptr]
+    cmp dword ptr [rcx + MDI_kind], MDK_TEXT
+    jne .Lmst_next
+    test r15d, r15d             # between it and the one before: LF or a space (md_sel_text's rule)
+    js 3f
+    movsxd rax, r15d
+    imul rax, rax, MDI_SIZE
+    add rax, [rbx + MD_items + VEC_ptr]
+    mov edx, [rax + MDI_y]
+    cmp edx, [rcx + MDI_y]
+    je 2f
+    mov esi, 10
+    jmp 21f
+2:  mov edx, [rax + MDI_x]
+    add edx, [rax + MDI_w]
+    cmp edx, [rcx + MDI_x]
+    jge 3f
+    mov esi, ' '
+21: lea rdi, [rsp]
+    call sb_push_byte
+3:  mov dword ptr [rsp + 56], r14d  # the item's index and start
+    mov rax, [rsp + SB_len]
+    mov [rsp + 60], eax
+    lea rdi, [rsp + 24]
+    lea rsi, [rsp + 56]
+    mov edx, 8
+    call sb_push
+    imul rcx, r14, MDI_SIZE
+    add rcx, [rbx + MD_items + VEC_ptr]
+    mov rsi, [rbx + MD_text + SB_ptr]
+    mov eax, [rcx + MDI_off]
+    add rsi, rax
+    mov edx, [rcx + MDI_len]
+    lea rdi, [rsp]
+    call sb_push
+    mov r15d, r14d
+.Lmst_next:
+    inc r14
+    jmp .Lmst_item
+.Lmst_find:
+    xor r14d, r14d              # the match's start
+1:  mov rax, r14
+    add rax, r13
+    cmp rax, [rsp + SB_len]
+    ja .Lmst_no
+    xor ecx, ecx
+2:  cmp rcx, r13
+    jae 5f
+    mov rdx, [rsp + SB_ptr]
+    add rdx, r14
+    movzx eax, byte ptr [rdx + rcx]
+    movzx edx, byte ptr [r12 + rcx]
+    cmp eax, edx
+    je 4f
+    cmp eax, 10                 # white space matches white space
+    je 3f
+    cmp eax, ' '
+    jne 6f
+3:  cmp edx, 10
+    je 4f
+    cmp edx, ' '
+    jne 6f
+4:  inc rcx
+    jmp 2b
+6:  inc r14
+    jmp 1b
+5:  mov [rsp + 48], r14
+    # the start: the first item whose bytes reach past it; the end: the last item starting before it
+    mov r8, [rsp + 24 + SB_ptr]
+    mov r9, [rsp + 24 + SB_len]
+    shr r9, 3
+    mov r10, r14
+    add r10, r13                # the end
+    mov dword ptr [rbx + MD_sa], -1
+    xor ecx, ecx
+7:  cmp rcx, r9
+    jae 9f
+    mov eax, [r8 + rcx*8]       # its item
+    mov edx, [r8 + rcx*8 + 4]   # its start
+    imul rsi, rax, MDI_SIZE
+    add rsi, [rbx + MD_items + VEC_ptr]
+    mov esi, [rsi + MDI_len]
+    add rsi, rdx                # its end
+    cmp dword ptr [rbx + MD_sa], -1
+    jne 8f
+    cmp r14, rsi
+    jae 8f
+    mov [rbx + MD_sa], eax
+    mov rdi, r14
+    sub rdi, rdx
+    jns 71f
+    xor edi, edi
+71: mov [rbx + MD_sao], edi
+8:  cmp rdx, r10
+    jae 9f
+    mov [rbx + MD_sb], eax
+    mov rdi, r10
+    sub rdi, rdx
+    sub rsi, rdx                # its length
+    cmp rdi, rsi
+    cmova rdi, rsi
+    mov [rbx + MD_sbo], edi
+    inc rcx
+    jmp 7b
+9:  cmp dword ptr [rbx + MD_sa], -1
+    je .Lmst_no
+    mov dword ptr [rbx + MD_sel], 1
+    mov dword ptr [rbx + MD_drag], 0
+    mov dword ptr [rip + g_dirty], 1
+    mov r15d, 1
+    jmp .Lmst_end
+.Lmst_no:
+    mov dword ptr [rbx + MD_sel], 0
+    xor r15d, r15d
+.Lmst_end:
+    lea rdi, [rsp]
+    call sb_free
+    lea rdi, [rsp + 24]
+    call sb_free
+    mov eax, r15d
+    EPILOGUE
+
+# FN md_sel_end(m) -> eax the right end of the selection's last line (its text items'), edx that line's top,
+#   ecx its height (the document's coordinates, as md_draw lays it out); eax -1 when nothing is selected
+FN md_sel_end
+    PROLOGUE
+    mov rbx, rdi
+    call sel_range
+    test eax, eax
+    js 9f
+    movsxd rax, ecx
+    imul r13, rax, MDI_SIZE
+    add r13, [rbx + MD_items + VEC_ptr]
+    mov r12d, [r13 + MDI_y]
+    mov eax, [r13 + MDI_x]
+    add eax, [r13 + MDI_w]
+    xor ecx, ecx                # the text items on its line: their right end
+1:  cmp rcx, [rbx + MD_items + VEC_len]
+    jae 3f
+    imul rdx, rcx, MDI_SIZE
+    add rdx, [rbx + MD_items + VEC_ptr]
+    inc rcx
+    cmp dword ptr [rdx + MDI_kind], MDK_TEXT
+    jne 1b
+    cmp [rdx + MDI_y], r12d
+    jne 1b
+    mov r8d, [rdx + MDI_x]
+    add r8d, [rdx + MDI_w]
+    cmp r8d, eax
+    cmovg eax, r8d
+    jmp 1b
+3:  mov edx, r12d
+    mov ecx, [r13 + MDI_h]
+9:  EPILOGUE
+
 # md_set_flat(m): keep code on the containing surface (0: nothing).
 FN md_set_flat
     test rdi, rdi
     jz 1f
     mov dword ptr [rdi + MD_flat], 1
     mov dword ptr [rdi + MD_width], -1
+1:  ret
+
+# md_set_size(m, px): its text at px and every other face in proportion (headings, the small face,
+#   code at the text's size, not the editor's); 0 is the interface's faces, as without it. Only one
+#   size is kept made at a time: callers share one (the agents panel)
+FN md_set_size
+    test rdi, rdi
+    jz 1f
+    cmp esi, 0
+    jge 2f
+    xor esi, esi
+2:  mov [rdi + MD_size], esi
+    mov dword ptr [rdi + MD_width], -1
+1:  ret
+
+# md_set_compact(m, on): its headings little bigger than the text: level 1 at 1.4 times, 2 at 1.25,
+#   3 at 1.1, deeper at the text's size, all bold (with md_set_size; a chat column)
+FN md_set_compact
+    test rdi, rdi
+    jz 1f
+    mov [rdi + MD_compact], esi
+    mov dword ptr [rdi + MD_width], -1
+1:  ret
+
+# md_set_muted(m, on): its text drawn in the muted colour (links and code keep theirs); the layout stays
+FN md_set_muted
+    test rdi, rdi
+    jz 1f
+    mov [rdi + MD_muted], esi
+1:  ret
+
+# md_set_tint(m, theme slot or 0): its text drawn in that slot's colour where it would be the text colour
+#   (links and code keep theirs); the layout stays
+FN md_set_tint
+    test rdi, rdi
+    jz 1f
+    mov [rdi + MD_tint], esi
 1:  ret
 
 # md_set_base(m, ptr, len): the absolute folder relative links name (a trailing / left out); an
@@ -1559,6 +1995,8 @@ md_parse:
     mov [rip + para_open], eax
     mov [rip + code_open], eax
     mov [rip + comment_open], eax
+    mov [rip + para_fn], eax
+    mov [rip + pend_fn], eax
     mov [rip + tbl_open], eax
     mov [rip + skip_next], eax
     mov [rip + pend_marker], eax
@@ -1588,6 +2026,7 @@ md_parse:
     lea r13, [r14 + 1]
     jmp 1b
 8:  call close_all
+    call fn_finish
     EPILOGUE
 
 # close_all(): whatever is open ends
@@ -1660,7 +2099,20 @@ close_para:
     mov [rbx + MDB_marker], eax
     mov eax, [rip + para_num]
     mov [rbx + MDB_num], eax
-    mov rdi, [rip + pb + SB_ptr]
+    cmp dword ptr [rip + para_fn], 0    # a footnote's definition: its entry's block (the first one's)
+    je 1f
+    mov dword ptr [rip + para_fn], 0
+    mov dword ptr [rbx + MDB_fn], 1
+    mov rcx, [rip + pm]
+    mov eax, [rip + fn_ent]
+    imul rax, rax, MDN_SIZE
+    add rax, [rcx + MD_fns + VEC_ptr]
+    cmp dword ptr [rax + MDN_block], -1
+    jne 1f
+    mov rdx, [rcx + MD_blocks + VEC_len]
+    dec edx
+    mov [rax + MDN_block], edx
+1:  mov rdi, [rip + pb + SB_ptr]
     mov rsi, [rip + pb + SB_len]
     call inline_runs
     mov [rbx + MDB_run0], eax
@@ -2024,7 +2476,36 @@ parse_line:
     jmp .Lpl_ret
 61: mov r15, [rsp + 8]
     movzx eax, byte ptr [r15]
-    # a fence
+    # "$$" alone: display math, shown as its source (code without a language) to the next "$$" alone
+    cmp eax, '$'
+    jne 60f
+    lea rcx, [r15 + 2]
+    cmp rcx, r14
+    ja 63f
+    cmp byte ptr [r15 + 1], '$'
+    jne 63f
+600:cmp rcx, r14
+    jae 601f
+    cmp byte ptr [rcx], ' '
+    je 602f
+    cmp byte ptr [rcx], 9
+    jne 63f
+602:inc rcx
+    jmp 600b
+601:mov [rip + code_fch], eax
+    mov dword ptr [rip + code_flen], 2
+    call close_para
+    mov dword ptr [rip + tbl_open], 0
+    mov eax, [rsp]
+    mov [rip + code_find], eax
+    mov dword ptr [rip + code_open], 1
+    call code_ctx
+    mov rbx, [rip + pm]
+    mov rax, [rbx + MD_text + SB_len]
+    mov [rip + code_lang], eax
+    mov dword ptr [rip + code_langlen], 0
+    jmp .Lpl_ret
+60: # a fence
     cmp eax, '`'
     je 62f
     cmp eax, '~'
@@ -2120,9 +2601,11 @@ parse_line:
     mov [rbx + MDB_run0], eax
     mov [rbx + MDB_nrun], edx
     jmp .Lpl_ret
-64: # a setext underline turns the paragraph into a heading
+64: # a setext underline turns the paragraph into a heading (not a footnote's definition)
     cmp dword ptr [rip + para_open], 0
     je 65f
+    cmp dword ptr [rip + para_fn], 0
+    jne 65f
     mov rdi, r15
     mov rsi, r14
     call setext_level
@@ -2158,7 +2641,30 @@ parse_line:
     jnz .Lpl_ret
     mov dword ptr [rip + comment_open], 1
     jmp .Lpl_ret
-67: # a table: a row with | over an alignment row, or a row of the table open
+67: # a footnote's definition "[^label]: text": a paragraph of its own (moved to the end: fn_finish)
+    mov rdi, r15
+    mov rsi, r14
+    call fn_def_label
+    test rax, rax
+    jz 679f
+    mov [rsp + 32], rcx         # its text
+    mov rdi, [rip + pm]
+    mov rsi, rax
+    call fn_find
+    test eax, eax
+    js 679f                     # past the definitions kept: text
+    mov [rsp + 40], eax
+    call close_para             # (a definition before it takes its own entry)
+    mov eax, [rsp + 40]
+    mov [rip + fn_ent], eax
+    mov dword ptr [rip + tbl_open], 0
+    mov dword ptr [rip + pend_fn], 1
+    mov rdi, [rsp + 32]
+    mov rsi, r14
+    call indent
+    mov r15, rdx
+    jmp .Lpl_para
+679:# a table: a row with | over an alignment row, or a row of the table open
     cmp dword ptr [rip + tbl_open], 0
     je 671f
     mov eax, [rip + cur_quote]
@@ -2223,6 +2729,9 @@ parse_line:
     mov eax, [rip + pend_num]
     mov [rip + para_num], eax
     mov dword ptr [rip + pend_marker], 0
+    mov eax, [rip + pend_fn]
+    mov [rip + para_fn], eax
+    mov dword ptr [rip + pend_fn], 0
     jmp 691f
 69: lea rdi, [rip + pb]
     mov esi, 10
@@ -2781,6 +3290,10 @@ ref_def:
     cmp byte ptr [r12], '['
     jne 8f
     lea r14, [r12 + 1]
+    cmp r14, r13
+    jae 8f
+    cmp byte ptr [r14], '^'     # "[^label]:" is a footnote's definition
+    je 8f
 1:  cmp r14, r13
     jae 8f
     movzx eax, byte ptr [r14]
@@ -2848,8 +3361,8 @@ ref_def:
 8:  xor eax, eax
     EPILOGUE
 
-# collect_refs(): a first pass over the lines for reference definitions (outside fenced code; quote
-#   markers skipped)
+# collect_refs(): a first pass over the lines for reference definitions and footnotes' labels
+#   (outside fenced code; quote markers skipped)
 collect_refs:
     PROLOGUE 16
     mov dword ptr [rip + ref_collect], 1
@@ -2899,11 +3412,497 @@ collect_refs:
     jmp 8f
 34: test r14d, r14d
     jnz 8f
+    mov [rsp], rdi
+    mov rsi, r13
+    call fn_def_label
+    test rax, rax
+    jz 35f
+    mov rdi, rax
+    mov rsi, rdx
+    call fn_add
+    jmp 8f
+35: mov rdi, [rsp]
     mov rsi, r13
     call ref_def
 8:  lea r12, [r13 + 1]
     jmp 1b
 9:  mov dword ptr [rip + ref_collect], 0
+    EPILOGUE
+
+# ---------------- footnotes ----------------
+# "[^label]: text" defines a footnote (a paragraph: its first line and the lines that go on with it);
+# "[^label]" cites one: its number, small and raised, a link to "#^label". Numbers go by first use;
+# at the end the definitions cited move after the last block, in number order (fn_finish), and the
+# others go. A label nobody defined stays text.
+
+# fn_def_label(p, end) -> rax the label of a definition "[^label]:" at p (no blank or [ in it), rdx
+#   its length, rcx past the colon; rax 0 when it is not one
+fn_def_label:
+    xor eax, eax
+    mov rcx, rsi
+    sub rcx, rdi
+    cmp rcx, 5
+    jb 9f
+    cmp byte ptr [rdi], '['
+    jne 9f
+    cmp byte ptr [rdi + 1], '^'
+    jne 9f
+    lea rcx, [rdi + 2]
+1:  cmp rcx, rsi
+    jae 9f
+    movzx edx, byte ptr [rcx]
+    cmp edx, ']'
+    je 2f
+    cmp edx, ' '
+    jbe 9f
+    cmp edx, '['
+    je 9f
+    inc rcx
+    jmp 1b
+2:  lea rdx, [rdi + 2]
+    cmp rcx, rdx
+    je 9f                       # empty
+    lea r8, [rcx + 1]
+    cmp r8, rsi
+    jae 9f
+    cmp byte ptr [r8], ':'
+    jne 9f
+    mov rax, rdx
+    sub rcx, rdx
+    mov rdx, rcx
+    lea rcx, [r8 + 1]
+9:  ret
+
+# fn_find(m, label, len) -> eax its MD_fns entry (labels compare without case), -1 none
+fn_find:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov r13, rdx
+    xor r14d, r14d
+1:  cmp r14, [rbx + MD_fns + VEC_len]
+    jae 8f
+    imul r15, r14, MDN_SIZE
+    add r15, [rbx + MD_fns + VEC_ptr]
+    mov eax, [r15 + MDN_len]
+    cmp rax, r13
+    jne 3f
+    mov rsi, [rbx + MD_src + SB_ptr]
+    mov eax, [r15 + MDN_label]
+    add rsi, rax
+    xor ecx, ecx
+2:  cmp rcx, r13
+    jae 4f
+    movzx eax, byte ptr [r12 + rcx]
+    movzx edx, byte ptr [rsi + rcx]
+    or eax, 0x20
+    or edx, 0x20
+    cmp eax, edx
+    jne 3f
+    inc rcx
+    jmp 2b
+3:  inc r14
+    jmp 1b
+4:  mov eax, r14d
+    EPILOGUE
+8:  mov eax, -1
+    EPILOGUE
+
+# fn_add(label in MD_src, len): an entry for a definition's label (the first pass), unless it has one
+#   or MD_FNS_MAX are kept
+fn_add:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    mov rbx, [rip + pm]
+    cmp qword ptr [rbx + MD_fns + VEC_len], MD_FNS_MAX
+    jae 9f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call fn_find
+    test eax, eax
+    jns 9f
+    lea rdi, [rbx + MD_fns]
+    mov esi, MDN_SIZE
+    call vec_push
+    mov rcx, r12
+    sub rcx, [rbx + MD_src + SB_ptr]
+    mov [rax + MDN_label], ecx
+    mov [rax + MDN_len], r13d
+    mov dword ptr [rax + MDN_num], 0
+    mov dword ptr [rax + MDN_block], -1
+9:  EPILOGUE
+
+# fn_ref(ptr, len, i at "[^") -> rax past "[^label]" when a definition has that label (its number
+#   emitted, small and raised, a link to "#^label": inside another link, of that link), else 0
+fn_ref:
+    PROLOGUE 32
+    mov r12, rdi
+    mov r13, rsi
+    lea rbx, [rdx + 2]          # the label
+    mov r14, rbx
+1:  cmp r14, r13
+    jae 8f
+    movzx eax, byte ptr [r12 + r14]
+    cmp eax, ']'
+    je 2f
+    cmp eax, ' '
+    jbe 8f
+    cmp eax, '['
+    je 8f
+    inc r14
+    jmp 1b
+2:  cmp r14, rbx
+    je 8f
+    mov rdi, [rip + pm]
+    lea rsi, [r12 + rbx]
+    mov rdx, r14
+    sub rdx, rbx
+    call fn_find
+    test eax, eax
+    js 8f
+    mov rcx, [rip + pm]         # its number: given at its first use
+    imul rax, rax, MDN_SIZE
+    add rax, [rcx + MD_fns + VEC_ptr]
+    mov edx, [rax + MDN_num]
+    test edx, edx
+    jnz 3f
+    inc dword ptr [rcx + MD_fnused]
+    mov edx, [rcx + MD_fnused]
+    mov [rax + MDN_num], edx
+3:  mov [rsp], edx
+    mov eax, [rip + in_link]
+    mov [rsp + 4], eax
+    mov r15d, [rip + in_style]
+    or r15d, MS_SUP
+    cmp eax, -1
+    jne 4f
+    lea rdi, [rip + .Lfn_target]    # "#^" and the label, one link
+    mov esi, 2
+    call add_link
+    test eax, eax
+    js 4f
+    mov [rip + in_link], eax
+    or r15d, MS_LINK
+    mov rcx, [rip + pm]
+    lea rdi, [rcx + MD_text]
+    lea rsi, [r12 + rbx]
+    mov rdx, r14
+    sub rdx, rbx
+    call sb_push
+    mov rcx, [rip + pm]
+    mov eax, [rip + in_link]
+    mov rdx, [rcx + MD_links + VEC_ptr]
+    mov esi, r14d
+    sub esi, ebx
+    add [rdx + rax*8 + MDL_len], esi
+4:  lea rdi, [rsp + 8]
+    mov esi, [rsp]
+    call fmt_u64
+    lea rdi, [rsp + 8]
+    mov rsi, rax
+    mov edx, r15d
+    call emit
+    mov eax, [rsp + 4]
+    mov [rip + in_link], eax
+    lea rax, [r14 + 1]
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# fn_anchor(m, label, len) -> eax the top of that footnote's definition laid out, -1 none
+fn_anchor:
+    PROLOGUE
+    mov rbx, rdi
+    call fn_find
+    test eax, eax
+    js 8f
+    imul rax, rax, MDN_SIZE
+    add rax, [rbx + MD_fns + VEC_ptr]
+    mov r12d, [rax + MDN_num]
+    test r12d, r12d
+    jz 8f
+    mov rcx, [rbx + MD_blocks + VEC_len]    # the definitions are the last blocks
+1:  test rcx, rcx
+    jz 8f
+    dec rcx
+    imul rax, rcx, MDB_SIZE
+    add rax, [rbx + MD_blocks + VEC_ptr]
+    mov edx, [rax + MDB_fn]
+    test edx, edx
+    jz 8f
+    cmp edx, r12d
+    jne 1b
+    mov eax, [rax + MDB_y]
+    EPILOGUE
+8:  mov eax, -1
+    EPILOGUE
+
+# fn_finish(): the definitions cited move after the last block in number order (a list item each,
+#   MDB_fn its number), the others go; a table row's header block is found again where it moved
+fn_finish:
+    PROLOGUE 16
+    mov rbx, [rip + pm]
+    cmp qword ptr [rbx + MD_fns + VEC_len], 0
+    je 9f
+    mov r12, [rbx + MD_blocks + VEC_len]
+    test r12, r12
+    jz 9f
+    imul rdi, r12, MDB_SIZE     # the blocks in their new order
+    call mem_alloc
+    mov r13, rax
+    mov rdi, r12                # where each old block went, -1 nowhere
+    shl rdi, 2
+    call mem_alloc
+    mov r14, rax
+    mov edi, [rbx + MD_fnused]  # the definition of each number, -1 none
+    inc edi
+    shl edi, 2
+    call mem_alloc
+    mov [rsp], rax
+    xor ecx, ecx
+1:  cmp ecx, [rbx + MD_fnused]
+    jae 2f
+    mov dword ptr [rax + rcx*4], -1
+    inc ecx
+    jmp 1b
+2:  xor ecx, ecx
+21: cmp rcx, [rbx + MD_fns + VEC_len]
+    jae 3f
+    imul rdx, rcx, MDN_SIZE
+    add rdx, [rbx + MD_fns + VEC_ptr]
+    mov esi, [rdx + MDN_num]
+    test esi, esi
+    jz 22f
+    mov edi, [rdx + MDN_block]
+    mov [rax + rsi*4 - 4], edi
+22: inc rcx
+    jmp 21b
+3:  xor r15d, r15d              # the body's blocks, in their order
+    mov qword ptr [rsp + 8], 0
+31: mov rcx, [rsp + 8]
+    cmp rcx, r12
+    jae 4f
+    mov dword ptr [r14 + rcx*4], -1
+    imul rsi, rcx, MDB_SIZE
+    add rsi, [rbx + MD_blocks + VEC_ptr]
+    cmp dword ptr [rsi + MDB_fn], 0
+    jne 32f
+    mov [r14 + rcx*4], r15d
+    imul rdi, r15, MDB_SIZE
+    add rdi, r13
+    mov edx, MDB_SIZE
+    call memcpy
+    inc r15d
+32: inc qword ptr [rsp + 8]
+    jmp 31b
+4:  mov qword ptr [rsp + 8], 0  # then the definitions cited, by number
+41: mov rcx, [rsp + 8]
+    cmp ecx, [rbx + MD_fnused]
+    jae 5f
+    mov rax, [rsp]
+    mov esi, [rax + rcx*4]
+    test esi, esi
+    js 42f
+    imul rsi, rsi, MDB_SIZE
+    add rsi, [rbx + MD_blocks + VEC_ptr]
+    imul rdi, r15, MDB_SIZE
+    add rdi, r13
+    mov edx, MDB_SIZE
+    call memcpy
+    imul rdi, r15, MDB_SIZE
+    add rdi, r13
+    mov rcx, [rsp + 8]
+    inc ecx
+    mov [rdi + MDB_fn], ecx
+    mov [rdi + MDB_num], ecx
+    mov dword ptr [rdi + MDB_marker], 2
+    mov dword ptr [rdi + MDB_list], 0
+    mov dword ptr [rdi + MDB_quote], 0
+    inc r15d
+42: inc qword ptr [rsp + 8]
+    jmp 41b
+5:  xor ecx, ecx                # table rows name their header where it is now
+51: cmp ecx, r15d
+    jae 6f
+    imul rdi, rcx, MDB_SIZE
+    add rdi, r13
+    cmp dword ptr [rdi + MDB_type], MDB_TROW
+    jne 52f
+    mov eax, [rdi + MDB_tbl]
+    test eax, eax
+    js 52f
+    cmp rax, r12
+    jae 52f
+    mov eax, [r14 + rax*4]
+    mov [rdi + MDB_tbl], eax
+52: inc ecx
+    jmp 51b
+6:  mov rdi, [rbx + MD_blocks + VEC_ptr]
+    mov rsi, r13
+    imul rdx, r15, MDB_SIZE
+    call memcpy
+    mov [rbx + MD_blocks + VEC_len], r15
+    mov rdi, r13
+    call mem_free
+    mov rdi, r14
+    call mem_free
+    mov rdi, [rsp]
+    call mem_free
+9:  EPILOGUE
+
+# insight_kind(ptr, len) -> eax MS_INSIGHT for a code span's text holding "★" and "Insight", MS_IRULE
+#   for one of 20 or more "─" alone (blanks round it), else 0 (the Explanatory output style's frame)
+insight_kind:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    lea rdx, [rip + .Lstar]
+    mov ecx, 3
+    call has_bytes
+    test eax, eax
+    jz 1f
+    mov rdi, r12
+    mov rsi, r13
+    lea rdx, [rip + .Linsight]
+    mov ecx, 7
+    call has_bytes
+    test eax, eax
+    jz 1f
+    mov eax, MS_INSIGHT
+    EPILOGUE
+1:  xor ecx, ecx                # blanks, then "─" only, then blanks
+    xor edx, edx                # how many
+2:  cmp rcx, r13
+    jae 4f
+    cmp byte ptr [r12 + rcx], ' '
+    jne 3f
+    inc rcx
+    jmp 2b
+3:  lea rax, [rcx + 3]
+    cmp rax, r13
+    ja 5f
+    cmp word ptr [r12 + rcx], 0x94e2
+    jne 5f
+    cmp byte ptr [r12 + rcx + 2], 0x80
+    jne 5f
+    inc edx
+    add rcx, 3
+    cmp rcx, r13
+    jae 4f
+    cmp byte ptr [r12 + rcx], ' '
+    jne 3b
+41: inc rcx                     # blanks to the end only
+    cmp rcx, r13
+    jae 4f
+    cmp byte ptr [r12 + rcx], ' '
+    je 41b
+    jmp 5f
+4:  cmp edx, 20
+    jb 5f
+    mov eax, MS_IRULE
+    EPILOGUE
+5:  xor eax, eax
+    EPILOGUE
+
+# has_bytes(ptr, len, needle, n) -> eax 1 when the needle is in the text
+has_bytes:
+    xor eax, eax
+    cmp rsi, rcx
+    jb 9f
+    sub rsi, rcx
+    xor r8d, r8d                # each start
+1:  cmp r8, rsi
+    ja 9f
+    xor r9d, r9d
+2:  cmp r9, rcx
+    jae 8f
+    lea r10, [r8 + r9]
+    mov r11b, [rdi + r10]
+    cmp r11b, [rdx + r9]
+    jne 3f
+    inc r9
+    jmp 2b
+3:  inc r8
+    jmp 1b
+8:  mov eax, 1
+9:  ret
+
+# insight_label(ptr, len) -> eax where an Insight line's label starts in the text, edx its length: from
+#   the first byte that is no blank and no "─" to the next "─", blanks off its end
+insight_label:
+    xor eax, eax
+1:  cmp rax, rsi
+    jae 5f
+    cmp byte ptr [rdi + rax], ' '
+    jne 2f
+    inc rax
+    jmp 1b
+2:  lea rcx, [rax + 3]
+    cmp rcx, rsi
+    ja 3f
+    cmp word ptr [rdi + rax], 0x94e2
+    jne 3f
+    cmp byte ptr [rdi + rax + 2], 0x80
+    jne 3f
+    add rax, 3
+    jmp 1b
+3:  mov rdx, rax                # its end: the next "─"
+31: cmp rdx, rsi
+    jae 4f
+    lea rcx, [rdx + 3]
+    cmp rcx, rsi
+    ja 32f
+    cmp word ptr [rdi + rdx], 0x94e2
+    jne 32f
+    cmp byte ptr [rdi + rdx + 2], 0x80
+    je 4f
+32: inc rdx
+    jmp 31b
+4:  cmp rdx, rax
+    jbe 41f
+    cmp byte ptr [rdi + rdx - 1], ' '
+    jne 41f
+    dec rdx
+    jmp 4b
+41: sub rdx, rax
+    ret
+5:  xor edx, edx
+    ret
+
+# img_tip(m, link) -> rax the tip of an image not shown: "Image blocked: URL" (a cstr), 0 for a data: URI
+img_tip:
+    PROLOGUE
+    call md_link
+    mov r12, rax
+    mov r13, rdx
+    cmp r13, 5
+    jb 1f
+    cmp dword ptr [r12], 0x61746164     # "data:"
+    jne 1f
+    cmp byte ptr [r12 + 4], ':'
+    jne 1f
+    xor eax, eax
+    EPILOGUE
+1:  lea rdi, [rip + tip_img]
+    lea rsi, [rip + .Limg_blocked]
+    mov edx, MD_TIP_HEAD
+    call memcpy
+    lea rbx, [rip + tip_img + MD_TIP_HEAD]
+    test r13, r13
+    jnz 2f
+    lea r12, [rip + .Limg_unknown]
+    mov r13d, 7
+2:  cmp r13, MD_TIP_URL
+    jbe 3f
+    mov r13d, MD_TIP_URL
+3:  mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call memcpy
+    mov byte ptr [rbx + r13], 0
+    lea rax, [rip + tip_img]
     EPILOGUE
 
 # ---------------- parsing: inline ----------------
@@ -3229,7 +4228,13 @@ inline_parse:
     jne 71f
 701:inc qword ptr [rsp + 8]
     dec qword ptr [rsp + 16]
-71: mov rbx, [rsp + 8]
+71: mov rdi, r12                # the Explanatory style's "★ Insight" line and its closing rule
+    add rdi, [rsp + 8]
+    mov rsi, [rsp + 16]
+    sub rsi, [rsp + 8]
+    call insight_kind
+    mov [rsp + 40], eax
+    mov rbx, [rsp + 8]
 72: cmp rbx, [rsp + 16]
     jae 73f
     movzx edi, byte ptr [r12 + rbx]
@@ -3244,6 +4249,7 @@ inline_parse:
     mov esi, 1
     mov edx, [rip + in_style]
     or edx, MS_CODE
+    or edx, [rsp + 40]
     call emit
 722:inc rbx
     jmp 72b
@@ -3528,7 +4534,22 @@ link_at:
     mov r13, rsi
     mov r14, rdx
     mov [rsp + 56], ecx
-    # the matching ]
+    # "[^label]": a footnote's number when a definition has the label
+    test ecx, ecx
+    jnz 10f
+    lea rax, [r14 + 1]
+    cmp rax, r13
+    jae 10f
+    cmp byte ptr [r12 + rax], '^'
+    jne 10f
+    mov rdi, r12
+    mov rsi, r13
+    mov rdx, r14
+    call fn_ref
+    test rax, rax
+    jz 10f
+    EPILOGUE
+10: # the matching ]
     lea rbx, [r14 + 1]
     xor ecx, ecx                # depth
 1:  cmp rbx, r13
@@ -4073,19 +5094,159 @@ entity:
 
 # ---------------- layout ----------------
 
-# face_of(MDF_*) -> rax FACE* (the emphasis face made again when the ui face changed)
+# face_of(MDF_*) -> rax FACE* (the emphasis face made again when the ui face changed): the
+#   interface's, or a sized document's (use_doc says which)
 face_of:
-    cmp edi, MDF_EM
-    jne 1f
+    cmp dword ptr [rip + cur_sized], 0
+    je 2f
+    lea rax, [rip + sz_tab]
+    mov rax, [rax + rdi*8]
+    lea rcx, [rip + em_face]
+    cmp rax, rcx
+    jne 9f                      # the interface's emphasis face is made below when it changed
+2:  cmp edi, MDF_EM
+    jne 3f
     mov eax, [rip + g_face_gen]
     cmp eax, [rip + em_gen]
     je 1f
     push rdi
     call em_face_init
     pop rdi
+    jmp 1f
+3:  cmp edi, MDF_SUP
+    jne 1f
+    mov eax, [rip + g_face_gen]
+    cmp eax, [rip + sup_gen]
+    je 1f
+    push rdi
+    call sup_face_init
+    pop rdi
 1:  lea rax, [rip + md_faces]
     mov rax, [rax + rdi*8]
-    ret
+9:  ret
+
+# use_doc(m): face_of answers for this document from here on (its size's faces, made if needed)
+use_doc:
+    mov eax, [rdi + MD_size]
+    mov [rip + cur_sized], eax
+    test eax, eax
+    jz 1f
+    push rbx
+    mov esi, [rdi + MD_compact]
+    mov edi, eax
+    call sized_faces
+    pop rbx
+    cmp qword ptr [rip + sz_tab], 0
+    jne 1f
+    mov dword ptr [rip + cur_sized], 0  # no fonts yet: the interface's faces
+1:  ret
+
+# sized_faces(px, compact): sz_tab for that size, made again when the size, the headings or any face
+#   changed (g_face_gen); making them moves g_face_gen on, so documents are laid out again once. A face
+#   the interface has at that size is the interface's own (its glyphs are drawn already): the text,
+#   small and emphasis faces at the interface's size, the code face at the editor's
+sized_faces:
+    PROLOGUE
+    mov ebx, edi
+    mov r12d, esi
+    cmp ebx, [rip + sz_px]
+    jne 1f
+    cmp r12d, [rip + sz_compact]
+    jne 1f
+    mov eax, [rip + g_face_gen]
+    cmp eax, [rip + sz_gen]
+    je 9f
+1:  cmp qword ptr [rip + g_face_ui + FACE_font], 0
+    je 9f
+    cmp qword ptr [rip + g_face_code + FACE_font], 0
+    je 9f
+    mov [rip + sz_px], ebx
+    mov [rip + sz_compact], r12d
+    cmp ebx, [rip + g_face_ui + FACE_px]
+    jne 11f
+    lea rax, [rip + g_face_ui]
+    mov [rip + sz_tab + 8*MDF_UI], rax
+    lea rax, [rip + g_face_small]
+    mov [rip + sz_tab + 8*MDF_SMALL], rax
+    lea rax, [rip + em_face]
+    mov [rip + sz_tab + 8*MDF_EM], rax
+    jmp 12f
+11: mov edi, MDF_UI
+    mov esi, 100
+    call sz_make
+    mov edi, MDF_EM
+    mov esi, 100
+    call sz_make
+    mov dword ptr [rip + sz_faces + MDF_EM * FACE_SIZE + FACE_oblique], 1
+    mov eax, [rip + g_face_ui + FACE_embolden]
+    mov [rip + sz_faces + MDF_EM * FACE_SIZE + FACE_embolden], eax
+    cvtsi2ss xmm0, ebx          # small: 1.5 points less, as the interface's
+    movss xmm1, [rip + g_s]
+    mulss xmm1, [rip + f_sz_small]
+    subss xmm0, xmm1
+    cvtss2si edx, xmm0
+    mov edi, MDF_SMALL
+    call sz_make_px
+12: mov edi, MDF_BIG
+    mov esi, 155
+    test r12d, r12d
+    jz 2f
+    mov esi, 125
+2:  call sz_make
+    mov edi, MDF_HUGE
+    mov esi, 340
+    test r12d, r12d
+    jz 3f
+    mov esi, 140
+3:  call sz_make
+    mov edi, MDF_H3
+    mov esi, 100
+    test r12d, r12d
+    jz 4f
+    mov esi, 110
+4:  call sz_make
+    mov edi, MDF_SUP
+    mov esi, 75
+    call sz_make
+    lea rax, [rip + g_face_code]    # code: the editor's font at the text's size
+    cmp ebx, [rip + g_face_code + FACE_px]
+    je 6f
+    mov edx, ebx
+    lea rdi, [rip + sz_faces + MDF_CODE * FACE_SIZE]
+    mov rsi, [rip + g_face_code + FACE_font]
+    cmp edx, 4
+    jge 5f
+    mov edx, 4
+5:  call face_init
+    lea rax, [rip + sz_faces + MDF_CODE * FACE_SIZE]
+6:  mov [rip + sz_tab + 8*MDF_CODE], rax
+    mov eax, [rip + g_face_gen]
+    mov [rip + sz_gen], eax
+9:  EPILOGUE
+
+# sz_make(MDF_*, percent) using ebx = the size: that face of sz_faces, the interface's font at
+#   percent of the size; sz_make_px(MDF_*, edx px) at px
+sz_make:
+    mov eax, ebx
+    imul eax, esi
+    add eax, 50
+    xor edx, edx
+    mov ecx, 100
+    div ecx
+    mov edx, eax
+sz_make_px:
+    cmp edx, 4
+    jge 1f
+    mov edx, 4
+1:  mov eax, edi
+    imul rax, rax, FACE_SIZE
+    lea rcx, [rip + sz_faces]
+    add rax, rcx
+    lea rcx, [rip + sz_tab]
+    mov [rcx + rdi*8], rax
+    mov rdi, rax
+    mov rsi, [rip + g_face_ui + FACE_font]
+    jmp face_init
 
 # em_face_init(): em_face is the ui face's font and size, sheared; g_face_gen stays (it is ours)
 em_face_init:
@@ -4102,6 +5263,28 @@ em_face_init:
     mov [rip + em_face + FACE_embolden], eax
 1:  mov [rip + g_face_gen], ebx
     mov [rip + em_gen], ebx
+    pop rbx
+    ret
+
+# sup_face_init(): sup_face is the ui face's font at three quarters of its size; g_face_gen stays
+sup_face_init:
+    push rbx
+    mov ebx, [rip + g_face_gen]
+    mov rsi, [rip + g_face_ui + FACE_font]
+    test rsi, rsi
+    jz 1f
+    mov edx, [rip + g_face_ui + FACE_px]
+    imul edx, edx, 3
+    shr edx, 2
+    cmp edx, 4
+    jge 2f
+    mov edx, 4
+2:  lea rdi, [rip + sup_face]
+    call face_init
+    mov eax, [rip + g_face_ui + FACE_embolden]
+    mov [rip + sup_face + FACE_embolden], eax
+1:  mov [rip + g_face_gen], ebx
+    mov [rip + sup_gen], ebx
     pop rbx
     ret
 
@@ -4140,6 +5323,9 @@ FN md_layout
     PROLOGUE 48
     mov rbx, rdi
     mov [rip + pm], rdi
+    mov [rsp], esi
+    call use_doc
+    mov esi, [rsp]
     cmp [rbx + MD_width], esi
     jne 1f
     mov eax, [rip + g_face_gen]
@@ -4147,13 +5333,24 @@ FN md_layout
     jne 1f
     mov eax, [rbx + MD_height]
     EPILOGUE
-1:  mov [rbx + MD_width], esi
+1:  mov eax, [rbx + MD_sel]     # (task 10: kept when the same items come again at the same width, below)
+    cmp [rbx + MD_width], esi
+    je 2f
+    xor eax, eax
+2:  mov [rip + keep_sel], eax
+    mov [rbx + MD_width], esi
     mov eax, [rip + g_face_gen]
     mov [rbx + MD_gen], eax
+    mov rax, [rbx + MD_items + VEC_len]
+    mov [rip + keep_n], rax
     mov dword ptr [rbx + MD_sel], 0     # the items change: no selection
     mov dword ptr [rbx + MD_drag], 0
     mov qword ptr [rbx + MD_items + VEC_len], 0
-    mov dword ptr [rbx + MD_maxw], 0
+    mov rax, [rbx + MD_tparse]  # the last layout's own text goes (each layout adds its list numbers)
+    cmp rax, [rbx + MD_text + SB_len]
+    ja 3f
+    mov [rbx + MD_text + SB_len], rax
+3:  mov dword ptr [rbx + MD_maxw], 0
     mov dword ptr [rip + lay_y], 0
     xor r12d, r12d              # block
 .Lml_block:
@@ -4169,7 +5366,13 @@ FN md_layout
     cmp dword ptr [r13 + MDB_hdr], 0
     je 2f                       # rows of a table touch
 11: M eax, MI_10
-    cmp dword ptr [r13 + MDB_list], 0
+    cmp dword ptr [r13 + MDB_fn], 0     # footnotes come closer, as list items
+    je 14f
+    cmp dword ptr [r13 - MDB_SIZE + MDB_fn], 0
+    je 12f
+    M eax, MI_4
+    jmp 12f
+14: cmp dword ptr [r13 + MDB_list], 0
     je 12f
     cmp dword ptr [r13 + MDB_marker], 0
     jne 13f
@@ -4180,16 +5383,50 @@ FN md_layout
     je 12f
     M eax, MI_4
 12: add [rip + lay_y], eax
-2:  mov eax, [rip + lay_y]
+2:  cmp dword ptr [r13 + MDB_fn], 0     # the first footnote: a thin rule above them
+    je 26f
+    test r12, r12
+    jz 25f
+    cmp dword ptr [r13 - MDB_SIZE + MDB_fn], 0
+    jne 26f
+25: M eax, MI_6
+    add eax, [rip + lay_y]
+    xor edi, edi
+    mov esi, eax
+    mov edx, [rbx + MD_width]
+    sub edx, [rip + g_mt + 4*MI_2]
+    cmp edx, 1
+    jge 251f
+    mov edx, 1
+251:M ecx, MI_1
+    mov r8d, T_BORDER
+    call fill_item
+    M eax, MI_12
+    add [rip + lay_y], eax
+26: mov eax, [rip + lay_y]
     mov [rsp], eax              # the block's top
     mov [r13 + MDB_y], eax
-    # its left: quotes and lists indent it
+    # its left: quotes and lists indent it, a footnote's number too
     mov eax, [r13 + MDB_quote]
     imul eax, [rip + g_mt + 4*MI_16]
     mov ecx, [r13 + MDB_list]
     imul ecx, [rip + g_mt + 4*MI_24]
     add eax, ecx
-    mov [rip + lay_x0], eax
+    cmp dword ptr [r13 + MDB_fn], 0
+    je 27f
+    mov r14d, eax               # room for "99." at the text's size, MI_24 at least
+    mov edi, MDF_UI
+    call face_of
+    mov rdi, rax
+    lea rsi, [rip + .Lfn_room]
+    mov edx, 3
+    call text_width
+    add eax, [rip + g_mt + 4*MI_8]
+    cmp eax, [rip + g_mt + 4*MI_24]
+    jge 271f
+    mov eax, [rip + g_mt + 4*MI_24]
+271:add eax, r14d
+27: mov [rip + lay_x0], eax
     mov eax, [rbx + MD_width]
     sub eax, [rip + g_mt + 4*MI_2]
     mov [rip + lay_right], eax
@@ -4200,8 +5437,10 @@ FN md_layout
     mov [rip + lay_right], eax  # never narrower than a little
 21: mov dword ptr [rip + lay_color], T_FG
     cmp dword ptr [r13 + MDB_quote], 0
+    jne 28f
+    cmp dword ptr [r13 + MDB_fn], 0
     je 22f
-    mov dword ptr [rip + lay_color], T_MUTED
+28: mov dword ptr [rip + lay_color], T_MUTED
 22: mov eax, [r13 + MDB_type]
     cmp eax, MDB_CODE
     je .Lml_code
@@ -4216,6 +5455,8 @@ FN md_layout
     jne 3f
     mov dword ptr [rip + lay_bold], 1
     mov ecx, [r13 + MDB_level]
+    cmp dword ptr [rbx + MD_compact], 0
+    jne 24f
     cmp ecx, 1
     jne 23f
     mov dword ptr [rip + lay_face], MDF_HUGE
@@ -4224,6 +5465,17 @@ FN md_layout
 23: cmp ecx, 2
     jne 3f
     mov dword ptr [rip + lay_face], MDF_BIG
+    jmp 3f
+24: mov edx, MDF_HUGE           # compact: every level bold, the first three a little bigger
+    cmp ecx, 1
+    je 25f
+    mov edx, MDF_BIG
+    cmp ecx, 2
+    je 25f
+    mov edx, MDF_H3
+    cmp ecx, 3
+    jne 3f
+25: mov [rip + lay_face], edx
 3:  mov edi, [rip + lay_face]
     call face_of
     mov ecx, [rax + FACE_lineh]
@@ -4296,6 +5548,13 @@ FN md_layout
 .Lml_done:
     mov eax, [rip + lay_y]
     mov [rbx + MD_height], eax
+    cmp dword ptr [rip + keep_sel], 0   # phase 3 task 10: a selection stays when the document is laid out
+    je 9f                               #   again at its width into as many items (a row measured again, a
+    mov rax, [rip + keep_n]             #   face made again; a new width drops it)
+    cmp rax, [rbx + MD_items + VEC_len]
+    jne 9f
+    mov dword ptr [rbx + MD_sel], 1
+9:  mov eax, [rbx + MD_height]
     EPILOGUE
 
 # marker_items(block): its list item's marker left of it: a dot, "N." or a task's box
@@ -4421,12 +5680,20 @@ flow:
     mov rdi, r13
     call image_run
     test eax, eax
-    jz 11f
-    mov eax, [r13 + MDR_link]
+    jnz 12f
+    mov edi, [r13 + MDR_link]   # not shown: a chip in its place
+    call chip_item
+12: mov eax, [r13 + MDR_link]
     mov [rsp + 40], eax
     jmp .Lfl_next
-11: mov eax, [rip + lay_face]   # its face: code spans in the code face, emphasis sheared
-    test dword ptr [r13 + MDR_style], MS_CODE
+11: test dword ptr [r13 + MDR_style], MS_INSIGHT | MS_IRULE
+    jnz .Lfl_insight
+    mov eax, [rip + lay_face]   # its face: code spans in the code face, emphasis sheared, a
+    test dword ptr [r13 + MDR_style], MS_SUP    # footnote's number smaller
+    jz 13f
+    mov eax, MDF_SUP
+    jmp 2f
+13: test dword ptr [r13 + MDR_style], MS_CODE
     jz 21f
     mov eax, MDF_CODE
     jmp 2f
@@ -4509,7 +5776,11 @@ flow:
     cmp ecx, 0xf0
     jb 34f
     inc eax
-34: lea r15d, [r14 + rax]
+34: mov ecx, r15d               # never past the word (a lead byte cut off at its end)
+    sub ecx, r14d
+    cmp eax, ecx
+    cmova eax, ecx
+    lea r15d, [r14 + rax]
     mov rdi, [rsp + 16]
     mov rsi, [rsp + 24]
     add rsi, r14
@@ -4538,7 +5809,12 @@ flow:
     mov ecx, [rip + lay_lineh]
     mov [rax + MDI_h], ecx
     mov ecx, [rip + lay_base]
-    mov [rax + MDI_base], ecx
+    test dword ptr [r13 + MDR_style], MS_SUP
+    jz 45f
+    imul edx, ecx, 11           # raised by a third of the line's ascent
+    sar edx, 5
+    sub ecx, edx
+45: mov [rax + MDI_base], ecx
     mov ecx, [rsp + 8]
     mov [rax + MDI_face], ecx
     mov ecx, [r13 + MDR_style]
@@ -4567,6 +5843,86 @@ flow:
     mov [rbx + MD_maxw], eax
 44: mov r14d, r15d
     jmp .Lfl_piece
+.Lfl_insight:
+    # a line of its own: "★ Insight" in the accent and a thin rule after it, or the rule alone
+    mov eax, [rip + lay_x]
+    cmp eax, [rip + lay_x0]
+    je 1f
+    call flow_newline
+1:  mov eax, [rip + lay_x0]
+    mov [rsp + 44], eax         # where the rule starts
+    test dword ptr [r13 + MDR_style], MS_IRULE
+    jnz 5f
+    mov rdi, [rbx + MD_text + SB_ptr]
+    mov eax, [r13 + MDR_off]
+    add rdi, rax
+    mov esi, [r13 + MDR_len]
+    call insight_label
+    add eax, [r13 + MDR_off]
+    mov [rsp + 48], eax         # the label: where, how long
+    mov [rsp + 52], edx
+    mov edi, [rip + lay_face]
+    call face_of
+    mov [rsp + 16], rax
+    mov rdi, rax
+    mov rsi, [rbx + MD_text + SB_ptr]
+    mov eax, [rsp + 48]
+    add rsi, rax
+    mov edx, [rsp + 52]
+    mov ecx, [rip + lay_right]
+    sub ecx, [rip + lay_x0]
+    call text_fit               # as much as the line takes
+    mov [rsp + 52], eax
+    test eax, eax
+    jz 5f
+    mov rdi, [rsp + 16]
+    mov rsi, [rbx + MD_text + SB_ptr]
+    mov ecx, [rsp + 48]
+    add rsi, rcx
+    mov edx, eax
+    call text_width
+    mov [rsp + 32], eax
+    mov edi, MDK_TEXT
+    call item_new
+    mov ecx, [rip + lay_x0]
+    mov [rax + MDI_x], ecx
+    mov ecx, [rip + lay_y]
+    mov [rax + MDI_y], ecx
+    mov ecx, [rsp + 32]
+    mov [rax + MDI_w], ecx
+    mov ecx, [rip + lay_lineh]
+    mov [rax + MDI_h], ecx
+    mov ecx, [rip + lay_base]
+    mov [rax + MDI_base], ecx
+    mov ecx, [rip + lay_face]
+    mov [rax + MDI_face], ecx
+    mov dword ptr [rax + MDI_style], MS_INSIGHT
+    mov dword ptr [rax + MDI_color], T_ACCENT
+    mov ecx, [rsp + 48]
+    mov [rax + MDI_off], ecx
+    mov ecx, [rsp + 52]
+    mov [rax + MDI_len], ecx
+    mov eax, [rip + lay_x0]
+    add eax, [rsp + 32]
+    cmp eax, [rbx + MD_maxw]
+    jle 2f
+    mov [rbx + MD_maxw], eax
+2:  add eax, [rip + g_mt + 4*MI_8]
+    mov [rsp + 44], eax
+5:  mov edi, [rsp + 44]         # the rule to the line's end, through its middle
+    mov edx, [rip + lay_right]
+    sub edx, edi
+    jle 6f
+    mov esi, [rip + lay_lineh]
+    sar esi, 1
+    add esi, [rip + lay_y]
+    M ecx, MI_1
+    mov r8d, T_BORDER
+    call fill_item
+6:  lea eax, [r12 + 1]          # what follows it starts a line
+    cmp eax, [rsp + 4]
+    jae .Lfl_next
+    call flow_newline
 .Lfl_next:
     inc r12d
     jmp .Lfl_run
@@ -4574,6 +5930,51 @@ flow:
     mov eax, [rip + lay_lineh]
     add [rip + lay_y], eax
     EPILOGUE
+
+# chip_item(link): "[Image]" in the line for an image not shown (its tip names the source)
+chip_item:
+    PROLOGUE 16
+    mov [rsp], edi
+    mov rbx, [rip + pm]
+    mov edi, [rip + lay_face]
+    call face_of
+    mov rdi, rax
+    lea rsi, [rip + .Limg_chip]
+    mov edx, MD_CHIP_LEN
+    call text_width
+    add eax, [rip + g_mt + 4*MI_4]
+    add eax, [rip + g_mt + 4*MI_4]
+    mov r12d, eax
+    add eax, [rip + lay_x]
+    cmp eax, [rip + lay_right]
+    jle 1f
+    mov eax, [rip + lay_x]
+    cmp eax, [rip + lay_x0]
+    je 1f
+    call flow_newline
+1:  mov edi, MDK_CHIP
+    call item_new
+    mov ecx, [rip + lay_x]
+    mov [rax + MDI_x], ecx
+    mov ecx, [rip + lay_y]
+    mov [rax + MDI_y], ecx
+    mov [rax + MDI_w], r12d
+    mov ecx, [rip + lay_lineh]
+    mov [rax + MDI_h], ecx
+    mov ecx, [rip + lay_base]
+    mov [rax + MDI_base], ecx
+    mov ecx, [rip + lay_face]
+    mov [rax + MDI_face], ecx
+    mov dword ptr [rax + MDI_color], T_MUTED
+    mov dword ptr [rax + MDI_len], MD_CHIP_LEN
+    mov ecx, [rsp]
+    mov [rax + MDI_link], ecx
+    add [rip + lay_x], r12d
+    mov eax, [rip + lay_x]
+    cmp eax, [rbx + MD_maxw]
+    jle 9f
+    mov [rbx + MD_maxw], eax
+9:  EPILOGUE
 
 # flow_newline(): the next line
 flow_newline:
@@ -4818,17 +6219,35 @@ code_items:
 
 # cell_width(run, run end, header) -> eax the natural width of a cell's runs
 cell_width:
-    PROLOGUE
+    PROLOGUE 16
     mov r12d, edi
     mov r13d, esi
     mov r14d, edx
     mov rbx, [rip + pm]
     xor r15d, r15d
+    mov dword ptr [rsp], -1     # the image measured last: a chip "[Image]" once
 1:  cmp r12d, r13d
     jae 9f
     imul rcx, r12, MDR_SIZE
     add rcx, [rbx + MD_runs + VEC_ptr]
+    test dword ptr [rcx + MDR_style], MS_IMAGE
+    jz 3f
+    mov eax, [rcx + MDR_link]
+    cmp eax, [rsp]
+    je 4f
+    mov [rsp], eax
     mov edi, MDF_UI
+    call face_of
+    mov rdi, rax
+    lea rsi, [rip + .Limg_chip]
+    mov edx, MD_CHIP_LEN
+    call text_width
+    add eax, [rip + g_mt + 4*MI_4]
+    add eax, [rip + g_mt + 4*MI_4]
+    add r15d, eax
+4:  inc r12d
+    jmp 1b
+3:  mov edi, MDF_UI
     test dword ptr [rcx + MDR_style], MS_CODE
     jz 2f
     mov edi, MDF_CODE
@@ -5039,7 +6458,8 @@ row_items:
 # cell_items(run, run end, column, header, aligns): a cell's runs on one line in its column, aligned,
 #   the last one cut where the column ends
 cell_items:
-    PROLOGUE 48
+    PROLOGUE 64
+    mov dword ptr [rsp + 48], -1    # the image named last (a chip: its other runs go)
     mov [rsp], edi
     mov [rsp + 4], esi
     mov [rsp + 8], edx
@@ -5088,7 +6508,43 @@ cell_items:
     mov [rsp + 24], rax
     cmp dword ptr [rax + MDR_len], 0
     je .Lce_next
+    test dword ptr [rax + MDR_style], MS_IMAGE  # an image: "[Image]", never drawn in a cell
+    jz 21f
+    mov ecx, [rax + MDR_link]
+    cmp ecx, [rsp + 48]
+    je .Lce_next
+    mov [rsp + 48], ecx
     mov edi, MDF_UI
+    call face_of
+    mov rdi, rax
+    lea rsi, [rip + .Limg_chip]
+    mov edx, MD_CHIP_LEN
+    call text_width
+    add eax, [rip + g_mt + 4*MI_4]
+    add eax, [rip + g_mt + 4*MI_4]
+    mov r13d, eax
+    lea eax, [r12 + r13]
+    cmp eax, r14d
+    jg .Lce_done
+    mov edi, MDK_CHIP
+    call item_new
+    mov [rax + MDI_x], r12d
+    mov edx, [rip + lay_y]
+    add edx, [rip + g_mt + 4*MI_4]
+    mov [rax + MDI_y], edx
+    mov [rax + MDI_w], r13d
+    mov edx, [rip + lay_lineh]
+    mov [rax + MDI_h], edx
+    mov edx, [rip + lay_base]
+    mov [rax + MDI_base], edx
+    mov dword ptr [rax + MDI_face], MDF_UI
+    mov dword ptr [rax + MDI_color], T_MUTED
+    mov dword ptr [rax + MDI_len], MD_CHIP_LEN
+    mov edx, [rsp + 48]
+    mov [rax + MDI_link], edx
+    add r12d, r13d
+    jmp .Lce_next
+21: mov edi, MDF_UI
     test dword ptr [rax + MDR_style], MS_CODE
     jz 3f
     mov edi, MDF_CODE
@@ -5170,6 +6626,19 @@ FN md_measure
 FN md_draw
     PROLOGUE 64
     mov rbx, rdi
+    push rsi
+    push rdx
+    push rcx
+    push r8
+    push r9
+    push r9
+    call use_doc
+    pop r9
+    pop r9
+    pop r8
+    pop rcx
+    pop rdx
+    pop rsi
     mov [rsp], esi
     mov [rsp + 4], edx
     mov [rsp + 8], ecx
@@ -5210,7 +6679,15 @@ FN md_draw
     mov r15d, [r13 + MDI_x]
     add r15d, [rsp]             # its left on screen
     mov eax, [r13 + MDI_color]
-    lea rcx, [rip + g_theme]
+    cmp eax, T_FG               # a muted document: its text muted (thinking); a tinted one: its slot (a
+    jne 0f                      #   failed reply's T_ERROR)
+    cmp dword ptr [rbx + MD_tint], 0
+    je 610f
+    mov eax, [rbx + MD_tint]
+610: cmp dword ptr [rbx + MD_muted], 0
+    je 0f
+    mov eax, T_MUTED
+0:  lea rcx, [rip + g_theme]
     mov eax, [rcx + rax*4]
     mov [rsp + 32], eax         # its color
     mov eax, [r13 + MDI_kind]
@@ -5226,6 +6703,58 @@ FN md_draw
     je .Lmd_image
     cmp eax, MDK_COPY
     je .Lmd_copy
+    cmp eax, MDK_CHIP
+    je .Lmd_chip
+    jmp .Lmd_next
+.Lmd_chip:
+    # "[Image]" on a tint; hovered, the tip names what was blocked. A button, but no link: a click
+    # follows nothing
+    mov edi, r15d
+    mov esi, r14d
+    mov edx, [r13 + MDI_w]
+    mov ecx, [r13 + MDI_h]
+    M r8d, MI_3
+    COLOR r9d, T_HOVER
+    call gfx_round_rect
+    mov edi, [r13 + MDI_face]
+    call face_of
+    mov rdi, rax
+    mov esi, r15d
+    add esi, [rip + g_mt + 4*MI_4]
+    mov edx, r14d
+    add edx, [r13 + MDI_base]
+    lea rcx, [rip + .Limg_chip]
+    mov r8d, MD_CHIP_LEN
+    mov r9d, [rsp + 32]
+    call text_draw
+    mov eax, [r13 + MDI_link]
+    test eax, eax
+    js .Lmd_next
+    and eax, MD_LINKS_MAX - 1
+    add eax, [rsp + 20]
+    mov [rsp + 56], eax
+    mov edi, eax
+    mov esi, r15d
+    mov edx, r14d
+    mov ecx, [r13 + MDI_w]
+    mov r8d, [r13 + MDI_h]
+    call ui_btn
+    test eax, UB_HOVER
+    jz .Lmd_next
+    mov [rsp + 60], eax
+    mov rdi, rbx
+    mov esi, [r13 + MDI_link]
+    call img_tip
+    test rax, rax
+    jz .Lmd_next
+    mov r9, rax
+    mov edi, [rsp + 56]
+    mov esi, r15d
+    mov edx, r14d
+    add edx, [r13 + MDI_h]
+    mov ecx, [r13 + MDI_w]
+    mov r8d, [rsp + 60]
+    call tip_note_text
     jmp .Lmd_next
 .Lmd_copy:
     mov edi, [r13 + MDI_link]
@@ -5283,6 +6812,8 @@ FN md_draw
     mov esi, r14d
     mov edx, [r13 + MDI_w]
     mov ecx, [r13 + MDI_h]
+    cmp dword ptr [r8 + MDM_kind], 3
+    je 2f
     cmp dword ptr [r8 + MDM_kind], 1
     jne 1f
     mov r9d, [r8 + MDM_id]
@@ -5291,6 +6822,44 @@ FN md_draw
     jmp .Lmd_next
 1:  add r8, MDM_img
     call viewimg_blit_img
+    jmp .Lmd_next
+2:  mov eax, [r8 + MDM_link]    # a data: image: its thumbnail (agentimg.s; a blit), a click opens it
+    mov [rsp + 56], eax
+    mov eax, [r8 + MDM_id]
+    mov [rsp + 60], eax
+    mov r8d, edx                # the square it fits in: its longer side, centred on the item
+    cmp r8d, ecx
+    cmovl r8d, ecx
+    mov eax, r8d
+    sub eax, edx
+    sar eax, 1
+    sub edi, eax                # x less half the room left
+    mov eax, r8d
+    sub eax, ecx
+    sar eax, 1
+    mov edx, esi
+    sub edx, eax                # y likewise
+    mov esi, edi
+    mov ecx, r8d
+    mov edi, [rsp + 60]
+    call agimg_draw
+    mov eax, [rsp + 56]
+    and eax, MD_LINKS_MAX - 1
+    add eax, [rsp + 20]
+    mov edi, eax
+    mov esi, r15d
+    mov edx, r14d
+    mov ecx, [r13 + MDI_w]
+    mov r8d, [r13 + MDI_h]
+    call ui_btn
+    test eax, UB_HOVER
+    jz .Lmd_next
+    mov dword ptr [rip + g_cursor], CUR_POINTER
+    test eax, UB_CLICK
+    jz .Lmd_next
+    mov edi, [rsp + 60]
+    lea rsi, [rip + .Limg_title]
+    call agimg_open
     jmp .Lmd_next
 .Lmd_fill:
     mov edi, r15d
@@ -5441,6 +7010,14 @@ FN md_draw
 .Lp_https: .asciz "https://"
 .Lp_rhun: .asciz "rhun://"
 .Lcopy_code: .asciz "Copy"
+.Limg_chip: .asciz "[Image]"
+.Limg_title: .asciz "Image"
+.Limg_blocked: .asciz "Image blocked: "
+.Limg_unknown: .asciz "unknown"
+.Lfn_target: .asciz "#^"
+.Lfn_room: .asciz "99."
+.Lstar: .asciz "\342\230\205"
+.Linsight: .asciz "Insight"
 .Lcopied_code: .asciz "Code copied"
 .Lcopy_failed: .asciz "Could not copy code"
 .Lb_doc: .asciz "doc"
@@ -5465,7 +7042,8 @@ url_trail: .asciz ".,:;!?\"')"
 .p2align 3
 entities: .quad .Le_amp, '&', .Le_lt, '<', .Le_gt, '>', .Le_quot, '"', .Le_apos, 0x27
     .quad .Le_nbsp, 0xa0, .Le_copy, 0xa9, .Le_mdash, 0x2014, .Le_ndash, 0x2013, .Le_hellip, 0x2026, 0, 0
-md_faces: .quad g_face_ui, g_face_small, g_face_big, g_face_huge, g_face_code, em_face
+md_faces: .quad g_face_ui, g_face_small, g_face_big, g_face_huge, g_face_code, em_face, g_face_ui, sup_face
+f_sz_small: .float 1.5
 # bytes that end a stretch of plain text in inline parsing
 special:
     .byte 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0     # 0x00: \x01, LF
@@ -5482,8 +7060,8 @@ special:
 
 .text
 # md_dump(m, sb): "blocks=N height=H maxw=W", a line per block ("block I type=T level=L quote=Q
-#   list=D marker=M num=N line=K"), per layout item ("item KIND x=X y=Y w=W h=H face=F style=S
-#   color=C link=L [text=T]") and per link ("link I TARGET")
+#   list=D marker=M num=N line=K runs=R fn=F"), per layout item ("item KIND x=X y=Y w=W h=H face=F
+#   style=S color=C link=L base=B [text=T]": a chip's text is "[Image]") and per link ("link I TARGET")
 FN md_dump
     PROLOGUE 16
     mov rbx, rdi
@@ -5610,7 +7188,16 @@ FN md_dump
     call sb_push_u64
     add r15, 16
     jmp 31b
-32: cmp dword ptr [r14 + MDI_kind], MDK_TEXT
+32: cmp dword ptr [r14 + MDI_kind], MDK_CHIP
+    jne 34f
+    mov rdi, r12
+    lea rsi, [rip + .Ld_text]
+    call sb_push_cstr
+    mov rdi, r12
+    lea rsi, [rip + .Limg_chip]
+    call sb_push_cstr
+    jmp 33f
+34: cmp dword ptr [r14 + MDI_kind], MDK_TEXT
     jne 33f
     mov rdi, r12
     lea rsi, [rip + .Ld_text]
@@ -5665,6 +7252,430 @@ FN md_dump
     jmp 6b
 9:  EPILOGUE
 
+# md_row_dump(m, sb, x, y): what is drawn of a document, a line per block: "heading:L TEXT", "para
+#   TEXT", "item TEXT" (a list item's first block), "code:LANG N lines", "table RxC" (at its header
+#   row), "rule"; "list N items" before a list's first block; "> " per quote level and "  " per list
+#   level before a line; a footnote's definition "footnote N TEXT", "footnotes" before the first. In a
+#   text a footnote's number is "^N", an image "[Image]", an Insight line "<insight LABEL>" and its
+#   closing rule "<rule>". After a block, "link TEXT -> TARGET" per link in it ("image [Image] -> TARGET"
+#   for an image drawn as a chip, "image -> TARGET" for one shown), with " at X Y" (the middle of its
+#   first item on screen, the document drawn with its top left at x, y) unless x is -1
+FN md_row_dump
+    PROLOGUE 48
+    mov rbx, rdi
+    mov r12, rsi
+    mov [rsp], edx
+    mov [rsp + 4], ecx
+    mov dword ptr [rsp + 8], 0  # in a list
+    xor r13d, r13d
+.Lrd_block:
+    cmp r13, [rbx + MD_blocks + VEC_len]
+    jae .Lrd_done
+    imul r14, r13, MDB_SIZE
+    add r14, [rbx + MD_blocks + VEC_ptr]
+    cmp dword ptr [r14 + MDB_list], 0
+    jne 1f
+    mov dword ptr [rsp + 8], 0
+    jmp 4f
+1:  cmp dword ptr [rsp + 8], 0
+    jne 4f
+    mov dword ptr [rsp + 8], 1  # a list begins: its items at the first level
+    xor r15d, r15d
+    mov rax, r13
+2:  cmp rax, [rbx + MD_blocks + VEC_len]
+    jae 3f
+    imul rdx, rax, MDB_SIZE
+    add rdx, [rbx + MD_blocks + VEC_ptr]
+    cmp dword ptr [rdx + MDB_list], 0
+    je 3f
+    cmp dword ptr [rdx + MDB_list], 1
+    jne 21f
+    cmp dword ptr [rdx + MDB_marker], 0
+    je 21f
+    inc r15d
+21: inc rax
+    jmp 2b
+3:  xor esi, esi
+    call rd_prefix
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_list]
+    call sb_push_cstr
+    mov rdi, r12
+    mov esi, r15d
+    call sb_push_u64
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_items]
+    call sb_push_cstr
+4:  cmp dword ptr [r14 + MDB_fn], 0     # a footnote: "footnotes" before the first
+    je 40f
+    test r13, r13
+    jz 42f
+    cmp dword ptr [r14 - MDB_SIZE + MDB_fn], 0
+    jne 43f
+42: mov rdi, r12
+    lea rsi, [rip + .Lrd_fns]
+    call sb_push_cstr
+43: mov rdi, r12
+    lea rsi, [rip + .Lrd_fn]
+    call sb_push_cstr
+    mov rdi, r12
+    mov esi, [r14 + MDB_fn]
+    call sb_push_u64
+    mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+    mov esi, -2
+    call rd_runs
+    jmp .Lrd_eol
+40: mov eax, [r14 + MDB_type]
+    cmp eax, MDB_TROW
+    jne 41f
+    cmp dword ptr [r14 + MDB_hdr], 0
+    je .Lrd_links
+41: mov esi, [r14 + MDB_list]
+    call rd_prefix
+    mov eax, [r14 + MDB_type]
+    cmp eax, MDB_HEAD
+    je .Lrd_head
+    cmp eax, MDB_CODE
+    je .Lrd_code
+    cmp eax, MDB_RULE
+    je .Lrd_rule
+    cmp eax, MDB_TROW
+    je .Lrd_table
+    lea rsi, [rip + .Lrd_para]
+    cmp dword ptr [r14 + MDB_marker], 0
+    je 5f
+    lea rsi, [rip + .Lrd_item]
+5:  mov rdi, r12
+    call sb_push_cstr
+    mov esi, -2
+    call rd_runs
+    jmp .Lrd_eol
+.Lrd_head:
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_heading]
+    call sb_push_cstr
+    mov rdi, r12
+    mov esi, [r14 + MDB_level]
+    call sb_push_u64
+    mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+    mov esi, -2
+    call rd_runs
+    jmp .Lrd_eol
+.Lrd_code:
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_codek]
+    call sb_push_cstr
+    mov rsi, [rbx + MD_text + SB_ptr]
+    mov eax, [r14 + MDB_lang]
+    add rsi, rax
+    mov edx, [r14 + MDB_langlen]
+    mov rdi, r12
+    call sb_push
+    mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+    mov rsi, [rbx + MD_text + SB_ptr]   # its lines: the code ends with a LF
+    mov eax, [r14 + MDB_code]
+    add rsi, rax
+    mov ecx, [r14 + MDB_codelen]
+    xor edx, edx
+    xor eax, eax
+6:  cmp eax, ecx
+    jae 61f
+    cmp byte ptr [rsi + rax], 10
+    jne 62f
+    inc edx
+62: inc eax
+    jmp 6b
+61: test ecx, ecx
+    jz 63f
+    cmp byte ptr [rsi + rcx - 1], 10
+    je 63f
+    inc edx
+63: mov rdi, r12
+    mov esi, edx
+    call sb_push_u64
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_lines]
+    call sb_push_cstr
+    jmp .Lrd_eol
+.Lrd_rule:
+    mov rdi, r12
+    lea rsi, [rip + .Lt_rule]
+    call sb_push_cstr
+    jmp .Lrd_eol
+.Lrd_table:
+    mov r15d, 0                 # its rows: the header's and the rows after it naming it
+    mov rax, r13
+7:  cmp rax, [rbx + MD_blocks + VEC_len]
+    jae 71f
+    imul rdx, rax, MDB_SIZE
+    add rdx, [rbx + MD_blocks + VEC_ptr]
+    cmp dword ptr [rdx + MDB_type], MDB_TROW
+    jne 71f
+    cmp [rdx + MDB_tbl], r13d
+    jne 71f
+    inc r15d
+    inc rax
+    jmp 7b
+71: mov rdi, r12
+    lea rsi, [rip + .Lrd_tablek]
+    call sb_push_cstr
+    mov rdi, r12
+    mov esi, r15d
+    call sb_push_u64
+    mov rdi, r12
+    mov esi, 'x'
+    call sb_push_byte
+    mov rdi, r12
+    mov esi, [r14 + MDB_ncols]
+    call sb_push_u64
+.Lrd_eol:
+    mov rdi, r12
+    mov esi, 10
+    call sb_push_byte
+.Lrd_links:
+    # its links, each once
+    mov dword ptr [rsp + 12], -1
+    mov dword ptr [rsp + 16], 0
+.Lrd_run:
+    mov eax, [rsp + 16]
+    cmp eax, [r14 + MDB_nrun]
+    jae .Lrd_next
+    add eax, [r14 + MDB_run0]
+    imul rcx, rax, MDR_SIZE
+    add rcx, [rbx + MD_runs + VEC_ptr]
+    mov r15d, [rcx + MDR_link]
+    test r15d, r15d
+    js .Lrd_run_next
+    cmp r15d, [rsp + 12]
+    je .Lrd_run_next
+    mov [rsp + 12], r15d
+    mov eax, [rcx + MDR_style]
+    mov [rsp + 20], eax
+    mov dword ptr [rsp + 32], MDK_TEXT  # the item that shows it
+    mov esi, [r14 + MDB_list]
+    call rd_prefix
+    test dword ptr [rsp + 20], MS_IMAGE
+    jz 80f
+    mov dword ptr [rsp + 32], MDK_CHIP  # an image: "image [Image] -> TARGET" when it is a chip
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_image]
+    call sb_push_cstr
+    xor ecx, ecx
+84: cmp rcx, [rbx + MD_items + VEC_len]
+    jae 86f
+    imul rdx, rcx, MDI_SIZE
+    add rdx, [rbx + MD_items + VEC_ptr]
+    cmp dword ptr [rdx + MDI_kind], MDK_CHIP
+    jne 85f
+    cmp [rdx + MDI_link], r15d
+    jne 85f
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_chip]
+    call sb_push_cstr
+    jmp 86f
+85: inc rcx
+    jmp 84b
+80: mov rdi, r12
+    lea rsi, [rip + .Ld_link]
+    call sb_push_cstr
+    mov esi, r15d
+    call rd_runs
+86: mov rdi, r12
+    lea rsi, [rip + .Lrd_arrow]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r15d
+    call md_link
+    mov rsi, rax
+    mov rdi, r12
+    call sb_push
+    cmp dword ptr [rsp], -1
+    je 8f
+    xor ecx, ecx                # where its first item is on screen
+81: cmp rcx, [rbx + MD_items + VEC_len]
+    jae 8f
+    imul rdx, rcx, MDI_SIZE
+    add rdx, [rbx + MD_items + VEC_ptr]
+    mov eax, [rsp + 32]
+    cmp [rdx + MDI_kind], eax
+    jne 82f
+    cmp [rdx + MDI_link], r15d
+    je 83f
+82: inc rcx
+    jmp 81b
+83: mov [rsp + 24], rdx
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_at]
+    call sb_push_cstr
+    mov rdx, [rsp + 24]
+    mov esi, [rdx + MDI_w]
+    sar esi, 1
+    add esi, [rdx + MDI_x]
+    add esi, [rsp]
+    mov rdi, r12
+    call md_push_int
+    mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+    mov rdx, [rsp + 24]
+    mov esi, [rdx + MDI_h]
+    sar esi, 1
+    add esi, [rdx + MDI_y]
+    add esi, [rsp + 4]
+    mov rdi, r12
+    call md_push_int
+8:  mov rdi, r12
+    mov esi, 10
+    call sb_push_byte
+.Lrd_run_next:
+    inc dword ptr [rsp + 16]
+    jmp .Lrd_run
+.Lrd_next:
+    inc r13
+    jmp .Lrd_block
+.Lrd_done:
+    EPILOGUE
+
+# rd_prefix(list depth) using r14 = the block, r12 = the sb: "> " per quote level, "  " per list level
+rd_prefix:
+    push rbx
+    push r15
+    sub rsp, 8
+    mov r15d, esi
+    mov ebx, [r14 + MDB_quote]
+1:  test ebx, ebx
+    jz 2f
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_quote]
+    call sb_push_cstr
+    dec ebx
+    jmp 1b
+2:  test r15d, r15d
+    jz 3f
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_indent]
+    call sb_push_cstr
+    dec r15d
+    jmp 2b
+3:  add rsp, 8
+    pop r15
+    pop rbx
+    ret
+
+# rd_runs(link) using rbx = the document, r14 = the block, r12 = the sb: the text of its runs (-2 all,
+#   else those of that link), a hard break as a space, a footnote's number as "^N", an image as
+#   "[Image]", an Insight line as "<insight LABEL>" and its closing rule as "<rule>"
+rd_runs:
+    push rbx
+    push r13
+    push r15
+    push rbp
+    sub rsp, 8
+    mov r15d, esi
+    mov ebp, -1                 # the image named last
+    xor r13d, r13d
+1:  cmp r13d, [r14 + MDB_nrun]
+    jae 9f
+    mov eax, [r14 + MDB_run0]
+    add eax, r13d
+    imul rcx, rax, MDR_SIZE
+    add rcx, [rbx + MD_runs + VEC_ptr]
+    mov [rsp], rcx
+    cmp r15d, -2
+    je 2f
+    cmp [rcx + MDR_link], r15d
+    jne 4f
+2:  test dword ptr [rcx + MDR_style], MS_BREAK
+    jz 21f
+    mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+    jmp 4f
+21: test dword ptr [rcx + MDR_style], MS_IMAGE
+    jz 22f
+    mov eax, [rcx + MDR_link]
+    cmp eax, ebp
+    je 4f
+    mov ebp, eax
+    mov rdi, r12
+    lea rsi, [rip + .Limg_chip]
+    call sb_push_cstr
+    jmp 4f
+22: test dword ptr [rcx + MDR_style], MS_IRULE
+    jz 23f
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_irule]
+    call sb_push_cstr
+    jmp 4f
+23: test dword ptr [rcx + MDR_style], MS_INSIGHT
+    jz 24f
+    mov rdi, r12
+    lea rsi, [rip + .Lrd_insight]
+    call sb_push_cstr
+    mov rcx, [rsp]
+    mov rdi, [rbx + MD_text + SB_ptr]
+    mov eax, [rcx + MDR_off]
+    add rdi, rax
+    mov esi, [rcx + MDR_len]
+    push rdi
+    push rdi
+    call insight_label
+    pop rsi
+    pop rsi
+    add rsi, rax
+    mov rdi, r12
+    call sb_push
+    mov rdi, r12
+    mov esi, '>'
+    call sb_push_byte
+    jmp 4f
+24: test dword ptr [rcx + MDR_style], MS_SUP
+    jz 3f
+    mov rdi, r12
+    mov esi, '^'
+    call sb_push_byte
+3:  mov rcx, [rsp]
+    mov rsi, [rbx + MD_text + SB_ptr]
+    mov eax, [rcx + MDR_off]
+    add rsi, rax
+    mov edx, [rcx + MDR_len]
+    mov rdi, r12
+    call sb_push
+4:  inc r13d
+    jmp 1b
+9:  add rsp, 8
+    pop rbp
+    pop r15
+    pop r13
+    pop rbx
+    ret
+
+# md_push_int(sb, n): n in decimal, a minus sign before a negative one
+FN md_push_int
+    push rbx
+    push r12
+    sub rsp, 8
+    mov rbx, rdi
+    movsxd r12, esi
+    test r12, r12
+    jns 1f
+    mov esi, '-'
+    call sb_push_byte
+    neg r12
+1:  mov rdi, rbx
+    mov rsi, r12
+    call sb_push_u64
+    add rsp, 8
+    pop r12
+    pop rbx
+    ret
+
 .section .rodata
 .Ld_blocks: .asciz "blocks="
 .Ld_height: .asciz " height="
@@ -5675,6 +7686,24 @@ FN md_dump
 .Ld_text: .asciz " text="
 .Ld_link: .asciz "link "
 .Ld_copy: .asciz "copy-action "
+.Lrd_list: .asciz "list "
+.Lrd_items: .asciz " items\n"
+.Lrd_para: .asciz "para "
+.Lrd_item: .asciz "item "
+.Lrd_heading: .asciz "heading:"
+.Lrd_codek: .asciz "code:"
+.Lrd_lines: .asciz " lines"
+.Lrd_tablek: .asciz "table "
+.Lrd_arrow: .asciz " -> "
+.Lrd_at: .asciz " at "
+.Lrd_quote: .asciz "> "
+.Lrd_indent: .asciz "  "
+.Lrd_fns: .asciz "footnotes\n"
+.Lrd_fn: .asciz "footnote "
+.Lrd_image: .asciz "image"
+.Lrd_chip: .asciz " [Image]"
+.Lrd_insight: .asciz "<insight "
+.Lrd_irule: .asciz "<rule>"
 .Lt_para: .asciz "para"
 .Lt_head: .asciz "head"
 .Lt_code: .asciz "code"
@@ -5704,9 +7733,12 @@ FN md_dump
 .p2align 3
 type_names: .quad .Lt_para, .Lt_head, .Lt_code, .Lt_rule, .Lt_row
 .Lk_copy: .asciz "copy"
+.Lk_chip: .asciz "chip"
+.Lf_fn: .asciz " fn="
+.Lf_base: .asciz " base="
 .p2align 3
-kind_names: .quad .Lk_text, .Lk_fill, .Lk_dot, .Lk_box, .Lk_line, .Lk_image, .Lk_copy
+kind_names: .quad .Lk_text, .Lk_fill, .Lk_dot, .Lk_box, .Lk_line, .Lk_image, .Lk_copy, .Lk_chip
 block_fields: .quad .Lf_level, MDB_level, .Lf_quote, MDB_quote, .Lf_list, MDB_list, .Lf_marker, MDB_marker
-    .quad .Lf_num, MDB_num, .Lf_line, MDB_line, .Lf_runs, MDB_nrun, 0, 0
+    .quad .Lf_num, MDB_num, .Lf_line, MDB_line, .Lf_runs, MDB_nrun, .Lf_fn, MDB_fn, 0, 0
 item_fields: .quad .Lf_x, MDI_x, .Lf_y, MDI_y, .Lf_w, MDI_w, .Lf_h, MDI_h, .Lf_face, MDI_face
-    .quad .Lf_style, MDI_style, .Lf_color, MDI_color, .Lf_link, MDI_link, 0, 0
+    .quad .Lf_style, MDI_style, .Lf_color, MDI_color, .Lf_link, MDI_link, .Lf_base, MDI_base, 0, 0

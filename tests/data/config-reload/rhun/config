@@ -3,3 +3,13 @@ multi_cursor_paste = full
 tab_width = 3
 [keys]
 ctrl+q = quit
+[claude]
+chat = false
+executable = /opt/claude/bin/claude
+wrapper = /usr/bin/env
+initial_mode = manual
+env.FOO = bar
+env.CLAUDE_CONFIG_DIR = /tmp/claude-config
+env.FOO = replaced
+[agents]
+idle_stop_minutes = 15

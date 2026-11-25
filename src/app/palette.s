@@ -18,6 +18,7 @@
 .equ PM_REMOTE, 40              # remote hosts: a pick list that also takes typed text (remoteui.s)
 .equ PM_TASKS, 76               # tasks and terminals: Run Task and the other task commands (tasks.s)
 .equ PM_WSLIST, 88              # wsedit: a workspace edit's question (wsconfirm.s)
+.equ PM_LINKS, 89               # a URL from an agent's reply: Open, Copy Link, Cancel (links.s)
 .equ PM_WSYM, 92                # language features: Go to Symbol in Project (wsym.s)
 .equ PM_DPICK, 80               # debugger: a launch's ${pick:} or ${process} (debugask.s)
 .equ PM_ICONS, 64               # contributions: Select File Icon Theme (iconth.s)
@@ -25,6 +26,7 @@
 .equ ID_PAL_ROW, 0x200000         # + row: a range of its own, as results run to MAXFILES
 .equ ID_PAL_FIELD, 0x3fff
 .equ MAXFILES, 200000
+.equ KEYS_CACHE_N, 512            # built-in commands whose shortcut labels are kept (g_commands has 264 with the chat's lines merged)
 .equ GREP_MAX, 5000             # results
 .equ GREP_FILE_MAX, 8 << 20     # bytes per file
 .equ GREP_TOTAL_MAX, 256 << 20
@@ -1403,6 +1405,17 @@ FN palette_wslist_open
     pop rbx
     ret
 
+# palette_links_open(label cstr): an empty pick list asking before a URL opens (links_ask_open); rows follow
+# with palette_choose_add, then palette_choose_ready; choosing row n calls links_chose(n)
+FN palette_links_open
+    push rbx
+    mov rbx, rdi
+    mov edi, PM_LINKS
+    call palette_open
+    mov [rip + pal_label], rbx
+    pop rbx
+    ret
+
 # palette_results_open(label cstr), palette_results_add(ptr, len, detail cstr or 0, n),
 # palette_results_ready(), palette_results_close(): a list of langfeat's results; choosing item n
 # calls langfeat_chosen(n). The strings stay langfeat's until it closes the list
@@ -1568,6 +1581,15 @@ FN palette_ext_prompt_open
     call tf_set
     EPILOGUE
 
+# FN palette_prompt_kind() -> eax the open prompt's PROMPT_*, 0 when no prompt shows (plan review: mdtab.s
+#   closes its comment prompt with its tab)
+FN palette_prompt_kind
+    xor eax, eax
+    cmp dword ptr [rip + pal_mode], PM_PROMPT
+    jne 1f
+    mov eax, [rip + pal_prompt]
+1:  ret
+
 # palette_close_commands(): the command list holds CMD* and titles of extension commands that
 # just moved or went: a palette showing it closes
 FN palette_close_commands
@@ -1632,7 +1654,7 @@ load_commands:
     call palette_ext_keys_reset
     xor ebx, ebx
 .Llc_reset:
-    cmp ebx, 256
+    cmp ebx, KEYS_CACHE_N
     jae .Llc_reset_done
     lea rax, [rip + keys_cache]
     mov rdi, [rax + rbx*8]
@@ -1649,6 +1671,10 @@ load_commands:
     jz 9f
     cmp byte ptr [r12], 0
     je 2f
+    mov rdi, rbx                # phase 4 task 8: the mention commands are not listed with the chat off
+    call agctx_cmd_hidden
+    test eax, eax
+    jnz 2f
     mov rdi, r12
     call strlen
     mov r13, rax
@@ -1660,14 +1686,18 @@ load_commands:
     mov ecx, CMD_SIZE
     div rcx
     mov r14, rax
+    cmp r14, KEYS_CACHE_N       # past the cache (more commands than it holds): formatted each time
+    jae 31f
     lea rcx, [rip + keys_cache]
     mov rax, [rcx + r14*8]
     test rax, rax
     jnz 3f
-    mov rdi, rbx
+31: mov rdi, rbx
     call keys_for
     test rax, rax
     jz 3f
+    cmp r14, KEYS_CACHE_N
+    jae 3f
     mov rdi, rax
     push rax
     call strlen
@@ -1980,7 +2010,9 @@ scan_cb:
 # ---- path browser ----
 
 # browse_open(folder): Open File (0) or Open Folder (1), starting in the project folder; 2 is Add
-#   Folder to Workspace (workspace.s), which adds the folder picked instead of opening it
+#   Folder to Workspace (workspace.s), which adds the folder picked instead of opening it; 3 is Attach File
+#   (phase 4 task 3): a file picked is attached to the agents box's message (agatt_attach_paths; Enter closes,
+#   Shift+Enter stays for another), starting in that conversation's checkout
 FN browse_open_kind
 browse_open:
     PROLOGUE
@@ -1992,13 +2024,22 @@ browse_open:
     lea rax, [rip + .Lph_open_file]
     test ebx, ebx
     jz 1f
+    lea rax, [rip + .Lph_attach]
+    cmp ebx, 3
+    je 1f
     lea rax, [rip + .Lph_open_folder]
     cmp ebx, 2
     jne 1f
     lea rax, [rip + .Lph_add_folder]
 1:  mov [rip + pal_label], rax
-    # the field: the project folder, the home folder as ~, and a '/'
-    mov rsi, [rip + g_project]
+    # the field: the project folder (Attach File: the conversation's checkout), the home folder as ~, and a '/'
+    cmp ebx, 3
+    jne 11f
+    call agatt_browse_dir
+    mov rsi, rax
+    test rsi, rsi
+    jnz 2f
+11: mov rsi, [rip + g_project]
     test rsi, rsi
     jnz 2f
     call vfs_home               # the host's in a remote window
@@ -2210,8 +2251,10 @@ browse_load:
     call vfs_is_dir
     test eax, eax
     jz 9f
-    xor ebx, ebx                # items before the sorted ones
+    xor ebx, ebx                # items before the sorted ones (none when files are picked)
     cmp dword ptr [rip + brw_kind], 0
+    je 1f
+    cmp dword ptr [rip + brw_kind], 3
     je 1f
     lea rdi, [rip + strings]
     lea rsi, [rip + .Lopen_here]
@@ -2289,6 +2332,8 @@ browse_cb:
     test r13d, r13d
     jnz 1f
     cmp dword ptr [rip + brw_kind], 0
+    je 1f
+    cmp dword ptr [rip + brw_kind], 3   # (Attach File lists files too)
     jne 9f
 1:  mov rax, [rip + strings + SB_len]
     mov [rsp], rax
@@ -2460,6 +2505,8 @@ FN palette_print
     cmp dword ptr [rip + pal_mode], PM_CHOOSE
     je 13f
     cmp dword ptr [rip + pal_mode], PM_WSLIST
+    je 13f
+    cmp dword ptr [rip + pal_mode], PM_LINKS
     je 13f
     cmp dword ptr [rip + pal_mode], PM_REOPEN   # custom editors
     je 13f
@@ -2691,9 +2738,17 @@ FN palette_filter
     test eax, eax
     jns 12f
     cmp dword ptr [rip + pal_mode], PM_COMMANDS
-    je 13f
+    je 14f
     cmp dword ptr [rip + pal_mode], PM_KEYS
     jne 4f
+    jmp 13f
+14: mov rdi, [r12 + IT_label]   # an agents' command by its driver's name (agentcmd.s)
+    mov rsi, [r12 + IT_len]
+    mov rdx, r14
+    mov rcx, r15
+    call agcmd_alias
+    test eax, eax
+    jns 12f
 13: mov rdi, [r12 + IT_detail]
     test rdi, rdi
     jz 4f
@@ -3154,7 +3209,15 @@ palette_accept:
     call dview_dpick_chosen
     mov dword ptr [rip + g_dirty], 1
     jmp .Lpa_ret
-35: cmp ebx, PM_CHOOSE
+35: cmp ebx, PM_LINKS            # a reply's URL: the user's answer (links.s)
+    jne 36f
+    mov dword ptr [rip + pal_mode], PM_NONE
+    call pal_return_focus
+    mov rdi, [r12 + IT_data]
+    call links_chose
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lpa_ret
+36: cmp ebx, PM_CHOOSE
     jne .Lpa_close
     # the extension's pick: the item's number, with the palette closed first (the reply may
     # open another prompt)
@@ -3310,7 +3373,7 @@ palette_accept:
     mov dword ptr [rip + g_dirty], 1
     jmp .Lpa_ret
 693: cmp dword ptr [rip + pal_prompt], PROMPT_COLOR    # editor presentation: a swatch's color (hicolor.s)
-    jne 690f
+    jne 694f
     lea rdi, [rip + pal_tf]
     call tf_text
     mov dword ptr [rip + pal_mode], PM_NONE
@@ -3320,6 +3383,19 @@ palette_accept:
     pop rsi
     pop rdi
     call color_prompt_done
+    mov dword ptr [rip + g_dirty], 1
+    jmp .Lpa_ret
+694: cmp dword ptr [rip + pal_prompt], PROMPT_MD_COMMENT    # plan review: a comment on the selection (mdtab.s)
+    jne 690f
+    lea rdi, [rip + pal_tf]
+    call tf_text
+    mov dword ptr [rip + pal_mode], PM_NONE
+    push rax
+    push rdx
+    call pal_return_focus
+    pop rsi
+    pop rdi
+    call mdtab_prompt_done
     mov dword ptr [rip + g_dirty], 1
     jmp .Lpa_ret
 690: cmp dword ptr [rip + pal_prompt], PROMPT_REMOTE
@@ -3489,6 +3565,8 @@ palette_accept:
     # a folder: the browser goes into it; picking a folder, Ctrl+Enter opens it
     cmp dword ptr [rip + brw_kind], 0
     je 1f
+    cmp dword ptr [rip + brw_kind], 3
+    je 1f
     test dword ptr [rip + pal_mods], MOD_CTRL
     jnz 2f
 1:  mov rdi, r12
@@ -3530,7 +3608,21 @@ palette_accept:
     mov rsi, [r12 + IT_label]
     call path_join
     mov r13, rax
+    cmp dword ptr [rip + brw_kind], 3
+    jne 1f
+    mov rdi, r13                # Attach File: the box's message gets it (Shift+Enter: the browser stays)
+    call strlen
+    lea rsi, [rax + 1]
+    mov rdi, r13
+    call agatt_attach_paths
+    mov rdi, r13
+    call mem_free
+    test dword ptr [rip + pal_mods], MOD_SHIFT
+    jnz .Lpa_ret
     call palette_close
+    mov dword ptr [rip + g_focus], FOCUS_AGENT_INPUT
+    jmp .Lpa_ret
+1:  call palette_close
     mov rdi, r13
     call app_open_path
     mov rdi, r13
@@ -4207,6 +4299,7 @@ hint_text:
 .Lhint_new_file: .asciz "Enter creates the file, Esc cancels"
 .Lhint_new_folder: .asciz "Enter creates the folder, Esc cancels"
 .Lhint_rename: .asciz "Enter renames, Esc cancels"
+.Lph_attach: .asciz "Attach File"
 .Lph_open_file: .asciz "Open a file"
 .Lph_open_folder: .asciz "Open a folder"
 .Lopen_here: .asciz "Open "
@@ -4223,7 +4316,7 @@ hint_text:
 .Lpp_sel: .asciz "> "
 .bss
 .p2align 3
-keys_cache: .zero 8 * 256
+keys_cache: .zero 8 * KEYS_CACHE_N
 ext_keys_cache: .zero VEC_SIZE  # the extensions' shortcut labels, one slot per command
 .globl g_ed_h_lines
 g_ed_h_lines: .long 0

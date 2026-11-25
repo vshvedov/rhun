@@ -2276,6 +2276,23 @@ g_commands:
     COMMAND email, "Email rhun", cmd_email, ""
     COMMAND feedback, "Send Feedback or Report a Bug", cmd_feedback, ""
     COMMAND focus_agents, "Focus Agents Panel", cmd_focus_agents, ""
+    COMMAND agents_font_increase, "Agents: Increase Font Size", cmd_agents_font_inc, ""
+    COMMAND agents_font_decrease, "Agents: Decrease Font Size", cmd_agents_font_dec, ""
+    COMMAND agents_font_reset, "Agents: Reset Font Size", cmd_agents_font_reset, ""
+    COMMAND agents_focus_last, "Agents: Focus Last Message", agents_focus_last, ""
+    COMMAND agents_toggle_thinking, "Agents: Expand or Collapse Thinking", agents_toggle_thinking, ""
+    COMMAND agents_toggle_focus_view, "Agents: Toggle Focus View", agents_toggle_focus_view, "ctrl+alt+f"
+    # phase 4 task 12: a proposed change in the Review tab (review.s); its own keys stay (a r A R ] [ } {,
+    #   Ctrl+Enter)
+    COMMAND review_accept, "Review: Accept Proposed Changes", review_cmd_accept, ""
+    COMMAND review_reject, "Review: Reject Proposed Changes", review_cmd_reject, ""
+    COMMAND review_accept_change, "Review: Accept Change at Cursor", review_cmd_accept_change, ""
+    COMMAND review_reject_change, "Review: Reject Change at Cursor", review_cmd_reject_change, ""
+    COMMAND review_edit, "Review: Edit Proposed Text", review_cmd_edit, ""
+    # phase 4 task 8: the commands that mention (agentctx.s); each tests its own state, no when clause
+    COMMAND agents_insert_mention, "Agents: Insert @-Mention", cmd_agents_insert_mention, "alt+k"
+    COMMAND agents_focus_input, "Agents: Focus or Unfocus the Message Box", cmd_agents_focus_input, "ctrl+Escape"
+    COMMAND agents_add_to_chat, "Agents: Add to Chat", cmd_agents_add_to_chat, ""
     COMMAND open_file, "Open File", cmd_open_file, "ctrl+o"
     COMMAND open_folder, "Open Folder", cmd_open_folder, "ctrl+shift+o"
     COMMAND add_workspace_folder, "Add Folder to Workspace", cmd_add_workspace_folder, ""   # resources: workspace.s
@@ -2464,5 +2481,24 @@ g_commands:
     COMMAND fold_level_1, "Fold Level 1", cmd_fold_level_1, ""
     COMMAND fold_level_2, "Fold Level 2", cmd_fold_level_2, ""
     COMMAND fold_level_3, "Fold Level 3", cmd_fold_level_3, ""
+    # Claude chat phase 5: terminal claude and terminal mode (claudeterm.s); agents_open and agents_focus_input
+    #   are phase 4's names (tasks 13 and 8 build their chat side; agents_focus_input is task 8's, above)
+    COMMAND agents_open, "Agents: Open", cmd_agents_open, ""
+    COMMAND claude_open_terminal, "Claude: Open in Terminal", cmd_claude_open_terminal, ""
+    COMMAND claude_mention_terminal, "Claude: Insert @-Mention in Terminal", cmd_claude_mention_terminal, "ctrl+alt+k"
+    # phase 4 task 13: conversation tabs (agenttab.s)
+    COMMAND agents_open_tab, "Agents: Open in New Tab", agtab_cmd_open_tab, "ctrl+shift+Escape"
+    COMMAND agents_open_panel, "Agents: Open in Side Panel", agtab_cmd_open_panel, ""
+    COMMAND agents_new_conversation, "Agents: New Conversation", agtab_cmd_new, ""
+    COMMAND agents_open_window, "Agents: Open in New Window", agtab_cmd_open_window, ""
+    # p8 (agentcmd.s): the extension's other commands (docs/guide.md maps all of them)
+    COMMAND agents_blur, "Agents: Return to the Editor", cmd_agents_blur, ""
+    COMMAND agents_sign_in, "Agents: Sign In", cmd_agents_sign_in, ""
+    COMMAND agents_sign_out, "Agents: Sign Out", cmd_agents_sign_out, ""
+    COMMAND agents_install_plugin, "Agents: Install Plugin", cmd_agents_install_plugin, ""
+    COMMAND agents_mark_unread, "Agents: Mark Conversation as Unread", cmd_agents_mark_unread, ""
+    COMMAND agents_rename, "Agents: Rename Conversation", cmd_agents_rename, ""
+    COMMAND agents_add_to_group, "Agents: Add Conversation to Group", cmd_agents_add_to_group, ""
+    COMMAND agents_show_logs, "Agents: Show Logs", cmd_agents_show_logs, ""
     .quad 0, 0, 0, 0
 

@@ -36,7 +36,7 @@ When coding agents do more of the heavy lifting, you may not need everything tha
 - **Built-in terminal:** Run your shell, tools, and coding agents right beside the code.
 - **Git:** Stage, commit, pull, and push; see changed files, read diffs, and browse commit history. Optionally draft commit messages with your Claude or Codex subscription, or a local Ollama model.
 - **Fuzzy search:** Jump to a file or search across the whole project.
-- **Agents panel:** See Claude Code, Codex, Grok Build, and OpenCode sessions as they work.
+- **Agents panel:** See Claude Code, Codex, Grok Build, and OpenCode sessions as they work, and talk to Claude Code from it.
 - **Extensions:** Completion, errors, go to definition and rename from your language servers, formatters, charts drawn in a tab, and your own: native programs in Rust, Go, C, or C++ that your coding agent can write from [a template](https://github.com/rhun-editor/template-rust).
 
 <p>

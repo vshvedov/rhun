@@ -82,14 +82,17 @@ class Menus(MenuBase):
             'click 50 400 right', 'print-menu'])
         builtin = ['New File', 'New Folder', 'Rename', 'Delete', 'Copy Path', 'Show in Finder'
                    if contribhost.host.sys.platform == 'darwin' else out[5]]
+        chat = ['-', 'Add to Chat']     # rhun's own group after the built-in items (with the agents' chat on)
         makefile = out[:out.index('New File', 1)]
         self.assertEqual(makefile[:6], builtin)
-        self.assertEqual(makefile[6:], ['-', 'Demo Tools' + CHEVRON + ' >', '-',
+        self.assertEqual(makefile[6:8], chat)
+        self.assertEqual(makefile[8:], ['-', 'Demo Tools' + CHEVRON + ' >', '-',
                                         'Early [bob/other]', 'Copy Relative [alice/demo]', '-',
                                         'Run Make Target [alice/demo]'])
         rest = out[len(makefile):]
         folder = rest[:rest.index('New File', 1)]
-        self.assertEqual(folder[6:], ['-', 'Demo Tools' + CHEVRON + ' >', '-',
+        self.assertEqual(folder[6:8], chat)
+        self.assertEqual(folder[8:], ['-', 'Demo Tools' + CHEVRON + ' >', '-',
                                       'Early [bob/other]', 'Copy Relative [alice/demo]'])
         root = rest[len(folder):]
         self.assertNotIn('Copy Relative [alice/demo]', root)

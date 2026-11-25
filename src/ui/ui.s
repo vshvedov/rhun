@@ -43,6 +43,8 @@ g_face_huge: .zero FACE_SIZE
 last_scale: .long 0
 last_code_px: .long 0
 last_ui_px: .long 0
+.globl g_ui_faces_gen
+g_ui_faces_gen: .long 0         # moves on each time the interface's faces are made (agentfont.s)
 .globl g_font_code, g_font_ui, g_font_term
 g_font_code: .quad 0
 g_font_ui: .quad 0
@@ -89,6 +91,7 @@ FN ui_update_metrics
     cmp ebx, [rip + last_ui_px]
     je 3f
     mov [rip + last_ui_px], ebx
+    inc dword ptr [rip + g_ui_faces_gen]
     lea rdi, [rip + g_face_ui]
     mov rsi, [rip + g_font_ui]
     mov edx, ebx
@@ -1609,7 +1612,7 @@ FN ta_lines
     call ln_end
     mov r15, rax                # logical line end
 .Ltl_row:
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r12 + r14]
     mov rdx, r15
     sub rdx, r14
@@ -1722,6 +1725,24 @@ FN ta_line_h
     add eax, [rip + g_mt + 4*MI_3]
     ret
 
+# ta_line_h_of(tf) -> eax height of a line of that text area, in its face (TF_face)
+FN ta_line_h_of
+    push rbx
+    mov rbx, rdi
+    call ta_face
+    mov eax, [rdi + FACE_lineh]
+    add eax, [rip + g_mt + 4*MI_3]
+    pop rbx
+    ret
+
+# ta_face() using rbx = tf -> rdi the face it measures and draws in (only rdi and the flags change)
+ta_face:
+    mov rdi, [rbx + TF_face]
+    test rdi, rdi
+    jnz 1f
+    lea rdi, [rip + g_face_ui]
+1:  ret
+
 # ta_insert(tf, ptr, len): replaces the selection; CR LF and CR become line breaks, tabs spaces
 FN ta_insert
     PROLOGUE
@@ -1811,7 +1832,7 @@ FN ta_key
     mov [rsp + 16], rax
     cmp dword ptr [rbx + TF_prefx], -1
     jne 51f
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r15 + rax]
     mov rdx, [rbx + TF_cur]
     sub rdx, rax
@@ -1835,7 +1856,7 @@ FN ta_key
     mov rdi, [rsp + 24]
     call ta_row_bounds
     mov [rsp + 16], rax
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r15 + rax]
     mov rdx, [rsp + 8]
     sub rdx, rax
@@ -1866,6 +1887,149 @@ FN ta_key
     xor eax, eax
     EPILOGUE
 
+# ta_paint_row(tf, x, y, h, start, end): a text area's row [start, end) drawn by parts: the bytes of a
+#   painted range (TF_paint: {start 8, end 8, kind 4, pad 4} ending start -1) a glyph at a time in the cycling
+#   colours across the range (PAINT_RAINBOW: the extension's seven, for a dark or a light theme), a mention's
+#   over a T_HOVER box (PAINT_CHIP), the rest in T_FG. Locals: [rsp] the pen's x, [rsp+4] y, [rsp+8] h, [rsp+16] a part's end, [rsp+24] a glyph's colour
+ta_paint_row:
+    PROLOGUE 32
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov [rsp + 8], ecx
+    mov r12, r8
+    mov r13, r9
+    mov rdi, rbx
+    call tf_text
+    mov r14, rax
+.Lpr_part:
+    cmp r12, r13
+    jae .Lpr_done
+    mov r15, [rbx + TF_paint]   # the range holding r12, else the next one's start
+    mov rcx, r13
+1:  mov rax, [r15]
+    cmp rax, -1
+    je 3f
+    cmp rax, r12
+    ja 2f
+    cmp [r15 + 8], r12
+    ja .Lpr_glyph
+    jmp 4f
+2:  cmp rax, rcx
+    cmovb rcx, rax
+4:  add r15, 24
+    jmp 1b
+3:  mov [rsp + 16], rcx         # plain bytes up to there
+    call ta_face
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    lea r8, [r14 + r12]
+    mov r9, [rsp + 16]
+    sub r9, r12
+    COLOR eax, T_FG
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    mov [rsp], eax
+    mov r12, [rsp + 16]
+    jmp .Lpr_part
+.Lpr_glyph:                     # one glyph of the range at r15: its colour by its place in the range
+    cmp dword ptr [r15 + 16], PAINT_CHIP    # phase 4 task 7: a mention, a tinted box behind it
+    je .Lpr_chip
+    mov rcx, [r15]
+    xor r8d, r8d                # the range's glyphs
+    xor r9d, r9d                # those before r12
+5:  cmp rcx, [r15 + 8]
+    jae 6f
+    movzx eax, byte ptr [r14 + rcx]
+    and eax, 0xc0
+    cmp eax, 0x80
+    je 51f
+    inc r8d
+    cmp rcx, r12
+    jae 51f
+    inc r9d
+51: inc rcx
+    jmp 5b
+6:  imul eax, r9d, 7
+    xor edx, edx
+    test r8d, r8d
+    jz 61f
+    div r8d
+61: cmp eax, 6
+    jbe 62f
+    mov eax, 6
+62: lea rcx, [rip + rainbow_dark]
+    cmp dword ptr [rip + g_theme_dark], 0
+    jne 63f
+    lea rcx, [rip + rainbow_light]
+63: mov eax, [rcx + rax*4]
+    mov [rsp + 24], eax
+    lea rdi, [r14 + r12]
+    mov rsi, r13
+    sub rsi, r12
+    call utf8_decode
+    lea rax, [r12 + rdx]
+    mov [rsp + 16], rax
+    call ta_face
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    lea r8, [r14 + r12]
+    mov r9, [rsp + 16]
+    sub r9, r12
+    mov eax, [rsp + 24]
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    mov [rsp], eax
+    mov r12, [rsp + 16]
+    jmp .Lpr_part
+.Lpr_chip:                      # (phase 4 task 7) the range's bytes on this row over a T_HOVER box
+    mov rax, [r15 + 8]
+    cmp rax, r13
+    cmova rax, r13
+    mov [rsp + 16], rax
+    call ta_face
+    lea rsi, [r14 + r12]
+    mov rdx, [rsp + 16]
+    sub rdx, r12
+    call text_width
+    mov edx, eax                # its width
+    M eax, MI_2
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    add esi, eax
+    mov ecx, [rsp + 8]
+    sub ecx, eax
+    sub ecx, eax
+    jg 1f
+    mov ecx, [rsp + 8]
+    mov esi, [rsp + 4]
+1:  M r8d, MI_2
+    COLOR r9d, T_HOVER
+    call gfx_round_rect
+    call ta_face
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    lea r8, [r14 + r12]
+    mov r9, [rsp + 16]
+    sub r9, r12
+    COLOR eax, T_FG
+    push rax
+    push rax
+    call ui_text_v
+    add rsp, 16
+    mov [rsp], eax
+    mov r12, [rsp + 16]
+    jmp .Lpr_part
+.Lpr_done:
+    EPILOGUE
+
 # ui_textarea(tf, x, y, w, h, focused, placeholder): always wrap at the available
 # width, keeping the caret's visual row in view; the mouse places the cursor -> UB bits
 FN ui_textarea
@@ -1883,7 +2047,8 @@ FN ui_textarea
     call ta_layout
     mov [rsp + 80], eax         # total visual rows
     mov dword ptr [rbx + TF_scroll], 0
-    call ta_line_h
+    mov rdi, rbx
+    call ta_line_h_of
     mov [rsp + 32], eax         # line h
     M eax, MI_10
     add eax, [rsp]
@@ -1920,6 +2085,13 @@ FN ui_textarea
     cmp dword ptr [rsp + 16], 0
     je 3f
     COLOR r9d, T_ACCENT
+    mov eax, [rbx + TF_ring]    # its owner's colour for the frame (a theme slot + 1)
+    test eax, eax
+    jz 3f
+    cmp eax, T_COUNT
+    ja 3f
+    lea r10, [rip + g_theme]
+    mov r9d, [r10 + rax*4 - 4]
 3:  COLOR eax, T_INPUT
     push rax
     push rax
@@ -1952,7 +2124,7 @@ FN ui_textarea
     add ecx, [rbx + TF_scroll]
     mov eax, 0
     js 42f
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r14 + r12]
     mov rdx, r13
     sub rdx, r12
@@ -1969,7 +2141,7 @@ FN ui_textarea
     mov [rsp + 72], eax
     mov rdi, rax
     call ta_row_bounds
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r14 + rax]
     mov rdx, [rbx + TF_cur]
     sub rdx, rax
@@ -2006,16 +2178,31 @@ FN ui_textarea
     mov [rsp + 36], eax
     test r15, r15
     jnz 6f
-    # placeholder
-    mov r8, [rsp + 24]
-    test r8, r8
+    # placeholder: its first line, with "…" at a character's end when it is wider than the box
+    mov rdi, [rsp + 24]
+    test rdi, rdi
     jz .Lta_caret
-    lea rdi, [rip + g_face_ui]
+    call strlen
+    mov [rsp + 84], eax
+    call ta_face
+    mov eax, [rsp + 32]         # its baseline, centered in the line's height
+    sub eax, [rdi + FACE_ascent]
+    sub eax, [rdi + FACE_descent]
+    sar eax, 1
+    add eax, [rsp + 40]
+    add eax, [rdi + FACE_ascent]
+    mov edx, eax
+    mov eax, [rsp + 8]          # the room inside: the text's own padding on both sides
+    sub eax, [rip + g_mt + 4*MI_10]
+    sub eax, [rip + g_mt + 4*MI_10]
     mov esi, [rsp + 36]
-    mov edx, [rsp + 40]
-    mov ecx, [rsp + 32]
+    mov rcx, [rsp + 24]
+    mov r8d, [rsp + 84]
     COLOR r9d, T_MUTED
-    call ui_text_c
+    push rax
+    push rax
+    call text_draw_fit
+    add rsp, 16
     jmp .Lta_caret
 6:  mov rdi, rbx
     call tf_sel
@@ -2047,7 +2234,7 @@ FN ui_textarea
     ja 8f
     cmp rax, r12
     cmovb rax, r12
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r14 + r12]
     mov rdx, rax
     sub rdx, r12
@@ -2056,7 +2243,7 @@ FN ui_textarea
     mov rdx, [rsp + 64]
     cmp rdx, r13
     cmova rdx, r13
-    lea rdi, [rip + g_face_ui]
+    call ta_face
     lea rsi, [r14 + r12]
     sub rdx, r12
     call text_width
@@ -2066,7 +2253,8 @@ FN ui_textarea
     jae 71f
     cmp byte ptr [r14 + r13], 10
     jne 71f
-    add eax, [rip + g_face_ui + FACE_cellw]
+    call ta_face
+    add eax, [rdi + FACE_cellw]
 71: sub eax, [rsp + 88]
     jle 8f
     mov edx, eax
@@ -2079,7 +2267,9 @@ FN ui_textarea
 8:  mov r9, r13
     sub r9, r12
     jz 81f
-    lea rdi, [rip + g_face_ui]
+    cmp qword ptr [rbx + TF_paint], 0
+    jne .Lta_paint              # a field with painted ranges (TF_paint) draws its rows by parts
+    call ta_face
     mov esi, [rsp + 36]
     mov edx, [rsp + 76]
     mov ecx, [rsp + 32]
@@ -2089,12 +2279,23 @@ FN ui_textarea
     push rax
     call ui_text_v
     add rsp, 16
-81: cmp r13, r15
+81:
+.Lta_row_done:
+    cmp r13, r15
     jae .Lta_caret
     inc dword ptr [rsp + 48]
     mov eax, [rsp + 32]
     add [rsp + 76], eax
     jmp .Lta_line
+.Lta_paint:
+    mov rdi, rbx
+    mov esi, [rsp + 36]
+    mov edx, [rsp + 76]
+    mov ecx, [rsp + 32]
+    mov r8, r12
+    mov r9, r13
+    call ta_paint_row
+    jmp .Lta_row_done
 .Lta_caret:
     cmp dword ptr [rsp + 16], 0
     je 9f
@@ -2118,6 +2319,10 @@ f_100: .float 100.0
 f_min_scale: .float 0.5
 f_big: .float 1.55
 f_huge: .float 3.4
+rainbow_dark:                   # PAINT_RAINBOW: the extension's --app-ultrathink-rainbow, dark and light
+    .long 0xffeb5f57, 0xfff58b57, 0xfffac35f, 0xff91c882, 0xff82aadc, 0xff9b82c8, 0xffc882b4
+rainbow_light:
+    .long 0xffc8322d, 0xffcd5f1e, 0xffa57800, 0xff2d823c, 0xff2864b9, 0xff5a41aa, 0xffa53c82
 # logical sizes for MI_* indices
 metric_values:
     .long 1, 2, 3, 4, 6, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48

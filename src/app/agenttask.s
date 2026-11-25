@@ -1227,11 +1227,12 @@ FN agtask_click
     call shown
     test r12, r12
     jz 8f
-    cmp r12d, eax
+    mov ecx, eax                # (the whole number: one past 32 bits is no line)
+    cmp r12, rcx
     ja 8f
     test edx, edx
     jz 1f
-    cmp r12d, AK_LINES + 1
+    cmp r12, AK_LINES + 1
     je 8f
 1:  lea rax, [rip + tk_idx]
     movsxd rsi, dword ptr [rax + r12*4 - 4]

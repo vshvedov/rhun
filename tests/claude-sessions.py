@@ -352,13 +352,13 @@ class Lifetimes(ListCase):
         self.open_list()
         self.command('agent-list new-group')
         self.command('key Return')
-        # 1280x800, the panel alone at x 900 to 1280: its header to y 80, then the group's header (32), Ungrouped
-        # (32), then rows of 56: Bottom's at 200 to 256
+        # 1280x800, the panel alone at x 900 to 1280: its header to y 80, Account & usage (24, row 5.14), then the
+        # group's header (32), Ungrouped (32), then rows of 56: Bottom's at 224 to 280
         self.assertEqual(self.rows(), ['Top', 'Bottom'])
-        self.command('move 1100 228')
+        self.command('move 1100 252')
         self.command('down')
-        self.command('move 1100 180')
-        self.command('move 1100 96')
+        self.command('move 1100 204')
+        self.command('move 1100 120')
         self.command('up')
         self.assertEqual([re.sub(r' kind=.*', '', l) for l in self.listed()[1:4]],
                          ['group New group (1)', '  row Bottom', 'ungrouped (1)'])

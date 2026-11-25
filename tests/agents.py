@@ -498,7 +498,7 @@ class CodexDiscovery(unittest.TestCase):
         config.write_text('[updates]\ncheck = false\n[git]\nenabled = false\n'
                           '[ui]\nagents_panel = true\nagents_width = 240\n')
         script = self.home / 'commands.rsc'
-        script.write_text('wait-agents\nmove 1190 118\nwait 650\nprint-tip\nquit\n', encoding='utf-8')
+        script.write_text('wait-agents\nmove 1190 142\nwait 650\nprint-tip\nquit\n', encoding='utf-8')   # (under Account & usage, 24 px)
         result = subprocess.run([str(EXE), str(self.project), '--headless', '1280x800',
                                  '--scale', '1', '--script', str(script)], env=self.env,
                                 capture_output=True, timeout=20)
@@ -1233,7 +1233,8 @@ class CodexDiscovery(unittest.TestCase):
                         title('Full transcript title') + long_message)
         self.assertEqual(self.worker()[-1][2][0]['title'], 'Prefix title')
         script = self.home / 'commands.rsc'
-        script.write_text('wait-agents\nclick 1000 100\nclick 922 60\n'
+        # (the first row is under the list's Account & usage, 24 px)
+        script.write_text('wait-agents\nclick 1000 130\nclick 922 60\n'
                           'click 1258 60\nwait-agents\nprint-agents\nprint-project\n'
                           'wait 2000\nclick 1258 60\nwait-agents\nprint-agents\n' +
                           ('print-agents 1\n' if replace else '') + 'quit\n')
@@ -1306,7 +1307,7 @@ class CodexDiscovery(unittest.TestCase):
                                           'customTitle': 'Known custom title'}) + '\n' + message)
         self.assertEqual(self.worker()[-1][2][0]['title'], '')
         script = self.home / 'commands.rsc'
-        script.write_text('wait-agents\nclick 1000 100\nclick 922 60\n'
+        script.write_text('wait-agents\nclick 1000 130\nclick 922 60\n'
                           'print-agents\nprint-project\nwait 1500\n'
                           'click 1258 60\nwait-agents\nprint-agents\nquit\n')
         process = subprocess.Popen([str(EXE), str(self.project), '--headless', '1280x800',

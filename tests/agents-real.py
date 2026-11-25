@@ -219,7 +219,7 @@ def resume(project, folder, env, reference):
     before, after = folder / 'thread-before.ppm', folder / 'thread-after.ppm'
     script = folder / 'commands.rsc'
     script.write_text('cmd focus_agents\nwait-agents\n' + f'shot {listing}\n' +
-                      'click 1000 100\n' +
+                      'click 1000 130\n' +
                       f'shot {before}\nprint-project\n' +
                       'wait 11000\nwait-agents\n' + f'shot {after}\nclick 922 60\n' +
                       'print-agents-page\nprint-agents\nquit\n')

@@ -216,6 +216,19 @@ class StatusTest(ClaudeDialogCase):
         self.assertEqual(len(self.starts()), 1)
         self.assertEqual(self.prompts(), [])
 
+    def test_a_start_that_fails_at_once_shows_its_error(self):
+        self.start('[claude]\nexecutable = /nonexistent/claude\n')
+        self.command('cmd focus_agents')
+        self.command('agent-new claude')
+        self.command('agent-dialog status')                                 # the start fails before it waits
+        head = self.until_state('error')
+        self.assertEqual(head['dialog'], 'status')
+        self.assertEqual(self.body()[0], 'msg Claude Code was not found. Install it, or set its path in '
+                                         'Settings > Claude Code.')
+        self.command('key Escape')                                          # claude_dlg2.s's too
+        self.command('agent-dialog mcp')
+        self.assertEqual(self.until_state('error')['dialog'], 'mcp')
+
     def test_loading(self):
         self.draft(env={'FAKE_CLAUDE_DIALOG_MS': '1500'})
         self.command('agent-dialog status')

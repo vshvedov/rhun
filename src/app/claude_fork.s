@@ -1166,10 +1166,17 @@ ask:
     je 3f
     cmp eax, ALS_HELD
     je 3f
+    mov [rip + fd_pend], r12     # waiting already: a start that fails at once shows its error (agentdlg_ended)
+    mov rdi, rbx
+    call agentdlg_pend
     mov rdi, [rbx + AL_as]
     call agent_run
     mov rdi, [rip + fd_as]
+    test rdi, rdi
+    jz 9f
     call agent_live
+    test rax, rax
+    jz 9f
     mov rbx, rax
     mov rdi, rax
     call is_up

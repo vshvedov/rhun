@@ -1038,8 +1038,7 @@ run_edit:
     EPILOGUE
 
 # last_dest() -> rax the add page's first destination: the place the card or this page saved to last, when
-#   it is the project's settings file (local, project), else local (the user's own file is never preselected:
-#   it is written only on a pick of it each time)
+#   it is a settings file (local, user, project), else local
 last_dest:
     PROLOGUE
     mov edi, AG_CLAUDE
@@ -1056,10 +1055,8 @@ last_dest:
     jnz 9f
     inc r12d
     jmp 1b
-9:  cmp r12d, 1                 # (userSettings: dest_ids' second)
-    jne 10f
 8:  xor r12d, r12d
-10: mov eax, r12d
+9:  mov eax, r12d
     EPILOGUE
 
 # keep_dest(cstr): the project's remembered place (agentcfg's, which the permission card shares)

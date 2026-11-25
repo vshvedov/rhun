@@ -5,7 +5,7 @@ tests/claude-chat.py for its cases: every rhun gets its own HOME and XDG folders
 CLAUDE* or ANTHROPIC* variables, and a config whose [claude] section starts the fake. Rules a test saves
 go to destination session, or to localSettings and projectSettings inside its temporary project (the
 fake writes them under the project's .claude folder): never the user's own. The fake's Claude folder is
-the test's HOME, so even a userSettings rule would land there; no test here sends one."""
+the test's HOME (and CLAUDE_CONFIG_DIR is not set), so a userSettings rule lands there, never in ~/.claude."""
 import importlib.util
 import json
 from pathlib import Path
@@ -172,50 +172,48 @@ class PermissionCardTest(CardCase):
         self.assertEqual([u['destination'] for u in answer['updatedPermissions']], ['session'])
         self.assertFalse((self.project / '.claude').exists())
 
-    def test_an_invalid_remembered_place_falls_back_to_session(self):
+    def test_an_invalid_remembered_place_is_the_suggestions_own(self):
+        """As the extension's localStorage value outside its four places, which it reads as none."""
         self.start()
         self.chat('hello')
         self.command('agent-cfg-set dest bogusSettings')
         self.command('agent-timing card=0')
         self.command('agent-prompt tool')
         self.command('wait-agent waiting')
-        self.assertEqual(self.head()['dest'], 'session')
-        self.assertEqual(self.buttons()[1], 'Yes, allow touch approved.txt for [this session]')
+        self.assertEqual(self.head()['dest'], 'localSettings')
+        self.assertEqual(self.buttons()[1], f'Yes, allow touch approved.txt for [{LOCAL}]')
+
+    def test_a_remembered_all_projects_is_the_first_place(self):
+        """The extension keeps every pick, "all projects" too: the next card opens on it and its rule button
+        saves to the user's settings (the test's HOME/.claude/settings.json, written by the fake)."""
+        self.ask('tool')
+        self.keys('Down', 'Right')                  # all projects
+        self.keys('3')                              # No
+        self.command('wait-agent ready')
+        self.command('agent-prompt tool touch again.txt')
+        self.command('wait-agent waiting')
+        self.assertEqual(self.head()['dest'], 'userSettings')
+        self.assertEqual(self.buttons()[1], 'Yes, allow touch again.txt for [all projects]')
         self.command('agent-card 2')
-        answer = self.until_answered()[0]
-        self.assertEqual([u['destination'] for u in answer['updatedPermissions']],
-                         ['session', 'session', 'session'])
+        answer = self.until_answered(2)[-1]
+        self.assertEqual([u['destination'] for u in answer['updatedPermissions'] if u['type'] == 'addRules'],
+                         ['userSettings'])
+        user = json.loads((self.work / '.claude' / 'settings.json').read_text())
+        self.assertIn('Bash(touch again.txt)', user['permissions']['allow'])
 
     def test_the_place_is_remembered(self):
         self.ask('tool')
-        self.keys('Down', 'Right', 'Right')         # this project (shared): kept, though nothing is saved here
-        self.assertEqual(self.head()['dest'], 'projectSettings')
-        self.keys('3')                              # No
-        self.command('wait-agent ready')
-        self.assertIn('dest projectSettings', self.command('print-agent-cfg'))
-        self.command('agent-prompt tool touch again.txt')
-        self.command('wait-agent waiting')
-        self.assertEqual(self.head()['dest'], 'projectSettings')
-        self.command('agent-card 3')
-        self.command('wait-agent ready')
-        self.assertEqual([a['behavior'] for a in self.answers()], ['deny', 'deny'])
-
-    def test_all_projects_is_never_preselected(self):
-        """The user's own settings file is written only on a pick of it on that card: a remembered "all
-        projects" opens the next card on this session, and Enter there writes no settings file."""
-        self.ask('tool')
-        self.keys('Down', 'Right')                  # all projects, picked: kept as the project's last
+        self.keys('Down', 'Right')                  # all projects: kept, though nothing is saved here
         self.assertEqual(self.head()['dest'], 'userSettings')
         self.keys('3')                              # No
         self.command('wait-agent ready')
         self.assertIn('dest userSettings', self.command('print-agent-cfg'))
         self.command('agent-prompt tool touch again.txt')
         self.command('wait-agent waiting')
-        self.assertEqual(self.head()['dest'], 'session')
-        self.command('agent-card 2')                # the rule button
-        answer = self.until_answered(2)[-1]
-        self.assertEqual({u['destination'] for u in answer['updatedPermissions'] if u['type'] != 'setMode'},
-                         {'session'})
+        self.assertEqual(self.head()['dest'], 'userSettings')
+        self.command('agent-card 3')
+        self.command('wait-agent ready')
+        self.assertEqual([a['behavior'] for a in self.answers()], ['deny', 'deny'])
 
     def test_no_rule_button_when_suppressed(self):
         self.ask('nosave')

@@ -75,6 +75,9 @@ class DockerHost(chat.DrivenCase):
         docker('run', '-d', '--platform', 'linux/amd64', '--name', HOST, IMAGE, 'sleep', 'infinity')
         docker('exec', '-i', HOST, 'sh', '-c', 'cat > /usr/local/bin/claude && chmod 755 /usr/local/bin/claude',
                input=FAKE.read_bytes())
+        # the module the fake imports from its own folder
+        docker('exec', '-i', HOST, 'sh', '-c', 'cat > /usr/local/bin/fake_claude_config.py',
+               input=(FAKE.parent / 'fake_claude_config.py').read_bytes())
         sh('mkdir -p %s/src && printf "hello\\n" > %s/a.txt' % (PROJ, PROJ))
 
     @classmethod
@@ -181,7 +184,7 @@ class DockerHost(chat.DrivenCase):
 
     def test_claude_in_a_usual_place_of_the_host(self):
         # not on the host's PATH, in ~/.local/bin as its installer puts it
-        sh('mkdir -p /root/.local/bin && cp /usr/local/bin/claude /root/.local/bin/claude && '
+        sh('mkdir -p /root/.local/bin && cp /usr/local/bin/claude /usr/local/bin/fake_claude_config.py /root/.local/bin/ && '
            'mv /usr/local/bin/claude /usr/local/bin/claude.away')
         try:
             self.start()

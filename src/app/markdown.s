@@ -5769,7 +5769,11 @@ flow:
     cmp ecx, 0xf0
     jb 34f
     inc eax
-34: lea r15d, [r14 + rax]
+34: mov ecx, r15d               # never past the word (a lead byte cut off at its end)
+    sub ecx, r14d
+    cmp eax, ecx
+    cmova eax, ecx
+    lea r15d, [r14 + rax]
     mov rdi, [rsp + 16]
     mov rsi, [rsp + 24]
     add rsi, r14

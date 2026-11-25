@@ -113,6 +113,7 @@ csb: .zero SB_SIZE              # c2_clean's
 esb: .zero SB_SIZE              # c2_errout's
 asb: .zero SB_SIZE              # a run's arguments, NUL-separated
 aoff: .zero 8 * ARGS_MAX        # their offsets in asb
+a_over: .quad 0                 # 1: an argument did not fit (c2_run refuses)
 an: .quad 0                     # their count
 .globl c2_as
 c2_as: .quad 0                  # the open dialog's conversation
@@ -122,6 +123,8 @@ c2_gen: .quad 0                 # the dialog's generation (a run's end for an ol
 run_pid: .quad 0                # the run's process, 0 none
 run_gen: .quad 0
 run_what: .quad 0
+pend_gen: .quad 0               # a run asked while a closed dialog's still went: its dialog's generation (0
+pend_what: .quad 0              #   none), what; it starts when that one ends (its arguments kept in asb, c2_in)
 run_open: .long 0               # pipes still open (2: stdout and stderr)
 run_in_w: .long 0               # run_fd_in is watched (POLLOUT)
 .p2align 3
@@ -904,6 +907,7 @@ FN c2_shown
 # FN c2_args(): the arguments emptied; c2_arg_c(cstr), c2_arg_n(ptr, len): one more
 FN c2_args
     mov qword ptr [rip + an], 0
+    mov qword ptr [rip + a_over], 0
     lea rdi, [rip + asb]
     jmp wipe
 FN c2_arg_c
@@ -917,8 +921,10 @@ FN c2_arg_n
     mov r12, rsi
     mov rax, [rip + an]
     cmp rax, ARGS_MAX
-    jae 9f
-    mov rcx, [rip + asb + SB_len]
+    jb 1f
+    mov qword ptr [rip + a_over], 1 # one too many: the run is refused (never one with arguments cut off)
+    jmp 9f
+1:  mov rcx, [rip + asb + SB_len]
     lea rdx, [rip + aoff]
     mov [rdx + rax*8], rcx
     inc qword ptr [rip + an]
@@ -931,13 +937,24 @@ FN c2_arg_n
     call sb_push_byte
 9:  EPILOGUE
 
-# FN c2_run(what) -> eax 1 when it runs: claude with the arguments made (c2_args ...); none may run already
+# FN c2_run(what) -> eax 1 when it runs: claude with the arguments made (c2_args ...); none of this dialog's may
+#   run already. One a closed dialog left still going (a write goes on to its end): this one runs after it
 FN c2_run
     PROLOGUE 16+8*(ARGS_MAX+16)
     mov [rsp], rdi
     xor eax, eax
+    cmp qword ptr [rip + a_over], 0
+    jne .Lr_none
     cmp qword ptr [rip + run_pid], 0
-    jne 9f
+    je 0f
+    mov rcx, [rip + c2_gen]
+    cmp [rip + run_gen], rcx
+    je 9f
+    mov [rip + pend_gen], rcx
+    mov [rip + pend_what], rdi
+    mov eax, 1
+    jmp 9f
+0:
     mov rdi, [rip + c2_as]
     test rdi, rdi
     jz 9f
@@ -1239,7 +1256,32 @@ run_end:
     mov rsi, rbx
     call [rax + M_RAN]
     mov dword ptr [rip + g_dirty], 1
-9:  EPILOGUE
+9:  mov rax, [rip + pend_gen]   # a run that waited for this one: now, when its dialog still shows
+    test rax, rax
+    jz 10f
+    mov qword ptr [rip + pend_gen], 0
+    cmp qword ptr [rip + run_pid], 0
+    jne 10f                     # (M_RAN started one of its own)
+    cmp rax, [rip + c2_gen]
+    jne 11f
+    mov rdi, [rip + pend_what]
+    call c2_run
+    test eax, eax
+    jnz 10f
+    call mod_row                # it could not start: its end, a failure
+    test rax, rax
+    jz 10f
+    mov qword ptr [rip + c2_busy], 0
+    mov rdi, [rip + pend_what]
+    mov esi, 1
+    call [rax + M_RAN]
+    mov dword ptr [rip + g_dirty], 1
+    jmp 10f
+11: lea rdi, [rip + asb]        # its dialog went: its arguments go
+    call wipe
+    lea rdi, [rip + c2_in]
+    call wipe
+10: EPILOGUE
 
 # FN c2_later(ms): the module's M_TICK in that many ms (one at a time: a later call moves it)
 FN c2_later

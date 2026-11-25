@@ -765,7 +765,14 @@ class TerminalModeTest(BridgeCase):
         self.until(lambda: len(self.terminals()) == 1, 'a terminal')
         self.command(f'open {self.project / "a.txt"}')     # the editor has the keys (a terminal's program has them there)
         self.command(f'key {MOD}+Escape')
-        self.until(lambda: len(self.terminals()) == 2, 'a second terminal: one each time, as the extension')
+        time.sleep(0.5)
+        self.assertEqual(len(self.terminals()), 1)      # the running claude is shown again, not a second one
+        self.assertIn('focus=%d ' % 8, self.command('print-state'))      # FOCUS_TERMINAL
+        self.command(f'open {self.project / "a.txt"}')
+        self.command('cmd kill_terminal')               # its tab closed: the next press starts a new one
+        self.until(lambda: len(self.terminals()) == 0, 'the tab closed')
+        self.command(f'key {MOD}+Escape')
+        self.until(lambda: len(self.terminals()) == 1, 'a new terminal')
 
     def test_without_it_the_key_moves_the_keyboard_to_the_box_and_back(self):
         self.start('[agents]\nclaude = false\ncodex = false\ngrok = false\nopencode = false\n')

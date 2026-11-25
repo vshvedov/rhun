@@ -8,11 +8,16 @@
 #   cmd_claude_open_terminal    Claude: Open in Terminal: claude ([claude] executable, else claude on the PATH)
 #                               in a new terminal tab named CLAUDE_CODE_TERMINAL_TITLE or "Claude Code", in the
 #                               project, with the keys; its environment is every terminal's (the bridge's port)
-#   cmd_agents_focus_input      Ctrl+Esc: the terminal (use_terminal); else the chat's side, agentctx.s's
-#                               agctx_focus_input (the box, the selection's mention)
+#   cmd_agents_focus_input      Ctrl+Esc: the terminal (use_terminal): the claude this command started last when
+#                               its program still runs (shown, with the keys), else a new one; else the chat's
+#                               side, agentctx.s's agctx_focus_input (the box, the selection's mention)
 #   cmd_claude_mention_terminal Ctrl+Alt+K: at_mentioned to the connected claude (the file, its selected lines),
 #                               then the terminal has the keys; with none connected, a toast says so
 .include "rhun.inc"
+
+.bss
+.p2align 3
+ct_term: .quad 0                # the TERM cmd_claude_open_terminal started last (0: none)
 
 .text
 
@@ -25,8 +30,24 @@ FN cmd_agents_open
 # FN cmd_agents_focus_input()
 FN cmd_agents_focus_input
     cmp dword ptr [rip + cfg_claude_use_terminal], 0
-    jne cmd_claude_open_terminal
+    jne 1f
     jmp agctx_focus_input       # the chat's side: the box, the selection's mention (agentctx.s)
+1:  PROLOGUE
+    mov rbx, [rip + ct_term]    # the claude started last, still running: shown, with the keys
+    test rbx, rbx
+    jz 2f
+    mov rdi, rbx
+    call term_state
+    test eax, eax
+    jnz 2f
+    mov rdi, rbx
+    mov esi, 1
+    call term_reveal
+    test rax, rax
+    jnz 2f
+    EPILOGUE
+2:  call cmd_claude_open_terminal
+    EPILOGUE
 
 # FN cmd_claude_open_terminal()
 FN cmd_claude_open_terminal
@@ -62,7 +83,8 @@ FN cmd_claude_open_terminal
     lea rdi, [rip + .Lt_busy]
     call app_toast
     EPILOGUE
-4:  mov dword ptr [rip + g_panel_cur], -1   # the panel shows its terminals
+4:  mov [rip + ct_term], rax
+    mov dword ptr [rip + g_panel_cur], -1   # the panel shows its terminals
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 

@@ -2482,16 +2482,15 @@ class SeamWordsTest(unittest.TestCase):
             'claude_fork_dir': {'fork_copy'},
             'claude_transcript': {'new_as'},
             '.Lk_claude': {'kind_names'},
+            'claude_index_envp': {'agent_drv_index_envp'},  # review 3: discovery's, through the driver layer
+            'claude_dir_moved': {'agent_drv_dir_moved'},
         },
         'agents.s': {
             '.Lclaude_name': {'agent_badge', 'agents_dump'},
-            'claude_dir_moved': {'agents_tick'},
-            'claude_index_envp': {'index_start'},
         },
         'agentext.s': {
-            'AG_CLAUDE': {'agentext_list_buttons', 'agentext_remote_line'},
+            'AG_CLAUDE': {'agentext_remote_line'},
             'cfg_claude_chat': {'agentext_remote_line'},
-            '.Lph_claude': {'agentext_bottom_draw'},
         },
     }
     # file -> the string definitions whose text may name Claude (besides those of the names above)

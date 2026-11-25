@@ -43,6 +43,7 @@
 .equ IGS_FAILED, 4
 .equ IGS_NOGIT, 5
 .equ IGS_NOREPO, 6
+.equ IGS_REPO, 7                # a repository above it, git not asked yet (the walk up done once)
 .equ IGW_EXCLUDE, 0             # agctx_ignored's reasons (print-agent-context why=)
 .equ IGW_GIT, 1
 .equ IGW_PAUSED, 2
@@ -88,6 +89,7 @@ ig_next: .quad 0                # the slot the next new file takes
 ig_serial: .quad 0
 ig_ver: .quad 0                 # git_files_gen the table is for
 checks: .quad 0                 # git jobs started (print-agent-context checks=)
+walks: .quad 0                  # walks up to a repository (print-agent-context walks=)
 stash: .zero SB_SIZE            # a mention waiting for its box
 stash_until: .quad 0
 wsb: .zero SB_SIZE
@@ -697,14 +699,21 @@ FN agctx_ignored
     mov rdi, [rip + o_hpath]
     call ig_find
     test rax, rax
-    jnz .Lig_known
+    jz 31f
+    cmp dword ptr [rax + IG_state], IGS_REPO
+    je 4f
+    jmp .Lig_known
+31: inc qword ptr [rip + walks]
     call repo_of                # no repository above it: nothing to ask (kept, no process)
     test eax, eax
-    jnz 4f
+    jnz 32f
     mov rdi, [rip + o_hpath]
     call ig_new
     mov dword ptr [rax + IG_state], IGS_NOREPO
     jmp .Lig_known
+32: mov rdi, [rip + o_hpath]    # one: kept, not walked again on every draw until git is asked
+    call ig_new
+    mov dword ptr [rax + IG_state], IGS_REPO
 4:  cmp dword ptr [rip + g_git_paused], 0
     je 5f
     mov eax, 1
@@ -717,9 +726,23 @@ FN agctx_ignored
     mov eax, 1
     mov edx, IGW_UNASKED
     EPILOGUE
-6:  mov rdi, [rip + o_hpath]    # git check-ignore -q -- PATH, in the repository's folder
+6:  call repo_of                # git check-ignore -q -- PATH, in the repository's folder (wsb)
+    mov r12d, eax
+    mov rdi, [rip + o_hpath]
+    call ig_find
+    test rax, rax
+    jnz 61f
+    mov rdi, [rip + o_hpath]
     call ig_new
-    mov rbx, rax
+61: mov rbx, rax
+    test r12d, r12d
+    jnz 62f
+    mov dword ptr [rbx + IG_state], IGS_NOREPO  # (its folder went meanwhile)
+    jmp .Lig_known
+62: mov dword ptr [rbx + IG_state], IGS_RUNNING
+    inc qword ptr [rip + ig_serial]             # (a late answer to an earlier ask is not this one's)
+    mov rax, [rip + ig_serial]
+    mov [rbx + IG_serial], rax
     call time_ms
     mov [rbx + IG_t0], rax
     mov edi, 16
@@ -1398,7 +1421,7 @@ dismissed:
     EPILOGUE
 
 # FN agctx_dump(sb): print-agent-context: "chip=0|1 label=L file=PATH lines=A-B ignored=0|1|? why=W checks=N
-#   dismissed=0|1 sent=0|1 stash=0|1" for the box's conversation
+#   walks=N dismissed=0|1 sent=0|1 stash=0|1" for the box's conversation
 FN agctx_dump
     PROLOGUE 16
     mov rbx, rdi
@@ -1483,6 +1506,12 @@ FN agctx_dump
     mov rsi, [rip + checks]
     call sb_push_u64
     mov rdi, rbx
+    lea rsi, [rip + .Ld_walks]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [rip + walks]
+    call sb_push_u64
+    mov rdi, rbx
     lea rsi, [rip + .Ld_dismissed]
     call sb_push_cstr
     mov rdi, r12
@@ -1558,6 +1587,7 @@ ph_sb: .zero SB_SIZE
 .Ld_ignored: .asciz " ignored="
 .Ld_why: .asciz " why="
 .Ld_checks: .asciz " checks="
+.Ld_walks: .asciz " walks="
 .Ld_dismissed: .asciz " dismissed="
 .Ld_sent: .asciz " sent="
 .Ld_stash: .asciz " stash="

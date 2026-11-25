@@ -730,6 +730,23 @@ class ContextTest(ContextCase):
         self.until(lambda: self.ctx()['why'] in ('git', '-'), 'the check', 10)
         self.assertEqual(self.ctx()['checks'], '1')
 
+    def test_the_repository_is_looked_for_once_a_file(self):
+        """Review 2 finding 6: while git may not be asked yet (nothing typed), the chip's draw does not walk the
+        file's folders up to the repository on every frame: once a file (print-agent-context walks=)."""
+        self.git_project()
+        self.put('a.py', LINES)
+        self.start(extra=GIT_ON)
+        self.chat('hello')
+        self.open_file()
+        self.select_lines(2)
+        first = int(self.ctx()['walks'])
+        for _ in range(10):
+            self.command('wait 20')
+            self.assertEqual(self.ctx()['why'], 'unasked')
+        self.assertEqual(int(self.ctx()['walks']), first)
+        self.assertLessEqual(first, 1)
+        self.assertEqual(self.ctx()['checks'], '0')
+
     def test_a_reader_starts_no_git(self):
         self.git_project()
         self.start(extra=GIT_ON)

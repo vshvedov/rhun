@@ -3144,6 +3144,27 @@ class KidsTest(TaskCase):
         self.assertEqual(len(self.kids(rows[4])), 1000)
         self.assertIn(NOT_ON_DISK, self.command('print-toast'))
 
+    def test_a_grandchilds_change_measures_its_parents_again(self):
+        """Review 2 finding 4: a call two levels down changes: the calls above it are measured again (the row
+        is as tall as when every height is measured fresh)."""
+        self.codex()
+        self.tool('p name=Agent: second=Look around in=Look around. flags=512 state=ok')
+        self.tool('c up=p name=Agent: second=Inner in=Inner look. flags=512 state=ok')
+        self.tool('g up=c name=Bash second=Step in=ls state=running')
+        row = self.agents()[0]['row']
+        self.command('agent-row-click %d kids' % (row + 1))
+        self.command('agent-kid-click %d 1 kids' % (row + 1))
+        self.assertIn('call g ', '\n'.join(self.command('print-agent-rows %d 1' % row).splitlines()))
+        h1 = int(self.drawn(row)[0]['height'])
+        self.tool('g desc=%s out=%s state=ok done=1' % (' '.join(['a longer description'] * 30),
+                                                        '\\n'.join('line %d' % i for i in range(8))))
+        h2 = int(self.drawn(row)[0]['height'])
+        self.command('agent-kid-click %d 1 kids' % (row + 1))         # the inner list shut and opened: fresh
+        self.command('agent-kid-click %d 1 kids' % (row + 1))
+        h3 = int(self.drawn(row)[0]['height'])
+        self.assertGreater(h3, h1)
+        self.assertEqual(h2, h3)
+
     def test_kids_rows_fit(self):
         self.codex()
         self.tool('p name=Agent: second=Look around in=Look around the project. flags=512 state=ok')

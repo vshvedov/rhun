@@ -574,8 +574,9 @@ FN agrow_done
     call agrow_touch
     EPILOGUE
 
-# FN agrow_touch(AS*, AT*): it changed: its row is measured again; a top-level call that has todo items now
-#   (the task tools' list comes with their result) is the latest todo row when none later is
+# FN agrow_touch(AS*, AT*): it changed: its row is measured again, and the calls above it (a kept height covers
+#   the list under it); a top-level call that has todo items now (the task tools' list comes with their
+#   result) is the latest todo row when none later is
 FN agrow_touch
     cmp qword ptr [rsi + AT_up], 0
     jne 1f
@@ -587,7 +588,13 @@ FN agrow_touch
     mov [rdi + AS_todo], eax
 1:  mov dword ptr [rsi + AT_h], -1
     inc dword ptr [rsi + AT_rev]
-    movsxd rsi, dword ptr [rsi + AT_row]
+    mov rax, [rsi + AT_up]
+2:  test rax, rax
+    jz 3f
+    mov dword ptr [rax + AT_h], -1
+    mov rax, [rax + AT_up]
+    jmp 2b
+3:  movsxd rsi, dword ptr [rsi + AT_row]
     jmp agents_msg_changed
 
 # FN agrow_summary(AS*, AT*, ptr, len): a top-level row's one-line summary (print-agents, the simple draw)

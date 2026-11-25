@@ -1820,5 +1820,19 @@ class ReviewRulesTest(CardCase):
         self.until_answered()
 
 
+class CardIdsTest(unittest.TestCase):
+    def test_the_dialog_cards_ids_are_inside_the_cards_range(self):
+        """Review 2 finding 9: a dialog card's link and × are ids of the card's range (ID_AGCARD .. +0x4ff), not
+        the popup's rows that follow it, and the question card's preview links end before them."""
+        def equ(path, name):
+            text = (ROOT / path).read_text(encoding='utf-8')
+            return int(re.search(r'^\.equ %s, (0x[0-9a-f]+|\d+)' % name, text, re.M).group(1), 0)
+        card, pop = equ('src/rhun.inc', 'ID_AGCARD'), equ('src/rhun.inc', 'ID_AGPOP')
+        self.assertEqual(pop - card, 0x500)
+        link, close = equ('src/app/agentcard.s', 'DID_LINK'), equ('src/app/agentcard.s', 'DID_CLOSE')
+        self.assertLess(max(link, close), 0x500)
+        self.assertGreater(min(link, close), equ('src/app/agentcard.s', 'QID_LINKS'))
+
+
 if __name__ == '__main__':
     unittest.main()

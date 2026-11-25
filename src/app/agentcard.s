@@ -102,8 +102,8 @@
 .equ LK_DLINK, 8                # its layout items (item_letters): the link
 .equ LK_DCLOSE, 9               #   the ×
 .equ LK_DOFF, 10                #   a greyed button's frame (its label: muted text lines)
-.equ DID_LINK, 0x500            # ID_AGCARD + : the link, the ×
-.equ DID_CLOSE, 0x501
+.equ DID_LINK, 0x4fe            # ID_AGCARD + : the link, the × (the range ends at 0x4ff: ID_AGPOP follows)
+.equ DID_CLOSE, 0x4ff
 .equ DLG_LINES, 24              # a paragraph's lines at most
 .equ LEARN_LEN, 10              # "Learn more"
 # the question card
@@ -113,7 +113,7 @@
 .equ QID_SUBMIT, 0x212
 .equ QID_FIELD, 0x213           #   Other's field
 .equ QID_OPT, 0x220             #   a row (+ the row, 17)
-.equ QID_LINKS, 0x300           #   the preview's links (+ their index, to 0x4ff)
+.equ QID_LINKS, 0x300           #   the preview's links (+ their index, to 0x4fd)
 .equ LK_TAB, 16                 # its layout items (item_letters)
 .equ LK_CLOSE, 17
 .equ LK_OPT, 18                 #   a row (LI_idx: the row; the last one is Other)

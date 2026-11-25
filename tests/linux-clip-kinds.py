@@ -335,6 +335,25 @@ class ClipKinds(unittest.TestCase):
         self.assertEqual((finished.l[0], finished.l[1] & 1), (target, 1))
         self.until(lambda: 'active=a b.txt' in self.command('print-state'))     # nobody took it: opened
 
+    def test_a_list_larger_than_the_input_buffer(self):
+        # 400 KB in one property, more than the X input buffer holds: it is read in pages, not the end of rhun
+        target, status = self.drag(['text/uri-list'])
+        self.send(target, 'XdndDrop', self.win, 0, 0)
+        request = self.event(30).request
+        self.answer(request, self.atom('text/uri-list'), 8,
+                    ('#' + 'x' * 400000 + '\r\nfile://' + str(self.a).replace(' ', '%20') + '\r\n').encode())
+        finished = self.event(33, lambda e: e.client.message_type == self.atom('XdndFinished')).client
+        self.assertEqual((finished.l[0], finished.l[1] & 1), (target, 1))
+        self.until(lambda: 'active=a b.txt' in self.command('print-state'))
+
+    def test_a_refused_conversion_ends_the_drag(self):
+        target, status = self.drag(['text/uri-list'])
+        self.send(target, 'XdndDrop', self.win, 0, 0)
+        self.answer(self.event(30).request, self.atom('text/uri-list'), 8, None)
+        finished = self.event(33, lambda e: e.client.message_type == self.atom('XdndFinished')).client
+        self.assertEqual(finished.l[1] & 1, 0)
+        self.until(lambda: self.command('print-drop').startswith('over=0'))
+
     def test_a_drag_of_text_alone_is_refused(self):
         target, status = self.drag(['UTF8_STRING'])
         self.assertEqual(status.l[1] & 1, 0)

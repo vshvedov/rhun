@@ -3228,6 +3228,8 @@ xd_known: .long 0               #   known
 xd_x: .long 0                   # the drag's point in the window
 xd_y: .long 0
 xd_time: .long 0
+xd_off: .long 0                 # where the next GetProperty reads, in 4-byte units (a value read in pages)
+xd_full: .long 0                # the list reached CLIP_FILES_MAX: later pieces are not kept
 .globl xd_px, xd_py
 xd_px: .long 0                  # the origin as the pointer's events show it
 xd_py: .long 0
@@ -3313,6 +3315,8 @@ xd_reset:
     mov dword ptr [rip + xd_get_seq], -1
     mov dword ptr [rip + xd_list_seq], -1
     mov dword ptr [rip + xd_xlate_seq], -1
+    mov dword ptr [rip + xd_off], 0
+    mov dword ptr [rip + xd_full], 0
     lea rdi, [rip + xd_buf]
     call sb_free
     add rsp, 8
@@ -3513,7 +3517,8 @@ FN x_drop_client
     mov eax, 1
     EPILOGUE
 
-# xd_get(): GetProperty of the window's drop property, deleting it (a piece of an INCR transfer, or all of it)
+# xd_get(): GetProperty of the window's drop property from xd_off, a page of XR_PAGE bytes (the input buffer
+#   holds a page's reply, never a whole list), deleting it once the last page is read
 xd_get:
     PROLOGUE 32
     mov rdi, rsp
@@ -3527,7 +3532,9 @@ xd_get:
     mov [rsp + 4], eax
     mov eax, [rip + a_xd_prop]
     mov [rsp + 8], eax
-    mov dword ptr [rsp + 20], CLIP_FILES_MAX / 4
+    mov eax, [rip + xd_off]
+    mov [rsp + 16], eax
+    mov dword ptr [rsp + 20], XR_PAGE / 4
     mov rdi, rsp
     mov esi, 24
     call x_req
@@ -3552,10 +3559,17 @@ FN x_drop_notify
     sub rsp, 8
     cmp dword ptr [rdi + 20], 0
     jne 1f
-    xor edi, edi                # refused: finished, not accepted
+    xor edi, edi                # refused: finished, not accepted, the veil gone
     call xd_finish
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
     jmp 2f
 1:  mov dword ptr [rip + xd_state], XD_GET
+    mov dword ptr [rip + xd_off], 0
     call xd_get
 2:  add rsp, 8
     mov eax, 1
@@ -3592,15 +3606,19 @@ xd_done:
     call mem_free
     EPILOGUE
 
-# xd_take(ptr, len): a piece of the list; past CLIP_FILES_MAX only its whole lines up to there are kept
+# xd_take(ptr, len): a piece of the list; past CLIP_FILES_MAX only its whole lines up to there are kept, and
+#   nothing after (xd_full: a later piece's line would join a cut one)
 xd_take:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
+    cmp dword ptr [rip + xd_full], 0
+    jne 9f
     mov rax, [rip + xd_buf + SB_len]
     add rax, r12
     cmp rax, CLIP_FILES_MAX
     jbe 2f
+    mov dword ptr [rip + xd_full], 1
     mov r12, CLIP_FILES_MAX     # cut, then back to its last line feed
     sub r12, [rip + xd_buf + SB_len]
 1:  test r12, r12
@@ -3647,6 +3665,17 @@ FN x_drop_reply
     call xd_take
     pop rsi
     pop rsi
+    cmp dword ptr [rbx + 12], 0 # bytes after this page: the next page (a full list's whole value ends
+    je 2f                       #   here; an INCR piece is read to its end, which deletes it for the next)
+    cmp dword ptr [rip + xd_full], 0
+    je 1f
+    cmp dword ptr [rip + xd_state], XD_INCR
+    jne 2f
+1:  shr esi, 2
+    add [rip + xd_off], esi
+    call xd_get
+    jmp .Lxdr_yes
+2:  mov dword ptr [rip + xd_off], 0
     cmp dword ptr [rip + xd_state], XD_INCR
     jne 3f                      # whole (what did not fit was cut at a line)
     test esi, esi

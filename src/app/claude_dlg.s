@@ -1892,9 +1892,11 @@ duration_row:
 put_unit_sp:
     push rsi
     push rdx
+    sub rsp, 8                  # (the call's stack aligned)
     lea rdi, [rip + fsb]
     mov esi, ' '
     call sb_push_byte
+    add rsp, 8
     pop rdx
     pop rsi
 put_unit:

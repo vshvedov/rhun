@@ -1755,7 +1755,9 @@ mcp_name_f:
     jz 1f
     push rsi
     push rdi
+    sub rsp, 8                  # (the call's stack aligned)
     call strlen
+    add rsp, 8
     mov rsi, rax
     pop rdi
     pop rdx

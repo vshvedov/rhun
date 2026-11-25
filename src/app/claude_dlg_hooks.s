@@ -346,11 +346,13 @@ badge_of:
 policy_flag:
     push rbx
     push rsi
+    sub rsp, 8                  # (the calls' stack aligned)
     lea rsi, [rip + .Lk_policy]
     call json_get
     mov rdi, rax
-    pop rsi
+    mov rsi, [rsp + 8]
     call c2_jbool
+    add rsp, 16
     pop rbx
     ret
 

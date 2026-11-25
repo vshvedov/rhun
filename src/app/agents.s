@@ -401,7 +401,7 @@ index_start:
     mov rax, [rdx + AS_path]
 1:  mov [rsp + 40], rax
     mov qword ptr [rsp + 48], 0
-    call claude_index_envp      # Claude Code: an env.CLAUDE_CONFIG_DIR set reaches discovery (claudecfg.s)
+    call agent_drv_index_envp   # the drivers' environment for discovery (agent_drv.s)
     mov rsi, rax
     mov rdi, rsp
     xor edx, edx
@@ -3125,7 +3125,7 @@ FN agents_tick
     call time_ms
     mov [rip + last_scan], rax
     call index_dirty
-7:  call claude_dir_moved      # the login environment names another Claude folder: discovery again
+7:  call agent_drv_dir_moved   # a driver's folder moved (the login environment): discovery again
     test eax, eax
     jz 71f
     call agents_scan

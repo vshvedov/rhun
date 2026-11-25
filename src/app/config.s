@@ -1061,7 +1061,7 @@ g_settings:
     SETTING .Ls_agents, autosave, ST_BOOL, cfg_agents_autosave, 0, 1, 1, 0, "Save files before the agent reads or edits them", "An open file with unsaved changes is saved, as Ctrl+S saves it, before the agent reads or edits it."
     # phase 4 task 13: where Agents: Open and new conversations go (agenttab.s)
     SETTING .Ls_agents, location, ST_CHOICE, cfg_agents_location, 0, 1, 1, 0, "Open conversations in", "Where Agents: Open and new conversations show. Follows your last Open in New Tab or Open in Side Panel.", agtab_loc_opts
-    SETTING .Ls_agents, continue_after_restart, ST_BOOL, cfg_agents_continue, 0, 1, 1, 0, "Continue after a restart", "A step Claude was taking when rhun quit goes on when its conversation opens again within an hour."
+    SETTING .Ls_agents, continue_after_restart, ST_BOOL, cfg_agents_continue, 0, 1, 1, 0, "Continue after a restart", "A step the agent was taking when rhun quit goes on when its conversation opens again within an hour."
     # Claude Code's chat; the env.NAME pairs follow the last row (claudecfg.s)
     SETTING .Ls_claude, chat, ST_BOOL, cfg_claude_chat, 0, 1, 1, 0, "Chat with Claude Code", "Talk to Claude Code in the agents panel. rhun runs your installed claude."
     SETTING .Ls_claude, executable, ST_STR, cfg_claude_executable, 0, 0, 0, 0, "Claude Code program", "Path of claude. Empty finds it on your PATH."

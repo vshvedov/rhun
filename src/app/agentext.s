@@ -2098,12 +2098,14 @@ FN agentext_send
     call agatt_drop_auto
     mov rdi, [rsp]
     call agatt_keep
-    mov eax, r14d
-    lea rdi, [rip + .Lsend_refused]
-    cmp eax, SEND_REFUSED
-    je 7f
-    lea rdi, [rip + .Lsend_full]
-    cmp eax, SEND_FULL
+    cmp r14d, SEND_REFUSED
+    jne 71f
+    mov rdi, rbx                # its driver's words: "NAME is still working. ..."
+    call agentside_words
+    mov rdi, [rax + 8*DW_BUSY]
+    jmp 7f
+71: lea rdi, [rip + .Lsend_full]
+    cmp r14d, SEND_FULL
     jne 9f
 7:  call app_toast
     EPILOGUE
@@ -3653,7 +3655,10 @@ FN agentext_bottom_draw
     lea rax, [rip + .Lph_reply]
     cmp dword ptr [rbx + AS_kind], AS_KIND_EXT
     je 4f
-    lea rax, [rip + .Lph_claude]
+    mov rdi, rbx                # its driver's "KEY to focus or unfocus NAME" (agentctx.s)
+    call agent_drv_of
+    mov rdi, rax
+    call agctx_placeholder_e
 4:  cmp qword ptr [rip + in_tf + TF_sb + SB_len], 0
     je 41f
     xor eax, eax                # none over text
@@ -4157,7 +4162,10 @@ FN agentext_list_buttons
     call agentext_new
 3:  sub r13d, [rip + g_pmt + 4*MI_4]
     jmp 1b
-9:  mov edi, AG_CLAUDE          # the built-in driver, leftmost
+9:  call agent_drv_default      # the built-in driver that starts conversations, leftmost
+    test eax, eax
+    jz 10f
+    mov edi, eax
     call agent_drv_for_kind
     test rax, rax
     jz 10f
@@ -4172,7 +4180,8 @@ FN agentext_list_buttons
     sub r13d, [rip + g_pmt + 4*MI_4]
     test edx, edx
     jz 10f
-    mov edi, AG_CLAUDE
+    call agent_drv_default
+    mov edi, eax
     call agentext_new_kind
 10: mov eax, r13d
     EPILOGUE
@@ -4385,17 +4394,10 @@ FN agentext_prompts_gone
 .Lnot_running: .asciz "The agent's extension is not running"
 .Lprompt_failed: .asciz "The agent refused the prompt: "
 .Lprompt_long: .asciz "The prompt is longer than 64 KB"
-.Lsend_refused: .asciz "Claude is still working. Stop it or wait for the reply."
 .Lsend_full: .asciz "Four prompts are already waiting to be sent."
 .Lnew_failed: .asciz "The new conversation could not be started."
 .Lph_reply: .asciz "Reply to the agent (Enter sends, Shift+Enter a new line)"
 .Lph_new: .asciz "Start a conversation"
-# Claude chat phase 5: the extension's placeholder (e) once Ctrl+Esc (Cmd+Esc) exists (claudeterm.s)
-.ifdef MACOS
-.Lph_claude: .asciz "\xe2\x8c\x98 Esc to focus or unfocus Claude"
-.else
-.Lph_claude: .asciz "ctrl esc to focus or unfocus Claude"
-.endif
 .Ld_placeholder: .asciz "placeholder="
 .Lb_send: .asciz "Send"
 .Lrestore_gap: .asciz "\n\n"

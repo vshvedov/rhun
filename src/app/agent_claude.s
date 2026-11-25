@@ -4455,6 +4455,7 @@ cl_words:                       # DW_*: the driver's words in generic places (ph
     .quad .Lw_unfocus, .Lw_mention_refused
     .quad .Lw_seltip                # phase 4 task 8: the selection chip's tip (jFn WV@5793400)
     .quad .Lw_side_empty            # DW_SIDE_EMPTY: a side question without an answer (VNt @5470517)
+    .quad .Lw_busy                  # DW_BUSY: a Send refused while a turn runs
 cl_types:
     .quad .Lv_stream_event, h_stream, .Lv_assistant, h_assistant, .Lv_system, h_system
     .quad .Lv_result, h_result, .Lv_control_request, h_request, .Lv_control_response, h_response
@@ -4559,6 +4560,7 @@ auth_words: .quad .La_w1, .La_w2, .La_w3, .La_w4, 0
 .Lw_mention_refused: .asciz "This path can't be @-mentioned, because Claude Code would read it as a different mention: "
 .Lw_seltip: .asciz "Showing Claude your current file selection"
 .Lw_side_empty: .asciz "Claude didn't return an answer for this side question."
+.Lw_busy: .asciz "Claude is still working. Stop it or wait for the reply."
 .Lt_too_large: .asciz "This message is too large to send: remove an attachment."
 .Lk_message: .asciz "message"
 .Lk_model: .asciz "model"

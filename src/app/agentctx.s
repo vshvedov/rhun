@@ -1602,7 +1602,8 @@ ph_sb: .zero SB_SIZE
 .Lw_off: .asciz "off"
 .Lw_unasked: .asciz "unasked"
 .Lw_side_empty: .asciz "The agent didn't return an answer for this side question."
+.Lw_busy: .asciz "The agent is still working. Stop it or wait for the reply."
 .p2align 3
-generic_words: .quad .Lw_unfocus, .Lw_refused, .Lw_seltip, .Lw_side_empty
+generic_words: .quad .Lw_unfocus, .Lw_refused, .Lw_seltip, .Lw_side_empty, .Lw_busy
 why_words: .quad .Lw_exclude, .Lw_git, .Lw_paused, .Lw_nogit, .Lw_failed, .Lw_slow, .Lw_norepo, .Lw_off
     .quad .Lw_unasked, .Ldash

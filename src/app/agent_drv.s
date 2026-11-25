@@ -127,6 +127,16 @@ FN agent_drv_for_kind
     lea rax, [rip + claude_drv]    # (a remote window's program runs on its host: agent_conn.s)
 1:  ret
 
+# FN agent_drv_index_envp() -> rax the environment the session index's discovery runs with: the built-in
+#   driver's (Claude Code: an env.CLAUDE_CONFIG_DIR set reaches it, claudecfg.s)
+FN agent_drv_index_envp
+    jmp claude_index_envp
+
+# FN agent_drv_dir_moved() -> eax 1 when a built-in driver's folder of sessions moved since asked last (the
+#   login environment names another one): discovery runs again
+FN agent_drv_dir_moved
+    jmp claude_dir_moved
+
 # FN agent_drv_default() -> eax the first built-in kind whose driver is available and starts conversations, 0
 #   none (phase 4 task 13: the status item, a new conversation of no kind)
 FN agent_drv_default

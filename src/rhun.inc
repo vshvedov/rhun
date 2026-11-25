@@ -3480,7 +3480,8 @@ ENDSTRUCT AMD_SIZE
 .equ DW_MENTION_REFUSED, 1
 .equ DW_SELTIP, 2               # phase 4 task 8: the selection chip's tip ("Showing Claude your current file selection")
 .equ DW_SIDE_EMPTY, 3           # a side question with no answer ("Claude didn't return an answer for this side question.")
-.equ DW_COUNT, 4
+.equ DW_BUSY, 4                 # a Send refused while a turn runs ("Claude is still working. ...")
+.equ DW_COUNT, 5
 # MP: one part of a message (by value in AP_parts)
 STRUCT
 F MP_kind, 4            # MPK_*

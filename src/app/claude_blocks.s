@@ -1431,13 +1431,7 @@ ing_user:
     mov rsi, [rsp + 48]
     call push_plain
     jmp 4b
-7:  cmp dword ptr [rip + cb_flags], ING_FILE   # an image, a document: a chip of the prompt
-    jne 4b
-    mov rdi, rbx
-    mov rsi, r15
-    mov rdx, [rsp + 24]
-    call media_chip
-    jmp 4b
+7:  jmp 4b                     # (an image, a document: media_chip's above)
 8:  cmp dword ptr [rip + cb_flags], ING_FILE
     jne 9f
     cmp qword ptr [rsp], 0
@@ -2708,7 +2702,7 @@ place_hash:
 # media_chip(AS*, block, type jv): an image block of a prompt is the chip "[Image]" whose target is its place,
 #   "@OFF:LEN:N:HASH" (the record's line in the session's file, its n-th image, the line's hash: agentimg.s reads
 #   the picture again from it when the line read again is the same; "-" without a place), a document its title,
-#   else "Document"; any other block nothing
+#   else "Document"; any other block nothing. -> eax 1 when it was a chip
 media_chip:
     PROLOGUE
     mov rbx, rdi
@@ -2759,6 +2753,7 @@ media_chip:
     mov rcx, [rip + t3 + SB_len]
     mov r8d, 'i'
     call push_chip
+    mov eax, 1
     EPILOGUE
 1:  mov rdi, r13
     lea rsi, [rip + .Lv_document]
@@ -2783,6 +2778,7 @@ media_chip:
     xor ecx, ecx
     mov r8d, 'd'
     call push_chip
+    mov eax, 1
 9:  EPILOGUE
 
 # tool_pics(AS*, AT*, tool_result block): its image blocks (PICS_MAX at most) as the call's AT_pics: read from

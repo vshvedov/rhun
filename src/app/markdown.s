@@ -125,6 +125,7 @@ F MD_muted, 4           # its text in the muted colour where it would be the tex
 F MD_tint, 4            # the theme slot its text takes where it would be the text colour, 0 none (md_set_tint)
 F MD_mutedpad, 4
 F MD_datafn, 8          # md_set_data_images: fn(link ptr, len) -> a picture's id (agentimg.s), or 0
+F MD_tparse, 8          # MD_text's length once parsed: a layout's own text (list numbers) goes after it
 ENDSTRUCT MD_SIZE
 
 # a footnote definition (MD_fns)
@@ -342,6 +343,8 @@ FN md_new
     call sb_push_byte
 5:  mov rdi, rbx
     call md_parse
+    mov rax, [rbx + MD_text + SB_len]
+    mov [rbx + MD_tparse], rax
     mov rax, rbx
     EPILOGUE
 
@@ -5343,7 +5346,11 @@ FN md_layout
     mov dword ptr [rbx + MD_sel], 0     # the items change: no selection
     mov dword ptr [rbx + MD_drag], 0
     mov qword ptr [rbx + MD_items + VEC_len], 0
-    mov dword ptr [rbx + MD_maxw], 0
+    mov rax, [rbx + MD_tparse]  # the last layout's own text goes (each layout adds its list numbers)
+    cmp rax, [rbx + MD_text + SB_len]
+    ja 3f
+    mov [rbx + MD_text + SB_len], rax
+3:  mov dword ptr [rbx + MD_maxw], 0
     mov dword ptr [rip + lay_y], 0
     xor r12d, r12d              # block
 .Lml_block:

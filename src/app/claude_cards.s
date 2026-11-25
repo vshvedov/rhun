@@ -3374,6 +3374,8 @@ dialog_reply:
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
+    test dword ptr [r12 + AQ_flags], AQF_CLAIMED    # answered already, waiting for Remote Control
+    jnz 6f
     mov r14d, [r13 + CD_chosen]
     test r14d, r14d
     jz 8f
@@ -3404,6 +3406,7 @@ dialog_reply:
     jnz 2f
     or dword ptr [r12 + AQ_flags], AQF_CLAIMED
     mov rdi, r13
+    mov esi, 1
     call rc_card_wait
     mov eax, 1
     EPILOGUE
@@ -3472,25 +3475,31 @@ dialog_reply:
 8:  xor eax, eax
     EPILOGUE
 
-# rc_card_wait(CD*): the offer card while Remote Control turns on: its first button "Turning on Remote Control…",
-#   both greyed (the extension's disabled buttons)
+# rc_card_wait(CD*, wait): wait 1: the offer card while Remote Control turns on: its first button "Turning on
+#   Remote Control…", both greyed (the extension's disabled buttons); 0: as it was made again
 rc_card_wait:
     PROLOGUE
     mov rbx, rdi
+    mov r14d, esi
     xor r12d, r12d
 1:  cmp r12, [rbx + CD_btns + VEC_len]
     jae 9f
     imul r13, r12, CDB_SIZE
     add r13, [rbx + CD_btns + VEC_ptr]
     or dword ptr [r13 + CDB_flags], CDBF_OFF
-    test r12, r12
+    lea r15, [rip + .Lb_rc_turning]
+    test r14d, r14d
+    jnz 11f
+    and dword ptr [r13 + CDB_flags], ~CDBF_OFF
+    lea r15, [rip + .Lb_rc_on]
+11: test r12, r12
     jnz 2f
     mov rdi, [r13 + CDB_label]
     call mem_free
-    lea rdi, [rip + .Lb_rc_turning]
+    mov rdi, r15
     call strlen
     mov rsi, rax
-    lea rdi, [rip + .Lb_rc_turning]
+    mov rdi, r15
     call mem_dup
     mov [r13 + CDB_label], rax
 2:  inc r12
@@ -3519,8 +3528,24 @@ FN claude_rc_settled
     mov rdx, r13
     call dialog_write
     test eax, eax
+    jnz 2f
+    mov rdi, rbx                # not sent (and the request still there): the card as it was, to answer again
+    mov rsi, r12
+    call claude_req_kept
+    test eax, eax
     jz 9f
-    mov rdi, rbx
+    and dword ptr [r12 + AQ_flags], ~AQF_CLAIMED
+    mov rdi, [r12 + AQ_card]
+    test rdi, rdi
+    jz 11f
+    xor esi, esi
+    call rc_card_wait
+11: mov rdi, rbx
+    mov rsi, r12
+    xor edx, edx
+    call claude_req_after
+    jmp 9f
+2:  mov rdi, rbx
     mov rsi, r12
     call claude_req_kept
     test eax, eax

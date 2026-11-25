@@ -4290,7 +4290,7 @@ def remote_control(rid, request):
                 if kind == 'bridgefail' else {'state': 'connected'}
             emit(dict({'type': 'system', 'subtype': 'bridge_state'}, **state, bridge_epoch=1,
                       uuid=str(uuid.uuid4()), session_id=SID))
-        threading.Timer(0.05, later).start()
+        threading.Timer(int(ENV.get('FAKE_CLAUDE_REMOTE_MS', '50')) / 1000, later).start()   # review 3: slower
 
 
 def remote_control_members():

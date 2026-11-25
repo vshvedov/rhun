@@ -469,6 +469,20 @@ class RemoteTest(PanelCase):
         self.assertTrue(self.replied('answered turned_on'), self.thread())
         self.assertEqual(self.state(), 'on')
 
+    def test_offer_waiting_takes_no_second_answer(self):
+        self.panel(env={'FAKE_CLAUDE_REMOTE_MS': '1500'})
+        self.command('agent-timing card=0')
+        self.chat('dialog-rc', wait='waiting')
+        self.command('agent-card 1')
+        self.assertIn('options=Turning on Remote Control\u2026|Not now', self.card())
+        self.command('key Return')                          # greyed: neither a key nor a press answers again
+        self.command('agent-card 1')
+        self.command('agent-card 2')
+        self.command('wait-agent ready')
+        answers = [m for m in self.stdin() if m.get('type') == 'control_response']
+        self.assertEqual(len([m for m in answers if 'turned_on' in json.dumps(m)]), 1, answers)
+        self.assertEqual([m for m in answers if 'declined' in json.dumps(m)], [])
+
     def test_offer_not_now_and_its_own_words(self):
         self.panel()
         self.command('agent-timing card=0')

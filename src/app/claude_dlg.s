@@ -954,9 +954,9 @@ scaled:
 34: add r15d, r10d
 4:  add r15d, [rsp]             # value x 10^digits = mantissa x 10^r15
     mov rax, r14
-5:  test r15d, r15d
+5:  test rax, rax               # zero stays zero
     jz 7f
-    test rax, rax               # zero stays zero
+    test r15d, r15d
     jz 7f
     js 6f
     mov rcx, 1000000000000000

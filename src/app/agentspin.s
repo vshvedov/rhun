@@ -27,6 +27,7 @@
 #   agspin_step()                   one step now, whatever the time (agent-spin-tick)
 #   agspin_dump(sb)                 print-agent-spinner
 #   agspin_set(AS*, cstr or 0, static)   the driver's words in place of a verb (ev_spin); 0 gives the verbs back
+#   agspin_gone(AS*)                a session is freed: the line and the words forget it
 .include "rhun.inc"
 
 .equ SPIN_TICK, 120             # ms a tick (the extension's interval)
@@ -714,6 +715,19 @@ FN agspin_timeout
     EPILOGUE
 8:  mov eax, -1
     EPILOGUE
+
+# FN agspin_gone(AS*): a session is freed: its driver's words go, and the line forgets it (no step reads it)
+FN agspin_gone
+    PROLOGUE
+    mov rbx, rdi
+    xor esi, esi
+    xor edx, edx
+    call agspin_set
+    cmp [rip + sp_as], rbx
+    jne 9f
+    mov qword ptr [rip + sp_as], 0
+    mov dword ptr [rip + sp_on], 0
+9:  EPILOGUE
 
 # FN agspin_tick(): when the tick's time has come and something moving was drawn: a step, the mark cleared,
 #   a frame

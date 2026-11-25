@@ -4947,7 +4947,16 @@ def export_conversation(rid, request):
     respond(rid, {'text': text_, 'default_filename': name})
 
 
-P7C_REQUESTS.update({'rewind_files': rewind_files, 'export_conversation': export_conversation})
+def rewind_files_late(rid, request):
+    """review 3: FAKE_CLAUDE_REWIND_MS makes a dry run's answer that late."""
+    delay = int(ENV.get('FAKE_CLAUDE_REWIND_MS', '0')) / 1000
+    if delay and request.get('dry_run'):
+        threading.Timer(delay, rewind_files, (rid, request)).start()
+    else:
+        rewind_files(rid, request)
+
+
+P7C_REQUESTS.update({'rewind_files': rewind_files_late, 'export_conversation': export_conversation})
 
 
 def cut_prompt():

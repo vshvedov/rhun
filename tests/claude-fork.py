@@ -159,6 +159,18 @@ class RewindTest(ForkCase):
         self.assertEqual(self.head()['title'], 'Rewind to\u2026')
         self.assertIn('item[2] write a.txt one\t\tjust now', self.body())
 
+    def test_never_mind_during_the_dry_run_stays_on_the_list(self):
+        self.start(self.claude_section('initial_mode = acceptEdits\n'), env={'FAKE_CLAUDE_REWIND_MS': '1000'})
+        self.say('write a.txt one', 'write a.txt two')
+        self.command('agent-prompt /rewind')
+        self.command('agent-dialog-pick 2')
+        self.assertIn('text Checking code changes\u2026', self.body())
+        self.command('agent-dialog-press 2')                # Never mind while it checks
+        time.sleep(1.5)                             # the dry run's answer comes: it is not shown
+        self.command('shot /dev/null')
+        self.assertEqual(self.head()['title'], 'Rewind to\u2026')
+        self.assertIn('item[2] write a.txt one\t\tjust now', self.body())
+
     def test_unchanged_code_offers_the_conversation_only(self):
         self.start(self.claude_section('initial_mode = acceptEdits\n'))
         self.say('hello', 'again')

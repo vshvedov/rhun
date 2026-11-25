@@ -1305,7 +1305,9 @@ fd_act:
     jne 4f
     cmp qword ptr [rip + fd_flow], FL_PICK
     jne 31f
-    call chk_clear              # back to the list
+    mov qword ptr [rip + fd_pend], 0    # back to the list: a dry run asked or due is not waited for
+    call agentdlg_unwait
+    call chk_clear
     call build_list
     jmp 9f
 31: call agentdlg_close

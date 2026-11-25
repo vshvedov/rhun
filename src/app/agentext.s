@@ -2677,6 +2677,9 @@ FN agentext_input_key
     jnz 9f
     cmp dword ptr [rip + g_show_agents], 0
     jne 6f
+    call agtab_hosting          # a conversation tab hosts the view: its box is shown, the panel need not be
+    test eax, eax
+    jnz 6f
     mov dword ptr [rip + g_focus], FOCUS_EDITOR   # the panel was hidden: the editor has the keys
     jmp 9f
 6:  call agentdlg_key           # a dialog over the panel takes the keys first (agentdlg.s)

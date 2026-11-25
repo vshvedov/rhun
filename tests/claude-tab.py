@@ -161,6 +161,14 @@ class ViewTest(TabCase):
         self.assertTrue(self.hosting())
         self.assertEqual([r.split(' ', 1)[1] for r in self.thread()], ['hello', 'ok: hello'])
 
+    def test_a_tab_takes_typing_while_the_panel_is_hidden(self):
+        self.start()
+        self.to_tab()
+        self.command('cmd toggle_agents')                                 # the right panel goes; the tab stays
+        self.assertTrue(self.hosting())
+        self.command('type x')
+        self.assertTrue(self.command('print-agent-input').startswith('input=x '), self.command('print-agent-input'))
+
     def test_the_header_has_no_back_in_a_tab(self):
         self.start()
         self.to_tab()

@@ -6572,9 +6572,10 @@ answers:
     jae 9f
     cmp byte ptr [r12 + r15], '"'
     jne 9f
-    lea rdi, [r12 + r15]        # the question: to its closing quote, before "="
+    lea rdi, [r12 + r15 + 1]    # the question: after its opening quote, to its closing quote before "="
     mov rsi, r13
     sub rsi, r15
+    dec rsi
     lea rdx, [rip + .Lqa]
     mov ecx, 3
     call str_find
@@ -6582,9 +6583,8 @@ answers:
     js 9f
     lea rcx, [r15 + 1]
     mov [rsp], rcx              # the question's start and length
-    lea rcx, [rax - 1]
-    mov [rsp + 8], rcx
-    lea r14, [r15 + rax + 2]    # the answer's opening quote
+    mov [rsp + 8], rax
+    lea r14, [r15 + rax + 3]    # the answer's opening quote
     lea rdi, [r12 + r14]        # its closing quote: before the next ", "Q"=" or at the text's end
     mov rsi, r13
     sub rsi, r14

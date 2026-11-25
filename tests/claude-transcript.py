@@ -1062,6 +1062,14 @@ class HostileTest(ToolCase):
         self.command('agent-row-click %d in' % (c['row'] + 1))
         self.assertIn('value', self.command('print-doc'))
 
+    def test_text_answers_whose_question_starts_with_equals_quote(self):
+        """Review 2 finding 3: answers read from the text alone, a question that begins with '="'."""
+        self.open_seeded([call('q1', 'AskUserQuestion', {'questions': [{'question': '="x'}]}),
+                          result('q1', 'Your questions have been answered: "="x"="y". You can now continue with '
+                                       'these answers in mind.')])
+        q, = self.calls()
+        self.assertIn('="x → y', q['out'])
+
     def test_bidi_and_controls_in_headers(self):
         self.open_seeded([call('b1', 'Bash', {'command': 'ls', 'description': 'a‮b\x1b[31mc\x07d⁦e'})])
         b, = self.calls()

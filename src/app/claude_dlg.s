@@ -942,9 +942,11 @@ scaled:
     sub eax, '0'
     cmp eax, 9
     ja 33f
+    inc rcx
+    cmp r10d, 100000            # (a larger exponent counts as this one: no overflow, no long loop)
+    jae 32b
     imul r10d, r10d, 10
     add r10d, eax
-    inc rcx
     jmp 32b
 33: test r11d, r11d
     jz 34f
@@ -953,6 +955,8 @@ scaled:
 4:  add r15d, [rsp]             # value x 10^digits = mantissa x 10^r15
     mov rax, r14
 5:  test r15d, r15d
+    jz 7f
+    test rax, rax               # zero stays zero
     jz 7f
     js 6f
     mov rcx, 1000000000000000

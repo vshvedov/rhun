@@ -60,6 +60,7 @@
 .equ FOOT_SEL, 7                #   the selection chip, its x (phase 4 task 8)
 .equ FOOT_SELX, 8
 .equ BAND_LINK, 8               # ID_AGBAND + BAND_LINK + kind: a band's link
+.equ FOOT_RC, 9                 #   rows 2.22, 4.14: the Remote Control pill
 
 .data
 fl_force: .long -1              # print-agents-foot every: the extras as a mask (extras), -1 the conversation's
@@ -107,6 +108,11 @@ band_lx: .zero 4 * BK_COUNT
 band_ly: .zero 4 * BK_COUNT
 .p2align 3
 fl_cms: .quad 0                 #   a warm clock's ms left, a cold one's idle ms
+fl_hrc: .long 0                 # rows 2.22, 4.14: the Remote Control pill shows (extras), its x and width (0:
+fl_rx: .long 0                  #   none), as drawn last its centre
+fl_rw: .long 0
+fd_rc: .long 0
+fd_rc_y: .long 0
 csb: .zero SB_SIZE              # the clock's minutes as shown ("Nm")
 fd_mode: .long 0                # as drawn last: the buttons' centres
 fd_mode_y: .long 0
@@ -966,7 +972,10 @@ layout_pass:
     cmp dword ptr [rip + fl_hfast], 0
     je 2f
     sub ecx, eax
-2:  cmp dword ptr [rip + fl_hctx], 0
+2:  cmp dword ptr [rip + fl_hrc], 0     # (rows 2.22, 4.14: the Remote Control pill)
+    je 21f
+    sub ecx, eax
+21: cmp dword ptr [rip + fl_hctx], 0
     je 3f
     sub ecx, eax
 3:  mov [rsp + 24], ecx         # xr1
@@ -1020,6 +1029,9 @@ layout_pass:
     mov [rip + fl_stage], eax
     mov [rip + fl_hfast], eax
     mov [rip + fl_hctx], eax
+    mov [rip + fl_hrc], eax
+    mov [rip + fl_rx], eax
+    mov [rip + fl_rw], eax
     lea rdi, [rip + lsb]
     call sb_clear
     lea rdi, [rip + psb3]
@@ -1106,7 +1118,16 @@ layout_pass:
     cmovg r13d, ecx
     cmp r13d, [rip + fl_row]
     jge .Lly_mode
-9:  cmp dword ptr [rip + fl_hctx], 0
+9:  cmp dword ptr [rip + fl_hrc], 0     # then the Remote Control pill's (rows 2.22, 4.14)
+    je 91f
+    mov dword ptr [rip + fl_hrc], 0
+    add ecx, [rsp + 44]
+    mov r13d, [rsp + 12]
+    cmp r13d, ecx
+    cmovg r13d, ecx
+    cmp r13d, [rip + fl_row]
+    jge .Lly_mode
+91: cmp dword ptr [rip + fl_hctx], 0
     je .Lly_mode
     mov dword ptr [rip + fl_hctx], 0
     add ecx, [rsp + 44]
@@ -1202,13 +1223,22 @@ layout_pass:
     mov [rip + fl_ix], eax
     mov [rip + fl_iw], eax
     mov [rip + fl_cx], eax
+    mov [rip + fl_rx], eax
+    mov [rip + fl_rw], eax
     cmp dword ptr [rip + fl_hfast], 0
     je 16f
     sub ecx, edx
     mov [rip + fl_fx], ecx
     mov [rip + fl_fw], edx
     sub ecx, [rip + g_pmt + 4*MI_4]
-16: mov eax, [rip + fl_cw]
+16: cmp dword ptr [rip + fl_hrc], 0     # rows 2.22, 4.14: the Remote Control pill
+    je 161f
+    sub ecx, edx
+    mov [rip + fl_rx], ecx
+    mov [rip + fl_rw], edx
+    sub ecx, [rip + g_pmt + 4*MI_4]
+161:
+    mov eax, [rip + fl_cw]
     test eax, eax
     jz 17f
     sub ecx, eax
@@ -1233,6 +1263,7 @@ extras:
     mov [rip + fl_hctx], eax
     mov [rip + fl_cstate], eax
     mov [rip + fl_pct], eax
+    mov [rip + fl_hrc], eax
     lea rdi, [rip + csb]
     call sb_clear
     mov eax, [rip + fl_force]
@@ -1261,6 +1292,10 @@ extras:
     setne al
     movzx eax, al
     mov [rip + fl_hfast], eax
+    cmp dword ptr [r12 + AL_rc], RCS_OFF    # rows 2.22, 4.14: Remote Control's pill
+    setne al
+    movzx eax, al
+    mov [rip + fl_hrc], eax
     lea rdi, [r12 + AL_usage]
     call agent_ctx_used
     test edx, edx
@@ -1601,6 +1636,10 @@ FN foot_draw
     mov esi, [rsp]
     mov edx, [rsp + 4]
     call fast_draw
+    mov rdi, rbx                # rows 2.22, 4.14: the Remote Control pill
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    call rc_draw
     mov rdi, rbx                # the context pie
     mov esi, [rsp]
     mov edx, [rsp + 4]
@@ -1884,6 +1923,99 @@ fast_draw:
     mov r8d, r13d
     call tip_note_text
 9:  EPILOGUE
+
+# rc_draw(AS* or 0, x, y): the Remote Control pill while its program's Remote Control is not off (rows 2.22,
+#   4.14; the extension's CFt @5784300, its icon-only form): a cloud in the accent colour while it connects or is
+#   on, muted after an error; its tooltip the driver's (AL_rctip); on, a click opens its URL (AL_rcurl), asked
+#   first. Not drawn: fd_rc 0
+rc_draw:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov [rsp], esi
+    mov [rsp + 4], edx
+    mov dword ptr [rip + fd_rc], 0
+    mov dword ptr [rip + fd_rc_y], 0
+    cmp dword ptr [rip + fl_rw], 0
+    je 9f
+    test rbx, rbx
+    jz 9f
+    mov r15, [rbx + AS_live]
+    test r15, r15
+    jz 9f
+    mov r12d, [rsp]
+    add r12d, [rip + fl_rx]
+    mov edi, ID_AGFOOT + FOOT_RC
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    mov ecx, [rip + fl_rw]
+    mov r8d, [rip + fl_row]
+    call ui_btn
+    mov r13d, eax
+    mov ecx, [rip + fl_rw]
+    shr ecx, 1
+    lea eax, [r12 + rcx]
+    mov [rip + fd_rc], eax
+    mov eax, [rip + fl_row]
+    shr eax, 1
+    add eax, [rsp + 4]
+    mov [rip + fd_rc_y], eax
+    mov eax, [r15 + AL_rc]
+    mov r14d, eax
+    cmp eax, RCS_ON             # a link: lit while hovered
+    jne 1f
+    mov edi, -1                 # (no popup of its own)
+    mov esi, r13d
+    call hover_bg
+    mov edi, r12d
+    mov esi, [rsp + 4]
+    mov edx, [rip + fl_rw]
+    call hover_draw
+1:  PM ecx, MI_16
+    mov esi, [rip + fl_rw]
+    sub esi, ecx
+    sar esi, 1
+    add esi, r12d
+    mov edx, [rip + fl_row]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 4]
+    mov edi, IC_CLOUD
+    COLOR r8d, T_ACCENT
+    cmp r14d, RCS_ERROR
+    jne 2f
+    COLOR r8d, T_MUTED
+2:  call icon_draw
+    mov r9, [r15 + AL_rctip]
+    test r9, r9
+    jz 3f
+    mov edi, ID_AGFOOT + FOOT_RC
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    add edx, [rip + fl_row]
+    mov ecx, [rip + fl_rw]
+    mov r8d, r13d
+    call tip_note_text
+3:  test r13d, UB_CLICK
+    jz 9f
+    cmp r14d, RCS_ON
+    jne 9f
+    mov rdi, [r15 + AL_rcurl]
+    test rdi, rdi
+    jz 9f
+    mov r12, rdi
+    call strlen
+    lea rdi, [rip + .Lrc_who]
+    mov rsi, r12
+    mov rdx, rax
+    call agents_web_link
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# FN foot_rc_at() -> eax x, edx y: the Remote Control pill's centre as drawn last (eax 0: not drawn)
+FN foot_rc_at
+    mov eax, [rip + fd_rc]
+    mov edx, [rip + fd_rc_y]
+    ret
 
 # ctx_draw(AS* or 0, x, y): the context pie where layout put it (none: fl_iw 0): the share in use as a
 #   filled part of a disc; tooltip "N% of context remaining until auto-compact. Click to compact now."
@@ -3082,6 +3214,7 @@ band_tips: .quad .Lt_error, .Lt_warning, .Lt_warning, .Lt_warning, .Lt_notice
 .Lt_h_sp: .asciz "h "
 .Lt_d_sp: .asciz "d "
 .Lt_fast_on: .asciz "Fast mode enabled"
+.Lrc_who: .asciz "Remote Control"
 .Lt_fast_cool: .asciz "Fast mode cooling down"
 .Ld_mode: .asciz "mode="
 .Ld_dash: .asciz "-"

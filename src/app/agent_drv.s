@@ -301,6 +301,12 @@ FN agent_state_set
     call agentdlg_ended
     mov rdi, rbx                # p7c: a side question waiting for it fails (agentside.s)
     call agside_ended
+    mov rdi, rbx                # rows 2.22, 4.14: Remote Control ends with its program
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call ev_remote
     mov rdi, rbx
     mov rax, [rbx + AL_drv]
     call [rax + DRV_ended]
@@ -346,6 +352,10 @@ live_free:
     mov rdi, [rbx + AL_unsent]  # prompts never given back go with their session
     call mem_free
     mov rdi, [rbx + AL_dseen]   # the driver's own block (Claude's record uuids)
+    call mem_free
+    mov rdi, [rbx + AL_rctip]   # rows 2.22, 4.14: Remote Control's pill
+    call mem_free
+    mov rdi, [rbx + AL_rcurl]
     call mem_free
     mov rdi, rbx
     call live_lists_free
@@ -2969,6 +2979,43 @@ FN ev_spin
 FN ev_pill
     mov rdi, [rdi + AL_as]
     jmp agents_pill
+
+# FN ev_remote(al, state RCS_*, tip cstr or 0, url cstr or 0, 0): its program's Remote Control as the driver says
+#   it is now (rows 2.22, 4.14): the footer's pill (agentfoot.s) shows it while it is not off, with that tooltip;
+#   a click on it opens the URL (asked first). Copied; off drops both
+FN ev_remote
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov r13, rdx
+    mov r14, rcx
+    mov [rbx + AL_rc], r12d
+    mov rdi, [rbx + AL_rctip]
+    call mem_free
+    mov qword ptr [rbx + AL_rctip], 0
+    mov rdi, [rbx + AL_rcurl]
+    call mem_free
+    mov qword ptr [rbx + AL_rcurl], 0
+    cmp r12d, RCS_OFF
+    je 9f
+    test r13, r13
+    jz 1f
+    mov rdi, r13
+    call strlen
+    lea rsi, [rax + 1]
+    mov rdi, r13
+    call mem_dup
+    mov [rbx + AL_rctip], rax
+1:  test r14, r14
+    jz 9f
+    mov rdi, r14
+    call strlen
+    lea rsi, [rax + 1]
+    mov rdi, r14
+    call mem_dup
+    mov [rbx + AL_rcurl], rax
+9:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
 
 # FN ev_band(al, kind BK_*, ptr, len): the band of that kind above the box shows the text (ptr 0: it goes);
 #   the text a band the user dismissed had (AL_bandoff, agentfoot.s) keeps it away, another shows it

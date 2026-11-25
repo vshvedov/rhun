@@ -22,7 +22,7 @@ chat = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(chat)
 
 LEVELS = 'low:Low,medium:Medium,high:High'
-DIALOG_KINDS = ['fable_overage_consent_prompt', 'auto_mode_server_fallback']    # the pinned ones (finding 25)
+DIALOG_KINDS = ['fable_overage_consent_prompt', 'auto_mode_server_fallback', 'send_to_project_remote_control_offer']    # the pinned ones (finding 25)
 
 
 class CfgCase(chat.DrivenCase):

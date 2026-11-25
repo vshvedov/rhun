@@ -3314,6 +3314,10 @@ F AL_dwait, 8           #   time_ms the prompts held for its first settings answ
 F AL_dseen, 8           # the driver's own (one mem_alloc'd block, freed with the live record): Claude's
                         #   table of the record uuids the stream gave
 F AL_forkat, 40         # phase 6 (p6b): cstr, a copy's last kept entry (the driver's id), empty: its whole source
+F AL_rc, 4              # rows 2.22, 4.14: its program's Remote Control as the driver said last (RCS_*, ev_remote)
+F AL_rcpad, 4
+F AL_rctip, 8           #   owned cstr: the footer pill's tooltip, or 0
+F AL_rcurl, 8           #   owned cstr: what a click on the pill opens (asked first), or 0
 ENDSTRUCT AL_SIZE
 .equ TE_DONE, 0                 # ev_turn_end's reasons
 .equ TE_ERROR, 1
@@ -3367,6 +3371,7 @@ F AQ_offer, 8           # phase 4 task 11: its proposed change's id in the Revie
 ENDSTRUCT AQ_SIZE
 .equ AQF_NOSAVE, 1              # suppress_always_allow_rule
 .equ AQF_DEFNO, 2               # default_to_no
+.equ AQF_CLAIMED, 4             # a dialog card whose answer waits for something else (Turn on Remote Control)
 .equ AQ_MAX, 32                 # requests waiting at most (AL_reqs); one more gets an error reply
 .equ AQK_PERMISSION, 1
 .equ AQK_QUESTION, 2
@@ -5100,3 +5105,9 @@ ENDSTRUCT SGR_SIZE
 .equ EDS_SAVING, 2      #   its save runs
 .equ EDS_FAILED, 3      #   not saved (read-only, changed on disk, or the save failed)
 # ---- Claude chat phase 4 tasks 9, 10: end ----
+# ---- claude-chat rows 2.22, 4.14 (Remote Control): AL_rc's states (ev_remote, agent_drv.s; the footer's pill) ----
+.equ RCS_OFF, 0                 # off: no pill
+.equ RCS_CONNECTING, 1          # asked, not connected yet
+.equ RCS_ON, 2                  # connected: the pill opens AL_rcurl
+.equ RCS_ERROR, 3               # failed: the pill says why until it is dismissed
+# ---- end rows 2.22, 4.14 ----

@@ -13,11 +13,14 @@
 #   writes Claude Code's user settings; rhun leaves that to Claude Code). The browser chooser is left out:
 #   get_chrome_browsers answers "Claude in Chrome is not connected in this session" while nothing is
 #   connected, and a connected answer was never seen.
-# Remote Control (2.22, /remote-control, /rc): remote_control {enabled} on the running program, then its
-#   system/bridge_state frames {state, detail, failure_kind?} (from the CLI binary's own schema; never
-#   recorded: enabling it publishes the session to the account's claude.ai/code, so it was not tried): the
-#   state shows in a band above the box (connecting, active with its link, error). Nothing is shown as
-#   connected unless the program says so.
+# Remote Control (2.22, 4.14, /remote-control, /rc, the menu's /remote-control): remote_control {enabled} on the
+#   running program, then its system/bridge_state frames {state, detail, failure_kind?} (from the CLI binary's
+#   own schema; never recorded: enabling it publishes the session to the account's claude.ai/code, so it was not
+#   tried). The state is the live record's (ev_remote: AL_rc, so it ends with the program and its record): the
+#   footer's pill shows it (connecting, active with its link, error) as the extension's CFt does. Nothing is
+#   shown as connected unless the program says so. The offer card (send_to_project_remote_control_offer,
+#   claude_cards.s) asks claude_side_rc_offer to turn it on and is answered when the bridge settles
+#   (claude_rc_settled).
 # The hand-off (4.22, 7.4): a command that only works in Claude Code's own terminal interface (/agents) gives
 #   the card "Continue in Terminal to configure agents?" (1 Continue in Terminal, 2 Never mind); Continue
 #   puts `claude /agents` in rhun's terminal prompt (DRV_terminal with claude_term_extra) and the card
@@ -27,15 +30,12 @@
 #   claude_side_action(AL* or 0, act, ptr, len) -> eax   DRV_action's acts from ACT_BTW
 #   claude_side_answer(AL*, control_response record, act, n)   h_response
 #   claude_side_system(AL*, record)                             h_system
+#   claude_side_rc_offer(AL*) -> rax cstr or 0                  the offer card's "Turn on Remote Control"
 #   claude_term_extra: cstr or 0, a word cl_terminal adds after the program (taken once)
 .include "rhun.inc"
 
 .equ HO_ASK, 0                  # the hand-off card's steps
 .equ HO_OPENED, 1
-.equ RC_OFF, 0                  # Remote Control, as the program said last
-.equ RC_ASKED, 1
-.equ RC_ON, 2
-.equ RC_MAX, 32
 
 .bss
 .p2align 3
@@ -46,7 +46,6 @@ csb: .zero SB_SIZE
 side_ptr: .quad 0
 side_len: .quad 0
 side_al: .quad 0
-rc_tab: .zero 16 * RC_MAX       # {AL*, state}
 ho_step: .long 0
 rc_want: .long 0
 
@@ -412,47 +411,28 @@ url_keep:
 
 # ---- Remote Control ----
 
-# rc_slot(AL*) -> rax its {AL*, state} slot (made; the oldest reused past RC_MAX)
-rc_slot:
-    lea rax, [rip + rc_tab]
-    xor ecx, ecx
-1:  cmp [rax], rdi
-    je 9f
-    add rax, 16
-    inc ecx
-    cmp ecx, RC_MAX
-    jb 1b
-    lea rax, [rip + rc_tab]     # a free one
-    xor ecx, ecx
-2:  cmp qword ptr [rax], 0
-    je 3f
-    add rax, 16
-    inc ecx
-    cmp ecx, RC_MAX
-    jb 2b
-    lea rax, [rip + rc_tab]
-3:  mov [rax], rdi
-    mov qword ptr [rax + 8], RC_OFF
-9:  ret
-
-# rc_toggle(AL*): /remote-control: on (remote_control {enabled: true}) unless it is on, then off
+# rc_toggle(AL*): /remote-control, /rc: on (remote_control {enabled: true}) while it is off, else off (enabled:
+#   false: an error shown is dismissed so, as the extension's dismissRemoteControlError toggles)
 rc_toggle:
+    xor esi, esi
+    cmp dword ptr [rdi + AL_rc], RCS_OFF
+    jne rc_set
+    mov esi, 1
+
+# rc_set(AL*, want) -> eax 1 asked: remote_control {enabled: want} on the running program; asked on: the pill
+#   says it connects. No program: the note says so (0)
+rc_set:
     PROLOGUE
     mov rbx, rdi
+    mov r12d, esi
     cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
     jne 7f
     cmp dword ptr [rbx + AL_state], ALS_STARTING
     je 7f
-    call rc_slot
-    mov r12, rax
-    xor r13d, r13d
-    cmp qword ptr [r12 + 8], RC_OFF
-    jne 1f
-    mov r13d, 1
-1:  mov [rip + rc_want], r13d
+    mov [rip + rc_want], r12d
     mov rdi, rbx
     mov esi, OA_SIDE_REMOTE
-    test r13d, r13d
+    test r12d, r12d
     jnz 2f
     mov esi, OA_SIDE_REMOTE_OFF
 2:  lea rdx, [rip + .Lv_remote]
@@ -460,18 +440,24 @@ rc_toggle:
     call claude_side_req
     test eax, eax
     jz 9f
-    test r13d, r13d
-    jz 9f
-    mov qword ptr [r12 + 8], RC_ASKED
+    mov r13d, 1
+    test r12d, r12d
+    jz 8f
     mov rdi, rbx
-    mov esi, BK_NOTICE
+    mov esi, RCS_CONNECTING
     lea rdx, [rip + .Lr_connecting]
-    call band
-9:  EPILOGUE
+    xor ecx, ecx
+    xor r8d, r8d
+    call ev_remote
+8:  mov eax, r13d
+    EPILOGUE
+9:  xor eax, eax
+    EPILOGUE
 7:  mov rdi, rbx                # no program: nothing to connect
     mov esi, R_INFO
     lea rdx, [rip + .Lr_noproc]
     call note
+    xor eax, eax
     EPILOGUE
 
 fill_remote:
@@ -482,24 +468,6 @@ fill_remote:
     mov rdi, rbx
     mov esi, [rip + rc_want]
     call jw_bool
-    EPILOGUE
-
-# band(AL*, kind, cstr): ev_band with a cstr (0: it goes)
-band:
-    PROLOGUE
-    mov rbx, rdi
-    mov r12d, esi
-    mov r13, rdx
-    xor ecx, ecx
-    test rdx, rdx
-    jz 1f
-    mov rdi, rdx
-    call strlen
-    mov rcx, rax
-1:  mov rdi, rbx
-    mov esi, r12d
-    mov rdx, r13
-    call ev_band
     EPILOGUE
 
 # note(AL*, role, cstr): ev_note with a cstr
@@ -517,14 +485,13 @@ note:
     call ev_note
     EPILOGUE
 
-# rc_error(AL*, ptr, len): "Remote Control error: TEXT · Run /remote-control to dismiss" (off)
+# rc_error(AL*, ptr, len): the pill's "Remote Control error: TEXT · Run /remote-control to dismiss"; an offer card
+#   waiting for it is answered "failed"
 rc_error:
     PROLOGUE
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
-    call rc_slot
-    mov qword ptr [rax + 8], RC_OFF
     lea rdi, [rip + csb]
     call sb_clear
     lea rdi, [rip + csb]
@@ -537,34 +504,53 @@ rc_error:
     lea rdi, [rip + csb]
     lea rsi, [rip + .Lr_dismiss]
     call sb_push_cstr
+    lea rdi, [rip + csb]
+    xor esi, esi
+    call sb_push_byte
     mov rdi, rbx
-    mov esi, BK_NOTICE
-    xor edx, edx
-    xor ecx, ecx
-    call ev_band
-    mov rdi, rbx
-    mov esi, BK_ERROR
+    mov esi, RCS_ERROR
     mov rdx, [rip + csb + SB_ptr]
-    mov rcx, [rip + csb + SB_len]
-    call ev_band
+    xor ecx, ecx
+    xor r8d, r8d
+    call ev_remote
+    mov rdi, rbx
+    lea rsi, [rip + .Lo_failed]
+    call claude_rc_settled
     EPILOGUE
 
-# rc_on(AL*): the bridge is up: "Remote Control is active", its link
+# rc_on(AL*): the bridge is up: the pill links to claude.ai/code; an offer card waiting is answered "turned_on"
 rc_on:
     PROLOGUE
     mov rbx, rdi
-    call rc_slot
-    mov qword ptr [rax + 8], RC_ON
-    mov rdi, rbx
-    mov esi, BK_NOTICE
+    mov esi, RCS_ON
     lea rdx, [rip + .Lr_active]
-    call band
-    mov rdi, rbx
-    mov esi, BK_NOTICE
-    lea rdx, [rip + .Lr_open]
     lea rcx, [rip + .Lr_url]
-    call ev_band_link
+    xor r8d, r8d
+    call ev_remote
+    mov rdi, rbx
+    lea rsi, [rip + .Lo_turned_on]
+    call claude_rc_settled
     EPILOGUE
+
+# FN claude_side_rc_offer(AL*) -> rax the offer card's answer now ("already_on", "failed"), or 0 when it waits
+#   for the bridge (claude_rc_settled answers it): "Turn on Remote Control" (the extension's turnRemoteControlOn)
+FN claude_side_rc_offer
+    PROLOGUE
+    mov rbx, rdi
+    lea rax, [rip + .Lo_already_on]
+    cmp dword ptr [rbx + AL_rc], RCS_ON
+    je 9f
+    xor eax, eax
+    cmp dword ptr [rbx + AL_rc], RCS_CONNECTING
+    je 9f
+    mov rdi, rbx
+    mov esi, 1
+    call rc_set
+    test eax, eax
+    lea rax, [rip + .Lo_failed]
+    jz 9f
+    xor eax, eax
+9:  EPILOGUE
 
 # ---- answers ----
 
@@ -648,16 +634,19 @@ FN claude_side_answer
     call rc_error
     EPILOGUE
 .Lan_remote_off:
-    mov rdi, rbx
-    call rc_slot
-    mov qword ptr [rax + 8], RC_OFF
-    mov rdi, rbx
-    mov esi, BK_NOTICE
-    xor edx, edx
-    call band
     test r15d, r15d
-    jnz 9b
-    call err_text
+    jz 4f
+    mov rdi, rbx                # off: no pill; an offer card still waiting is answered "declined"
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call ev_remote
+    mov rdi, rbx
+    lea rsi, [rip + .Lo_declined]
+    call claude_rc_settled
+    EPILOGUE
+4:  call err_text
     mov rdi, rbx
     mov rsi, rax
     call rc_error
@@ -685,7 +674,7 @@ err_text:
     mov edx, 13
 9:  EPILOGUE
 
-# FN claude_side_system(AL*, record): system/bridge_state: Remote Control's state in its band
+# FN claude_side_system(AL*, record): system/bridge_state: Remote Control's state on its pill
 FN claude_side_system
     PROLOGUE
     mov rbx, rdi
@@ -740,7 +729,8 @@ FN claude_side_system
     call rc_error
 9:  EPILOGUE
 
-# FN claude_side_dump(sb): print-agent-remote: "remote=off|asked|on" for the open conversation's program
+# FN claude_side_dump(sb): print-agent-remote: "remote=off|connecting|on|error" for the open conversation's
+#   program, then, while its footer pill was drawn last, " pill=X,Y" (its centre) and "\ttip=TOOLTIP"
 FN claude_side_dump
     PROLOGUE
     mov rbx, rdi
@@ -750,16 +740,44 @@ FN claude_side_dump
     xor ecx, ecx
     test rax, rax
     jz 1f
-    mov rdi, [rax + AS_live]
-    test rdi, rdi
+    mov r12, [rax + AS_live]
+    test r12, r12
     jz 1f
-    call rc_slot
-    mov rcx, [rax + 8]
+    mov ecx, [r12 + AL_rc]
+    cmp ecx, RCS_ERROR
+    jbe 1f
+    xor ecx, ecx
 1:  lea rax, [rip + rc_words]
     mov rsi, [rax + rcx*8]
     mov rdi, rbx
     call sb_push_cstr
+    call foot_rc_at
+    test eax, eax
+    jz 2f
+    mov r13d, edx
+    mov r14d, eax
     mov rdi, rbx
+    lea rsi, [rip + .Ld_pill]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r14d
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, ','
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, r13d
+    call sb_push_u64
+    mov rsi, [r12 + AL_rctip]
+    test rsi, rsi
+    jz 2f
+    mov rdi, rbx
+    lea rsi, [rip + .Ld_tip]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov rsi, [r12 + AL_rctip]
+    call sb_push_cstr
+2:  mov rdi, rbx
     mov esi, 10
     call sb_push_byte
     EPILOGUE
@@ -781,7 +799,7 @@ url_n: .long 0
 chrome_ops: .quad chrome_act, chrome_free
 ho_opts_ask: .quad .Lh_continue, .Lh_never
 ho_opts_opened: .quad .Lh_refresh, .Lh_without
-rc_words: .quad .Lw_off, .Lw_asked, .Lw_on
+rc_words: .quad .Lw_off, .Lw_connecting, .Lw_on, .Lw_error
 .globl claude_side_n_print
 claude_side_n_print: .asciz "print-agent-remote"
 .Lv_side: .asciz "side_question"
@@ -829,8 +847,7 @@ claude_side_n_print: .asciz "print-agent-remote"
 .Le_unsent: .asciz "Couldn't ask Claude Code."
 .Le_unknown: .asciz "unknown error"
 .Lr_connecting: .asciz "Connecting to claude.ai/code\342\200\246"
-.Lr_active: .asciz "Remote Control is active \302\267 Run /remote-control to turn off"
-.Lr_open: .asciz "Open claude.ai/code"
+.Lr_active: .asciz "Remote Control is active \302\267 Click to open claude.ai/code \302\267 Run /remote-control to turn off"
 .Lr_url: .asciz "https://claude.ai/code"
 .Lr_error: .asciz "Remote Control error: "
 .Lr_dismiss: .asciz " \302\267 Run /remote-control to dismiss"
@@ -842,6 +859,13 @@ claude_side_n_print: .asciz "print-agent-remote"
 .Lh_refresh: .asciz "Refresh and continue"
 .Lh_without: .asciz "Continue without refreshing"
 .Lw_off: .asciz "off"
-.Lw_asked: .asciz "asked"
+.Lw_connecting: .asciz "connecting"
+.Lw_error: .asciz "error"
+.Ld_pill: .asciz " pill="
+.Ld_tip: .asciz "\ttip="
+.Lo_already_on: .asciz "already_on"
+.Lo_turned_on: .asciz "turned_on"
+.Lo_failed: .asciz "failed"
+.Lo_declined: .asciz "declined"
 .Lw_on: .asciz "on"
 .Ld_remote: .asciz "remote="

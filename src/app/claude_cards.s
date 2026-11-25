@@ -67,7 +67,9 @@
 .equ DR_SWITCH, 3
 .equ DR_ADMIN, 4
 .equ DR_BUY, 5                  #   "Buy usage credits on claude.ai": consent, claude.ai's page asked about
-.equ DR_COUNT, 6
+.equ DR_RCON, 6                 #   "Turn on Remote Control": claude_side_rc_offer's answer, now or once it settles
+.equ DR_DECLINED, 7             #   "Not now"
+.equ DR_COUNT, 8
 .equ DG_TEXT_MAX, 4000          #   a title's or a paragraph's bytes at most (cut at a character's start)
 .equ DG_PARAS, 20               #   paragraphs at most
 .equ DG_URL_MAX, 2000
@@ -3397,6 +3399,18 @@ dialog_reply:
     mov r15d, eax
     lea rcx, [rip + dlg_results]
     mov rdx, [rcx + rax*8]
+    cmp r15d, DR_RCON
+    jne 2f
+    mov rdi, rbx                # Turn on Remote Control: answered now, or once the bridge settles
+    call claude_side_rc_offer
+    mov rdx, rax
+    test rax, rax
+    jnz 2f
+    or dword ptr [r12 + AQ_flags], AQF_CLAIMED
+    mov rdi, r13
+    call rc_card_wait
+    mov eax, 1
+    EPILOGUE
 2:  mov rdi, rbx
     mov rsi, r12
     call dialog_write
@@ -3460,6 +3474,114 @@ dialog_reply:
 6:  mov eax, 1
     EPILOGUE
 8:  xor eax, eax
+    EPILOGUE
+
+# rc_card_wait(CD*): the offer card while Remote Control turns on: its first button "Turning on Remote Control…",
+#   both greyed (the extension's disabled buttons)
+rc_card_wait:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12, [rbx + CD_btns + VEC_len]
+    jae 9f
+    imul r13, r12, CDB_SIZE
+    add r13, [rbx + CD_btns + VEC_ptr]
+    or dword ptr [r13 + CDB_flags], CDBF_OFF
+    test r12, r12
+    jnz 2f
+    mov rdi, [r13 + CDB_label]
+    call mem_free
+    lea rdi, [rip + .Lb_rc_turning]
+    call strlen
+    mov rsi, rax
+    lea rdi, [rip + .Lb_rc_turning]
+    call mem_dup
+    mov [r13 + CDB_label], rax
+2:  inc r12
+    jmp 1b
+9:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# FN claude_rc_settled(AL*, result cstr): Remote Control settled (claude_side.s): the offer card that waits for it
+#   (AQF_CLAIMED) is answered with the result ("turned_on", "failed", "declined") and goes
+FN claude_rc_settled
+    PROLOGUE
+    mov rbx, rdi
+    mov r13, rsi
+    xor ecx, ecx
+1:  cmp rcx, [rbx + AL_reqs + VEC_len]
+    jae 9f
+    mov rax, [rbx + AL_reqs + VEC_ptr]
+    mov r12, [rax + rcx*8]
+    inc rcx
+    cmp dword ptr [r12 + AQ_kind], AQK_DIALOG
+    jne 1b
+    test dword ptr [r12 + AQ_flags], AQF_CLAIMED
+    jz 1b
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r13
+    call dialog_write
+    test eax, eax
+    jz 9f
+    mov rdi, rbx
+    mov rsi, r12
+    call claude_req_kept
+    test eax, eax
+    jz 9f
+    mov rdi, rbx
+    mov rsi, r12
+    mov edx, 1
+    call claude_req_after
+9:  EPILOGUE
+
+# ---- send_to_project_remote_control_offer (row 4.14; BMt @5562786, its reader JPe and words XUt @3423900)
+
+# dlg_rcoffer(AQ*, payload jv) -> eax 1: the title and the body, each the payload's when it is a string not blank
+#   (trimmed), else the extension's own; "Turn on Remote Control", "Not now"; no ×
+dlg_rcoffer:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, r12
+    lea rsi, [rip + .Lk_title_d]
+    call in_str
+    mov rdi, rax
+    mov rsi, rdx
+    call trim
+    test rdx, rdx
+    jnz 1f
+    lea rdi, [rip + .Ld_rc_title]
+    call strlen
+    mov rdx, rax
+    lea rax, [rip + .Ld_rc_title]
+1:  mov rsi, rax
+    mov edi, CDT_TITLE
+    call card_text
+    mov rdi, r12
+    lea rsi, [rip + .Lk_body_d]
+    call in_str
+    mov rdi, rax
+    mov rsi, rdx
+    call trim
+    test rdx, rdx
+    jnz 2f
+    lea rdi, [rip + .Ld_rc_body]
+    call strlen
+    mov rdx, rax
+    lea rax, [rip + .Ld_rc_body]
+2:  mov rsi, rax
+    mov edi, CDT_DETAIL
+    call card_text
+    lea rdi, [rip + .Lb_rc_on]
+    mov esi, CBA_DIALOG + DR_RCON
+    xor edx, edx
+    call card_btn
+    lea rdi, [rip + .Lb_rc_not_now]
+    mov esi, CBA_DIALOG + DR_DECLINED
+    xor edx, edx
+    call card_btn
+    mov eax, 1
     EPILOGUE
 
 # card_btn(label cstr, act, flags): a button of the card being made
@@ -4549,9 +4671,11 @@ push_grouped:
 dlg_kinds:                      # the declared kinds, their card's maker (-> eax 1 made, 0 refused)
     .quad .Lv_kind_overage, dlg_overage
     .quad .Lv_kind_auto, dlg_auto
+    .quad .Lv_kind_rc, dlg_rcoffer      # row 4.14: the Remote Control offer
     .quad 0, 0
 dlg_results:                    # DR_*
     .quad .Lv_continue, .Lv_interrupt, .Lv_consent, .Lv_switch_default, .Lv_request_admin, .Lv_consent
+    .quad .Lv_failed_d, .Lv_declined_d  # (DR_RCON's: claude_side_rc_offer's, "failed" only if it gives none)
 help_domains: .quad .Ld_claude_com, .Ld_anthropic_com, 0
 model_families: .quad .Ld_fable, .Ld_haiku, .Ld_mythos, .Ld_opus, .Ld_sonnet, 0
 whole_codes: .quad .Ld_jpy, .Ld_krw, .Ld_vnd, 0
@@ -4565,6 +4689,15 @@ month_names_d:
 month_days: .byte 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31
 .Lv_kind_overage: .asciz "fable_overage_consent_prompt"
 .Lv_kind_auto: .asciz "auto_mode_server_fallback"
+.Lv_kind_rc: .asciz "send_to_project_remote_control_offer"
+.Lv_failed_d: .asciz "failed"
+.Lv_declined_d: .asciz "declined"
+.Lk_body_d: .asciz "body"
+.Ld_rc_title: .asciz "Remote Control is off, so this session can\342\200\231t be sent"
+.Ld_rc_body: .asciz "This command needs Remote Control so a Claude Project can read this session."
+.Lb_rc_on: .asciz "Turn on Remote Control"
+.Lb_rc_turning: .asciz "Turning on Remote Control\342\200\246"
+.Lb_rc_not_now: .asciz "Not now"
 .Lv_dialog_req: .asciz "request_user_dialog"
 .Lk_subtype_d: .asciz "subtype"
 .Lk_dialog_kind: .asciz "dialog_kind"

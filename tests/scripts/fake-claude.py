@@ -2185,8 +2185,8 @@ def s_dialog_overage(prompt):
 
 
 def s_dialog_other(prompt):
-    """dialog-other: a dialog kind initialize did not declare (the extension's Remote Control offer)"""
-    dialog('send_to_project_remote_control_offer', {'title': 'Remote Control is off'})
+    """dialog-other: a dialog kind initialize did not declare (the extension's refusal fallback)"""
+    dialog('refusal_fallback_prompt', {'title': 'Refused'})
     final('done')
 
 
@@ -4290,6 +4290,23 @@ def remote_control(rid, request):
 
 
 P7C_REQUESTS = {'side_question': side_question, 'get_chrome_dialog': chrome_dialog, 'remote_control': remote_control}
+
+
+# ---- claude-chat rows 2.22, 4.14 (tests/claude-panels.py RemoteTest): the Remote Control offer ----
+def s_dialog_rc(prompt):
+    """dialog-rc [empty]: send_to_project_remote_control_offer (UNRECORDED, the extension's reader JPe: {title?,
+    body?}; results turned_on, already_on, failed, declined), as a SendToProject call would ask it; the turn ends
+    with "answered RESULT"."""
+    words = prompt.split()
+    payload = {} if len(words) > 1 and words[1] == 'empty' else {
+        'title': 'Remote Control is off', 'body': 'Turn it on so the project can read this session.'}
+    answer = dialog('send_to_project_remote_control_offer', payload)
+    if answer is not None:
+        final('answered ' + str(answer.get('result') if answer.get('behavior') == 'completed' else 'cancelled'))
+
+
+SCENARIOS.update({'dialog-rc': s_dialog_rc})
+# ---- end rows 2.22, 4.14 ----
 
 
 def s_chrome(prompt):

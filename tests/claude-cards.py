@@ -1213,7 +1213,7 @@ class PlanTest(CardCase):
 
 # the dialog cards: the bundle's strings (webview index.js: YPe and XPe @3423169, oOe, aOe, que, eOe, nOe, sOe,
 # iOe, lOe @3426000-3429000, the cards FMt and zMt @5561231-5564700, ij @3595371)
-DIALOG_KINDS = ['fable_overage_consent_prompt', 'auto_mode_server_fallback']
+DIALOG_KINDS = ['fable_overage_consent_prompt', 'auto_mode_server_fallback', 'send_to_project_remote_control_offer']
 SWITCH = 'Switch to the default model and continue'
 BUY = 'Buy usage credits on claude.ai'
 LEARN = 'https://support.claude.com/en/articles/12429409-extra-usage-for-paid-claude-plans'

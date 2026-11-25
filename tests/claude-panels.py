@@ -355,36 +355,131 @@ class ChromeRowTest(PanelCase):
 
 
 class RemoteTest(PanelCase):
-    """Row 2.22's Remote Control: never shown as connected unless the program says so."""
+    """Rows 2.22, 4.14 and 1.24: Remote Control's footer pill, the offer card and the menu's entry; never shown as
+    connected unless the program says so; its state ends with the program (review 2, finding 2)."""
 
-    def bands(self):
-        return self.command('print-agent-bands')
+    def remote(self):
+        """print-agent-remote after a frame: ({remote, pill}, tooltip)."""
+        self.command('shot /dev/null')
+        head, _, tip = self.command('print-agent-remote').rstrip('\n').partition('\ttip=')
+        return dict(re.findall(r'(\w+)=(\S+)', head)), tip
+
+    def state(self):
+        return self.remote()[0]['remote']
+
+    def card(self):
+        lines = self.command('print-agent-input').splitlines()
+        return lines[1] if len(lines) > 1 else None
+
+    def replied(self, text):
+        return any(r.startswith('agent') and r.endswith(' ' + text) for r in self.thread())
 
     def test_on_and_off(self):
         self.panel()
         self.chat('hello')
+        self.assertEqual(self.remote(), ({'remote': 'off'}, ''))
         self.command('agent-prompt /remote-control')
-        self.until(lambda: 'Remote Control is active' in self.bands(), 'the bridge state')
-        self.assertIn('claude.ai/code', self.bands())
-        self.assertEqual(self.command('print-agent-remote'), 'remote=on\n')
+        self.until(lambda: self.state() == 'on', 'the bridge state')
+        head, tip = self.remote()
+        self.assertRegex(head['pill'], r'^\d+,\d+$')
+        self.assertEqual(tip, 'Remote Control is active \u00b7 Click to open claude.ai/code \u00b7 Run /remote-control '
+                              'to turn off')
+        self.assertNotIn('Remote Control', self.command('print-agent-bands'))     # a pill now, not a band
         self.command('agent-prompt /rc')
-        self.until(lambda: 'Remote Control' not in self.bands(), 'the band gone')
+        self.until(lambda: self.state() == 'off', 'off')
+        self.assertNotIn('pill', self.remote()[0])
         self.assertEqual(self.logged('remote'), [True, False])
 
-    def test_refused(self):
+    def test_refused_then_dismissed(self):
         self.panel(env={'FAKE_CLAUDE_REMOTE': 'fail'})
         self.chat('hello')
         self.command('agent-prompt /remote-control')
-        self.until(lambda: 'Remote Control error: Remote Control is not available for this account' in self.bands(),
-                   'the error band')
-        self.assertEqual(self.command('print-agent-remote'), 'remote=off\n')
+        self.until(lambda: self.state() == 'error', 'the error')
+        self.assertEqual(self.remote()[1], 'Remote Control error: Remote Control is not available for this account '
+                                           '\u00b7 Run /remote-control to dismiss')
+        self.command('agent-prompt /remote-control')        # dismissed: the extension's toggle off
+        self.until(lambda: self.state() == 'off', 'dismissed')
+        self.assertEqual(self.logged('remote'), [True, False])
 
     def test_bridge_failed(self):
         self.panel(env={'FAKE_CLAUDE_REMOTE': 'bridgefail'})
         self.chat('hello')
         self.command('agent-prompt /remote-control')
-        self.until(lambda: 'Remote Control error: Could not reach claude.ai' in self.bands(), 'the error band')
-        self.assertNotIn('is active', self.bands())
+        self.until(lambda: self.state() == 'error', 'the error')
+        self.assertIn('Remote Control error: Could not reach claude.ai', self.remote()[1])
+
+    def test_it_ends_with_its_program(self):
+        self.panel()
+        self.chat('hello')
+        self.command('agent-prompt /remote-control')
+        self.until(lambda: self.state() == 'on', 'on')
+        self.command('agent-release')                       # the program ends: so does its bridge
+        self.until_gone()
+        self.assertEqual(self.state(), 'off')
+        self.command('agent-prompt again')
+        self.command('wait-agent ready')
+        self.command('agent-prompt /remote-control')        # a new program: asked on again, not off
+        self.until(lambda: self.state() == 'on', 'on again')
+        self.assertEqual(self.logged('remote'), [True, True])
+
+    def test_offer_turns_it_on(self):
+        self.panel()
+        self.command('agent-timing card=0')
+        self.chat('dialog-rc', wait='waiting')
+        self.assertEqual(self.card(), 'card=Remote Control is off Turn it on so the project can read this session. '
+                                      'options=Turn on Remote Control|Not now')
+        self.command('agent-card 1')
+        self.command('wait-agent ready')
+        self.assertTrue(self.replied('answered turned_on'), self.thread())
+        self.assertEqual(self.state(), 'on')
+
+    def test_offer_not_now_and_its_own_words(self):
+        self.panel()
+        self.command('agent-timing card=0')
+        self.chat('dialog-rc empty', wait='waiting')
+        self.assertEqual(self.card(), 'card=Remote Control is off, so this session can\u2019t be sent This command '
+                                      'needs Remote Control so a Claude Project can read this session. '
+                                      'options=Turn on Remote Control|Not now')
+        self.command('agent-card 2')
+        self.command('wait-agent ready')
+        self.assertTrue(self.replied('answered declined'), self.thread())
+        self.assertEqual(self.logged('remote'), [])
+
+    def test_offer_when_on_and_when_refused(self):
+        self.panel()
+        self.command('agent-timing card=0')
+        self.chat('hello')
+        self.command('agent-prompt /remote-control')
+        self.until(lambda: self.state() == 'on', 'on')
+        self.command('agent-prompt dialog-rc')
+        self.command('wait-agent waiting')
+        self.command('agent-card 1')
+        self.command('wait-agent ready')
+        self.assertTrue(self.replied('answered already_on'), self.thread())
+        self.quit()
+        self.panel(env={'FAKE_CLAUDE_REMOTE': 'fail'})
+        self.command('agent-timing card=0')
+        self.chat('dialog-rc', wait='waiting')
+        self.command('agent-card 1')
+        self.command('wait-agent ready')
+        self.assertTrue(self.replied('answered failed'), self.thread())
+
+    def test_menu_entry(self):
+        """Row 1.24: /remote-control is a Slash Commands entry, a section the extension shows only for a "/" query."""
+        self.panel()
+        self.chat('hello')
+        self.command('agent-menu')
+        self.assertNotIn('section Slash Commands', self.command('print-agent-menu').splitlines())
+        self.command('key Escape')
+        self.command('agent-type /remote')
+        menu = self.command('print-agent-menu').splitlines()
+        rows = [l for l in menu if l.startswith('row ') and ' /remote-control\t' in l]
+        self.assertEqual(len(rows), 1, menu)
+        self.assertIn('View and control this session from claude.ai/code', rows[0])
+        self.command('agent-menu-pick ' + rows[0].split()[1])  # (a slash command's row: into the box, then sent)
+        if '/remote-control' in self.command('print-agent-input').splitlines()[0]:
+            self.command('key Return')
+        self.until(lambda: self.state() == 'on', 'on from the menu')
 
 
 class MenuTest(PanelCase):

@@ -283,6 +283,41 @@ class MapTest(PanelCase):
         self.chat('hello')
         self.command('agent-prompt /bashes')
         self.assertIn('text No agents in this conversation.', self.command('print-agent-dialog').splitlines())
+        self.assertNotIn('head Background tasks', self.command('print-agent-dialog').splitlines())
+
+    def test_background_shell_commands(self):
+        """Row 3.29's background tasks: a shell command sent to the background is listed while it runs."""
+        self.panel(env={'FAKE_CLAUDE_BG_MS': '6000'})
+        self.command('agent-new claude')
+        self.command('agent-prompt bg')
+        task = self.until(lambda: re.search(r'task \S+ kind=shell \S+ bg=0 \S+ call=(\S+)',
+                                            self.command('print-agent-tasks')), 'the task')
+        self.command('agent-task-ask bg ' + task.group(1))
+        self.until(lambda: ' bg=1 ' in self.command('print-agent-tasks'), 'in the background')
+        self.command('wait-agent ready 10000')
+        self.command('agent-prompt /tasks')
+        self.command('shot /dev/null')
+        lines = self.command('print-agent-dialog').splitlines()
+        self.assertIn('head Background tasks', lines)
+        self.assertIn('text 1 background task \u00b7 click a task for details', lines)
+        items = [l for l in lines if l.startswith('item')]
+        self.assertTrue(items[-1].startswith('item[1] Sleep 20 seconds then echo done'), items)
+        self.assertTrue(items[-1].endswith('Running'), items)
+        self.command('agent-dialog-pick 1')                 # its details ("This session" is not picked)
+        detail = self.command('print-agent-dialog').splitlines()
+        self.assertIn(' back=1', detail[0])
+        self.assertIn('pair State\tRunning', detail)
+        stop = [l for l in detail if re.match(r'button \d+ Stop', l)]
+        self.assertTrue(stop, detail)
+        self.command('agent-dialog-press ' + stop[0].split()[1])
+        def drawn():
+            self.command('shot /dev/null')              # (the map follows the conversation as it is drawn)
+            return self.command('print-agent-dialog').splitlines()
+        self.until(lambda: 'pair State\tEnded' in drawn(), 'ended', 10)
+        self.assertTrue([r for r in self.stdin() if r.get('type') == 'control_request' and
+                         r['request'].get('subtype') == 'stop_task'])
+        self.command('key Escape')                          # back to the list: no task listed now
+        self.assertNotIn('head Background tasks', drawn())
 
 
 class HandoffTest(PanelCase):

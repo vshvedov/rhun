@@ -6,12 +6,16 @@
 # transcript" (its row in the conversation, opened), and "Stop agent" while it runs (DRV_task AGK_STOP with
 # its id). Nothing here names an agent: the rows are the conversation's typed rows (AT) and its live record.
 #
-# Background tasks (Running/Ended, Stop, "Command output") come from the conversation's task records
-# (AS_tasks, phase 3 task 11), which this line does not have: the section is not shown until they exist.
+# Background tasks (row 3.29; the extension's bAn and yAn @5448078): the conversation's shell commands that run
+# in the background and have not finished (its task records, AS_tasks: agenttask.s), under "N background
+# task(s) · click a task for details", each its description and Running. A task's details: back arrow, its
+# description, "Running" or "Ended", and Stop while it runs (agtask_ask AGK_STOP; refused: "The task could not
+# be stopped. It may have finished already."). The output view ("Command output", get_task_output) is not
+# built.
 #
 # It follows the conversation while it is open: agmap_tick (from agside_split, once a frame the
-# conversation is drawn) makes the rows again when the rows, the live state or the context changed
-# (a signature of four numbers: nothing is walked unless one moved).
+# conversation is drawn) makes the rows again when the rows, the live state, the context or its tasks changed
+# (a signature of five numbers: nothing is walked unless one moved; the tasks' is a sum over the few records).
 #
 #   agmap_open(AS*) -> eax 1      the map of that conversation
 #   agmap_tick(AS*)               the conversation drawn this frame
@@ -22,6 +26,9 @@
 .equ MA_BACK, 2
 .equ MA_STOP, 3
 .equ MA_OPEN, 4
+.equ MA_TASK, 5                 # a background task's row (DGR_arg: its place in AS_tasks)
+.equ MA_TSTOP, 6                # its Stop
+.equ SIG_SIZE, 40
 .equ PROMPT_MAX, 2000
 
 .data
@@ -30,7 +37,8 @@ map_row: .quad -1               # the agent shown in detail (its row), -1 the li
 .bss
 .p2align 3
 map_as: .quad 0                 # the conversation it shows, 0 none
-map_sig: .zero 32               # rows, last growth, state, context: as built last
+map_sig: .zero SIG_SIZE         # rows, last growth, state, context, tasks: as built last
+map_task: .quad 0               # the background task shown in detail (owned cstr: its id), 0 none
 msb: .zero SB_SIZE
 
 .text
@@ -53,6 +61,7 @@ FN agmap_open
     call agentdlg_open
     mov [rip + map_as], rbx
     mov qword ptr [rip + map_row], -1
+    call task_drop
     call build
     mov eax, 1
 9:  EPILOGUE
@@ -71,7 +80,28 @@ FN agmap_gone
 # map_free(): DGO_free
 map_free:
     mov qword ptr [rip + map_as], 0
+    jmp task_drop
+
+# task_drop(): no task shown in detail
+task_drop:
+    sub rsp, 8
+    mov rdi, [rip + map_task]
+    call mem_free
+    mov qword ptr [rip + map_task], 0
+    add rsp, 8
     ret
+
+# listed(AK*) -> eax 1 when the map lists it: a shell command in the background, not finished
+listed:
+    xor eax, eax
+    cmp dword ptr [rdi + AK_kind], AKK_SHELL
+    jne 1f
+    cmp dword ptr [rdi + AK_bg], 0
+    je 1f
+    cmp dword ptr [rdi + AK_state], AKS_WAITING
+    ja 1f
+    inc eax
+1:  ret
 
 # sig(AS*, out*) : the four numbers the rows follow
 sig:
@@ -88,11 +118,29 @@ sig:
     mov rcx, [rdx + AL_usage + AGU_used]
 1:  mov [rsi + 16], rax
     mov [rsi + 24], rcx
+    mov rax, [rdi + AS_tasks + VEC_len]     # the tasks: their count, each one's kind, state and place
+    shl rax, 32
+    mov rcx, [rdi + AS_tasks + VEC_ptr]
+    xor edx, edx
+2:  cmp rdx, [rdi + AS_tasks + VEC_len]
+    jae 3f
+    imul r8, rdx, AK_SIZE
+    mov r9d, [rcx + r8 + AK_state]
+    imul r9d, r9d, 7
+    add r9d, [rcx + r8 + AK_bg]
+    imul r9d, r9d, 3
+    add r9d, [rcx + r8 + AK_kind]
+    lea r10, [rdx + 1]
+    imul r9, r10
+    add rax, r9
+    inc rdx
+    jmp 2b
+3:  mov [rsi + 32], rax
     ret
 
 # FN agmap_tick(AS*): while the map of that conversation shows, its rows follow it
 FN agmap_tick
-    PROLOGUE 32
+    PROLOGUE 48
     mov rbx, rdi
     cmp [rip + map_as], rbx
     jne 9f
@@ -107,7 +155,7 @@ FN agmap_tick
     call sig
     lea rdi, [rsp]
     lea rsi, [rip + map_sig]
-    mov edx, 32
+    mov edx, SIG_SIZE
     call memeq
     test eax, eax
     jnz 9f
@@ -185,7 +233,11 @@ build:
     mov rdi, rbx
     lea rsi, [rip + map_sig]
     call sig
-    cmp qword ptr [rip + map_row], -1
+    cmp qword ptr [rip + map_task], 0
+    je 0f
+    call task_detail
+    EPILOGUE
+0:  cmp qword ptr [rip + map_row], -1
     je 1f
     mov rdi, [rip + map_row]
     call at_of
@@ -337,7 +389,7 @@ build:
 5:  inc r13
     jmp 4b
 6:  test r14d, r14d
-    jnz 9f
+    jnz 7f
     mov edi, DGK_TEXT
     mov esi, DGF_MUTED
     xor edx, edx
@@ -346,6 +398,141 @@ build:
     xor esi, esi
     lea rdx, [rip + .Lt_none]
     call agentdlg_ctext
+7:  call tasks_list
+9:  EPILOGUE
+
+# tasks_list(): the background tasks' section of the map's conversation, when it has any
+tasks_list:
+    PROLOGUE
+    mov rbx, [rip + map_as]
+    xor r13d, r13d              # how many
+    xor r12d, r12d
+1:  cmp r12, [rbx + AS_tasks + VEC_len]
+    jae 2f
+    imul rdi, r12, AK_SIZE
+    add rdi, [rbx + AS_tasks + VEC_ptr]
+    inc r12
+    call listed
+    add r13d, eax
+    jmp 1b
+2:  test r13d, r13d
+    jz 9f
+    mov edi, DGK_HEAD
+    xor esi, esi
+    xor edx, edx
+    call agentdlg_row
+    mov rdi, rax
+    xor esi, esi
+    lea rdx, [rip + .Lt_tasks]
+    call agentdlg_ctext
+    lea rdi, [rip + msb]        # "N background task(s) · click a task for details"
+    call sb_clear
+    lea rdi, [rip + msb]
+    mov esi, r13d
+    call sb_push_u64
+    lea rsi, [rip + .Lt_ntasks]
+    cmp r13d, 1
+    jne 3f
+    lea rsi, [rip + .Lt_ntask]
+3:  lea rdi, [rip + msb]
+    call sb_push_cstr
+    mov edi, DGK_TEXT
+    mov esi, DGF_MUTED | DGF_SMALL
+    xor edx, edx
+    call agentdlg_row
+    mov rdi, rax
+    xor esi, esi
+    mov rdx, [rip + msb + SB_ptr]
+    mov rcx, [rip + msb + SB_len]
+    call agentdlg_text
+    xor r12d, r12d
+4:  cmp r12, [rbx + AS_tasks + VEC_len]
+    jae 9f
+    imul r14, r12, AK_SIZE
+    add r14, [rbx + AS_tasks + VEC_ptr]
+    mov rdi, r14
+    call listed
+    test eax, eax
+    jz 5f
+    mov edi, DGK_ITEM
+    xor esi, esi
+    mov edx, MA_TASK
+    call agentdlg_row
+    mov r15, rax
+    mov [r15 + DGR_arg], r12
+    mov rdi, r14
+    call task_label
+    mov rdi, r15
+    xor esi, esi
+    mov rdx, rax
+    call agentdlg_ctext
+    mov rdi, r15
+    mov esi, 2
+    lea rdx, [rip + .Ls_running]
+    call agentdlg_ctext
+5:  inc r12
+    jmp 4b
+9:  EPILOGUE
+
+# task_label(AK*) -> rax its description, else "Background task"
+task_label:
+    mov rax, [rdi + AK_label]
+    test rax, rax
+    jz 1f
+    cmp byte ptr [rax], 0
+    jne 2f
+1:  lea rax, [rip + .Lt_task]
+2:  ret
+
+# task_detail(): the background task map_task names: its description, Running or Ended, Stop while it runs
+task_detail:
+    PROLOGUE
+    mov rbx, [rip + map_as]
+    mov rdi, [rip + map_task]
+    call strlen
+    mov rdx, rax
+    mov rdi, rbx
+    mov rsi, [rip + map_task]
+    call agtask_find
+    mov r12, rax                # its record, or 0 (gone: ended)
+    call agentdlg_begin
+    lea rdi, [rip + .Lt_task]
+    test r12, r12
+    jz 1f
+    mov rdi, r12
+    call task_label
+    mov rdi, rax
+1:  call agentdlg_title
+    mov edi, MA_BACK
+    call agentdlg_back
+    xor r13d, r13d              # running
+    test r12, r12
+    jz 2f
+    cmp dword ptr [r12 + AK_state], AKS_WAITING
+    ja 2f
+    inc r13d
+2:  mov edi, DGK_PAIR
+    xor esi, esi
+    xor edx, edx
+    call agentdlg_row
+    mov r14, rax
+    mov rdi, rax
+    xor esi, esi
+    lea rdx, [rip + .Lt_state]
+    call agentdlg_ctext
+    lea rdx, [rip + .Ls_ended]
+    test r13d, r13d
+    jz 3f
+    lea rdx, [rip + .Ls_running]
+3:  mov rdi, r14
+    mov esi, 1
+    call agentdlg_ctext
+    test r13d, r13d
+    jz 9f
+    lea rdi, [rip + .Lt_tstop]
+    mov esi, MA_TSTOP
+    mov edx, DBF_PRIMARY
+    call agentdlg_button
 9:  EPILOGUE
 
 # calls_of(AT*) -> eax its tool calls: the count known, else those kept, -1 none known
@@ -561,9 +748,46 @@ map_act:
 1:  cmp ebx, MA_BACK
     jne 2f
     mov qword ptr [rip + map_row], -1
+    call task_drop
     call build
     EPILOGUE
-2:  mov r13, [rip + map_as]
+2:  cmp ebx, MA_TASK            # a background task: its details (its id kept: the records move)
+    jne 21f
+    mov r13, [rip + map_as]
+    test r13, r13
+    jz 9f
+    cmp r12, [r13 + AS_tasks + VEC_len]
+    jae 9f
+    imul rax, r12, AK_SIZE
+    add rax, [r13 + AS_tasks + VEC_ptr]
+    mov r14, [rax + AK_id]
+    test r14, r14
+    jz 9f
+    call task_drop
+    mov rdi, r14
+    call strlen
+    mov rdi, r14
+    mov rsi, rax
+    call mem_dup
+    mov [rip + map_task], rax
+    call build
+    EPILOGUE
+21: cmp ebx, MA_TSTOP           # its Stop
+    jne 22f
+    mov rdi, [rip + map_as]
+    mov rdx, [rip + map_task]
+    test rdi, rdi
+    jz 9f
+    test rdx, rdx
+    jz 9f
+    mov esi, AGK_STOP
+    call agtask_ask
+    test eax, eax
+    jnz 9f
+    lea rdi, [rip + .Le_tstop]
+    call app_toast
+    EPILOGUE
+22: mov r13, [rip + map_as]
     test r13, r13
     jz 9f
     mov rdi, [rip + map_row]
@@ -649,3 +873,11 @@ map_ops: .quad map_act, map_free
 .Ls_stopped: .asciz "Stopped"
 .Ls_background: .asciz "In the background"
 .Le_stop: .asciz "Could not stop the agent."
+.Lt_tasks: .asciz "Background tasks"
+.Lt_ntasks: .asciz " background tasks \302\267 click a task for details"
+.Lt_ntask: .asciz " background task \302\267 click a task for details"
+.Lt_task: .asciz "Background task"
+.Lt_tstop: .asciz "Stop"
+.Ls_running: .asciz "Running"
+.Ls_ended: .asciz "Ended"
+.Le_tstop: .asciz "The task could not be stopped. It may have finished already."

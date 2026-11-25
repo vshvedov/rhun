@@ -88,6 +88,7 @@ o_doc: .zero SB_SIZE            # configure --json's answer, as JSON text
 # plg_open(-, -): the installed plugins first, then the marketplaces, then what can be installed
 plg_open:
     PROLOGUE
+    mov qword ptr [rip + g_defer], 0
     mov qword ptr [rip + g_tab], 0
     mov qword ptr [rip + g_restart], 0
     mov qword ptr [rip + g_reload_failed], 0
@@ -101,6 +102,7 @@ plg_open:
 
 plg_free:
     PROLOGUE
+    mov qword ptr [rip + g_defer], 0
     call opts_clear
     lea rdi, [rip + g_tf_mkt]
     call c2_wipe_tf
@@ -2046,6 +2048,7 @@ plg_act:
     call agent_release
     jmp 8f
 .Lga_tab:
+    mov qword ptr [rip + g_defer], 0    # another page: an act that waited for a list is not for it
     mov [rip + g_tab], r13
     call c2_notes_clear
     xor edi, edi
@@ -2054,6 +2057,7 @@ plg_act:
     call agentdlg_focus
     jmp 8f
 .Lga_plugin:
+    mov qword ptr [rip + g_defer], 0
     lea rdi, [rip + c2_doc]     # its id and scope kept: the list may change under the page
     call c2_parse
     mov rdi, rax
@@ -2071,10 +2075,12 @@ plg_act:
     call agentdlg_focus
     jmp 8f
 .Lga_avail:
+    mov qword ptr [rip + g_defer], 0
     mov rdi, r13
     call open_install
     jmp 8f
 .Lga_back:
+    mov qword ptr [rip + g_defer], 0
     call c2_notes_clear
     mov rax, [rip + c2_page]
     cmp rax, PG_UNINSTALL
@@ -2092,6 +2098,7 @@ plg_act:
 3:  mov qword ptr [rip + c2_page], PG_LIST
     jmp 8f
 .Lga_retry:
+    mov qword ptr [rip + g_defer], 0
     lea rdi, [rip + .Lg_loading]
     call agentdlg_loading
     mov edi, GW_LIST

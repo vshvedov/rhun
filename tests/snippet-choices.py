@@ -119,7 +119,7 @@ class Choices(snippets.Snippets):
     def test_normal_provider_lists_still_keep_50_best_items(self):
         records=b''.join(f'1 1 1 1 text 4 4 0 0\nv{i:03}v{i:03}'.encode() for i in range(60))
         root=self.extensions(completion=b'60 0\n'+records)
-        out=self.run_editor(['wait 300','cmd complete','wait 100','print-complete'],exts=root)
+        out=self.run_editor(['wait 300','cmd complete','wait-complete','print-complete'],exts=root)
         self.assertTrue(any('items=60 shown=50' in x for x in out),out)
 
     def test_nested_choice_updates_all_parent_mirrors_and_redo(self):
@@ -172,14 +172,14 @@ class Choices(snippets.Snippets):
 
     def test_invalid_completion_choices_discard_all_new_fields(self):
         root=self.extensions(choices=((1,('mismatch','first')),))
-        out=self.run_editor(['wait 200','cmd complete','wait 100','key Return','print-complete',
+        out=self.run_editor(['wait 200','cmd complete','wait-complete','key Return','print-complete',
                              'type x','print-doc'],exts=root)
         self.assertTrue(any('complete open=0' in s for s in out),out)
         self.assertIn('one two onex',out)
 
     def test_unnegotiated_completion_ignores_choices(self):
         root=self.extensions(features=False,choices=((1,('one','first')),))
-        out=self.run_editor(['wait 200','cmd complete','wait 100','key Return','print-complete',
+        out=self.run_editor(['wait 200','cmd complete','wait-complete','key Return','print-complete',
                              'type x','print-doc'],exts=root)
         self.assertTrue(any('complete open=0' in s for s in out),out)
         self.assertIn('one two onex',out)
@@ -197,7 +197,7 @@ class Choices(snippets.Snippets):
         self.assertIn('first two first',out)
 
     def test_invalid_new_completion_choices_keep_outer_choices_and_links(self):
-        out=self.run_choice(['cmd complete','wait 100','key Return','print-doc',
+        out=self.run_choice(['cmd complete','wait-complete','key Return','print-doc',
                              'cmd snippet_choose','wait 50','key Down','key Return','print-doc'],
                             complete_text='ok',complete_fields=((1,0,2,0),),
                             complete_choices=((1,('invalid','other')),),
@@ -207,7 +207,7 @@ class Choices(snippets.Snippets):
 
     def test_completion_choice_metadata_opens_native_list_after_acceptance(self):
         root=self.extensions(choices=((1,('one','first')),))
-        out=self.run_editor(['wait 200','cmd complete','wait 100','key Return','wait 50',
+        out=self.run_editor(['wait 200','cmd complete','wait-complete','key Return','wait 50',
                              'print-complete','key Down','key Return','print-doc'],exts=root)
         self.assertTrue(any('items=2 shown=2' in s for s in out),out)
         self.assertIn('first two first',out)

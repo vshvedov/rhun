@@ -131,7 +131,7 @@ class Snippets(host.Host):
 
     def test_completion_attaches_fields_before_tab_navigation(self):
         root=self.extensions()
-        out=self.run_editor(['wait 300','cmd complete','wait 300','print-complete','key Return',
+        out=self.run_editor(['wait 300','cmd complete','wait-complete','print-complete','key Return',
                              'print-state','type x','key Tab','print-state','print-doc'],exts=root)
         self.assertTrue(any('shown=1' in x for x in out),out)
         states=self.states(out)
@@ -141,14 +141,14 @@ class Snippets(host.Host):
 
     def test_completion_invalid_fields_fall_back_as_a_whole(self):
         root=self.extensions(fields=((1,0,3,0),(1,4,7,0),(2,8,11,0)))
-        out=self.run_editor(['wait 300','cmd complete','wait 300','key Return','print-state',
+        out=self.run_editor(['wait 300','cmd complete','wait-complete','key Return','print-state',
                              'type x','print-doc'],exts=root)
         self.assertIn('col=12 sel=0 ',self.states(out)[0])
         self.assertIn('one two onex',out)
 
     def test_unnegotiated_completion_ignores_fields(self):
         root=self.extensions(features=False)
-        out=self.run_editor(['wait 300','cmd complete','wait 300','key Return',
+        out=self.run_editor(['wait 300','cmd complete','wait-complete','key Return',
                              'print-state','print-doc'],exts=root)
         self.assertIn('col=12 sel=0 ',self.states(out)[0])
         self.assertIn('one two one',out)
@@ -257,7 +257,7 @@ class Snippets(host.Host):
 
     def test_empty_prepared_completion_keeps_empty_text(self):
         root=self.extensions(text='',fields=((1,0,0,0),(0,0,0,0)))
-        out=self.run_editor(['wait 300','cmd complete','wait 300','key Return','type x',
+        out=self.run_editor(['wait 300','cmd complete','wait-complete','key Return','type x',
                              'key Tab','print-state','print-doc'],exts=root)
         self.assertIn('x',out)
         self.assertNotIn('labelx',out)
@@ -315,7 +315,7 @@ class Snippets(host.Host):
     def test_completion_offsets_follow_earlier_additional_edits(self):
         (self.proj/'a.txt').write_text('hi\n')
         root=self.extensions(complete_range='2 1 2 1',edits=b'edit 1 1 1 1 2\n> ')
-        out=self.run_editor(['wait 300','key ctrl+End','cmd complete','wait 300','key Return',
+        out=self.run_editor(['wait 300','key ctrl+End','cmd complete','wait-complete','key Return',
                              'print-state','type x','print-doc'],exts=root)
         self.assertIn('line=2 col=4 sel=3 ',self.states(out)[0])
         self.assertIn('> hi',out)
@@ -386,14 +386,14 @@ class Snippets(host.Host):
         self.assertIn('col=8 sel=3 ',self.states(out)[1])
 
     def test_plain_completion_preserves_outer_links(self):
-        out=self.run_snippet(['key Right','cmd complete','wait 200','key Return','print-doc',
+        out=self.run_snippet(['key Right','cmd complete','wait-complete','key Return','print-doc',
                               'key Tab','print-state'],complete_text='ok',complete_fields=(),
                              complete_range='1 1 1 4',label='one')
         self.assertIn('ok two ok',out)
         self.assertIn('col=7 sel=3 ',self.states(out)[0])
 
     def test_nested_completion_pushes_and_resumes_outer_fields(self):
-        out=self.run_snippet(['key Right','cmd complete','wait 200','key Return','print-state',
+        out=self.run_snippet(['key Right','cmd complete','wait-complete','key Return','print-state',
                               'type x','print-doc','key Tab','key Tab','print-state'],
                              complete_text='ab ab',
                              complete_fields=((1,0,2,0),(1,3,5,0),(0,5,5,0)),
@@ -403,7 +403,7 @@ class Snippets(host.Host):
         self.assertIn('x x two x x',out)
 
     def test_nested_completion_additional_edits_inside_outer_field(self):
-        out=self.run_snippet(['key Right','cmd complete','wait 200','key Return','print-state',
+        out=self.run_snippet(['key Right','cmd complete','wait-complete','key Return','print-state',
                               'print-doc','type x','print-doc','key Tab','key Tab','print-state'],
                              complete_text='ab',complete_fields=((1,0,2,0),(0,2,2,0)),
                              complete_range='1 2 1 4',label='ne',edits=b'edit 1 1 1 1 2\n> ')
@@ -413,7 +413,7 @@ class Snippets(host.Host):
         self.assertIn('> ox two > ox',out)
 
     def test_nested_completion_outside_edits_end_outer_links(self):
-        out=self.run_snippet(['key Right','cmd complete','wait 200','key Return',
+        out=self.run_snippet(['key Right','cmd complete','wait-complete','key Return',
                               'type x','print-doc','key Tab','type q','print-doc'],
                              complete_text='ab',complete_fields=((1,0,2,0),(0,2,2,0)),
                              complete_range='1 1 1 4',label='one',edits=b'edit 1 5 1 5 1\n!')
@@ -421,7 +421,7 @@ class Snippets(host.Host):
         self.assertIn('xq !two one',out)
 
     def test_invalid_new_completion_fields_keep_valid_enclosing_links(self):
-        out=self.run_snippet(['key Right','cmd complete','wait 200','key Return','print-state',
+        out=self.run_snippet(['key Right','cmd complete','wait-complete','key Return','print-state',
                               'type q','print-doc','key Tab','print-state'],
                              complete_text='ab cd',complete_fields=((1,0,2,0),(1,3,5,0)),
                              complete_range='1 1 1 4',label='one')

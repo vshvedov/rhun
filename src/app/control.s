@@ -1154,6 +1154,26 @@ c_print_complete:
     xor eax, eax
     EPILOGUE
 
+# wait-complete: until the completion list shows items (10 s at most), then print-complete's lines
+c_wait_complete:
+    PROLOGUE
+    call time_ms
+    lea r13, [rax + 10000]
+1:  cmp dword ptr [rip + cp_open], 2
+    je 2f
+    call time_ms
+    cmp rax, r13
+    jae 2f
+    mov edi, 20
+    call loop_poll
+    call app_tick
+    jmp 1b
+2:  call flush_frame
+    lea rdi, [rip + out]
+    call complete_dump
+    xor eax, eax
+    EPILOGUE
+
 c_print_extbar:
     PROLOGUE
     call flush_frame
@@ -2424,6 +2444,7 @@ sev_words: .quad .Lsw_error, .Lsw_warning, .Lsw_info, .Lsw_hint
 .Lc_ext_menu: .asciz "ext-menu"
 .Lc_print_views: .asciz "print-views"
 .Lc_print_complete: .asciz "print-complete"
+.Lc_wait_complete: .asciz "wait-complete"
 .Lc_menu_pick: .asciz "menu-pick"
 .Lc_ext_remove: .asciz "ext-remove"
 
@@ -2550,7 +2571,7 @@ ctl_table:
     .quad .Lc_ext_setting, c_ext_setting, .Lc_print_ext_page, c_print_ext_page
     .quad .Lc_print_extbar, c_print_extbar, .Lc_ext_page, c_ext_page, .Lc_ext_remove, c_ext_remove
     .quad .Lc_ext_menu, c_ext_menu, .Lc_menu_pick, c_menu_pick, .Lc_print_views, c_print_views
-    .quad .Lc_focus, c_focus, .Lc_print_complete, c_print_complete
+    .quad .Lc_focus, c_focus, .Lc_print_complete, c_print_complete, .Lc_wait_complete, c_wait_complete
     .quad 0, 0
 appearance_rows:
     .quad .Ls_theme_eq, cfg_theme, .Ls_dark_eq, cfg_dark_theme, .Ls_light_eq, cfg_light_theme, 0

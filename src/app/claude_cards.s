@@ -1135,13 +1135,13 @@ keep_suggestions:
     mov qword ptr [rip + m_last], -1
     mov dword ptr [rip + own_dest], D_SESSION
     mov dword ptr [rip + own_rank], 9
-    lea rdi, [rip + nsb]
-    call sb_clear
     mov rdi, rsi
     lea rsi, [rip + .Lk_suggestions]
     call json_get
     mov r12, rax
-    mov rdi, rax
+    lea rdi, [rip + nsb]
+    call sb_clear
+    mov rdi, r12
     call json_len
     mov r13d, eax
     lea rdi, [rip + ssb]        # at the depth an answer writes them (three objects, then their bytes cleared)
@@ -1600,10 +1600,10 @@ mode_line:
     js 2f
     lea rcx, [rip + dest_labels]
     mov rcx, [rcx + rax*8]
-2:  lea rdi, [rip + hsb]
+2:  push rcx
+    push rcx
+    lea rdi, [rip + hsb]
     call sb_clear
-    push rcx
-    push rcx
     lea rdi, [rip + .Lx_makes]
     call hsb_cstr
     mov rdi, r12

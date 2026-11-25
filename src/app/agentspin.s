@@ -651,7 +651,7 @@ FN agspin_blink
     EPILOGUE
 
 # FN agspin_timeout() -> eax ms to the next tick, -1 none: only while something moving was drawn since the
-#   last tick, the panel shows and the open conversation is driven and works
+#   last tick, the panel or a conversation tab shows the view and the open conversation is driven and works
 FN agspin_timeout
     PROLOGUE
     cmp dword ptr [rip + g_spin_ms], 0
@@ -659,8 +659,11 @@ FN agspin_timeout
     cmp dword ptr [rip + sp_mark], 0
     je 8f
     cmp dword ptr [rip + g_show_agents], 0
-    je 8f
-    call agents_viewed
+    jne 1f
+    call agtab_hosting          # (or a conversation tab draws the view)
+    test eax, eax
+    jz 8f
+1:  call agents_viewed
     mov rdi, rax
     call moving
     test eax, eax

@@ -3089,7 +3089,9 @@ FN agents_timeout
     ret
 1:  mov eax, 50
     ret
-3:  mov eax, -1
+3:  push rax                    # no project, or the panel hidden: a conversation tab may still draw what
+    call agspin_timeout         #   moves (agentspin.s)
+    pop rcx
     ret
 
 FN agents_tick

@@ -795,6 +795,18 @@ class SpinnerTest(SpinnerCase):
         runs = [len(list(g)) for _, g in itertools.groupby(states)]
         self.assertEqual(runs[1:-1], [4] * (len(runs) - 2), states)       # 4 ticks on, 4 off
 
+    def test_the_tick_goes_on_in_a_tab_with_the_panel_hidden(self):
+        """Review 2 finding 5: a conversation tab draws the view without the panel: its spinner ticks."""
+        self.working()
+        self.command('cmd agents_open_tab')
+        self.command('cmd toggle_agents')            # the panel hidden
+        self.command('print-frames')
+        self.assertIn(' agents=0 ', self.command('print-panels'))
+        spin = self.spin()
+        self.assertEqual(spin['shown'], '1', spin)
+        self.assertIsNotNone(spin['timeout'], spin)
+        self.assertGreaterEqual(self.wakeups(), 8)
+
     def test_a_reader_has_no_tick(self):
         self.open_seeded(turns(3))
         self.command('agent-test-tool a name=Bash second=sleep 9')     # running, in a conversation only read

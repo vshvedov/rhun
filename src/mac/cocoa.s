@@ -1330,7 +1330,7 @@ FN mac_drag_perform
     mov x20, x8
     mov x21, x2
     mov x22, #0
-    cbz x20, 9f
+    cbz x20, 8f
     mov w0, #4
     ldp w1, w2, [sp]
     mov x3, x20
@@ -1339,6 +1339,13 @@ FN mac_drag_perform
     mov x0, x20
     XCALL mem_free
     mov x22, #1
+    b 9f
+8:  mov w0, #3                  // no files after all: the drag is over (no draggingExited follows a drop)
+    mov w1, #0
+    mov w2, #0
+    mov x3, #0
+    mov x4, #0
+    XCALL app_on_drop
 9:  mov x0, x22
     IMPRET
 

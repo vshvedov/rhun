@@ -1092,6 +1092,9 @@ rca_write:
     mov rsi, [rip + rsb + SB_len]
     call json_parse
     mov rbx, rax
+    lea rsi, [rip + .Lrc_unsaved]   # (never "null" over the user's settings)
+    test rax, rax
+    jz .Lrw_why
     lea rdi, [rip + rsb2]
     call sb_clear
     lea rdi, [rip + rsb2]

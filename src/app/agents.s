@@ -864,6 +864,10 @@ FN agent_session_free
     call aglist_gone            # phase 6: the list, its menus and its rename field forget it (agentlist.s)
     mov rdi, rbx                # a conversation tab forgets it, keeping its file (agenttab.s)
     call agtab_gone
+    mov rdi, rbx                # its driver's words in place of the spinner's verb go (agentspin.s)
+    xor esi, esi
+    xor edx, edx
+    call agspin_set
     mov rdi, rbx
     call agent_closed           # a session rhun drives: its program ends, its record goes (agent_drv.s)
     mov rdi, rbx

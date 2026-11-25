@@ -2539,7 +2539,7 @@ chip_of:
     mov rsi, rdx
     mov edx, '>'
     push rax
-    push rdx
+    push rsi                    # (its length: edx is the '>' now)
     call mem_chr_n
     pop rdx
     pop rcx

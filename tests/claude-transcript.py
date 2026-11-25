@@ -1947,6 +1947,15 @@ class UserRowTest(TaskEightCase):
         self.command('wait 50')
         self.assertIn(' active=main.c line=12 ', self.command('print-state'))
 
+    def test_browser_chips_keep_their_whole_address(self):
+        short = '<browser tabGroupId="1">https://a.co</browser>'
+        long = '<browser tabGroupId="12">https://example.com/a/rather/long/path/past/sixty/two/bytes/x</browser>'
+        self.seed_lines([blocks_line(short, long, 'look')])
+        self.start()
+        self.open_listed()
+        self.assertEqual([p for p in self.rows_of('content')[0][1] if p.startswith('chip ')],
+                         ['chip a.co', 'chip example.com/a/rather/long/path/past/sixty/two/bytes/x'])
+
     def test_a_name_with_a_control_byte_makes_no_chip(self):
         """A recorded file's name may hold a tab or another control byte: it makes no chip (the chips text is a
         line a chip, TAB-separated: such a name could make chips of its own), and nothing else of the row's."""

@@ -76,6 +76,9 @@ at_lk_has_prompt: .long 0
 at_lk_id: .zero 80                 #   the conversation it names, or empty
 at_lk_prompt: .zero SB_SIZE        #   the prompt for its box
 at_sb: .zero SB_SIZE
+at_pl: .zero SB_SIZE            # an install-plugin link's plugin (then its source, NUL-separated), its source
+at_pm: .zero SB_SIZE
+at_pm_has: .long 0              #   the link named a marketplace
 at_tipbuf: .zero 160
 
 .text
@@ -1287,6 +1290,15 @@ FN agtab_link
     call strlen
     mov rdi, r12
     mov rsi, rax
+    lea rdx, [rip + .Linstall]
+    mov ecx, 14
+    call str_starts
+    test eax, eax
+    jnz .Lal_install
+    mov rdi, r12
+    call strlen
+    mov rdi, r12
+    mov rsi, rax
     lea rdx, [rip + .Lopen]
     mov ecx, 4
     call str_starts
@@ -1354,6 +1366,102 @@ FN agtab_link
     mov r15d, 1
 9:  mov eax, r15d
     EPILOGUE
+# rhun://NAME/install-plugin?plugin=P&marketplace=M (rows 4.19, U: the extension's URI handler @3525150): no
+#   fragment, the plugin named (the marketplace's default, when the link names none, is the driver's); the panel
+#   shows and the driver opens Manage Plugins on it (DRV_action ACT_PLUGIN_LINK: its checks, the trust question)
+.Lal_install:
+    add r12, 14
+    cmp byte ptr [r12], '/'
+    jne 1f
+    inc r12
+1:  movzx eax, byte ptr [r12]
+    test eax, eax
+    jz 2f
+    cmp eax, '?'
+    jne 9b
+    inc r12
+2:  mov r15d, 1                 # (ours from here: handled, a toast when refused)
+    xor ecx, ecx                # a fragment: nothing is installed
+3:  movzx eax, byte ptr [r12 + rcx]
+    test eax, eax
+    jz 4f
+    inc rcx
+    cmp eax, '#'
+    jne 3b
+    lea rdi, [rip + .Lpl_hash]
+    call app_toast
+    jmp 9b
+4:  lea rdi, [rip + at_pl]
+    call sb_clear
+    lea rdi, [rip + at_pm]
+    call sb_clear
+    mov dword ptr [rip + at_pm_has], 0
+5:  cmp byte ptr [r12], 0
+    je 7f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_plugin]
+    call at_pair
+    test rax, rax
+    jz 51f
+    mov r12, rax
+    lea rdi, [rip + at_pl]
+    call sb_clear
+    mov rdi, r12
+    lea rsi, [rip + at_pl]
+    call at_decode
+    mov r12, rax
+    jmp 5b
+51: mov rdi, r12
+    lea rsi, [rip + .Lk_market]
+    call at_pair
+    test rax, rax
+    jz 52f
+    mov r12, rax
+    lea rdi, [rip + at_pm]
+    call sb_clear
+    mov rdi, r12
+    lea rsi, [rip + at_pm]
+    call at_decode
+    mov r12, rax
+    mov dword ptr [rip + at_pm_has], 1
+    jmp 5b
+52: movzx eax, byte ptr [r12]   # another pair: passed over
+    test eax, eax
+    jz 7f
+    inc r12
+    cmp eax, '&'
+    jne 52b
+    jmp 5b
+7:  cmp qword ptr [rip + at_pl + SB_len], 0
+    jne 71f
+    lea rdi, [rip + .Lpl_need]
+    call app_toast
+    jmp 9b
+71: lea rdi, [rip + at_pl]      # "PLUGIN\0SOURCE\0", or "PLUGIN\0" when the link names no marketplace (a NUL
+    xor esi, esi                #   inside either: the driver's checks refuse it)
+    call sb_push_byte
+    cmp dword ptr [rip + at_pm_has], 0
+    je 72f
+    lea rdi, [rip + at_pl]
+    mov rsi, [rip + at_pm + SB_ptr]
+    mov rdx, [rip + at_pm + SB_len]
+    call sb_push
+    lea rdi, [rip + at_pl]
+    xor esi, esi
+    call sb_push_byte
+72:    mov edi, r14d
+    call agent_drv_for_kind
+    test rax, rax
+    jz 9b
+    mov r13, rax
+    call cmd_focus_agents
+    xor edi, edi
+    mov esi, ACT_PLUGIN_LINK
+    mov rdx, [rip + at_pl + SB_ptr]
+    mov rcx, [rip + at_pl + SB_len]
+    call [r13 + DRV_action]
+    mov dword ptr [rip + g_dirty], 1
+    jmp 9b
 
 # at_pair(ptr, key cstr) -> rax after "KEY=" when the pair at ptr has that key, else 0
 at_pair:
@@ -2010,6 +2118,11 @@ agtab_loc_opts: .asciz "panel", "Side panel", "tab", "Editor tab", ""
 .Lt_noproject: .asciz "Open a folder first."
 .Lrhun: .asciz "rhun://"
 .Lopen: .asciz "open"
+.Linstall: .asciz "install-plugin"
+.Lk_plugin: .asciz "plugin"
+.Lk_market: .asciz "marketplace"
+.Lpl_hash: .asciz "Invalid plugin installation URL. The link contains a '#', so nothing was installed."
+.Lpl_need: .asciz "Invalid plugin installation URL. The plugin parameter is required."
 .Lslash_open: .asciz "/open"
 .Lq_session: .asciz "?session="
 .Lk_session: .asciz "session"

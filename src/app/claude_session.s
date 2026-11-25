@@ -2676,6 +2676,8 @@ shows_fast:
 #   ACT_SETTINGS (Settings at Claude Code's rows), ACT_HELP (the extension's help docs, open_help in
 #   extension.js @3355805, asked before they open); anything else 0
 FN claude_action
+    cmp esi, ACT_PLUGIN_LINK    # row 4.19: a rhun://claude/install-plugin link (claude_plugins.s)
+    je claude_plugin_link
     cmp esi, ACT_REWIND         # p6b: fork, rewind, export, a cut turn (claude_fork.s)
     jb 0f
     cmp esi, ACT_OPENED

@@ -656,6 +656,38 @@ class PluginsTest(Case):
                       [s[0] for s in self.subs()])
 
 
+    def test_install_plugin_link(self):
+        """Rows 4.19 and U: rhun://claude/install-plugin reaches the same question as agent-plugin-link."""
+        self.panel()
+        self.command('open rhun://claude/install-plugin?plugin=linked-tool&marketplace=someone%2Flink-market')
+        body = self.until_body(lambda b: 'text Installing plugin' in b, 'the trust question')
+        self.assertEqual(body[:4], ['text Installing plugin', 'text linked-tool',
+                                    'text requires adding a new marketplace source:', 'text someone/link-market'])
+
+    def test_install_plugin_link_refusals(self):
+        """The extension's checks and words (its URI handler and Mrt): nothing opens."""
+        self.panel()
+        for link, toast in (
+                ('rhun://claude/install-plugin?plugin=a&marketplace=b/c#x',
+                 "Invalid plugin installation URL. The link contains a '#', so nothing was installed."),
+                ('rhun://claude/install-plugin?marketplace=b/c',
+                 'Invalid plugin installation URL. The plugin parameter is required.'),
+                ('rhun://claude/install-plugin?plugin=bad%20name',
+                 "Invalid plugin installation URL. The plugin name can't be used in a link, so nothing was installed."),
+                ('rhun://claude/install-plugin?plugin=ok&marketplace=%01',
+                 "Invalid plugin installation URL. The marketplace can't be used in a link, so nothing was installed.")):
+            self.command('open ' + link)
+            self.assertIn(toast, self.command('print-toast'), link)
+        self.assertEqual(self.head().get('dialog', 'none'), 'none')
+
+    def test_install_plugin_link_official_marketplace(self):
+        """Without a marketplace the link names the official one, as the extension's default."""
+        self.panel()
+        self.command('open rhun://claude/install-plugin/?plugin=linked-tool')
+        self.until(lambda: any('anthropics/claude-plugins-official' in ' '.join(s[0]) for s in self.subs()) or
+                   any('anthropics/claude-plugins-official' in l for l in self.body()), 'the official source', 10)
+
+
 class ShellFormTest(Case):
     """The shell's form rows by keyboard alone, and every page's layout at panel sizes 8, 13, 32 and widths 240 to
     900."""

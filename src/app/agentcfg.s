@@ -2062,8 +2062,10 @@ act_names:                      # ACT_* by value
     .quad .La_btw, .La_bookmarks, .La_tasks, .La_remote, .La_chrome, .La_sideq, .La_handoff, .La_handans
     .quad .La_bashes, .La_rc
     .quad .La_rewind, .La_export, .La_msgact, .La_cut, .La_opened   # p6b, ACT_REWIND (43) to ACT_OPENED (47) (claude_fork.s)
+    .quad .La_plugin_link       # 48: ACT_PLUGIN_LINK (row 4.19, agenttab.s)
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .La_btw: .asciz "btw"
+.La_plugin_link: .asciz "plugin-link"
 .La_bookmarks: .asciz "bookmarks"
 .La_tasks: .asciz "tasks"
 .La_remote: .asciz "remote"

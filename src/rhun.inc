@@ -3653,7 +3653,9 @@ ENDSTRUCT ACH_SIZE
 .equ OA_FORK_CHECK, 60          #   rewind_files dry_run
 .equ OA_FORK_REWIND, 61         #   rewind_files
 .equ OA_FORK_EXPORT, 62         #   export_conversation
-.equ ACT_COUNT, 48
+.equ ACT_PLUGIN_LINK, 48       # DRV_action(0, ACT_PLUGIN_LINK, "PLUGIN\0SOURCE\0", len): a rhun://NAME/install-plugin
+                                #   link (agenttab.s): Manage Plugins on that plugin for the box's conversation
+.equ ACT_COUNT, 49
 # (end of phase 6's p6b block)
 # the dialog shell (agentdlg.s): a row (DGR), its kinds and flags, a button's flags, a dialog's ops table
 .equ ID_AGDLG, 0x8e00           # the dialog's controls: + DID_* (agentdlg.s), to 0x8fff

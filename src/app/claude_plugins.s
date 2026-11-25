@@ -2951,6 +2951,56 @@ FN c2_c_link
 8:  mov rax, -1
 9:  EPILOGUE
 
+# FN claude_plugin_link(AL* or 0, act, "PLUGIN\0SOURCE\0" or "PLUGIN\0", len) -> eax 1: DRV_action's
+#   ACT_PLUGIN_LINK (row 4.19, a rhun://claude/install-plugin link, agenttab.s): no SOURCE is the official
+#   marketplace (the extension's default); the extension's checks (Mrt @3525150) with its words as a toast, then
+#   Manage Plugins on the plugin for the box's conversation (a draft becomes one), as agent-plugin-link
+FN claude_plugin_link
+    PROLOGUE
+    mov rbx, rdx
+    mov r12, rcx
+    mov rdi, rbx                # PLUGIN, SOURCE: NUL-ended strings filling the bytes
+    call strlen
+    lea r13, [rbx + rax + 1]    # SOURCE
+    lea rcx, [rax + 1]
+    cmp rcx, r12
+    ja 7f
+    jb 0f
+    lea r13, [rip + .Lpl_official]  # the link named no marketplace
+    jmp 1f
+0:  mov rdi, r13
+    call strlen
+    lea rcx, [r13 + rax + 1]
+    sub rcx, rbx
+    cmp rcx, r12
+    jne 7f
+1:  mov rdi, rbx
+    call plain_name
+    test eax, eax
+    jz 7f
+    mov rdi, r13
+    call plain_source
+    test eax, eax
+    jz 8f
+    call agentext_box_owner
+    test rax, rax
+    jnz 2f
+    call agentext_draft_own
+2:  mov rdi, rax
+    mov rsi, rbx
+    mov rdx, r13
+    call claude_dlg2_install_link
+    mov eax, 1
+    EPILOGUE
+7:  lea rdi, [rip + .Lpl_bad_plugin]
+    call app_toast
+    mov eax, 1
+    EPILOGUE
+8:  lea rdi, [rip + .Lpl_bad_market]
+    call app_toast
+    mov eax, 1
+    EPILOGUE
+
 # resolve_link(): `plugin marketplace add --from-link --resolve-only -- SOURCE`
 resolve_link:
     PROLOGUE
@@ -3051,6 +3101,9 @@ tmp_doc: .zero SB_SIZE
 .section .rodata
 .globl c2_n_link
 c2_n_link: .asciz "agent-plugin-link"
+.Lpl_official: .asciz "anthropics/claude-plugins-official"
+.Lpl_bad_plugin: .asciz "Invalid plugin installation URL. The plugin name can't be used in a link, so nothing was installed."
+.Lpl_bad_market: .asciz "Invalid plugin installation URL. The marketplace can't be used in a link, so nothing was installed."
 .p2align 3
 scope_ids: .quad .Lv_user, .Lv_project, .Lv_local
 install_ids: .quad .Lv_user, .Lv_project, .Lv_local

@@ -2283,6 +2283,10 @@ FN ev_ready
     call agentdlg_ready
     mov rdi, rbx                # p7c: side questions that waited for it go (agentside.s)
     call agside_ready
+    cmp dword ptr [rbx + AL_state], ALS_STARTING    # a write of theirs broke the connection: its close
+    jne 9f                                          #   failed the start and put the prompts back
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
     mov esi, ALS_READY
     cmp qword ptr [rbx + AL_queue + VEC_len], 0
     je 1f

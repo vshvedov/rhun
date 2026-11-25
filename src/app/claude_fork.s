@@ -1402,7 +1402,9 @@ go:
     call claude_side_req
     test eax, eax
     jnz 9f
-8:  lea rdi, [rip + .Lrw_not_running]
+8:  mov qword ptr [rip + rw_as], 0   # nothing sent: nothing waits
+    mov qword ptr [rip + rw_after], 0
+    lea rdi, [rip + .Lrw_not_running]
     call app_toast
 9:  EPILOGUE
 
@@ -1591,7 +1593,11 @@ FN claude_fork_answer
     call agentdlg_fail
     EPILOGUE
 .Lan_rewind:                    # the rewind itself: its meta line, then the fork that waits for it
-    mov r13, [rip + rw_as]
+    xor eax, eax                # [rsp] 1: the kept prompt (rw_*) is this conversation's (another's stays)
+    mov rcx, [rbx + AL_as]
+    cmp [rip + rw_as], rcx
+    sete al
+    mov [rsp], rax
     test r15d, r15d
     jz 3f
     mov rdi, r12
@@ -1638,6 +1644,8 @@ FN claude_fork_answer
     xor r8d, r8d
     call agents_msg_add
     mov dword ptr [rip + g_dirty], 1
+    cmp qword ptr [rsp], 0
+    je 9f
     cmp qword ptr [rip + rw_after], 0
     je 8f
     mov qword ptr [rip + rw_after], 0
@@ -1672,9 +1680,11 @@ FN claude_fork_answer
     call sb_push_byte
     mov rdi, [rip + fsb + SB_ptr]
     call app_toast
+    cmp qword ptr [rsp], 0
+    je 9f
 8:  mov qword ptr [rip + rw_after], 0
     mov qword ptr [rip + rw_as], 0
-    EPILOGUE
+9:  EPILOGUE
 
 # err_text() -> rax ptr, rdx len: an error answer's text (r12: the response), or a word when it has none
 err_text:

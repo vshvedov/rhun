@@ -1976,10 +1976,13 @@ FN claude_started
 # FN claude_ended(AL*): DRV_ended: the record went OFF or FAILED (agent_state_set): a Stop during the start,
 #   a start that failed, a process gone. What a start or a run kept goes (CLP_RUN: the picks waiting for
 #   it, the prompts' wait for the settings, the first settings answer awaited, a /plan waiting for it, a
-#   mode or a model asked and not answered): nothing is written for it later, no clock waits for it, and
-#   the next start begins clean
+#   mode or a model asked and not answered; a re-run of a cut turn it was): nothing is written for it later,
+#   no clock waits for it, and the next start begins clean
 FN claude_ended
-    and dword ptr [rdi + AL_cfg], ~CLP_RUN
+    cmp rdi, [rip + claude_rerun_al]    # a start that re-ran a cut turn ended before its result: forgotten
+    jne 1f                              #   (claude_fork.s)
+    mov qword ptr [rip + claude_rerun_al], 0
+1:  and dword ptr [rdi + AL_cfg], ~CLP_RUN
     push rdi                    # phase 4 task 10: the hook answers that wait for it go, unanswered
     call claude_hooks_gone
     pop rdi

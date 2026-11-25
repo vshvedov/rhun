@@ -5013,6 +5013,17 @@ def handle(message):                     # noqa: F811 (p6b: after initialize's a
             COND.notify_all()
 # ---- end of p6b ----
 
+# ---- review 2 finding 11: FAKE_CLAUDE_RERUN_DIE=1: the re-run of a cut turn dies before its result ----
+_r2_rerun_turn = rerun_turn
+
+
+def rerun_turn(entry):                   # noqa: F811
+    if ENV.get('FAKE_CLAUDE_RERUN_DIE') == '1':
+        log(rerun_died=True)
+        os._exit(3)
+    return _r2_rerun_turn(entry)
+# ---- end of review 2 finding 11 ----
+
 threading.Thread(target=worker, daemon=True).start()
 for raw in sys.stdin:
     raw = raw.strip()

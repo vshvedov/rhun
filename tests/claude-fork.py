@@ -365,6 +365,16 @@ class RestartTest(ForkCase):
         self.assertEqual({r['env'].get('CLAUDE_CODE_ENABLE_SDK_FILE_CHECKPOINTING') for r in self.starts()}, {'true'})
         self.assertTrue(self.live().startswith('state=ready '), self.live())
 
+    def test_a_rerun_whose_program_dies_is_forgotten(self):
+        """Review 2 finding 11: the re-run's program dies before its result: the record is no longer the re-run
+        (a later start of it, or a record at its address, is not routed to the re-run's reading)."""
+        self.cut()
+        self.start(env={'FAKE_CLAUDE_RERUN_DIE': '1'})
+        self.command('cmd focus_agents')
+        self.until(lambda: len(self.reruns()) == 1, 'the re-run started', 20)
+        self.until(lambda: re.search(r'^state=(failed|off) ', self.live()), 'its program gone', 20)
+        self.assertTrue(self.fork_info()[0].endswith(' rerun=0'), self.fork_info())
+
     def test_switched_off_it_stays_cut(self):
         extra = '[agents]\ncontinue_after_restart = false\n'
         self.cut(extra)

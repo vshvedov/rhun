@@ -1335,6 +1335,7 @@ FN claude_side_dump
     mov rbx, rdi
     lea rsi, [rip + .Ld_remote]
     call sb_push_cstr
+    xor r12d, r12d              # no live record: no pill (a stale one of a frame before is not read)
     call agents_open_driven
     xor ecx, ecx
     test rax, rax
@@ -1350,6 +1351,8 @@ FN claude_side_dump
     mov rsi, [rax + rcx*8]
     mov rdi, rbx
     call sb_push_cstr
+    test r12, r12
+    jz 2f
     call foot_rc_at
     test eax, eax
     jz 2f

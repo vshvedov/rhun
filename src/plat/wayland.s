@@ -1057,8 +1057,18 @@ FN wl_drop_event
     jne 2f
     cmp r14, 20                   # enter
     jne 9f
-    call wl_drop_forget           # (a drag that left without a leave)
-    mov ebx, [r13 + 16]
+    cmp dword ptr [rip + wl_drop_fd], -1      # a list still being read keeps its offer
+    jne 0f
+    cmp dword ptr [rip + wl_drop_offer], 0
+    je 0f
+    call wl_drop_forget           # (a drag that left without a leave: it is over)
+    mov edi, DROP_LEAVE
+    xor esi, esi
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call app_on_drop
+0:  mov ebx, [r13 + 16]
     test ebx, ebx
     jz 9f
     cmp ebx, [rip + offer_new]

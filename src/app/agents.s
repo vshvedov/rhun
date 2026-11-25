@@ -864,11 +864,20 @@ FN agent_session_free
     call aglist_gone            # phase 6: the list, its menus and its rename field forget it (agentlist.s)
     mov rdi, rbx                # a conversation tab forgets it, keeping its file (agenttab.s)
     call agtab_gone
-    mov rdi, rbx                # its driver's words in place of the spinner's verb go (agentspin.s)
-    xor esi, esi
-    xor edx, edx
-    call agspin_set
-    mov rdi, rbx
+    mov rdi, rbx                # its driver's words in place of the spinner's verb go, the line forgets it
+    call agspin_gone            #   (agentspin.s)
+    cmp [rip + th_as], rbx      # the thread drawn, its anchor and its tip forget it
+    jne 1f
+    mov qword ptr [rip + th_as], 0
+1:  cmp [rip + th_aas], rbx
+    jne 2f
+    mov qword ptr [rip + th_aas], 0
+    mov dword ptr [rip + th_arow], -1
+    mov dword ptr [rip + th_follow], 1
+2:  cmp [rip + tip_as], rbx
+    jne 3f
+    mov qword ptr [rip + tip_as], 0
+3:  mov rdi, rbx
     call agent_closed           # a session rhun drives: its program ends, its record goes (agent_drv.s)
     mov rdi, rbx
     call session_clear_msgs

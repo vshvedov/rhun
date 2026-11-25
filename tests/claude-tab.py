@@ -352,6 +352,36 @@ class SessionTest(TabCase):
         self.assertEqual([r.split(' ', 1)[1] for r in self.thread()], ['hello', 'ok: hello'])
 
 
+class FreedTest(TabCase):
+    def test_a_tab_whose_conversation_is_freed_finds_it_again(self):
+        """Review 2 finding 1: the sources setting changes, the list is made again and every conversation rhun
+        does not run is freed, the one a tab shows too: the tab forgets it (no freed pointer read on the next
+        frame) and finds it again by its file once the list has it."""
+        self.seed('s1')
+        codex = self.work / '.codex/sessions/2026/10/02/rollout-test.jsonl'
+        codex.parent.mkdir(parents=True)
+        codex.write_text((chat.ROOT / 'tests/data/agents/codex.jsonl').read_text(encoding='utf-8')
+                         .replace('@PROJECT@', self.project.as_posix()), encoding='utf-8')
+        self.start()
+        rows = self.listed()
+        index = [l for l in self.command('print-agents').splitlines() if l.startswith(('Claude', 'Codex'))]
+        self.assertTrue([l for l in index if l.startswith('Codex')], index)
+        self.command('print-agents %d' % (index.index(rows[0]) + 1))
+        self.command('cmd agents_open_tab')
+        tabs, _, _ = self.tabs()
+        self.assertEqual([(t['file'], t['host']) for t in tabs], [('s1.jsonl', '1')])
+        before = self.thread()
+        self.assertTrue(before)
+        self.config.write_text(self.config_text() + '[agents]\ncodex = false\n', encoding='utf-8')
+        self.until(lambda: not [l for l in self.command('print-agents').splitlines() if l.startswith('Codex')],
+                   'the list without Codex')
+        self.command('wait-agents')
+        self.until(lambda: self.tabs()[0][0]['host'] == '1' and self.thread() == before, 'the tab shows it again')
+        tabs, _, _ = self.tabs()
+        self.assertEqual([t['file'] for t in tabs], ['s1.jsonl'])
+        self.assertTrue(tabs[0]['label'])
+
+
 class LinkTest(TabCase):
     def back(self):
         self.command(f'click {chat.BACK[0]} {chat.BACK[1]}')

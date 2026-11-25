@@ -35,6 +35,7 @@
 #   agtab_tab_dot(TAB*, x, y, h) -> eax its width; agtab_dot_w(TAB*) -> eax   tab_draw's, tab_width's
 #   agtab_turn_end(AS*)                ev_turn_end's (agent_drv.s): unseen when no view shows it
 #   agtab_new_made(AS*)                agent_new's: the draft a tab hosts became that conversation
+#   agtab_gone(AS*)                    agent_session_free's: a tab forgets a freed conversation (keeps its file)
 #   agents_status_item(right, y, h, min x) -> eax the right edge left of it   statusbar_draw's
 #   agtab_c_print (print-agent-tabs)   headless: the tabs, then the status item
 .include "rhun.inc"
@@ -395,6 +396,29 @@ FN agtab_new_made
     mov rdi, rbx
     call at_bind
 9:  EPILOGUE
+
+# FN agtab_gone(AS*): the conversation is freed (agent_session_free): a record that had it forgets it and keeps
+#   its file, so the tab finds it again by its path once the list has it (agtab_draw's .Lad_gone)
+FN agtab_gone
+    xor ecx, ecx
+    test rdi, rdi
+    jz 9f
+1:  cmp ecx, AGT_MAX
+    jae 9f
+    movsxd rax, ecx
+    imul rax, rax, ATB_SIZE
+    lea rdx, [rip + at_recs]
+    add rax, rdx
+    inc ecx
+    cmp dword ptr [rax + ATB_used], 0
+    je 1b
+    cmp [rax + ATB_as], rdi
+    jne 1b
+    mov qword ptr [rax + ATB_as], 0
+    mov qword ptr [rax + ATB_ltitle], -1
+    mov dword ptr [rip + g_dirty], 1
+    jmp 1b
+9:  ret
 
 # new_rec() -> rax a free record (zeroed, used), 0 none
 at_new_rec:

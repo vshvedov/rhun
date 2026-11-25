@@ -4019,6 +4019,7 @@ FN wl_paste_read_result
     je .Lwresult_done
     cmp r12, -EAGAIN
     je .Lwresult_done
+    jmp .Lwresult_cancel        # a broken pipe is no paste, not a too-big one
 .Lwresult_over:
     mov dword ptr [rip + wl_paste_over], 1
 .Lwresult_cancel:

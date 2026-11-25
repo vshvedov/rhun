@@ -369,7 +369,8 @@ def sandbox_dialog(cwd, config):
     sandbox = read(settings_path('localSettings', cwd, config), {}).get('sandbox') or {}
     enabled = sandbox.get('enabled') is True
     mode = ('auto-allow' if sandbox.get('autoAllowBashIfSandboxed', True) else 'regular') if enabled else 'disabled'
-    return {'supported': True, 'locked': False, 'overrides_locked': False, 'policy_origins': [], 'enabled': enabled,
+    locked = os.environ.get('FAKE_CLAUDE_SANDBOX_LOCKED') == '1'    # review 3: a policy's lock
+    return {'supported': True, 'locked': locked, 'overrides_locked': False, 'policy_origins': [], 'enabled': enabled,
             'enabled_in_settings': enabled, 'mode': mode, 'auto_allow_available': True, 'no_sandbox_allowed': True,
             'unsandboxed_fallback': sandbox.get('allowUnsandboxedCommands', True) is not False,
             'dependencies': {'errors': [], 'warnings': []},

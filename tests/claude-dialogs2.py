@@ -390,6 +390,16 @@ class SandboxTest(Case):
         self.until_line('text Added "make check" to the excluded commands')
         self.assertEqual(self.settings('local')['sandbox']['excludedCommands'], ['make check'])
 
+    def test_slash_sandbox_exclude_respects_the_lock(self):
+        self.start(env={'FAKE_CLAUDE_SANDBOX_LOCKED': '1'})
+        self.command('cmd focus_agents')
+        self.command('agent-new claude')
+        self.command('agent-dialog sandbox exclude make check')
+        self.until_ready()
+        self.command('wait 300')
+        self.assertNotIn('Added "make check"', '\n'.join(self.body()))
+        self.assertNotIn('excludedCommands', self.settings('local').get('sandbox', {}))
+
 
 class HooksTest(Case):
     """6.7, 6.8: the hooks by event and matcher, the editor's fields per type, Save to, Remove asks first."""

@@ -1262,6 +1262,15 @@ sbx_answer:
     mov qword ptr [rip + s_pat], 0
     push rdi
     push rdi
+    mov rdi, r12                # locked by policy: not added (as the dialog's own Add)
+    lea rsi, [rip + .Lk_locked]
+    call c2_jbool
+    pop rdi
+    pop rdi
+    test eax, eax
+    jnz 6f
+    push rdi
+    push rdi
     call strlen
     pop rdi
     pop rdi
@@ -1271,7 +1280,7 @@ sbx_answer:
     call exclude
     pop rdi
     pop rdi
-    call mem_free
+6:  call mem_free
 7:  call sbx_build
     EPILOGUE
 

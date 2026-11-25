@@ -2840,14 +2840,18 @@ FN agterm_parts
     mov r15, [rsp + 8]
     cmp dword ptr [rsp + 16], 2
     jne 1b
-    mov rbx, [rsp]              # its name: after "@terminal:"
+    mov rbx, [rsp]              # its name: after "@terminal:" (or '@"terminal:', to before its '"')
     add rbx, 10
+    mov eax, [rsp + 20]
+    add rbx, rax
     lea rax, [r13 + rbx]
     mov [rsp + 24], rax
     mov rax, r15
     sub rax, rbx
+    mov ecx, [rsp + 20]
+    sub rax, rcx
     mov [rsp + 32], rax
-    jz 1b
+    jle 1b
     mov rdi, [rsp + 24]         # once a name; not one a link brought
     mov rsi, [rsp + 32]
     lea rdx, [rip + term_seen]
@@ -2948,12 +2952,16 @@ FN agterm_block
     mov r14, [rsp + 8]
     cmp dword ptr [rsp + 16], 2
     jne 1b
-    mov rbx, [rsp]
+    mov rbx, [rsp]              # (quoted: '@"terminal:NAME"')
     add rbx, 10
+    mov eax, [rsp + 20]
+    add rbx, rax
     lea rdi, [rip + term_blocked]
     lea rsi, [r12 + rbx]
     mov rdx, r14
     sub rdx, rbx
+    mov eax, [rsp + 20]
+    sub rdx, rax
     call sb_push
     lea rdi, [rip + term_blocked]
     xor esi, esi

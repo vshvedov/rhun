@@ -570,6 +570,21 @@ class MentionTest(MentionCase):
         self.ready()
         self.assertIn('marker-42', repr(self.blocks()))
 
+    def test_a_quoted_terminal_mention_goes(self):
+        """Review 2 finding 13: @"terminal:NAME" (the quoted form) names the same terminal."""
+        self.start(extra='[terminal]\nshell = /bin/sh\n')
+        self.chat('hello')
+        self.command('cmd new_terminal')
+        self.command('type echo marker-$((40+2))')
+        self.command('key Return')
+        self.command('wait-term marker-42')
+        name = re.search(r' title=(\S+)', self.command('print-terminals')).group(1)
+        self.command(f'agent-prompt look @"terminal:{name}"')
+        self.ready()
+        terms = [b for b in self.blocks() if b['type'] == 'text' and b['text'].startswith('<terminal')]
+        self.assertEqual(len(terms), 1, self.blocks())
+        self.assertTrue(terms[0]['text'].startswith(f'<terminal name="{name}">\n'))
+
     def test_an_unknown_terminal_adds_nothing(self):
         self.start()
         self.chat('hello')

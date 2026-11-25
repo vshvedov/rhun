@@ -4486,10 +4486,10 @@ in_generic:
     mov rbx, rdi
     mov r12, rsi
     mov r13, rdx
+    test r13, r13               # (a call without a name: nothing to read)
+    jz 1f
     cmp byte ptr [r12], '*'     # (a call of a known tool in the generic form keeps its name with a "*")
     jne 1f
-    test r13, r13
-    jz 1f
     inc r12
     dec r13
     mov rdi, r12

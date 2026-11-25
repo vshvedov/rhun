@@ -1050,6 +1050,18 @@ class HostileTest(ToolCase):
         self.assertEqual(w3['name'], 'TaskUpdate')        # an unknown task: the generic form
         self.assertIn('in', w3)
 
+    def test_a_call_without_a_name(self):
+        """Review 2 finding 2: a tool_use block without "name" is a generic call, read from the file and read
+        again for its text, not a crash."""
+        self.open_seeded([{'type': 'assistant', 'message': {'model': MODEL, 'id': 'msg-x', 'role': 'assistant',
+                                                            'content': [{'type': 'tool_use', 'id': 'x1',
+                                                                         'input': {'key': 'value'}}]}},
+                          result('x1', 'done')])
+        c, = self.calls()
+        self.assertEqual((c['name'], c['state']), ('-', 'ok'))
+        self.command('agent-row-click %d in' % (c['row'] + 1))
+        self.assertIn('value', self.command('print-doc'))
+
     def test_bidi_and_controls_in_headers(self):
         self.open_seeded([call('b1', 'Bash', {'command': 'ls', 'description': 'a‮b\x1b[31mc\x07d⁦e'})])
         b, = self.calls()

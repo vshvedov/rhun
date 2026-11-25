@@ -334,8 +334,8 @@ class UsageTest(ClaudeDialogCase):
 
     def test_list_section_is_drawn_above_the_list(self):
         """Row 5.14: the list of conversations shows it above its rows (the driver's DRV_list_top)."""
-        self.start()
         self.seed()
+        self.start()
         self.assertEqual(len(self.listed()), 1)             # the panel's list, a conversation in it
         self.command('shot /dev/null')
 

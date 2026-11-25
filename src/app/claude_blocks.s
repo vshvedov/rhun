@@ -77,6 +77,7 @@ utext: .zero SB_SIZE            # an echo's line, a meta line, a pill's text
 tp_sb: .zero SB_SIZE            # (phase 4 task 6) tool_pics: a call's pictures as a chips text, and one
 tp_bytes: .zero SB_SIZE         #   picture's bytes decoded
 img_n: .long 0                  # (phase 4 task 6) the user record's images so far (media_chip, claude_image)
+kid_reading: .long 0            # claude_kids reads a subagent's file: its pictures are decoded, not places
 .p2align 3
 pc_sb: .zero SB_SIZE            # a prompt's text with its pastes unwrapped (phase 4 task 4)
 pc_tag: .zero SB_SIZE           #   and the closing tag it looks for
@@ -2829,6 +2830,8 @@ tool_pics:
     call sb_clear
     cmp qword ptr [r12 + AT_file], 0
     jne 3f
+    cmp dword ptr [rip + kid_reading], 0
+    jne 3f
     mov rcx, [rbx + AS_linelen]
     test rcx, rcx
     jz 3f
@@ -3751,6 +3754,7 @@ FN claude_kids
     mov [rip + cb_as], rbx
     mov dword ptr [rip + cb_flags], ING_FILE
     mov dword ptr [rip + tm_which], -1
+    mov dword ptr [rip + kid_reading], 1
     xor r15d, r15d              # a line's start
 3:  cmp r15, r14
     jae 7f
@@ -3785,7 +3789,8 @@ FN claude_kids
 6:  mov r15, [rsp + 16]
     inc r15
     jmp 3b
-7:  mov rax, [rsp]
+7:  mov dword ptr [rip + kid_reading], 0
+    mov rax, [rsp]
     mov [rbx + AS_line], rax
     mov rax, [rsp + 8]
     mov [rbx + AS_linelen], rax

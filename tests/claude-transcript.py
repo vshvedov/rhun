@@ -3095,6 +3095,33 @@ class KidsTest(TaskCase):
         self.assertEqual(len(kids), 1, kids)
         self.assertIn('call k1 ', kids[0])
 
+    def test_a_subagents_result_picture(self):
+        """Review 2 finding 8: a picture in a subagent's result, read from the agent's own file, is decoded and
+        kept (a place would name the conversation's own file, where it is not): it opens."""
+        import base64
+        import struct
+        import zlib
+
+        def chunk(kind, data):
+            return struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+        png = (b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', 20, 10, 8, 0, 0, 0, 0))
+               + chunk(b'IDAT', zlib.compress((b'\0' + b'\x80' * 20) * 10)) + chunk(b'IEND', b''))
+        picture = {'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/png',
+                                               'data': base64.b64encode(png).decode()}}
+        self.seed_lines([prompt('look'), call('ag1', 'Agent', {'description': 'Look', 'prompt': 'p'}),
+                         agent_result('ag1', 'a1111111111111111')])
+        self.write_sub('a1111111111111111', [sub_call('k1', 'Read', {'file_path': '/x/a.png'}),
+                                             sub_result('k1', [picture])])
+        self.start()
+        self.open_listed()
+        row = self.agent_row()
+        self.command('agent-row-click %d kids' % (row + 1))
+        self.assertEqual(len(self.kids(row)), 1)
+        recs = [l.split(' ') for l in self.command('print-agent-images').splitlines()[1:]]
+        self.assertEqual([r[1] for r in recs], ['bytes'], recs)
+        self.command('agent-image-open %s' % recs[0][0])
+        self.until(lambda: ' image=20x10' in self.command('print-state'), 'the picture opens')
+
     def test_no_subagent_file(self):
         self.seed_lines([prompt('look'), call('ag1', 'Agent', {'description': 'Look', 'prompt': 'p'}),
                          agent_result('ag1', 'a9999999999999999')])

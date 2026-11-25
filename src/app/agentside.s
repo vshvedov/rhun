@@ -2470,12 +2470,9 @@ FN agbook_toggle
     jmp 9f
 1:  cmp qword ptr [rip + bms + VEC_len], BM_MAX
     jb 2f
-    mov rax, [rip + bms + VEC_ptr]     # full: the oldest goes
+    mov rax, [rip + bms + VEC_ptr]     # full: the oldest goes, as a removal does (nothing points at it after)
     mov rdi, [rax]
-    call bm_free
-    lea rdi, [rip + bms]
-    xor esi, esi
-    call vec_del
+    call bm_drop
 2:  mov edi, BMK_SIZE
     call mem_alloc
     mov rbx, rax
@@ -2501,8 +2498,16 @@ FN agbook_toggle
     call st_save
 9:  EPILOGUE
 
-# bm_remove(BMK*): it goes (the shown one: none is shown)
+# bm_remove(BMK*): it goes (the shown one: none is shown), the state file written
 bm_remove:
+    PROLOGUE
+    call bm_drop
+    call st_save
+    EPILOGUE
+
+# bm_drop(BMK*): bm_remove without the write: out of the list, its Markdown and row cache, the selection
+#   gone, bm_gen moved (the panel's list is made again before anything reads it)
+bm_drop:
     PROLOGUE
     mov rbx, rdi
     xor ecx, ecx
@@ -2530,7 +2535,6 @@ bm_remove:
     mov dword ptr [rip + sp_sel], -1
     inc qword ptr [rip + bm_gen]
     mov dword ptr [rip + g_dirty], 1
-    call st_save
 9:  EPILOGUE
 
 # bm_row(AS*, BMK*) -> eax the conversation's row that is that reply, -1 none (found again only when the

@@ -187,6 +187,37 @@ class BookmarkTest(PanelCase):
         self.assertTrue(any(l.startswith('bm[1] ') for l in body), body)
 
 
+    def test_the_oldest_goes_at_the_limit_and_nothing_points_at_it(self):
+        """500 bookmarks at most: the oldest, shown and selected, goes as a removal does (review 2, finding 3)."""
+        self.panel()
+        self.chat('hello')
+        self.command('agent-prompt world')
+        self.command('wait-agent ready')
+        a = self.reply_row('ok: hello')
+        self.command(f'agent-bookmark {a}')
+        self.quit()
+        files = [p for p in self.work.rglob('*') if p.name.endswith('agents-side')]
+        self.assertEqual(len(files), 1, files)
+        lines = files[0].read_text(encoding='utf-8').splitlines()
+        mine = [l for l in lines if l.startswith('bm\t')]
+        self.assertEqual(len(mine), 1, lines)
+        others = ['bm\tother%d\t%x\t5\tfiller %d' % (i, i + 1, i) for i in range(499)]
+        files[0].write_text('\n'.join([l for l in lines if not l.startswith('bm\t')] + mine + others) + '\n',
+                            encoding='utf-8')
+        self.panel()
+        self.open_listed()
+        self.command('agent-side bookmarks')
+        self.command('agent-side-pick 1')
+        self.assertIn('bm[1] ok: hello', self.body())
+        b = self.reply_row('ok: world')
+        self.command(f'agent-bookmark {b}')                 # the 501st: "ok: hello" goes
+        self.command('key Delete')                          # nothing is selected now: nothing goes
+        body = self.body()
+        self.assertEqual([l for l in body if l.startswith('bm[')], ['bm[1] ok: world'])
+        self.assertNotIn('shown row=', ' '.join(body))
+        self.assertEqual(self.side()[0]['sel'], '-1')
+
+
 class DockTest(PanelCase):
     """Row 7.17: beside the conversation when the panel is wide, above it when not; sizes kept."""
 

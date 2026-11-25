@@ -4971,9 +4971,21 @@ FN agents_rows_cut
     test r12, r12
     jnz 8f
     mov dword ptr [rip + th_follow], 1
-8:  test r12, r12
+8:  mov qword ptr [rbx + AS_day], -1 # the day: the last pill's of the rows left, else none (row_init's)
+    mov r13, r12
+81: test r13, r13
+    jz 82f
+    dec r13
+    mov rdi, rbx
+    mov rsi, r13
+    call row_at
+    test dword ptr [rax + AM_flags], AMF_DAY
+    jz 81b
+    mov rdi, [rax + AM_t]
+    call agtime_day
+    mov [rbx + AS_day], rax
+82: test r12, r12
     jnz 9f
-    mov qword ptr [rbx + AS_day], -1
     mov rdi, rbx
     call agtask_clear
     mov rdi, [rbx + AS_rdata]

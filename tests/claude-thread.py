@@ -1054,6 +1054,16 @@ class TimeTest(ThreadCase):
         self.assertEqual(self.stamps(1)[2], last)
         self.assertEqual(self.stamps(2)[2], now)
 
+    def test_a_partial_cut_gives_the_day_back(self):
+        """Review 2 finding 12: rows cut off the end take their day with them: the next row of that day has the
+        pill again."""
+        self.seeded([('user', 'yesterday', '2026-11-19T12:00:00Z'), ('assistant', 'today', '2026-11-20T12:00:00Z')],
+                    'UTC')
+        self.assertEqual([d for _, _, d in self.rows()], ['1', '1'])
+        self.command('agent-test-truncate 1')
+        self.command('agent-test-row agent t=%d today again' % ms('2026-11-20T12:00:05'))
+        self.assertEqual([d for _, _, d in self.rows()], ['1', '1'])
+
     def test_no_pills_without_timestamps(self):
         rows = [('user', 'one', '2026-11-20T12:00:00Z'), ('assistant', 'two', '2026-11-20T12:00:01Z'),
                 ('user', 'three', '2026-11-21T12:00:00Z')]

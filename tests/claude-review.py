@@ -261,6 +261,13 @@ class OfferTest(OfferCase):
         self.assertEqual(offer['label'], 'Claude Code: outside.txt (file not read)')
         self.assertIn('+1 -1', self.review())
 
+    def test_a_path_that_climbs_out_of_the_project(self):
+        outside = self.work / 'outside.txt'
+        outside.write_text('one\ntwo\n', encoding='utf-8')
+        climbing = str(self.project) + '/' + os.path.relpath(outside, self.project)    # /project/../outside.txt
+        offer = self.edit('editjs ' + json.dumps({'file_path': climbing, 'old_string': 'two', 'new_string': 'TWO'}))
+        self.assertEqual(offer['label'], 'Claude Code: outside.txt (file not read)')
+
     def test_a_crlf_file_keeps_its_line_ends(self):
         (self.project / 'crlf.txt').write_bytes(b'one\r\ntwo\r\nthree\r\n')
         self.edit('editfile crlf.txt two TWO')

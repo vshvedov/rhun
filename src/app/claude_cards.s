@@ -5110,7 +5110,9 @@ offer_edit:
     mov rdi, rax
     PATH_ABSOLUTE rdi, 4f
     jmp 99f
-4:  cmp dword ptr [rsp + 24], 0
+4:  mov rdi, [rsp]              # its ".." resolved: "/project/../etc" is not inside the project
+    call path_normalize
+    cmp dword ptr [rsp + 24], 0
     je 5f
     mov rdi, r13                # Write: its content
     lea rsi, [rip + .Lk_content]

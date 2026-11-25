@@ -4091,6 +4091,20 @@ mention_sig:
 9:  mov rax, rbx                # (the hash goes back in rax: EPILOGUE restores rbx)
     EPILOGUE
 
+# browser_query() -> eax 1 when the query starts with "browser:" (any case): rows 1.19, 1.20, browser tabs, which
+#   come from Claude in Chrome (not connected by rhun): "No browser tabs found", as the extension says (POn)
+browser_query:
+    PROLOGUE
+    xor eax, eax
+    cmp qword ptr [rip + q_len], 8
+    jb 9f
+    mov rdi, [rip + q_ptr]
+    mov rsi, 8
+    lea rdx, [rip + .Lbrowser_colon]
+    mov ecx, 8
+    call str_ieq
+9:  EPILOGUE
+
 # terms_first() -> eax 1 when the query is a beginning of "terminal:" (the terminals before the files)
 terms_first:
     PROLOGUE
@@ -4173,7 +4187,15 @@ mention_terms:
 #   or after; "No files found" when there is none; the cut said at the end
 build_mention:
     PROLOGUE 32
-    call terms_first
+    call browser_query          # "browser:...": browser tabs only (the extension's findFiles), none here
+    test eax, eax
+    jz 0f
+    mov dword ptr [rip + tmpl + PR_kind], APK_EMPTY
+    lea rax, [rip + .Lno_tabs]
+    mov [rip + tmpl + PR_label], rax
+    call row_push
+    EPILOGUE
+0:  call terms_first
     mov [rsp + 24], eax
     test eax, eax
     jz 1f
@@ -4454,6 +4476,8 @@ empty: .byte 0
 .Lk_terminal: .asciz "terminal"
 .Lterminal_colon: .asciz "terminal:"
 .Lno_files: .asciz "No files found"
+.Lno_tabs: .asciz "No browser tabs found"
+.Lbrowser_colon: .asciz "browser:"
 .Lcut_note: .asciz "Only the first 200,000 files are listed."
 .Lrefused_generic: .asciz "This path can't be @-mentioned: "
 .Lf_check: .asciz "check"

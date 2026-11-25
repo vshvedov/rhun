@@ -789,7 +789,12 @@ class ChipsTest(AttachCase):
         self.chat('hello')
         add = rect(self.foot()['add_at'])
         self.command(f'click {add[0]} {add[1]}')
-        self.assertEqual(self.command('print-menu').splitlines(), ['Upload from computer', 'Add context'])
+        self.assertEqual(self.command('print-menu').splitlines(), ['Upload from computer', 'Add context',
+                                                                   'Browse the web'])
+        self.command('menu-pick Browse the web')        # rows 1.27, 1.19: no Claude in Chrome here; it says so
+        self.assertIn('Browser tabs come from a browser extension', self.command('print-toast'))
+        self.assertEqual(self.box(), '')
+        self.command(f'click {add[0]} {add[1]}')
         self.command('menu-pick Add context')
         self.assertEqual(self.box(), '@')
         self.assertIn('focus=1', self.command('print-agent-input'))

@@ -2711,14 +2711,16 @@ fit_line:
 # ---- the "+" menu and Attach File (task 3) ----
 
 # FN agatt_plus_menu(x, y): the footer's "+" was clicked (its top-left at x, y): its menu above it: "Upload from
-#   computer" (the path browser as Attach File), and, with DRVC_MENTIONS, "Add context" ("@" at the caret)
+#   computer" (the path browser as Attach File), and, with DRVC_MENTIONS, "Add context" ("@" at the caret) and
+#   "Browse the web" (rows 1.27, 1.19: browser tabs come from the agent's browser extension, which rhun does not
+#   connect: it says so instead of inserting "@browser:")
 FN agatt_plus_menu
     PROLOGUE
     mov r12d, edi
     mov r13d, esi
     call agatt_caps
     lea rdi, [rip + plus_items2]
-    mov ebx, 2
+    mov ebx, 3
     test eax, DRVC_MENTIONS
     jnz 1f
     lea rdi, [rip + plus_items1]
@@ -2779,6 +2781,15 @@ remote_refused:
     mov dword ptr [rip + g_dirty], 1
     mov eax, 1
 9:  EPILOGUE
+
+# FN agatt_browse(): "Browse the web": not available in rhun (no connection to a browser extension's tabs)
+FN agatt_browse
+    sub rsp, 8
+    lea rdi, [rip + .Lm_browse_no]
+    call app_toast
+    mov dword ptr [rip + g_dirty], 1
+    add rsp, 8
+    ret
 
 # FN agatt_add_context(): "Add context", "Mention file from this project…": the box gets the keys and "@" at
 #   its caret (the mention menu opens on it: task 7)
@@ -3054,6 +3065,8 @@ term_text: .zero SB_SIZE
 .Lfit7: .asciz "report (final) v2 - copy.txt"
 .Lm_upload: .asciz "Upload from computer"
 .Lm_context: .asciz "Add context"
+.Lm_browse: .asciz "Browse the web"
+.Lm_browse_no: .asciz "Browser tabs come from a browser extension that rhun does not connect: give the page's address instead."
 .Lat: .asciz "@"
 .Ld_live: .asciz "live="
 .Ld_bytes: .asciz " bytes="
@@ -3082,7 +3095,7 @@ chip_kinds: .ascii "-iddsftp"
 fit_names: .quad .Lfit0, .Lfit1, .Lfit2, .Lfit3, .Lfit4, .Lfit5, .Lfit6, .Lfit7
 fit_counts: .long 1, 5, 20, 0
 plus_items1: .quad .Lm_upload, agatt_upload, 0, 0
-plus_items2: .quad .Lm_upload, agatt_upload, .Lm_context, agatt_add_context, 0, 0
+plus_items2: .quad .Lm_upload, agatt_upload, .Lm_context, agatt_add_context, .Lm_browse, agatt_browse, 0, 0
 kind_words: .quad .Lk_none, .Lk_image, .Lk_pdf, .Lk_text, .Lk_selection, .Lk_openfile, .Lk_terminal, .Lk_paste
 tx_bare: .quad .Lx_license, .Lx_readme, .Lx_changelog, .Lx_authors, .Lx_contributors, .Lx_copying, 0
 # the extension's text names (Eje, WV@3688316, 2.1.328), sorted for a binary search

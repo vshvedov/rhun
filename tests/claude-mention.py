@@ -198,6 +198,14 @@ class MentionTest(MentionCase):
         self.assertIn('empty No files found', self.menu())
         self.assertEqual(self.filelist()['runs'], '0')
 
+    def test_browser_tabs_are_none(self):
+        """Rows 1.19, 1.20: "@browser:" asks for browser tabs only (the extension's findFiles); rhun has none."""
+        self.put('browser.txt')
+        self.open_box()
+        self.type('@browser:')
+        self.settle()
+        self.assertEqual(self.menu().splitlines()[1:], ['empty No browser tabs found'])
+
     def test_keys_wrap_enter_tab_escape(self):
         for name in ('a1.txt', 'a2.txt', 'a3.txt'):
             self.put(name)

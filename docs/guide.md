@@ -399,6 +399,7 @@ type them.
 | Resume conversation, `/resume`, `/continue` | Opens **Session history** (see [The list of conversations](#the-list-of-conversations)) |
 | Rewind, `/rewind` (`/checkpoint`, `/undo`); Export conversation, `/export [NAME]` | See [Fork, rewind and export](#fork-rewind-and-export) |
 | Focus view | Turns [focus view](#conversation-rows) on or off |
+| Enable Remote Control for all sessions | A switch: see [Remote Control](#side-questions-bookmarks-and-the-agent-map) |
 | Status, `/status`; Account & usage…, `/usage`; `/context` | Open the dialogs of [Status, usage and other dialogs](#status-usage-and-other-dialogs) |
 | Slash commands, `/skills`, `/help`; Memory, `/memory`; Instructions; Output styles | The same |
 | MCP servers, `/mcp`; Hooks, `/hooks`; Permissions, `/permissions` (`/allowed-tools`); Sandbox, `/sandbox`; Manage plugins, `/plugin` (`/plugins`, `/marketplace`) | Open the dialogs of [Claude Code's configuration](#claude-codes-configuration) |
@@ -457,8 +458,10 @@ as typing would, and sends no prompt; **Slash commands** starts nothing.
 Five dialogs change Claude Code's own configuration, from the command menu's Customize section or
 typed in the box. They list what the conversation's Claude Code reports, and every change goes
 through Claude Code itself (`claude mcp add`, `claude edit-hook`, `claude plugin install` and the
-like, run in the conversation's folder with its environment): rhun never writes a settings file.
-Nothing changes but what you do in the dialog, saved where it says; removing something asks first.
+like, run in the conversation's folder with its environment), and Claude Code writes the settings
+file you pick, as with the VS Code extension. Nothing changes but what you do in the dialog, saved
+where it says; removing something asks first. (The one setting rhun writes itself, as the extension
+does, is the Remote Control switch's: see [Remote Control](#side-questions-bookmarks-and-the-agent-map).)
 
 - **MCP servers** (`/mcp`): the servers by where they are configured (Project, Local, User,
   claude.ai, Managed, Enterprise) with their state and a filter. A server's page has **Reconnect**,
@@ -517,8 +520,9 @@ the same request does not ask again, such as "Yes, allow touch a.txt for this pr
 back only Claude Code's own suggestion, and Claude Code saves it where the button says: **this
 project (just you)** (`.claude/settings.local.json`), **all projects** (`~/.claude/settings.json`),
 **this project (shared)** (`.claude/settings.json`) or **this session** (not saved). A click on the
-place, or Left and Right on the button, changes it; the place you chose last is the first one next
-time in the project. Under the button a line names anything else the answer does, such as "Also
+place, or Left and Right on the button, changes it; the place you chose last, **all projects**
+included, is the first one next time in the project (and the first of **Add rule…** in Permissions
+when it is a settings file), as in the VS Code extension. Under the button a line names anything else the answer does, such as "Also
 allows access to DIR/" or "Also switches to “Edit automatically” for this session". A suggestion
 to switch to Bypass permissions is dropped without **Allow bypass permissions**.
 
@@ -641,6 +645,17 @@ command turns it off or dismisses the error. It needs Claude Code to be running 
 a command needs it (sending the session to a Claude Project), a card says "Remote Control is off, so
 this session can't be sent" with **Turn on Remote Control** ("Turning on Remote Control…" until Claude
 Code reports it connected or failed) and **Not now**.
+
+**Enable Remote Control for all sessions**, a switch in the command menu's Settings section, connects
+every conversation to claude.ai/code when its Claude Code starts. As the VS Code extension does, rhun
+writes the choice into Claude Code's user settings (`remoteControlAtStartup` in
+`~/.claude/settings.json`, or the folder `CLAUDE_CONFIG_DIR` names; only that key changes, and the
+file is written back with two spaces a level), since Claude Code offers no command for it. The running
+conversations then follow it: each is told, and its Remote Control turns on or off as Claude Code's
+settings now say (a `false` in the project's own settings wins). When the file cannot be read as JSON
+nothing is written and a message says why. The switch shows what Claude Code reports; it is hidden
+when Claude Code says Remote Control is not available, and in a remote window. When your
+organization locks the setting, the switch can only be turned off.
 
 **Commands for the terminal.** `/agents` works only in Claude Code's own terminal interface. A card
 asks "Continue in Terminal to configure agents?": **Continue in Terminal** puts `claude /agents` in

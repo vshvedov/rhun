@@ -3655,7 +3655,7 @@ ENDSTRUCT ACH_SIZE
 .equ OA_FORK_EXPORT, 62         #   export_conversation
 .equ ACT_PLUGIN_LINK, 48       # DRV_action(0, ACT_PLUGIN_LINK, "PLUGIN\0SOURCE\0", len): a rhun://NAME/install-plugin
                                 #   link (agenttab.s): Manage Plugins on that plugin for the box's conversation
-.equ ACT_COUNT, 49
+.equ ACT_COUNT, 50              # (ACT_RCALL, 49: rows 2.22, 4.14's block)
 # (end of phase 6's p6b block)
 # the dialog shell (agentdlg.s): a row (DGR), its kinds and flags, a button's flags, a dialog's ops table
 .equ ID_AGDLG, 0x8e00           # the dialog's controls: + DID_* (agentdlg.s), to 0x8fff
@@ -5114,4 +5114,9 @@ ENDSTRUCT SGR_SIZE
 .equ RCS_CONNECTING, 1          # asked, not connected yet
 .equ RCS_ON, 2                  # connected: the pill opens AL_rcurl
 .equ RCS_ERROR, 3               # failed: the pill says why until it is dismissed
+# Remote Control for all sessions (row 1.24's Settings switch, the extension's remote-control-at-startup;
+#   claude_side.s): the act, and its two requests to each running program
+.equ ACT_RCALL, 49              # the switch: Claude Code's user settings' remoteControlAtStartup (DRV_action)
+.equ OA_SIDE_RCFLAG, 44         #   apply_flag_settings {remoteControlAtStartup} after the switch wrote it
+.equ OA_SIDE_RCGET, 45          #   get_settings: then Remote Control follows the setting (the extension's uqe)
 # ---- end rows 2.22, 4.14 ----

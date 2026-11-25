@@ -4,9 +4,10 @@ bookmarks and the reply's bookmark button), how they dock, the agent map (/tasks
 (/agents), Claude in Chrome (/chrome), Remote Control (/remote-control), and the command menu's entries for
 them, against the fake CLI (tests/scripts/fake-claude.py), over the control socket. It imports
 tests/claude-chat.py for its cases: every rhun gets its own HOME and XDG folders, an environment without
-CLAUDE* or ANTHROPIC* variables, and a config whose [claude] section starts the fake. Nothing here writes
-Claude Code's settings."""
+CLAUDE* or ANTHROPIC* variables, and a config whose [claude] section starts the fake. The Remote Control for all
+sessions switch writes Claude Code's user settings: the test HOME's .claude/settings.json, never ~/.claude."""
 import importlib.util
+import json
 from pathlib import Path
 import re
 import unittest
@@ -515,6 +516,136 @@ class RemoteTest(PanelCase):
         if '/remote-control' in self.command('print-agent-input').splitlines()[0]:
             self.command('key Return')
         self.until(lambda: self.state() == 'on', 'on from the menu')
+
+
+class RemoteAllTest(PanelCase):
+    """Row 1.24's "Enable Remote Control for all sessions" (rows 2.22, 4.14): as the extension's host, the switch
+    writes remoteControlAtStartup into Claude Code's user settings file itself (2.1.330's update_settings refuses
+    the key), tells each running program (apply_flag_settings) and turns its Remote Control as the setting says;
+    a program that starts turns it on when initialize says remote_control_auto_enable."""
+    LABEL = 'Enable Remote Control for all sessions'
+
+    def remote(self):
+        self.command('shot /dev/null')
+        return dict(re.findall(r'(\w+)=(\S+)', self.command('print-agent-remote').partition('\t')[0]))['remote']
+
+    def user_file(self):
+        return self.work / '.claude' / 'settings.json'
+
+    def row(self):
+        """The switch's row of the button menu: (its number, its flags), or None."""
+        self.command('agent-menu')
+        try:
+            for line in self.command('print-agent-menu').splitlines():
+                if line.startswith('row ') and line.split(' ', 2)[2].startswith(self.LABEL + '\t'):
+                    parts = line.split('\t')
+                    self.assertEqual(parts[1], 'Connect all sessions to claude.ai/code automatically so you can '
+                                               'view and control them from the web.')
+                    return line.split()[1], parts[-1]
+            return None
+        finally:
+            self.command('key Escape')
+
+    def flip(self):
+        number, _ = self.row()
+        self.command('agent-menu')
+        self.command('agent-menu-pick ' + number)
+        self.command('key Escape')
+
+    def toast(self):
+        return self.command('print-toast').strip().partition('toast=')[2]
+
+    def test_the_switch_writes_the_setting_and_follows_it(self):
+        self.user_file().parent.mkdir(parents=True, exist_ok=True)
+        self.user_file().write_text('{"model": "opus", "permissions": {"allow": ["Bash(ls)"]}, "n": 1.50, '
+                                    '"remoteControlAtStartup": false, "z": "\u00e9"}', encoding='utf-8')
+        self.panel()
+        self.chat('hello')
+        self.assertEqual(self.row()[1], 'switch')
+        self.flip()
+        self.until(lambda: self.remote() == 'on', 'Remote Control on')
+        self.assertEqual(self.user_file().read_text(encoding='utf-8'),
+                         '{\n  "model": "opus",\n  "permissions": {\n    "allow": [\n      "Bash(ls)"\n    ]\n  },\n'
+                         '  "n": 1.50,\n  "remoteControlAtStartup": true,\n  "z": "\u00e9"\n}\n')
+        self.assertEqual(self.control('apply_flag_settings')[-1], {'subtype': 'apply_flag_settings',
+                                                                   'settings': {'remoteControlAtStartup': True}})
+        self.assertEqual(self.control('update_settings'), [])
+        self.assertEqual(self.row()[1], 'on,switch')
+        self.flip()
+        self.until(lambda: self.remote() == 'off', 'Remote Control off')
+        self.assertFalse(json.loads(self.user_file().read_text())['remoteControlAtStartup'])
+        self.assertEqual(self.logged('remote'), [True, False])
+        self.assertEqual(self.row()[1], 'switch')
+
+    def test_no_settings_file_yet(self):
+        self.panel()
+        self.chat('hello')
+        self.flip()
+        self.until(lambda: self.remote() == 'on', 'Remote Control on')
+        self.assertEqual(self.user_file().read_text(), '{\n  "remoteControlAtStartup": true\n}\n')
+
+    def test_a_start_turns_it_on(self):
+        self.user_file().parent.mkdir(parents=True, exist_ok=True)
+        self.user_file().write_text('{"remoteControlAtStartup": true}')
+        self.panel()
+        self.chat('hello')
+        self.until(lambda: self.remote() == 'on', 'Remote Control on at the start')
+        self.assertEqual(self.logged('remote'), [True])
+        self.assertEqual(self.row()[1], 'on,switch')
+
+    def test_a_local_false_wins(self):
+        """The binary's resolver: repo-scoped settings cannot turn it on, a false there turns it off."""
+        self.user_file().parent.mkdir(parents=True, exist_ok=True)
+        self.user_file().write_text('{"remoteControlAtStartup": true}')
+        local = self.project / '.claude' / 'settings.local.json'
+        local.parent.mkdir(parents=True, exist_ok=True)
+        local.write_text('{"remoteControlAtStartup": false}')
+        self.panel()
+        self.chat('hello')
+        self.assertEqual(self.logged('remote'), [])
+        self.assertEqual(self.row()[1], 'switch')       # effective: the local false
+        self.flip()                                     # on: written, but this project's program stays off
+        self.until(lambda: len(self.control('get_settings')) >= 2, 'get_settings again')
+        self.command('wait-agent ready')
+        self.assertTrue(json.loads(self.user_file().read_text())['remoteControlAtStartup'])
+        self.assertEqual(self.logged('remote'), [])
+        self.assertEqual(self.remote(), 'off')
+
+    def test_a_bad_settings_file_is_left_alone(self):
+        self.user_file().parent.mkdir(parents=True, exist_ok=True)
+        self.user_file().write_text('{"model": ')
+        self.panel()
+        self.chat('hello')
+        self.flip()
+        self.assertEqual(self.toast(), 'Failed to update "Enable Remote Control for all sessions": Settings file is not '
+                                       f'valid JSON: {self.user_file()}')
+        self.assertEqual(self.user_file().read_text(), '{"model": ')
+        self.assertEqual(self.control('apply_flag_settings'), [])
+        self.user_file().write_text('[1]')
+        self.flip()
+        self.assertEqual(self.toast(), 'Failed to update "Enable Remote Control for all sessions": Settings file is not '
+                                       f'a JSON object: {self.user_file()}')
+
+    def test_locked(self):
+        self.user_file().parent.mkdir(parents=True, exist_ok=True)
+        self.user_file().write_text('{"remoteControlAtStartup": true}')
+        self.panel(env={'FAKE_CLAUDE_RC_LOCK': 'Remote Control is turned off by your organization'})
+        self.chat('hello')
+        self.until(lambda: self.row()[1] == 'on,switch', 'the setting read')
+        self.flip()                                     # locked: it can only be turned off
+        self.until(lambda: self.remote() == 'off', 'off')
+        self.assertFalse(json.loads(self.user_file().read_text())['remoteControlAtStartup'])
+        self.assertEqual(self.toast(), "Remote Control turned off. It can't be turned back on while your "
+                                       "organization's lock is in place.")
+        self.flip()
+        self.assertEqual(self.toast(), 'Failed to update "Enable Remote Control for all sessions": Remote Control is '
+                                       'turned off by your organization')
+        self.assertFalse(json.loads(self.user_file().read_text())['remoteControlAtStartup'])
+
+    def test_hidden_when_unavailable(self):
+        self.panel(env={'FAKE_CLAUDE_REMOTE': 'unavailable'})
+        self.chat('hello')
+        self.assertIsNone(self.row())
 
 
 class MenuTest(PanelCase):

@@ -21,6 +21,18 @@
 #   shown as connected unless the program says so. The offer card (send_to_project_remote_control_offer,
 #   claude_cards.s) asks claude_side_rc_offer to turn it on and is answered when the bridge settles
 #   (claude_rc_settled).
+# Remote Control for all sessions (row 1.24's Settings switch, the extension's remote-control-at-startup, which
+#   2.1.330's update_settings refuses: "update_settings keys not allowed: remoteControlAtStartup"): as the
+#   extension's host does, the switch writes remoteControlAtStartup into Claude Code's user settings file
+#   (<claude dir>/settings.json: read, that one key set, written back with two blanks a level, as its s3 does),
+#   then asks each running program apply_flag_settings {remoteControlAtStartup} and get_settings, and turns
+#   that program's Remote Control on or off as the setting now says (the extension's uqe: a project or local
+#   false wins, then the policy's, then the user's, then the value written). A program that starts turns it
+#   on when initialize says remote_control_auto_enable (and remote_control_auto_on_by_default false, or
+#   ide_rc_auto_enable_gate: the extension's cqe) and remote_control_available is not false. The switch shows
+#   get_settings' effective value, else initialize's remote_control_auto_enable; it is hidden while
+#   initialize said remote_control_available false (and no lock), and in a remote window. A lock
+#   (get_settings' remote_control_policy_lock_reason) lets it only be turned off.
 # The hand-off (4.22, 7.4): a command that only works in Claude Code's own terminal interface (/agents) gives
 #   the card "Continue in Terminal to configure agents?" (1 Continue in Terminal, 2 Never mind); Continue
 #   puts `claude /agents` in rhun's terminal prompt (DRV_terminal with claude_term_extra) and the card
@@ -31,6 +43,9 @@
 #   claude_side_answer(AL*, control_response record, act, n)   h_response
 #   claude_side_system(AL*, record)                             h_system
 #   claude_side_rc_offer(AL*) -> rax cstr or 0                  the offer card's "Turn on Remote Control"
+#   claude_rca_shows(AS* or 0, kind) -> eax shown, ecx APRF_ON   the switch's row (claude_session.s's menu)
+#   claude_rca_read(get_settings' response object)              its value and lock, from every answer
+#   claude_rca_init(AL*, initialize's response object)          Remote Control at the start
 #   claude_term_extra: cstr or 0, a word cl_terminal adds after the program (taken once)
 .include "rhun.inc"
 
@@ -48,6 +63,19 @@ side_len: .quad 0
 side_al: .quad 0
 ho_step: .long 0
 rc_want: .long 0
+rpath: .zero SB_SIZE            # Remote Control for all sessions: the settings file's path,
+rsb: .zero SB_SIZE              #   the file as written back (compact, then with blanks)
+rsb2: .zero SB_SIZE
+rmsg: .zero SB_SIZE             #   the toast's words
+.p2align 3
+rca_lock: .quad 0               # owned cstr: get_settings' remote_control_policy_lock_reason, or 0
+.data
+.p2align 2
+rca_val: .long -1               # get_settings' effective remoteControlAtStartup (or as written last), -1 unknown
+rca_def: .long 0                # initialize's remote_control_auto_enable (the extension's AutoEnableDefault)
+rca_avail: .long 1              # initialize's remote_control_available was not false
+rca_pend: .long 0               # the value the switch wrote last: the verdict's last word
+.bss
 
 .text
 
@@ -59,6 +87,8 @@ FN claude_side_action
     mov r12d, esi
     mov r13, rdx
     mov r14, rcx
+    cmp r12d, ACT_RCALL         # Remote Control for all sessions: with or without a conversation
+    je .Lsa_rcall
     xor eax, eax
     test rbx, rbx
     jz 9f
@@ -112,6 +142,12 @@ FN claude_side_action
 .Lsa_remote:
     mov rdi, rbx
     call rc_toggle
+    mov eax, 1
+    EPILOGUE
+.Lsa_rcall:
+    mov rdi, r13
+    mov rsi, r14
+    call rca_flip
     mov eax, 1
     EPILOGUE
 .Lsa_handoff:
@@ -428,7 +464,15 @@ rc_set:
     cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
     jne 7f
     cmp dword ptr [rbx + AL_state], ALS_STARTING
-    je 7f
+    jne rc_ask
+    jmp 7f
+
+# rc_req(AL*, want) -> eax 1 asked: rc_set's request on a program that is up, starting or not (the setting's)
+rc_req:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+rc_ask:
     mov [rip + rc_want], r12d
     mov rdi, rbx
     mov esi, OA_SIDE_REMOTE
@@ -552,6 +596,544 @@ FN claude_side_rc_offer
     xor eax, eax
 9:  EPILOGUE
 
+# ---- Remote Control for all sessions ----
+
+# rca_on() -> eax 1 while the switch shows on: locked, only a value of true; else the value Claude Code
+#   reported (or rhun wrote) last, else initialize's remote_control_auto_enable (the extension's ht)
+rca_on:
+    mov eax, [rip + rca_val]
+    cmp qword ptr [rip + rca_lock], 0
+    jne 1f
+    test eax, eax
+    jns 9f
+    mov eax, [rip + rca_def]
+    ret
+1:  cmp eax, 1
+    sete al
+    movzx eax, al
+9:  ret
+
+# FN claude_rca_shows(AS* or 0, kind) -> eax 1 shown, ecx APRF_ON while on; rdx, r8, r9 0: not in a remote
+#   window (its settings file is the host's), not while initialize said remote_control_available false
+#   unless a lock is in place (the extension's rule)
+FN claude_rca_shows
+    xor eax, eax
+    xor ecx, ecx
+    xor edx, edx
+    xor r8d, r8d
+    xor r9d, r9d
+    cmp dword ptr [rip + g_remote], 0
+    jne 9f
+    cmp qword ptr [rip + rca_lock], 0
+    jne 1f
+    cmp dword ptr [rip + rca_avail], 0
+    je 9f
+1:  call rca_on
+    xor ecx, ecx
+    test eax, eax
+    jz 2f
+    mov ecx, APRF_ON
+2:  mov eax, 1
+    xor edx, edx
+9:  ret
+
+# FN claude_rca_read(get_settings' response object): effective.remoteControlAtStartup (a boolean, else
+#   unknown) and remote_control_policy_lock_reason (copied); a change redraws the menu's row
+FN claude_rca_read
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, [rip + rca_val]
+    mov r13, [rip + rca_lock]
+    mov rdi, rbx
+    call json_type
+    cmp eax, JT_OBJ
+    jne 9f
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_effective]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lk_rca]
+    call json_get
+    mov rdi, rax
+    call json_bool
+    test edx, edx
+    jnz 1f
+    mov eax, -1
+1:  mov [rip + rca_val], eax
+    cmp eax, r12d
+    je 2f
+    inc qword ptr [rip + g_agentcfg_gen]
+    mov dword ptr [rip + g_dirty], 1
+2:  mov rdi, rbx
+    lea rsi, [rip + .Lk_lock]
+    call json_get
+    mov rdi, rax
+    call json_str
+    mov r14, rax
+    mov r15, rdx
+    test r13, r13               # the same text: kept
+    jz 3f
+    test rdx, rdx
+    jz 4f
+    mov rdi, r13
+    call strlen
+    cmp rax, r15
+    jne 4f
+    mov rdi, r13
+    mov rsi, r14
+    mov rdx, r15
+    call memeq
+    test eax, eax
+    jnz 9f
+4:  mov rdi, r13
+    call mem_free
+    mov qword ptr [rip + rca_lock], 0
+    inc qword ptr [rip + g_agentcfg_gen]
+    mov dword ptr [rip + g_dirty], 1
+3:  test r15, r15
+    jz 9f
+    mov rdi, r14
+    mov rsi, r15
+    call mem_dup
+    mov [rip + rca_lock], rax
+    inc qword ptr [rip + g_agentcfg_gen]
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# FN claude_rca_init(AL*, initialize's response object): remote_control_available and _auto_enable kept for the
+#   switch; when the program says Remote Control starts on its own (remote_control_auto_enable true, and
+#   remote_control_auto_on_by_default false or ide_rc_auto_enable_gate true: the extension's cqe), it is
+#   available and it is off here, it is asked on (remote_control {enabled: true})
+FN claude_rca_init
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, rsi
+    call json_type
+    cmp eax, JT_OBJ
+    jne 9f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_rc_avail]
+    call json_get
+    mov rdi, rax
+    call json_bool
+    mov r13d, 1                 # available unless it says false
+    test edx, edx
+    jz 1f
+    mov r13d, eax
+1:  mov rdi, r12
+    lea rsi, [rip + .Lk_rc_auto]
+    call json_get
+    mov rdi, rax
+    call json_bool
+    and eax, edx
+    mov r14d, eax               # auto_enable true
+    mov eax, [rip + rca_avail]
+    cmp eax, r13d
+    jne 2f
+    mov eax, [rip + rca_def]
+    cmp eax, r14d
+    je 3f
+2:  mov [rip + rca_avail], r13d
+    mov [rip + rca_def], r14d
+    inc qword ptr [rip + g_agentcfg_gen]
+    mov dword ptr [rip + g_dirty], 1
+3:  test r14d, r14d
+    jz 9f
+    test r13d, r13d
+    jz 9f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_rc_bydefault]
+    call json_get
+    mov rdi, rax
+    call json_bool
+    test edx, edx               # on_by_default === false
+    jz 4f
+    test eax, eax
+    jz 5f
+4:  mov rdi, r12
+    lea rsi, [rip + .Lk_rc_gate]
+    call json_get
+    mov rdi, rax
+    call json_bool
+    and eax, edx                # gate === true
+    jz 9f
+5:  cmp dword ptr [rbx + AL_rc], RCS_OFF
+    jne 9f
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
+    mov rdi, rbx
+    mov esi, 1
+    call rc_req
+9:  EPILOGUE
+
+# rca_verdict(get_settings' response object) -> eax 1 when this program's Remote Control should be on now (the
+#   extension's uqe): a project's or local settings' false, else the policy's value, else the user's, else
+#   the value the switch wrote
+rca_verdict:
+    PROLOGUE 16
+    lea rsi, [rip + .Lk_sources]
+    call json_get
+    mov rbx, rax
+    xor r12d, r12d              # the item
+    mov r13d, -1                # the policy's
+    mov r14d, -1                # the user's
+    mov dword ptr [rsp], 0      # a project's or local false
+1:  mov rdi, rbx
+    mov esi, r12d
+    call json_at
+    test rax, rax
+    jz 5f
+    mov r15, rax
+    mov rdi, rax
+    lea rsi, [rip + .Lk_settings]
+    call json_get
+    mov rdi, rax
+    lea rsi, [rip + .Lk_rca]
+    call json_get
+    mov rdi, rax
+    call json_bool
+    test edx, edx
+    jz 4f
+    mov [rsp + 4], eax
+    mov rdi, r15
+    lea rsi, [rip + .Lk_source]
+    call json_get
+    mov [rsp + 8], rax
+    mov rdi, rax
+    lea rsi, [rip + .Ls_policy]
+    call json_is
+    test eax, eax
+    jz 2f
+    mov r13d, [rsp + 4]
+    jmp 4f
+2:  mov rdi, [rsp + 8]
+    lea rsi, [rip + .Ls_user]
+    call json_is
+    test eax, eax
+    jz 3f
+    mov r14d, [rsp + 4]
+    jmp 4f
+3:  cmp dword ptr [rsp + 4], 0  # true there counts for nothing (the CLI ignores it); false: off
+    jne 4f
+    mov rdi, [rsp + 8]
+    lea rsi, [rip + .Ls_project]
+    call json_is
+    test eax, eax
+    jnz 31f
+    mov rdi, [rsp + 8]
+    lea rsi, [rip + .Ls_local]
+    call json_is
+    test eax, eax
+    jz 4f
+31: mov dword ptr [rsp], 1
+4:  inc r12d
+    jmp 1b
+5:  xor eax, eax
+    cmp dword ptr [rsp], 0
+    jne 9f
+    mov eax, r13d
+    test eax, eax
+    jns 9f
+    mov eax, r14d
+    test eax, eax
+    jns 9f
+    mov eax, [rip + rca_pend]
+9:  EPILOGUE
+
+# rca_follow(AL*, on): its Remote Control as the setting says: on while it is off or failed (and available),
+#   off while it is not off (the extension's applyRemoteControlAtStartupToChannels)
+rca_follow:
+    PROLOGUE
+    mov rbx, rdi
+    mov r12d, esi
+    mov eax, [rbx + AL_rc]
+    test r12d, r12d
+    jz 2f
+    cmp dword ptr [rip + rca_avail], 0
+    je 9f
+    cmp eax, RCS_OFF
+    je 1f
+    cmp eax, RCS_ERROR
+    jne 9f
+1:  mov rdi, rbx
+    mov esi, 1
+    call rc_req
+    EPILOGUE
+2:  cmp eax, RCS_OFF
+    je 9f
+    mov rdi, rbx
+    xor esi, esi
+    call rc_req
+9:  EPILOGUE
+
+# rca_flip(arg ptr, len): the switch: "on", "off", else the state it shows flipped. Locked: only off (turning it
+#   off says it stays off). The user settings file gets the value (rca_write); a failure is a toast,
+#   "Failed to update "Enable Remote Control for all sessions": WHY" (the extension's). Then every running
+#   program of Claude Code is told (apply_flag_settings) and asked get_settings: its answer turns its Remote
+#   Control on or off (rca_follow)
+rca_flip:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    cmp dword ptr [rip + g_remote], 0
+    jne 9f
+    call rca_on
+    mov r14d, eax               # shown now
+    xor ebx, ebx
+    test eax, eax
+    sete bl                     # flipped
+    cmp r13, 2
+    jne 1f
+    cmp word ptr [r12], 0x6e6f  # "on"
+    jne 2f
+    mov ebx, 1
+    jmp 2f
+1:  cmp r13, 3
+    jne 2f
+    cmp word ptr [r12], 0x666f  # "of(f)"
+    jne 2f
+    cmp byte ptr [r12 + 2], 'f'
+    jne 2f
+    xor ebx, ebx
+2:  mov r15, [rip + rca_lock]
+    test r15, r15
+    jz 3f
+    test ebx, ebx
+    jz 3f
+    mov rdi, r15                # locked: never on
+    call rca_fail
+    jmp 9f
+3:  mov edi, ebx
+    call rca_write
+    test rax, rax
+    jz 4f
+    mov rdi, rax
+    call rca_fail
+    jmp 9f
+4:  mov [rip + rca_val], ebx
+    mov [rip + rca_pend], ebx
+    inc qword ptr [rip + g_agentcfg_gen]
+    mov dword ptr [rip + g_dirty], 1
+    test r15, r15
+    jz 5f
+    lea rdi, [rip + .Lrc_revoked]   # turned off under a lock
+    call app_toast
+5:  mov edi, AG_CLAUDE
+    call agent_drv_for_kind
+    mov r14, rax
+    test rax, rax
+    jz 9f
+    xor r12d, r12d
+6:  mov edi, r12d
+    call agent_live_at
+    test rax, rax
+    jz 9f
+    mov r13, rax
+    inc r12d
+    cmp [r13 + AL_drv], r14
+    jne 6b
+    cmp dword ptr [r13 + AL_cn + CN_state], CN_UP
+    jne 6b
+    cmp dword ptr [r13 + AL_state], ALS_STARTING
+    je 6b
+    mov rdi, r13
+    mov esi, OA_SIDE_RCFLAG
+    lea rdx, [rip + .Lv_apply_flags]
+    lea rcx, [rip + fill_rca]
+    call claude_side_req
+    cmp dword ptr [r13 + AL_cn + CN_state], CN_UP
+    jne 6b
+    mov rdi, r13
+    mov esi, OA_SIDE_RCGET
+    lea rdx, [rip + .Lv_get_settings]
+    xor ecx, ecx
+    call claude_side_req
+    jmp 6b
+9:  EPILOGUE
+
+fill_rca:                       # "settings": {"remoteControlAtStartup": B}
+    PROLOGUE
+    mov rbx, rdi
+    lea rsi, [rip + .Lk_settings]
+    call jw_key
+    mov rdi, rbx
+    call jw_obj
+    mov rdi, rbx
+    lea rsi, [rip + .Lk_rca]
+    call jw_key
+    mov rdi, rbx
+    mov esi, [rip + rca_pend]
+    call jw_bool
+    mov rdi, rbx
+    call jw_end_obj
+    EPILOGUE
+
+# rca_fail(why cstr): the toast "Failed to update "Enable Remote Control for all sessions": WHY"
+rca_fail:
+    PROLOGUE
+    mov rbx, rdi
+    lea rdi, [rip + rmsg]
+    call sb_clear
+    lea rdi, [rip + rmsg]
+    lea rsi, [rip + .Lrc_failed]
+    call sb_push_cstr
+    lea rdi, [rip + rmsg]
+    mov rsi, rbx
+    call sb_push_cstr
+    lea rdi, [rip + rmsg]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + rmsg + SB_ptr]
+    call app_toast
+    EPILOGUE
+
+# rca_write(on) -> rax 0 written, else why not (cstr, in rsb2 or static): <claude dir>/settings.json read
+#   (missing: {}), remoteControlAtStartup set in its place (else added last), every other member written back
+#   as it was, the whole with two blanks a level and a newline (the extension's JSON.stringify(l, null, 2)),
+#   through a sibling file (file_write_all). Not JSON, not an object: the extension's words
+rca_write:
+    PROLOGUE 16
+    mov [rsp], edi
+    lea rdi, [rip + rpath]
+    call sb_clear
+    lea rdi, [rip + rpath]
+    call claude_dir
+    lea rbx, [rip + .Lrc_nodir]
+    test eax, eax
+    jz .Lrw_ret
+    lea rdi, [rip + rpath]
+    lea rsi, [rip + .Lrc_file]
+    call sb_push_cstr
+    lea rdi, [rip + rpath]
+    xor esi, esi
+    call sb_push_byte
+    mov rdi, [rip + rpath + SB_ptr]
+    call file_read_all
+    mov r12, rax                # the text (mem_free it), or 0
+    mov r13, rdx
+    test rax, rax
+    jnz 1f
+    cmp rdx, -2                 # ENOENT: none yet
+    je 1f
+    lea rsi, [rip + .Lrc_unread]
+    jmp .Lrw_why
+1:  lea rdi, [rip + rsb]
+    call jw_begin
+    lea rdi, [rip + rsb]
+    call jw_obj
+    xor r15d, r15d              # the key was there
+    test r12, r12
+    jz 5f
+    mov rdi, r12
+    mov rsi, r13
+    call json_parse
+    mov r14, rax
+    lea rsi, [rip + .Lrc_notjson]
+    test rax, rax
+    jz .Lrw_free
+    mov rdi, rax
+    call json_type
+    lea rsi, [rip + .Lrc_notobj]
+    cmp eax, JT_OBJ
+    jne .Lrw_free
+    xor ebx, ebx
+2:  mov rdi, r14
+    mov esi, ebx
+    call json_pair
+    test rax, rax
+    jz 5f
+    mov [rsp + 8], rdx
+    mov rdi, rax
+    call json_str
+    mov rcx, rdx
+    mov rdx, rax
+    lea rdi, [rip + rsb]
+    mov rsi, rdx
+    mov rdx, rcx
+    mov [rsp + 4], ecx          # (its length, for the comparison below)
+    call jw_keyn
+    mov rdi, r14                # this pair's key once more: ours?
+    mov esi, ebx
+    call json_pair
+    mov rdi, rax
+    lea rsi, [rip + .Lk_rca]
+    call json_is
+    test eax, eax
+    jz 3f
+    mov r15d, 1
+    lea rdi, [rip + rsb]
+    mov esi, [rsp]
+    call jw_bool
+    jmp 4f
+3:  lea rdi, [rip + rsb]
+    mov rsi, [rsp + 8]
+    call jw_jv
+    lea rsi, [rip + .Lrc_deep]
+    test eax, eax
+    jz .Lrw_free
+4:  inc ebx
+    jmp 2b
+5:  test r15d, r15d
+    jnz 6f
+    lea rdi, [rip + rsb]
+    lea rsi, [rip + .Lk_rca]
+    call jw_key
+    lea rdi, [rip + rsb]
+    mov esi, [rsp]
+    call jw_bool
+6:  lea rdi, [rip + rsb]
+    call jw_end_obj
+    test r12, r12               # (its numbers were its text's: written now)
+    jz 7f
+    mov rdi, r12
+    call mem_free
+7:  mov rdi, [rip + rsb + SB_ptr]
+    mov rsi, [rip + rsb + SB_len]
+    call json_parse
+    mov rbx, rax
+    lea rdi, [rip + rsb2]
+    call sb_clear
+    lea rdi, [rip + rsb2]
+    mov rsi, rbx
+    call json_pretty
+    lea rdi, [rip + rsb2]
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, [rip + rpath + SB_ptr]
+    call mkdir_parent
+    mov rdi, [rip + rpath + SB_ptr]
+    mov rsi, [rip + rsb2 + SB_ptr]
+    mov rdx, [rip + rsb2 + SB_len]
+    call file_write_all
+    xor ebx, ebx
+    test rax, rax
+    jz .Lrw_ret
+    lea rsi, [rip + .Lrc_unsaved]
+    jmp .Lrw_why
+.Lrw_free:
+    mov rbx, rsi
+    mov rdi, r12
+    call mem_free
+    mov rsi, rbx
+.Lrw_why:                       # rsi: the words before the path
+    lea rdi, [rip + rsb2]
+    mov rbx, rsi
+    call sb_clear
+    lea rdi, [rip + rsb2]
+    mov rsi, rbx
+    call sb_push_cstr
+    lea rdi, [rip + rsb2]
+    mov rsi, [rip + rpath + SB_ptr]
+    call sb_push_cstr
+    lea rdi, [rip + rsb2]
+    xor esi, esi
+    call sb_push_byte
+    mov rbx, [rip + rsb2 + SB_ptr]
+.Lrw_ret:
+    mov rax, rbx
+    EPILOGUE
+
 # ---- answers ----
 
 # FN claude_side_answer(AL*, control_response record, act, n): an answer to one of this file's requests
@@ -576,7 +1158,24 @@ FN claude_side_answer
     je .Lan_remote
     cmp r13d, OA_SIDE_REMOTE_OFF
     je .Lan_remote_off
-    EPILOGUE
+    cmp r13d, OA_SIDE_RCGET
+    je .Lan_rcget
+    EPILOGUE                    # (OA_SIDE_RCFLAG: nothing; get_settings follows it)
+.Lan_rcget:
+    test r15d, r15d
+    jz 9f
+    mov rdi, r12
+    lea rsi, [rip + .Lk_response]
+    call json_get
+    mov r13, rax
+    mov rdi, rax
+    call claude_rca_read
+    mov rdi, r13
+    call rca_verdict
+    mov esi, eax
+    mov rdi, rbx
+    call rca_follow
+9:  EPILOGUE
 .Lan_side:
     test r15d, r15d
     jnz 1f
@@ -869,3 +1468,29 @@ claude_side_n_print: .asciz "print-agent-remote"
 .Lo_declined: .asciz "declined"
 .Lw_on: .asciz "on"
 .Ld_remote: .asciz "remote="
+.Lv_apply_flags: .asciz "apply_flag_settings"
+.Lv_get_settings: .asciz "get_settings"
+.Lk_settings: .asciz "settings"
+.Lk_rca: .asciz "remoteControlAtStartup"
+.Lk_effective: .asciz "effective"
+.Lk_lock: .asciz "remote_control_policy_lock_reason"
+.Lk_sources: .asciz "sources"
+.Lk_source: .asciz "source"
+.Lk_rc_avail: .asciz "remote_control_available"
+.Lk_rc_auto: .asciz "remote_control_auto_enable"
+.Lk_rc_bydefault: .asciz "remote_control_auto_on_by_default"
+.Lk_rc_gate: .asciz "ide_rc_auto_enable_gate"
+.Ls_policy: .asciz "policySettings"
+.Ls_user: .asciz "userSettings"
+.Ls_project: .asciz "projectSettings"
+.Ls_local: .asciz "localSettings"
+.Lrc_file: .asciz "/settings.json"
+.Lrc_failed: .asciz "Failed to update \"Enable Remote Control for all sessions\": "
+.Lrc_revoked: .asciz "Remote Control turned off. It can't be turned back on while your organization's lock is in place."
+.Lrc_nodir: .asciz "Claude Code's settings folder is not known."
+.Lrc_unread: .asciz "Couldn't read "
+.Lrc_notjson: .asciz "Settings file is not valid JSON: "
+.Lrc_notobj: .asciz "Settings file is not a JSON object: "
+.Lrc_deep: .asciz "Settings file is nested too deeply to be written back: "
+.Lrc_unsaved: .asciz "Your settings change was not saved: "
+

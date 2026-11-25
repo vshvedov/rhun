@@ -899,6 +899,18 @@ line naming a.txt and its backup, an assistant line), as the CLI writes them. Si
      ("\n❯ PROMPT\n  ⎿  ERROR" and "\n\n⏺ REPLY" lines) and "YYYY-MM-DD-HHMMSS-first-prompt-words.txt" (local
      time). The extension's /export NAME saves under NAME's last path part, ':' removed, ".txt" added when it has
      no extension (openExportForSaving).
+107. remoteControlAtStartup (2026-11-24, CLI 2.1.330; HOME and CLAUDE_CONFIG_DIR in a temporary folder, not signed
+     in, a temporary git repository; ~/.claude/settings.json had the same SHA-1 before and after). update_settings
+     with it is refused: userSettings and localSettings "update_settings keys not allowed:
+     remoteControlAtStartup" (true, false and null; the other sources are unsupported, finding 12), nothing written. apply_flag_settings {"settings":{"remoteControlAtStartup":
+     true}} answers success and get_settings then has it in effective and in a flagSettings source. The initialize
+     answer there: remote_control_available true, remote_control_auto_enable, _auto_on_by_default,
+     _auto_connect_default and ide_rc_auto_enable_gate false. The binary's resolver (from its text, not run): a
+     project's or local false wins, a true there is ignored ("repo-scoped settings cannot enable Remote Control;
+     set it at user scope (/config)"), then policy, then the user's settings; its own /config writes the user's
+     file. So the extension's host writes <config dir>/settings.json itself (s3: read, the key set, JSON with two
+     blanks a level), then apply_flag_settings to the session and remote_control on the open ones as the setting
+     says; rhun does the same (claude_side.s). Not tried: a real remote_control (it publishes the session).
 
 Other things learned
 

@@ -613,6 +613,9 @@ FN claude_settings_answer
     lea rsi, [rip + .Lk_response]
     call json_get
     mov r12, rax
+    mov rdi, rax                # rows 2.22, 4.14: remoteControlAtStartup and its lock (claude_side.s)
+    call claude_rca_read
+    mov rax, r12
     xor r14d, r14d              # Ultracode offered, and on
     xor r15d, r15d
     mov rdi, rax
@@ -4076,6 +4079,10 @@ menu_tbl:
     .quad .Lm_focus, .Lm_focus_d
     .long APK_SWITCH, 0
     .quad agfold_on
+    .long APS_SETTINGS, ACT_RCALL           # rows 2.22, 4.14: Remote Control for all sessions (claude_side.s)
+    .quad .Lm_rcall, .Lm_rcall_d
+    .long APK_SWITCH, 0
+    .quad claude_rca_shows
     .long APS_SETTINGS, ACT_SIGNIN
     .quad .Lm_signin, .Ld_login
     .long APK_ROW, 0
@@ -4156,6 +4163,8 @@ local_cmds:
     .quad .Ln2_market, .Lm2_plugins_d, .Lempty, ACT_PLUGINS
     .quad 0, 0, 0, 0
 .Ln_btw: .asciz "btw"
+.Lm_rcall: .asciz "Enable Remote Control for all sessions"
+.Lm_rcall_d: .asciz "Connect all sessions to claude.ai/code automatically so you can view and control them from the web."
 .Lm_rewind: .asciz "Rewind"             # p6b (claude_fork.s)
 .Lm_rewind_d: .asciz "Restore code and conversation to an earlier point"
 .Lm_export: .asciz "Export conversation"

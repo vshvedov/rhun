@@ -4050,6 +4050,14 @@ h_response:
     mov rdi, rbx
     mov rsi, rax
     call claude_init_answer
+    mov rdi, r12                # rows 2.22, 4.14: Remote Control at the start, as the setting says (claude_side.s)
+    lea rsi, [rip + .Lk_response]
+    call json_get
+    mov rdi, rbx
+    mov rsi, rax
+    call claude_rca_init
+    cmp dword ptr [rbx + AL_cn + CN_state], CN_UP
+    jne 9f
     mov rdi, rbx                # then what is in effect; a write that broke has ended the start
     call send_get_settings
     cmp dword ptr [rbx + AL_cn + CN_state], CN_UP

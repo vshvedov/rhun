@@ -2063,6 +2063,7 @@ act_names:                      # ACT_* by value
     .quad .La_bashes, .La_rc
     .quad .La_rewind, .La_export, .La_msgact, .La_cut, .La_opened   # p6b, ACT_REWIND (43) to ACT_OPENED (47) (claude_fork.s)
     .quad .La_plugin_link       # 48: ACT_PLUGIN_LINK (row 4.19, agenttab.s)
+    .quad .La_rcall             # 49: ACT_RCALL (Remote Control for all sessions, claude_side.s)
 fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .La_btw: .asciz "btw"
 .La_plugin_link: .asciz "plugin-link"
@@ -2075,6 +2076,7 @@ fast_names: .quad .Lfs_off, .Lfs_on, .Lfs_cooldown
 .La_handans: .asciz "handans"
 .La_bashes: .asciz "bashes"
 .La_rc: .asciz "rc"
+.La_rcall: .asciz "remote-control-at-startup"
 .La_rewind: .asciz "rewind"
 .La_export: .asciz "export"
 .La_msgact: .asciz "msgact"

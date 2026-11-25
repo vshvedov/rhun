@@ -440,9 +440,12 @@ def applied():
 
 def get_settings():
     """get_settings' answer (finding 11): errors only when there are some (FAKE_CLAUDE_SETTINGS_ERROR: one,
-    {path, message} as the CLI's schema names them; the text is unrecorded)."""
+    {path, message} as the CLI's schema names them; the text is unrecorded). FAKE_CLAUDE_RC_LOCK (TEXT):
+    remote_control_policy_lock_reason, the schema's member (unrecorded: no lock on the account)."""
     answer = {'effective': effective(), 'sources': settings_sources(), 'served_settings_state': 'ineligible',
               'applied': applied()}
+    if ENV.get('FAKE_CLAUDE_RC_LOCK'):
+        answer['remote_control_policy_lock_reason'] = ENV['FAKE_CLAUDE_RC_LOCK']
     if ENV.get('FAKE_CLAUDE_SETTINGS_ERROR'):
         answer['errors'] = [{'path': os.path.join(CWD, '.claude', 'settings.json'),
                              'message': ENV['FAKE_CLAUDE_SETTINGS_ERROR']}]
@@ -3058,8 +3061,9 @@ def init_response():
         response['account'] = account
     if ENV.get('FAKE_CLAUDE_AUTH_CONFLICT'):    # unrecorded member (the schema's, after account)
         response['auth_conflict'] = {'token_source': 'claude.ai', 'api_key_source': 'ANTHROPIC_API_KEY'}
-    response.update(pid=os.getpid(), claude_code_version='2.1.330', current_permission_mode=MODE,
-                    fast_mode_state=FAST[0])
+    response.update(pid=os.getpid(), claude_code_version='2.1.330', current_permission_mode=MODE)
+    response.update(remote_control_members())  # rows 2.22, 4.14 (finding 9's keys)
+    response.update(fast_mode_state=FAST[0])
     if ENV.get('FAKE_CLAUDE_FAST'):             # 2.1.330 sends the reason (finding 19), after the state
         response['fast_mode_disabled_reason'] = FAST[1]
     response.update(session_state='idle', capabilities=['ui_surface_v1'])
@@ -4287,6 +4291,21 @@ def remote_control(rid, request):
             emit(dict({'type': 'system', 'subtype': 'bridge_state'}, **state, bridge_epoch=1,
                       uuid=str(uuid.uuid4()), session_id=SID))
         threading.Timer(0.05, later).start()
+
+
+def remote_control_members():
+    """initialize's Remote Control members (finding 9; their values on the recorded account: available, nothing
+    automatic). remote_control_auto_enable follows remoteControlAtStartup as the binary's resolver reads it: a
+    project's or local false wins, a project's or local true counts for nothing, then the user's (no policy, no
+    rollout default here). FAKE_CLAUDE_REMOTE "unavailable": remote_control_available false."""
+    values = dict((s['source'], s['settings'].get('remoteControlAtStartup')) for s in settings_sources())
+    if values.get('projectSettings') is False or values.get('localSettings') is False:
+        auto = False
+    else:
+        auto = values.get('userSettings') is True
+    return {'remote_control_auto_enable': auto, 'remote_control_auto_connect_default': False,
+            'remote_control_available': ENV.get('FAKE_CLAUDE_REMOTE', '') != 'unavailable',
+            'remote_control_auto_on_by_default': False, 'ide_rc_auto_enable_gate': False}
 
 
 P7C_REQUESTS = {'side_question': side_question, 'get_chrome_dialog': chrome_dialog, 'remote_control': remote_control}

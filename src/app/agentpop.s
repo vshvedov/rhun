@@ -2282,6 +2282,8 @@ FN agentpop_run
     je .Lr_noconv
     cmp r13d, ACT_SETTINGS
     je .Lr_noconv
+    cmp r13d, ACT_RCALL         # a setting of the driver's, not of a conversation: none is made for it
+    je .Lr_noconv
     cmp r13d, ACT_FOCUSVIEW     # focus view: the panel's setting, whatever the driver (agentfold.s)
     je .Lr_focus
     cmp r13d, ACT_BTW           # p7c: the side panels and the agent map are the panel's (agentside.s)

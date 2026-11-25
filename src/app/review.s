@@ -2896,12 +2896,8 @@ FN review_line_extra
     mov r15d, edx
     test eax, eax
     jz 6f
-    mov rdi, rbx
-    mov rsi, [rsp + 24]
-    mov rdx, [rsp + 32]
     xor ecx, ecx
-    call review_decide
-    jmp 9f
+    jmp 7f
 6:  sub r15d, [rip + g_mt + 4*MI_6]
     mov rdi, r12
     mov esi, 1
@@ -2909,11 +2905,15 @@ FN review_line_extra
     call button
     test eax, eax
     jz 9f
-    mov rdi, rbx
-    mov rsi, [rsp + 24]
-    mov rdx, [rsp + 32]
     mov ecx, 1
-    call review_decide
+7:  mov rax, [rbx + RVP_id]     # decided after the frame (review_tick): the document stays while it is drawn
+    mov [rip + dec_id], rax
+    mov rax, [rsp + 24]
+    mov [rip + dec_file], rax
+    mov rax, [rsp + 32]
+    mov [rip + dec_hunk], rax
+    mov [rip + dec_accept], ecx
+    mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
 # button(label, primary, right) -> eax 1 when clicked, edx its left edge: drawn ending at right on the
@@ -3874,7 +3874,21 @@ FN review_offer_dump
 #   nothing; a close waits out the card's lock); a tab drawn greyed is drawn again once the lock is over
 FN review_tick
     PROLOGUE
-    mov rdi, [rip + show_id]    # a card's "Review the change"
+    mov rdi, [rip + dec_id]     # an Accept or Reject the last frame drew and was clicked
+    test rdi, rdi
+    jz 70f
+    mov qword ptr [rip + dec_id], 0
+    call find_proposal
+    test rax, rax
+    jz 70f
+    cmp dword ptr [rax + RVP_done], 0
+    jne 70f
+    mov rdi, rax
+    mov rsi, [rip + dec_file]
+    mov rdx, [rip + dec_hunk]
+    mov ecx, [rip + dec_accept]
+    call review_decide
+70: mov rdi, [rip + show_id]    # a card's "Review the change"
     test rdi, rdi
     jz 71f
     mov qword ptr [rip + show_id], 0
@@ -3994,9 +4008,11 @@ FN review_timeout
     jge 1b
 4:  mov r12d, eax
     jmp 1b
-5:  cmp qword ptr [rip + show_id], 0
+5:  cmp qword ptr [rip + dec_id], 0
+    jne 50f
+    cmp qword ptr [rip + show_id], 0
     je 51f
-    xor r12d, r12d
+50: xor r12d, r12d
 51: cmp qword ptr [rip + edit_id], 0    # task 12: an edit to open, edits to close, an edit's text due
     je 52f
     xor r12d, r12d
@@ -4664,6 +4680,11 @@ btn_dim: .long 0                # button(): greyed and not pressed (an offer who
 dim_drawn: .long 0              # an offer's tab was drawn greyed: drawn again when the lock is over
 .p2align 3
 show_id: .quad 0                # an offer whose tab is to be shown after the frame (review_offer_show)
+dec_id: .quad 0                 # an offer or review whose Accept / Reject was clicked in the frame (review_tick)
+dec_file: .quad 0               # its file (-1 every file)
+dec_hunk: .quad 0               # its hunk (-1 the whole file)
+dec_accept: .long 0             # 1 Accept, 0 Reject
+    .p2align 3
 edit_id: .quad 0                # task 12: an offer whose edit is to be opened after the frame (its button)
 marks: .zero VEC_SIZE           # offer_retext: the accepted changes' old lines, {ol, oc}
 orphans: .zero VEC_SIZE         # edits of freed offers, {DOC_id, name}: closed in the next pass

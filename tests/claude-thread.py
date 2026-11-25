@@ -807,6 +807,21 @@ class SpinnerTest(SpinnerCase):
         self.assertIsNotNone(spin['timeout'], spin)
         self.assertGreaterEqual(self.wakeups(), 8)
 
+    def test_verbs_that_are_not_ascii(self):
+        """Review 2 finding 7: a verb's characters, not its bytes: drawn as written, swept a character a step
+        (the longest verb a line takes, 40 bytes, of two-byte characters too)."""
+        for verb in ('Überlegend', 'Ü' * 20):
+            self.start(self.claude_section('spinner_verbs = replace\nspinner_verb = %s\n' % verb))
+            self.command('agent-timing spin=0')
+            self.chat('hello')
+            self.command('agent-prompt linger 30')
+            self.command('wait-agent working')
+            self.ticks(len(verb) + 4)
+            self.assertEqual(self.spin()['label'], verb + '...')
+            self.command('agent-stop')
+            self.command('wait-agent ready 10000')
+            self.quit()
+
     def test_a_reader_has_no_tick(self):
         self.open_seeded(turns(3))
         self.command('agent-test-tool a name=Bash second=sleep 9')     # running, in a conversation only read

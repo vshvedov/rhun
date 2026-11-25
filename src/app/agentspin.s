@@ -224,21 +224,43 @@ FN agspin_set
 8:  mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
-# cstr_copy_n(dst, src, n): at most n bytes and a NUL
+# cstr_copy_n(dst, src, n): at most n bytes and a NUL, not cut inside a UTF-8 character
 cstr_copy_n:
     xor ecx, ecx
 1:  cmp ecx, edx
-    jae 2f
+    jae 3f
     movzx eax, byte ptr [rsi + rcx]
     test eax, eax
     jz 2f
     mov [rdi + rcx], al
     inc ecx
     jmp 1b
+3:  test ecx, ecx               # cut: back to the start of the character that did not fit
+    jz 2f
+    movzx eax, byte ptr [rsi + rcx]
+    and eax, 0xc0
+    cmp eax, 0x80
+    jne 2f
+    dec ecx
+    jmp 3b
 2:  mov byte ptr [rdi + rcx], 0
     ret
 
-# verbs_of(AS*) -> rax the list, edx how many, ecx the longest's length
+# u8_chars(cstr) -> eax its characters (bytes that do not continue a UTF-8 character)
+u8_chars:
+    xor eax, eax
+1:  movzx ecx, byte ptr [rdi]
+    test ecx, ecx
+    jz 9f
+    inc rdi
+    and ecx, 0xc0
+    cmp ecx, 0x80
+    je 1b
+    inc eax
+    jmp 1b
+9:  ret
+
+# verbs_of(AS*) -> rax the list, edx how many, ecx the longest's length in characters
 verbs_of:
     PROLOGUE
     call spin_drv
@@ -252,7 +274,7 @@ verbs_of:
     mov rdi, [rbx + r12*8]
     test rdi, rdi
     jz 9f
-    call strlen
+    call u8_chars
     cmp eax, r13d
     cmovg r13d, eax
     inc r12d
@@ -302,9 +324,11 @@ words:
     lea rax, [rip + .Lempty]
 9:  EPILOGUE
 
-# aim(AS*, first): the label sweeps to the words shown now (first: from blank), when they are not those yet
+# aim(AS*, first): the label sweeps to the words shown now (first: from blank), when they are not those yet.
+#   The label is the words' characters (UTF-8 decoded), "..." and spaces. Locals: [rsp] the words' bytes,
+#   [rsp + 8] their characters, [rsp + 12] the byte the next character starts at
 aim:
-    PROLOGUE
+    PROLOGUE 16
     mov rbx, rdi
     mov r15d, esi
     call words
@@ -327,6 +351,10 @@ aim:
     lea r14d, [rcx + 3]
     mov rdi, r12
     call strlen
+    mov [rsp], rax
+    mov rdi, r12
+    call u8_chars
+    mov [rsp + 8], eax
     add eax, 3
     cmp eax, r14d
     cmovg r14d, eax
@@ -334,19 +362,26 @@ aim:
     jbe 2f
     mov r14d, LABEL_MAX
 2:  mov [rip + sp_len], r14d
+    mov dword ptr [rsp + 12], 0
     xor ecx, ecx                # the target: the words, "...", spaces
-    xor edx, edx
 3:  cmp ecx, r14d
     jae 6f
     mov eax, ' '
-    movzx r8d, byte ptr [r12 + rdx]
-    test r8d, r8d
-    jz 4f
-    mov eax, r8d
-    inc edx
+    cmp ecx, [rsp + 8]
+    jae 4f
+    mov edx, [rsp + 12]         # a character of the words
+    lea rdi, [r12 + rdx]
+    mov rsi, [rsp]
+    sub rsi, rdx
+    push rcx
+    push rcx
+    call utf8_decode
+    pop rcx
+    pop rcx
+    add [rsp + 12], edx
     jmp 5f
 4:  mov r9d, ecx                # "..." right after the words
-    sub r9d, edx
+    sub r9d, [rsp + 8]
     cmp r9d, 3
     jae 5f
     mov eax, '.'

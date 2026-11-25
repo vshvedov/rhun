@@ -1541,7 +1541,7 @@ line_lay:
     mov ecx, [rsp + 16]
     lea r9d, [r14 - PART_FOLD + PART_BG]
     call fl_note
-    test eax, UB_HOVER
+    test r13d, UB_HOVER         # (the button's flags, kept)
     jz 65f
     mov dword ptr [rip + g_cursor], CUR_POINTER
 65: call line_h

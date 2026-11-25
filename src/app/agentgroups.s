@@ -693,7 +693,9 @@ save:
 # FN agst_of(AS*) -> eax its flags (SF_*), edx its group's id (0 none)
 FN agst_of
     PROLOGUE
+    mov rbx, rdi
     call agst_load
+    mov rdi, rbx
     xor esi, esi
     call as_ent
     xor ecx, ecx
@@ -759,7 +761,9 @@ FN agst_put_group
 # FN agst_title(AS*) -> rax rhun's own title for it (cstr), or 0
 FN agst_title
     PROLOGUE
+    mov rbx, rdi
     call agst_load
+    mov rdi, rbx
     xor esi, esi
     call as_ent
     test rax, rax

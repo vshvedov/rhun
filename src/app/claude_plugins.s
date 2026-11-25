@@ -2045,6 +2045,11 @@ plg_act:
     mov rdi, [rip + c2_as]
     test rdi, rdi
     jz 8f
+    push rdi
+    push rdi
+    call agentdlg_keep          # the dialog stays: its lists are the CLI's, not the process's
+    pop rdi
+    pop rdi
     call agent_release
     jmp 8f
 .Lga_tab:

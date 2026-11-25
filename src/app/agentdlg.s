@@ -133,6 +133,7 @@ dg_content: .long 0             # the body's whole height
 dg_reveal: .long 0              # the focused row is brought into view at the next draw
 dg_prev: .long 0                # the focus before it opened
 dg_num: .long 0                 # its buttons are numbered
+dg_keep: .long 0                # it stays when its conversation's process ends (agentdlg_keep)
 dg_lay_w: .long 0
 dg_lay_px: .long 0
 dg_drawn: .long 0               # it was drawn (box rect valid)
@@ -209,6 +210,7 @@ FN agentdlg_open
     mov dword ptr [rip + dg_focus], -1
     mov dword ptr [rip + dg_scroll], 0
     mov dword ptr [rip + dg_num], 0
+    mov dword ptr [rip + dg_keep], 0
     mov dword ptr [rip + dg_drawn], 0
     mov dword ptr [rip + dg_state], DS_LOADING
     lea rdi, [rip + dg_msg]
@@ -573,8 +575,23 @@ FN agentdlg_ended
     jne 9f
     cmp dword ptr [rip + dg_state], DS_ERROR
     je 9f                       # (an error stays to be read)
+    cmp dword ptr [rip + dg_keep], 0
+    jne 9f                      # (one that ended the process itself: its Restart)
     call agentdlg_close
 9:  EPILOGUE
+
+# FN agentdlg_unwait(): the open dialog waits for nothing any more (an answer or a start it gave up)
+FN agentdlg_unwait
+    mov qword ptr [rip + dg_al], 0
+    mov qword ptr [rip + dg_req], 0
+    mov dword ptr [rip + dg_pend], 0
+    ret
+
+# FN agentdlg_keep(): the open dialog stays when its conversation's process ends (a dialog that ends it: a
+#   CLI-backed page's Restart)
+FN agentdlg_keep
+    mov dword ptr [rip + dg_keep], 1
+    ret
 
 # FN agentdlg_gone(ptr): an AS (or anything) is freed: the dialog opened for it closes
 FN agentdlg_gone

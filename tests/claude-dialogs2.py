@@ -608,6 +608,23 @@ class PluginsTest(Case):
         self.until(lambda: len(self.control('reload_plugins')) == 2, 'asked again')
         self.until_body(lambda b: not any('Restart' in l for l in b), 'the notice gone')
 
+    def test_restart_keeps_the_dialog(self):
+        self.env['FAKE_CLAUDE_RELOAD_FAIL'] = '1'    # the restart notice stays (the session could not reload)
+        self.panel()
+        self.open('mcp')                            # the conversation's process up
+        self.until_ready()
+        self.command('agent-dialog-close')
+        self.open('plugins')
+        self.until(lambda: any(l.startswith('head Available') for l in self.body()), 'available')
+        self.pick('lint-helper')
+        self.pick('Install for you')
+        self.until_body(lambda b: any(l.startswith('link[') and l.endswith(' Restart') for l in b), 'the notice')
+        self.pick('Restart')
+        self.until(lambda: self.live().startswith('state=off'), 'the process ended')
+        self.command('shot /dev/null')
+        self.assertEqual(self.head().get('title'), 'Manage Plugins')
+        self.assertFalse(any('Restart' in l for l in self.body()))
+
     def test_thousands_available(self):
         """The official directory lists thousands, as indented JSON over many lines: all of them, each read once."""
         self.env['FAKE_CLAUDE_PLUGINS_MANY'] = '4000'

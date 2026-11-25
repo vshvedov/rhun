@@ -332,6 +332,25 @@ class UsageTest(ClaudeDialogCase):
                          'usage open=1\nemail user@example.com\nmeter Weekly (7 day) 14%\n'
                          'meter Weekly Fable 16%\ndetails\n')
 
+    def test_list_section_is_drawn_above_the_list(self):
+        """Row 5.14: the list of conversations shows it above its rows (the driver's DRV_list_top)."""
+        self.start()
+        self.seed()
+        self.assertEqual(len(self.listed()), 1)             # the panel's list, a conversation in it
+        self.command('shot /dev/null')
+
+        def drawn():
+            line = self.command('print-agent-usage drawn').strip()
+            self.assertTrue(line.startswith('drawn y='), line)
+            return dict(re.findall(r'(\w)=(\d+)', line))
+        folded = drawn()
+        self.assertGreater(int(folded['h']), 0)
+        self.command('print-agent-usage toggle')
+        self.command('shot /dev/null')
+        self.assertGreater(int(drawn()['h']), int(folded['h']))     # unfolded: the email and "View details"
+        rows = [l for l in self.command('print-agent-list').splitlines() if l.strip().startswith('row ')]
+        self.assertEqual(len(rows), 1, rows)                        # the rows are still listed under it
+
     def test_typed_usage_opens_it(self):
         self.ready()
         self.command('agent-prompt /usage')

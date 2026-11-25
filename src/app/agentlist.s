@@ -1253,7 +1253,25 @@ FN aglist_draw
     call breaker_band
     add [rsp + 4], eax
     sub [rsp + 12], eax
-1:  mov rdi, rbx
+1:  mov r12d, 1                 # row 5.14: what each driver shows above the rows (Claude: Account & usage)
+2:  mov edi, r12d
+    call agent_drv_for_kind
+    inc r12d
+    test rax, rax
+    jz 3f
+    mov rax, [rax + DRV_list_top]
+    test rax, rax
+    jz 3f
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    xor ecx, ecx
+    call rax
+    add [rsp + 4], eax
+    sub [rsp + 12], eax
+3:  cmp r12d, 4
+    jbe 2b
+    mov rdi, rbx
     mov esi, [rsp]
     mov edx, [rsp + 4]
     mov ecx, [rsp + 8]

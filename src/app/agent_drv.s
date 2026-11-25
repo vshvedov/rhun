@@ -4345,6 +4345,7 @@ ext_drv:
     .long 0, 0                  # DRV_glyph: none
     .long SRCF_PUSHED | SRCF_STATE | SRCF_OWN, 0    # p8: DRV_src: its extension sends its rows and messages
     .quad agentext_open, ext_src_name, ext_key, ext_loading, ext_rows, ext_icon
+    .quad 0                     # DRV_list_top: nothing above the list
 # the readers of the kinds that have one, by AS_kind: {kind, ingest, text, kids, image, suffix}, then 0 (agent_ingest,
 #   agent_reader; the one place above the drivers that names a kind's reader)
 readers:

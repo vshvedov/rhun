@@ -3428,6 +3428,8 @@ F DRV_key, 8            # (AS*, sb) -> eax 1 when its key in rhun's state file w
 F DRV_loading, 8        # (AS*) -> eax 1 while its messages are being fetched
 F DRV_rows, 8           # (cb): cb(AS*) for each row its sources list now
 F DRV_icon, 8           # (AS*, x, y, size): its source's icon in its row's badge
+F DRV_list_top, 8       # row 5.14: (x, y, w, sb or 0) -> eax h: what the conversation list shows above its rows
+                        #   (drawn, or its lines written to sb), 0 none; the table's 0: nothing
 # ---- end p8 ----
 ENDSTRUCT DRV_SIZE
 .equ SRCF_PUSHED, 1             # p8: its source sends its rows and messages: no file read, stamped or watched

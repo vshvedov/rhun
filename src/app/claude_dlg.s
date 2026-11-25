@@ -88,6 +88,8 @@ meters: .zero 16 * METERS       # {label (meter_labels'), percent}: the last get
 meter_labels: .zero METER_LABEL * METERS
 meters_n: .quad 0
 usage_open: .long 0             # the list's Account & usage is unfolded
+us_drawn_y: .long 0             # where the list drew it last (its height 0: not yet)
+us_drawn_h: .long 0
 mem_on: .long 0                 # the memory switches as shown
 dream_on: .long 0
 
@@ -2159,7 +2161,12 @@ FN claude_usage_section
     call ui_text_v
     add rsp, 16
 62: add r13d, r12d
-9:  mov eax, r13d
+9:  test r15, r15               # drawn: where (print-agent-usage drawn)
+    jnz 91f
+    mov eax, [rsp + 4]
+    mov [rip + us_drawn_y], eax
+    mov [rip + us_drawn_h], r13d
+91: mov eax, r13d
     EPILOGUE
 
 # cwidth_s(face, cstr) -> eax its width
@@ -2180,19 +2187,53 @@ cwidth_s:
     pop rbx
     ret
 
-# FN claude_dlg_c_usage(out, rest, len) -> rax 0: print-agent-usage [toggle]: the list's Account & usage
-#   section's lines (toggle: unfolded or folded first)
+# FN claude_dlg_c_usage(out, rest, len) -> rax 0: print-agent-usage [toggle | drawn]: the list's Account & usage
+#   section's lines (toggle: unfolded or folded first); drawn: "drawn y=Y h=H" as the list drew it last (above
+#   its rows: the driver's DRV_list_top), "drawn none" before it was
 FN claude_dlg_c_usage
     PROLOGUE
     mov rbx, rdi
     test rdx, rdx
     jz 1f
+    mov rdi, rsi
+    mov rsi, rdx
+    lea rdx, [rip + .Lus_drawn_arg]
+    mov ecx, 5
+    call str_starts
+    test eax, eax
+    jnz 2f
     call claude_usage_toggle
 1:  xor edi, edi
     xor esi, esi
     mov edx, 300
     mov rcx, rbx
     call claude_usage_section
+    xor eax, eax
+    EPILOGUE
+2:  mov rdi, rbx
+    lea rsi, [rip + .Lus_drawn]
+    call sb_push_cstr
+    cmp dword ptr [rip + us_drawn_h], 0
+    jne 3f
+    mov rdi, rbx
+    lea rsi, [rip + .Lus_none]
+    call sb_push_cstr
+    jmp 4f
+3:  mov rdi, rbx
+    lea rsi, [rip + .Lus_y]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + us_drawn_y]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Lus_h]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + us_drawn_h]
+    call sb_push_u64
+4:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
     xor eax, eax
     EPILOGUE
 
@@ -3655,6 +3696,11 @@ chart_slots: .long T_ACCENT, T_SUCCESS, T_WARNING, T_ERROR, T_INFO, T_ICON + 4, 
 .Lk_outputStyle: .asciz "outputStyle"
 .Lk_setting: .asciz "setting"
 .Lus_title: .asciz "Account & usage"
+.Lus_drawn_arg: .asciz "drawn"
+.Lus_drawn: .asciz "drawn"
+.Lus_none: .asciz " none"
+.Lus_y: .asciz " y="
+.Lus_h: .asciz " h="
 .globl claude_dlg_n_usage
 claude_dlg_n_usage: .asciz "print-agent-usage"
 .Lus_details: .asciz "View details"

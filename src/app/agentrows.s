@@ -103,7 +103,8 @@ ln_ptr: .quad 0                 # lay_line's text
 ln_len: .quad 0
 sec_ptr: .quad 0                # section's text
 sec_len: .quad 0
-xs: .zero SB_SIZE               # scratch: a text shown (an error cut), the whole text of a part
+xs: .zero SB_SIZE               # scratch: a text shown, the whole text of a part (print-agent-rows-fit's lines)
+err_sb: .zero SB_SIZE           # an error's text cut (err_text: during a layout, while xs may hold a dump)
 ys: .zero SB_SIZE
 ks: .zero SB_SIZE               # task 11: the line of the calls under a call (kids_text)
 kc_n: .quad 0                   #   agrow_kid_click's count
@@ -3103,7 +3104,7 @@ copy_btn:
 9:  EPILOGUE
 
 # err_text(ptr, len): an error's text as the row shows it in sec_ptr, sec_len: whole up to 2000 characters,
-#   else its first 2000 and "…" (in xs)
+#   else its first 2000 and "…" (in err_sb)
 err_text:
     PROLOGUE
     mov [rip + sec_ptr], rdi
@@ -3124,18 +3125,18 @@ err_text:
 2:  inc rcx
     jmp 1b
 3:  mov r13, rcx
-    lea rdi, [rip + xs]
+    lea rdi, [rip + err_sb]
     call sb_clear
-    lea rdi, [rip + xs]
+    lea rdi, [rip + err_sb]
     mov rsi, rbx
     mov rdx, r13
     call sb_push
-    lea rdi, [rip + xs]
+    lea rdi, [rip + err_sb]
     lea rsi, [rip + .Lellipsis]
     call sb_push_cstr
-    mov rax, [rip + xs + SB_ptr]
+    mov rax, [rip + err_sb + SB_ptr]
     mov [rip + sec_ptr], rax
-    mov rax, [rip + xs + SB_len]
+    mov rax, [rip + err_sb + SB_len]
     mov [rip + sec_len], rax
 9:  EPILOGUE
 

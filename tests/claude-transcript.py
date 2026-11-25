@@ -3192,6 +3192,18 @@ class KidsTest(TaskCase):
         self.assertGreater(h3, h1)
         self.assertEqual(h2, h3)
 
+    def test_a_long_error_keeps_the_fit_dump(self):
+        """Review 2 finding 15: an error over 2000 characters is cut in a buffer of its own: print-agent-rows-fit
+        keeps its lines."""
+        self.codex()
+        self.tool('b name=Bash out=%s state=failed' % ('y' * 3000))
+        dump = self.command('print-agent-rows-fit')
+        self.assertFalse('yyyy' in dump, 'the error text is in the dump')
+        blocks = [b for b in dump.split('size=')[1:] if ' row=%d ' % self.base in b]
+        self.assertTrue(blocks)
+        for block in blocks:
+            self.assertGreater(len(block.strip().splitlines()), 1, block)
+
     def test_kids_rows_fit(self):
         self.codex()
         self.tool('p name=Agent: second=Look around in=Look around the project. flags=512 state=ok')

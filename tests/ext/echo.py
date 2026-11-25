@@ -24,7 +24,8 @@ test can assert catch-up and events. ECHO_MODE makes it misbehave:
 
 Commands (from tests/ext/exts/rhun-tests/echo/extension.ini): echo.shout upper-cases the active document,
 echo.hi inserts "hi" at the cursor, echo.toast shows a toast, echo.stale sends a replace with a
-version one behind, echo.status sets the status text, echo.open opens ECHO_OPEN at line 2,
+version one behind, echo.status sets the status text, echo.open opens ECHO_OPEN at line 2
+(and toasts "open ok" or "open error" when the answer came, for tests to wait on),
 echo.mb asks for a range inside a character, echo.sel selects then reads the first word, echo.relopen
 opens b.go by a relative path, echo.bad asks for a range outside the document.
 Gate 4: echo.reg registers the runtime command echo.extra (ctrl+alt+9; it toasts "extra ran"),
@@ -218,8 +219,11 @@ def main():
             if fields[0] == 'ok' and verb in ('text', 'range', 'ask') and len(fields) >= 3:
                 body = read_body(int(fields[-1]))
                 log(body)
-            if then and fields[0] == 'ok':
+            if callable(then) and fields[0] == 'ok':
                 then(fields, body)
+            if then == 'toast-answer':       # echo.open: the answer is in the log before the toast
+                answer = b'open ' + fields[0].encode()
+                request(f'toast {len(answer)}', answer)
             continue
         if fields[0] != '0':
             if fields[0].isdigit() and len(fields) >= 6 and MODE == 'lang':
@@ -427,7 +431,7 @@ def on_run(command, doc, versions):
         request(f'replace {doc} {max(versions.get(doc, 1) - 1, 0)} 1 1 1 1 5', b'stale')
     elif name == 'open':
         path = os.environ.get('ECHO_OPEN', '')
-        request(f'open 2 1 {path}')
+        request(f'open 2 1 {path}', then='toast-answer')
     elif name == 'bad':
         request(f'range {doc} 999 1 999 2')
     elif name == 'mb':

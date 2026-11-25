@@ -255,7 +255,9 @@ Code wants to open HOST in your browser: URL" with **Open**, **Copy Link** and *
 **+** at the left of the row under the box opens a menu: **Upload from computer** opens rhun's path
 browser as "Attach File", in the conversation's folder: Enter attaches the file picked and closes
 it, Shift+Enter attaches it and stays open for another, a folder is entered as in Open File.
-**Add context** puts `@` in the box. The command menu has the same two as **Attach file…** and
+**Add context** puts `@` in the box. **Browse the web** would add browser tabs, which come from Claude
+in Chrome; rhun does not connect it, so it says so instead (and `@browser:` in the box finds "No
+browser tabs found"). The command menu has the same two as **Attach file…** and
 **Mention file from this project…**. Each file attached shows as a chip above the box: its icon,
 its name (cut to 24 characters) with the whole name as its tip, and a × that takes it off. With
 many chips three rows show and the wheel over them shows the rest. Each conversation keeps its own
@@ -487,7 +489,12 @@ Nothing changes but what you do in the dialog, saved where it says; removing som
   a path), refreshes or removes it. After a change the running Claude Code reloads its plugins;
   when it cannot, "Restart Claude to apply plugin changes" with **Restart** ends it, and the next
   message starts it again. **Agents: Install Plugin** runs `claude /plugin` in rhun's terminal
-  instead.
+  instead. A link `rhun://claude/install-plugin?plugin=NAME&marketplace=SOURCE` (the marketplace is
+  Anthropic's official one when the link names none) opens Manage Plugins on that plugin for the
+  conversation the box belongs to; a marketplace not added yet is asked about first ("Installing
+  plugin … requires adding a new marketplace source: … Trust marketplace and continue"). A link with a
+  `#`, without a plugin, or with a name or source that cannot be used is refused with a message, and
+  nothing is installed.
 
 Opening one of these with no process running starts it quietly, as typing would.
 
@@ -579,7 +586,8 @@ Claude Code may also ask about usage credits for a model ("Continue on Fable wit
 drops rhun's model choice for the project, and **Continue with NAME**, **Buy usage credits on
 claude.ai** or **Request usage credits from your admin**; and when auto mode falls back to Claude
 Code's own checks, with **Continue** and **Stop** (this card has no ×: Escape stops the turn, as
-it does without a card). Both have **Learn more**. Requests of other
+it does without a card). Both have **Learn more**. The Remote Control card is under
+[Side questions, bookmarks and the agent map](#side-questions-bookmarks-and-the-agent-map). Requests of other
 kinds (from hooks, MCP servers, forms or other dialogs) are answered as not supported, so Claude
 never waits for a card that is not there.
 
@@ -613,18 +621,26 @@ project (at most 500 in a project, the oldest going first), not in Claude Code's
 context and whether it is working, then each agent the conversation started, with its description,
 how many tool calls it made and its state. Pick one for its details: its prompt, its tool calls,
 **Open transcript** (its row in the conversation, with its calls shown) and, while it runs, **Stop
-agent**. The map follows the conversation while it is open. Background shell commands are not listed
-yet.
+agent**. Under them, "N background tasks · click a task for details" lists the shell commands running in
+the background (a Bash call Claude started there, or one you sent there with **Run in background**),
+each with its description and "Running"; pick one for its state and **Stop** while it runs ("The task
+could not be stopped. It may have finished already." when Claude Code refuses). Its output is not
+shown. The map follows the conversation while it is open.
 
 **Claude in Chrome.** `/chrome` or **Claude in Chrome** in the command menu shows what Claude Code
 says about its Chrome extension: whether it is installed, whether this session is connected, and
 **Enabled by default** (changed in Claude Code itself), with links to install the extension, manage
 its permissions and reconnect it, each asked before it opens.
 
-**Remote Control.** `/remote-control` (or `/rc`) asks the running Claude Code to connect the
-conversation to claude.ai/code; a band above the box says "Connecting to claude.ai/code…", then
-"Remote Control is active" with a link once Claude Code reports it, or "Remote Control error: …".
-The same command turns it off. It needs Claude Code to be running.
+**Remote Control.** `/remote-control` (or `/rc`; typing `/` lists it under Slash Commands) asks the
+running Claude Code to connect the conversation to claude.ai/code. A cloud then shows in the row under the box, at the
+right: its tip says "Connecting to claude.ai/code…", then "Remote Control is active · Click to open
+claude.ai/code · Run /remote-control to turn off" once Claude Code reports it (a click asks before it
+opens claude.ai/code), or "Remote Control error: … · Run /remote-control to dismiss" (dimmed). The same
+command turns it off or dismisses the error. It needs Claude Code to be running and ends with it. When
+a command needs it (sending the session to a Claude Project), a card says "Remote Control is off, so
+this session can't be sent" with **Turn on Remote Control** ("Turning on Remote Control…" until Claude
+Code reports it connected or failed) and **Not now**.
 
 **Commands for the terminal.** `/agents` works only in Claude Code's own terminal interface. A card
 asks "Continue in Terminal to configure agents?": **Continue in Terminal** puts `claude /agents` in
@@ -685,6 +701,10 @@ agent's colour when the conversation is unread, and grey otherwise; a ring aroun
 program, such as `claude` in a terminal or another rhun window, has the conversation open. Hover the
 dot for what it means. A conversation is unread when its file grows while you are not looking at it;
 opening it reads it.
+
+Above the rows, **Account & usage** (folded at first; a click unfolds it) shows the email Claude Code
+reported, a bar for each usage limit the last Account & Usage dialog showed (Session (5hr), Weekly (7
+day), ...), and **View details**.
 
 **Search sessions** (the magnifier in the panel's header), or just typing while the list has the
 focus, filters the rows by their titles and marks the matches; **Clear search** (×) or Escape empties

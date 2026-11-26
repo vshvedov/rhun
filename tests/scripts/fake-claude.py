@@ -4271,14 +4271,20 @@ def chrome_dialog(rid, request):
                            'permissions': 'https://clau.de/chrome/permissions'}})
 
 
+REMOTE_GEN = [0]                    # remote_control requests so far: the bridge that comes up is the last one's
+
+
 def remote_control(rid, request):
     """remote_control {enabled} (UNRECORDED: enabling it publishes the session to the account; the shapes are
     the CLI binary's: the answer, then system/bridge_state {state, detail, bridge_epoch}). Enabled: an empty
-    success, then after 50 ms bridge_state connected. FAKE_CLAUDE_REMOTE: "fail" answers an error ("Remote
-    Control is not available for this account"), "bridgefail" a success and then bridge_state failed with the
-    detail "Could not reach claude.ai". Logged {"remote": enabled}."""
+    success, then after 50 ms bridge_state connected, unless another remote_control came first (turning it off
+    tears down a bridge still coming up, which then says nothing). FAKE_CLAUDE_REMOTE: "fail" answers an error
+    ("Remote Control is not available for this account"), "bridgefail" a success and then bridge_state failed
+    with the detail "Could not reach claude.ai". Logged {"remote": enabled}."""
     enabled = request.get('enabled') is True
     log(remote=enabled)
+    REMOTE_GEN[0] += 1
+    gen = REMOTE_GEN[0]
     kind = ENV.get('FAKE_CLAUDE_REMOTE', '')
     if enabled and kind == 'fail':
         respond_error(rid, 'Remote Control is not available for this account')
@@ -4286,6 +4292,8 @@ def remote_control(rid, request):
     respond(rid, {'bridge_session_id': 'cse_fake'} if enabled else {})
     if enabled:
         def later():
+            if REMOTE_GEN[0] != gen:
+                return
             state = {'state': 'failed', 'detail': 'Could not reach claude.ai', 'failure_kind': 'terminal'} \
                 if kind == 'bridgefail' else {'state': 'connected'}
             emit(dict({'type': 'system', 'subtype': 'bridge_state'}, **state, bridge_epoch=1,

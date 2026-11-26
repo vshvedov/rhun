@@ -113,6 +113,7 @@ check thumbhdr build/thumbhdr_test $(ls tests/data/images/* | LC_ALL=C sort)   #
 python3 tests/image-fuzz.py 1 20 || fail=1
 check cpu build/cpu_test
 check cols build/cols_test
+check icon-guard build/icon_guard_test   # bad icon sizes draw nothing (the 0.20.0 chip x crash)
 check textarea build/textarea_test
 check strfind build/str_test tests/data/strfind.txt
 check versions build/update_test tests/data/versions.txt

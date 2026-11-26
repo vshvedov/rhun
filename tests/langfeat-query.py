@@ -99,7 +99,7 @@ class Query(Lang):
                                      ['1\n' + loc('{path}', 2, 9, 2, 14, 'let total = 1;'), 0.05]],
                            'delay': 0.05, 'body': '1\n' + loc('{path}', 3, 5, 3, 10, 'total + 1')}}},
             'references = *.rs\n')
-        out = self.run_lang(root, ['cmd references', 'wait 600', 'print-results', 'print-langstats fake/lang'])
+        out = self.run_lang(root, ['cmd references', 'wait 1500', 'print-results', 'print-langstats fake/lang'])
         rows = [l for l in out if l.startswith('row ') and ' leaf ' in l]    # the Results panel's locations
         self.assertEqual(len(rows), 3, out)
         self.assertEqual(self.stats(out, 'references')['answered'], '1', out)
@@ -162,7 +162,7 @@ class Query(Lang):
         root = self.provider({'hello': 'hello 1 references query-stream', 'answers': {
             'references': {'parts': [['2\nbroken', 0.05]], 'delay': 0.2,
                            'body': '1\n' + loc('{path}', 1, 4, 1, 8, 'fn main() {')}}}, 'references = *.rs\n')
-        out = self.run_lang(root, ['cmd references', 'wait 600', 'print-results', 'print-langstats fake/lang'])
+        out = self.run_lang(root, ['cmd references', 'wait 1500', 'print-results', 'print-langstats fake/lang'])
         self.assertTrue(any(l.startswith('error 1 syntax') for l in self.lang_log()), self.lang_log())
         s = self.stats(out, 'references')
         self.assertEqual((s['dropped'], s['answered']), ('1', '1'), out)

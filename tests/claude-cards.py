@@ -73,6 +73,13 @@ class CardCase(chat.DrivenCase):
     def until_answered(self, n=1):
         return self.until(lambda: len(self.answers()) >= n and self.answers(), 'the answer')
 
+    def saved_settings(self, path, rule):
+        """The settings file once it holds rule: the fake logs an answer before it applies its updates."""
+        def read():
+            saved = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+            return rule in saved.get('permissions', {}).get('allow', []) and saved
+        return self.until(read, f'{rule} in {path}')
+
     def keys(self, *names):
         for name in names:
             self.command('key ' + name)
@@ -117,7 +124,7 @@ class PermissionCardTest(CardCase):
                  for m in self.control() if m.get('type') == 'control_request' or 'response' in m.get('response', {})]
         self.assertEqual(kinds[-2:], ['set_permission_mode', 'allow'])
         self.assertEqual(self.mode_requests()[-1], {'subtype': 'set_permission_mode', 'mode': 'acceptEdits'})
-        saved = json.loads((self.project / '.claude/settings.json').read_text(encoding='utf-8'))
+        saved = self.saved_settings(self.project / '.claude/settings.json', 'Bash(touch approved.txt)')
         self.assertEqual(saved, {'permissions': {'allow': ['Bash(touch approved.txt)']}})
         self.assertFalse((self.project / '.claude/settings.local.json').exists())
 
@@ -198,8 +205,7 @@ class PermissionCardTest(CardCase):
         answer = self.until_answered(2)[-1]
         self.assertEqual([u['destination'] for u in answer['updatedPermissions'] if u['type'] == 'addRules'],
                          ['userSettings'])
-        user = json.loads((self.work / '.claude' / 'settings.json').read_text())
-        self.assertIn('Bash(touch again.txt)', user['permissions']['allow'])
+        self.saved_settings(self.work / '.claude' / 'settings.json', 'Bash(touch again.txt)')
 
     def test_the_place_is_remembered(self):
         self.ask('tool')

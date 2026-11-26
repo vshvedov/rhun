@@ -641,6 +641,19 @@ class ContextCase(MentionCase):
         self.put('.gitignore', ''.join(f'{n}\n' for n in ignored))
         git(self.project, 'init', '-q')
 
+    def x_middle(self):
+        """The middle of the chip's x as drawn last (print-agent-context's x=)."""
+        return tuple(map(int, re.search(r' x=(\d+),(\d+)', self.command('print-agent-context')).groups()))
+
+    def colors_around(self, x, y, r=4):
+        """The distinct colours of the 2r by 2r pixels around (x, y) in a shot (P6: "P6\\nW H\\n255\\n")."""
+        shot = self.work / 'chip.ppm'
+        self.command(f'shot {shot}')
+        parts = shot.read_bytes().split(b'\n', 3)
+        w, px = int(parts[1].split()[0]), parts[3]
+        return {px[(row * w + col) * 3:(row * w + col) * 3 + 3]
+                for row in range(y - r, y + r) for col in range(x - r, x + r)}
+
 
 class ContextTest(ContextCase):
     """The chip (UI 1.17): its label, tip, x, settings, where it shows, its layout, its cost."""
@@ -679,6 +692,22 @@ class ContextTest(ContextCase):
         self.command('agent-context dismiss')
         self.open_file('b.py')                          # another file: back
         self.assertEqual(self.ctx()['label'], 'b.py')
+
+    def test_the_x_draws_its_icon_and_a_hover_keeps_rhun_running(self):
+        """0.20.0 drew the x's icon at whatever size ecx held: the x's middle (an icon far larger than the
+        button, none of it inside), and on a hover what gfx_round_rect left there, an icon over a million
+        pixels wide whose rasterizing crashed rhun (SIGSEGV in raster_line)."""
+        self.start()
+        self.chat('hello')
+        self.open_file()
+        x, y = self.x_middle()
+        self.assertGreater(len(self.colors_around(x, y)), 2)            # the cross's strokes, not a flat chip
+        self.command(f'move {x} {y}')
+        self.command('wait 20')
+        self.assertIsNone(self.process.poll())
+        self.assertGreater(len(self.colors_around(x, y)), 2)            # and over the hover's box
+        self.command(f'click {x} {y}')                                  # the x still dismisses the chip
+        self.assertEqual(self.ctx()['chip'], '0')
 
     def test_the_two_settings(self):
         self.start(extra='[agents]\nattach_selection = false\n')

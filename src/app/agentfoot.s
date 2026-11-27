@@ -3041,6 +3041,7 @@ sel_draw:
 2:  mov edi, IC_CLOSE
     mov esi, r15d
     mov edx, [rsp + 12]
+    mov ecx, [rsp + 8]          # the button's size: ecx held the x's middle, or gfx_round_rect's leftovers
     COLOR r8d, T_MUTED
     test dword ptr [rsp + 4], UB_HOVER
     jz 3f

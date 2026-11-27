@@ -2,6 +2,7 @@
 .include "rhun.inc"
 
 .equ ICACHE, 96
+.equ ICON_MAX, 2048             # px: the largest size icon_draw draws (a mask is size * size bytes)
 
 .bss
 .p2align 4
@@ -348,9 +349,14 @@ FN icon_mask
     pop rbx
     ret
 
-# icon_draw(icon, x, y, size, argb)
+# icon_draw(icon, x, y, size, argb): nothing for a size outside 1 to ICON_MAX, which only a caller's bad
+#   size register gives (raster_begin's w * h wraps far above it: a buffer too small, then a crash)
 FN icon_draw
-    push rbx
+    lea eax, [rcx - 1]
+    cmp eax, ICON_MAX
+    jb 1f
+    ret
+1:  push rbx
     push r12
     push r13
     push r14

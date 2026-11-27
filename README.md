@@ -20,11 +20,21 @@ Or use `wget`:
 wget -qO- https://github.com/vshvedov/rhun/releases/latest/download/install.sh | sh
 ```
 
-On Windows 10 (1809 or later) or Windows 11:
+On Windows 10 (1809 or later) or Windows 11, download the installer in PowerShell:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; & ([scriptblock]::Create((New-Object Net.WebClient).DownloadString('https://github.com/vshvedov/rhun/releases/latest/download/install.ps1')))"
+$rhunInstaller = Join-Path $env:TEMP ('rhun-install-' + [guid]::NewGuid() + '.ps1')
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/vshvedov/rhun/releases/latest/download/install.ps1' -OutFile $rhunInstaller -ErrorAction Stop
 ```
+
+After the download succeeds, you can [inspect the installer source](https://github.com/vshvedov/rhun/blob/main/install.ps1). Run it in the same PowerShell window:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File $rhunInstaller
+```
+
+The installer checks the release archive's SHA-256, installs for your user, and adds a Start menu shortcut and the `rhun` terminal command. Or [download the Windows ZIP](https://github.com/vshvedov/rhun/releases/latest), extract it, and open `rhun.exe`.
 
 ## Why rhun
 

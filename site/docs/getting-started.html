@@ -5,8 +5,13 @@
 <p>Paste this into your terminal. The installer checks the download and adds the <code>rhun</code> command. No root access needed.</p>
 <pre><code>curl -fsSL https://github.com/vshvedov/rhun/releases/latest/download/install.sh | sh</code></pre>
 <h3>Windows</h3>
-<p>Paste this into PowerShell, then open a new terminal to use the <code>rhun</code> command.</p>
-<pre><code>powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = 'Tls12'; &amp; ([scriptblock]::Create((New-Object Net.WebClient).DownloadString('https://github.com/vshvedov/rhun/releases/latest/download/install.ps1')))"</code></pre>
+<p>Download the installer in PowerShell:</p>
+<pre><code>$rhunInstaller = Join-Path $env:TEMP ('rhun-install-' + [guid]::NewGuid() + '.ps1')
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+Invoke-WebRequest -UseBasicParsing -Uri 'https://github.com/vshvedov/rhun/releases/latest/download/install.ps1' -OutFile $rhunInstaller -ErrorAction Stop</code></pre>
+<p>After the download succeeds, you can <a href="https://github.com/vshvedov/rhun/blob/main/install.ps1">inspect the installer source</a>. Run it in the same PowerShell window:</p>
+<pre><code>powershell -NoProfile -ExecutionPolicy RemoteSigned -File $rhunInstaller</code></pre>
+<p>The installer checks the release archive's SHA-256, installs for your user, and adds a Start menu shortcut and the <code>rhun</code> terminal command. Open a new terminal after installation.</p>
 <p>Prefer a download? Get an archive from <a href="https://github.com/vshvedov/rhun/releases/latest">Releases</a>. On Windows, extract the ZIP and open <code>rhun.exe</code>. Keep <code>rhun.com</code> beside it for terminal use.</p>
 </section>
 <section id="open">

@@ -359,11 +359,17 @@ class MentionTest(MentionCase):
         self.assertLess(narrow, wide // 2)
 
     def settle_query(self):
-        for _ in range(200):
-            before = self.filelist()['candidates']
-            self.command('wait 20')
-            if self.filelist()['candidates'] == before:
+        """Until the query stops: its steps and candidates still over five waits of 20 ms (a busy runner can
+        go 20 ms without a frame mid-query: one still wait read 78144 of 100000)."""
+        before, still = None, 0
+        for _ in range(500):
+            fl = self.filelist()
+            now = (fl['steps'], fl['candidates'])
+            still = still + 1 if now == before else 0
+            if still == 5:
                 return
+            before = now
+            self.command('wait 20')
 
     def test_the_list_is_not_made_again_without_a_change(self):
         self.put('a.txt')

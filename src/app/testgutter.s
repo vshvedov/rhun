@@ -63,6 +63,7 @@ FN testgutter_tick
     PROLOGUE
     call testgutter_glyphs
     call tg_autoresolve
+    call testresults_tick
     cmp dword ptr [rip + g_ts_marks], 0
     je 9f
     mov dword ptr [rip + g_ts_marks], 0

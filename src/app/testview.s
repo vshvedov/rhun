@@ -62,6 +62,7 @@ FN testview_select
     call testmodel_item
     mov eax, [rax + TSI_gen]
     mov [rip + g_tv_gen], rax
+    mov dword ptr [rip + g_trs_picked], 1  # Test Results shows its logs (testresults.s)
     mov dword ptr [rip + g_dirty], 1
     cmp qword ptr [rip + tv_tree], 0
     je 9f
@@ -312,6 +313,14 @@ FN cmd_test_rerun_last
     jb 1b
     test rbx, rbx
     jz 9f
+    mov rdi, rbx
+    call testview_rerun_run
+9:  EPILOGUE
+
+# testview_rerun_run(TSR*): that run again: its controller, kind and items (Test Results' Rerun)
+FN testview_rerun_run
+    PROLOGUE
+    mov rbx, rdi
     # copied first: a new run may take the old one's slot
     lea rdi, [rip + ids]
     call sb_clear
@@ -563,6 +572,7 @@ test_ctl:
     .quad .Lc_gutter_click, testctl_gutter_click, .Lc_status, testctl_status
     .quad .Lc_filter, testctl_filter, .Lc_failed, testctl_failed
     .quad .Lc_cov_view, testctl_cov_view
+    .quad .Lc_results, testresults_print, .Lc_results_rerun, testresults_rerun_ctl
     .quad 0, 0
 .Lc_select: .asciz "test-select"
 .Lc_expand: .asciz "test-expand"
@@ -581,6 +591,8 @@ test_ctl:
 .Lc_filter: .asciz "test-filter"
 .Lc_failed: .asciz "test-failed-only"
 .Lc_cov_view: .asciz "print-test-coverage"
+.Lc_results: .asciz "print-results-view"
+.Lc_results_rerun: .asciz "results-rerun"
 .text
 
 testctl_expand_open:
@@ -692,7 +704,7 @@ FN testview_expand
     mov rsi, rbx
     mov rdx, r12
     call testproto_resolve
-9:  mov dword ptr [rip + g_ts_dirty], 1
+9:  mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
@@ -1252,7 +1264,7 @@ FN testview_ensure
     mov edi, eax
     mov esi, IC_BEAKER
     call place_set_icon
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
 9:  EPILOGUE
 
 # node_id(tsc, index): tv_id holds the node's id: the controller's slot as two digits, the item's id
@@ -1476,9 +1488,9 @@ FN testview_rebuild
     PROLOGUE
     cmp qword ptr [rip + tv_tree], 0
     je 9f
-    cmp dword ptr [rip + g_ts_dirty], 0
-    je 9f
-    mov dword ptr [rip + g_ts_dirty], 0
+    test dword ptr [rip + g_ts_dirty], 1    # bit 0 is the section's, bit 1 Test Results'
+    jz 9f
+    and dword ptr [rip + g_ts_dirty], ~1
     mov qword ptr [rip + tv_stack + VEC_len], 0
     call tv_filter_marks
     mov rdi, [rip + tv_tree]
@@ -1660,7 +1672,7 @@ tv_load:
     mov rdx, r12
     call testproto_resolve
     jmp 9f
-1:  mov dword ptr [rip + g_ts_dirty], 1    # given by the next rebuild
+1:  mov dword ptr [rip + g_ts_dirty], 3    # given by the next rebuild
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
@@ -1766,7 +1778,7 @@ tv_keys:
     jz 12f
     lea rdi, [rip + tv_ftf]
     call tf_clear
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov eax, 1
     EPILOGUE
 11: cmp r12d, KEY_RETURN
@@ -1784,7 +1796,7 @@ tv_keys:
     call tf_key
     test eax, eax
     jz 9f
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     EPILOGUE
 10: cmp r14d, MOD_CTRL          # ctrl+f: the filter
     jne 14f
@@ -1910,8 +1922,8 @@ tv_draw:
     mov edx, [rsp + 8]
     call filter_row
     add [rsp + 16], eax
-    # the details' height: a third of the section for an item with something to show
-    call details_lines
+    # the selected result's logs are the Test Results tab's (testresults.s): the tree takes the rest
+    xor eax, eax
     mov r15d, eax               # lines
     xor r14d, r14d              # the details' height
     test r15d, r15d
@@ -2386,6 +2398,7 @@ FN testctl_print_view
 .Ltm_output: .asciz "Show Output"
 .p2align 3
 # per state: icon, color slot (-1 muted)
+.globl state_icons
 state_icons:
     .long IC_DOT, T_MUTED           # not run
     .long IC_SLASH, T_MUTED         # skipped
@@ -2819,7 +2832,7 @@ filter_row:
     test eax, UB_CLICK
     jz 5f
     xor dword ptr [rip + tv_failed], 1
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
 5:  M eax, MI_4
     add eax, ebx
@@ -3031,7 +3044,7 @@ testctl_filter:
     lea rdi, [rip + tv_ftf]
     mov rsi, rax
     call tf_set
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
     xor eax, eax
     EPILOGUE
@@ -3051,7 +3064,7 @@ testctl_failed:
     jne 1f
     mov ecx, 1
 1:  mov [rip + tv_failed], ecx
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
     xor eax, eax
     EPILOGUE

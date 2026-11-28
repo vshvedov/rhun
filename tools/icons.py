@@ -179,6 +179,8 @@ for k in range(8):
     ICONS.append(('SPINA%d' % (k + 8), [('W', 12)] + line(arc(64, 64, 40, 45 * k - 90 + 22.5, 45 * k + 180 + 22.5, 18))))
 # the Debug Console's Clear: the Sublime Debugger's bin (Tabler, MIT), converted as the icons above
 ICONS.append(('DBG_TRASH', [('W', 11), ('M', 21, 37), ('L', 107, 37), ('M', 53, 59), ('L', 53, 91), ('M', 75, 59), ('L', 75, 91), ('M', 27, 37), ('L', 32, 101), ('L', 33, 105), ('L', 35, 109), ('L', 39, 111), ('L', 43, 112), ('L', 85, 112), ('L', 89, 111), ('L', 93, 109), ('L', 95, 105), ('L', 96, 101), ('L', 101, 37), ('M', 48, 37), ('L', 48, 21), ('L', 48, 19), ('L', 50, 18), ('L', 51, 16), ('L', 53, 16), ('L', 75, 16), ('L', 77, 16), ('L', 78, 18), ('L', 80, 19), ('L', 80, 21), ('L', 80, 37)]))
+# the bottom panel at full width (Lucide move-horizontal): a line with an arrowhead at each end
+ICONS.append(('PANEL_WIDE', [('W', 11), ('M', 11, 64), ('L', 117, 64), ('M', 96, 43), ('L', 117, 64), ('L', 96, 85), ('M', 32, 43), ('L', 11, 64), ('L', 32, 85)]))
 # icon_mask keys its cache by icon | size << 8
 assert len(ICONS) <= 256, len(ICONS)
 # the color names of file icons, in the order of their theme slots from T_ICON (src/app/theme.s)

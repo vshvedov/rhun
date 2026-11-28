@@ -793,7 +793,7 @@ send_run:
     mov edx, PK_TEST_RUN
     mov ecx, QO_TESTS
     call query_track
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 8:  mov rdi, rbx
@@ -1215,7 +1215,7 @@ apply_results:
     mov qword ptr [rip + rr_apply], 1
     jmp 1b
 4:  call testmodel_budget
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_ts_marks], 1
     mov dword ptr [rip + g_dirty], 1
     xor eax, eax

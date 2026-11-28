@@ -2011,7 +2011,8 @@ default) let the formatter tidy lines as you type or paste.
 
 Extensions can also fill **trees and logs** that rhun draws and keeps: sections in the sidebar
 under the Explorer (click a header to fold it), tabs in the bottom panel after the terminals
-(`ctrl+j` **Toggle Panel** shows or hides the panel without starting a shell), tabs in the right
+(`ctrl+j` **Toggle Panel** shows or hides the panel without starting a shell; the ⇔ button at its
+top right spans it under the sidebars too, `[ui] panel_full_width`), tabs in the right
 column beside the Agents panel (**Toggle Side Views**), or a tab of their own. Trees keep your
 expansion and selection as the extension updates them: arrows move and fold, Enter opens, Space
 ticks a checkbox, typing jumps to a label, Shift+F10 opens the item's menu, and the buttons in the
@@ -2473,6 +2474,12 @@ Debug extension's debuggers (`[needs] debuggers`; Delve for Go, lldb-dap for Rus
 Python, js-debug for JavaScript and TypeScript), so running tests needs only the Tests extension and
 debugging them the Debug extension too (without it, rhun says which to install): breakpoints, stepping and the Debug Console work as for any
 session, and when the session ends the program's exit status is the test's result.
+
+A run opens the **Test Results** tab in the bottom panel, one tab reused by every run (a debug run
+shows in the Debug tab instead): Rerun, Rerun Failed Tests and Stop, the counts and the time the run
+took, then its logs. They are the whole run's until you select a test or group in the Testing tree;
+then they are that one's: its output, then its failure messages with the expected and actual values
+(a group: everything under it; a test the run left out: its last result).
 
 In the editor each test has a green play button in the gutter at its first line, as soon as its file
 is open, without expanding the Testing tree (`[testing] gutter = false` hides them): a click opens the play menu, as JetBrains IDEs and the Sublime Debugger do (Run

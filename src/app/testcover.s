@@ -267,7 +267,7 @@ FN testcover_apply
     mov dword ptr [rip + apply], 1
     jmp .Ltc_pass
 7:  mov dword ptr [rip + g_dirty], 1
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     call testgutter_cov_changed
     xor eax, eax
     EPILOGUE

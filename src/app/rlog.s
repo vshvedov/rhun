@@ -39,11 +39,13 @@ F LG_match, 8           # the line of the current match, -1
 F LG_rect, 16           # where its lines were last drawn
 F LG_drag, 4
 F LG_pad, 4
+F LG_face, 8            # the face its lines are drawn in, 0: the editor's monospaced face
 ENDSTRUCT LG_SIZE
 
 .bss
 .p2align 3
 lg_tmp: .zero SB_SIZE           # a line being cleaned, the copied lines
+lg_face: .quad 0                # the face of the log being drawn or keyed (lg_use)
 lg_find_tmp: .zero SB_SIZE      # a line without its SGR sequences, for find
 
 .text
@@ -56,11 +58,71 @@ FN log_new
     call mem_alloc
     mov [rax + LG_slot], ebx
     mov dword ptr [rax + LG_follow], 1
+    mov qword ptr [rax + LG_face], 0
     mov qword ptr [rax + LG_cur], -1
     mov qword ptr [rax + LG_anchor], -1
     mov qword ptr [rax + LG_match], -1
     pop rbx
     ret
+
+# log_set_face(LG*, FACE*): its lines in that face (the terminal's, for the Debug Console and Test
+#   Results), 0 the editor's monospaced one
+FN log_set_face
+    mov [rdi + LG_face], rsi
+    mov dword ptr [rip + g_dirty], 1
+    ret
+
+# lg_use(rdi = LG*): lg_face is the log's face (keeps every register but rax)
+lg_use:
+    mov rax, [rdi + LG_face]
+    test rax, rax
+    jnz 1f
+    lea rax, [rip + g_face_code]
+1:  mov [rip + lg_face], rax
+    ret
+
+# log_drop_last(LG*): its newest line goes (a line still growing is put back with log_append)
+FN log_drop_last
+    push rbx
+    mov rbx, rdi
+    cmp qword ptr [rbx + LG_count], 0
+    je 9f
+    mov rsi, [rbx + LG_seq]
+    dec rsi
+    call line_at
+    mov ecx, [rax + LL_len]
+    sub [rbx + LG_bytes], rcx
+    mov rdi, [rax + LL_ptr]
+    mov qword ptr [rax + LL_ptr], 0
+    call mem_free
+    dec qword ptr [rbx + LG_seq]
+    dec qword ptr [rbx + LG_count]
+    mov dword ptr [rip + g_dirty], 1
+9:  pop rbx
+    ret
+
+# log_print_rect(LG*, sb, label cstr): "LABEL X Y W H" and a newline: where its lines were last drawn
+FN log_print_rect
+    PROLOGUE
+    mov rbx, rdi
+    mov r12, rsi
+    mov rdi, r12
+    mov rsi, rdx
+    call sb_push_cstr
+    xor r13d, r13d
+1:  mov rdi, r12
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, r12
+    movsxd rsi, dword ptr [rbx + LG_rect + r13*4]
+    call sb_push_u64
+    inc r13
+    cmp r13, 4
+    jb 1b
+    mov rdi, r12
+    mov esi, 10
+    call sb_push_byte
+    EPILOGUE
 
 # log_clear(LG*): no lines (the numbering goes on)
 FN log_clear
@@ -276,7 +338,8 @@ FN log_sev_word
 
 # row_h() -> eax a line's height
 row_h:
-    mov eax, [rip + g_face_code + FACE_lineh]
+    mov rax, [rip + lg_face]
+    mov eax, [rax + FACE_lineh]
     add eax, [rip + g_mt + 4*MI_2]
     ret
 
@@ -292,6 +355,7 @@ rows:
 #   clicks and drags select lines, the wheel scrolls (and stops following until End)
 FN log_draw
     PROLOGUE 80
+    call lg_use
     mov rbx, rdi
     mov [rsp], esi
     mov [rsp + 4], edx
@@ -564,11 +628,12 @@ draw_line:
     add eax, [rip + g_mt + 4*MI_8]
     mov [rsp + 8], eax          # x
     call row_h
-    sub eax, [rip + g_face_code + FACE_ascent]
-    sub eax, [rip + g_face_code + FACE_descent]
+    mov rcx, [rip + lg_face]
+    sub eax, [rcx + FACE_ascent]
+    sub eax, [rcx + FACE_descent]
     sar eax, 1
     add eax, r13d
-    add eax, [rip + g_face_code + FACE_ascent]
+    add eax, [rcx + FACE_ascent]
     mov [rsp + 12], eax         # baseline
     mov r12, [r14 + LL_ptr]
     mov r13d, [r14 + LL_len]
@@ -621,7 +686,7 @@ seg:
     jle 9f
     push rcx
     push rcx
-    lea rdi, [rip + g_face_code]
+    mov rdi, [rip + lg_face]
     mov esi, [rsp + 16 + 8 + 8]
     lea rcx, [r12 + rbx]
     mov r8d, edx
@@ -664,6 +729,7 @@ sgr:
 #   previous, Escape closes it), Ctrl+C copies the selected lines
 FN log_key
     PROLOGUE 16
+    call lg_use
     mov rbx, rdi
     mov r12d, esi
     mov r13d, edx
@@ -824,6 +890,7 @@ scroll_to:
 #   current match (or the cursor), wrapping; it becomes the cursor's line, in view
 FN log_find_next
     PROLOGUE 16
+    call lg_use
     mov rbx, rdi
     mov r12d, esi
     cmp qword ptr [rbx + LG_count], 0
@@ -1008,6 +1075,7 @@ FN log_field
 #   line in view: "line K SEV TEXT" (TEXT without SGR sequences)
 FN log_dump
     PROLOGUE 16
+    call lg_use
     mov rbx, rdi
     mov r12, rsi
     mov rdi, r12

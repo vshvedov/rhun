@@ -424,7 +424,7 @@ exec_start:
 6:  mov rdi, [rsp]
     mov rsi, [r14 + TSX_exec]
     call testproto_reply_ok_u64
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
     jmp .Lxs_done
 .Lxs_remote:
@@ -1208,7 +1208,7 @@ report_exit:
     xor esi, esi
     mov edx, TSX_SIZE
     call memset
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 

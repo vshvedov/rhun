@@ -27,6 +27,11 @@ g_watches: .zero SB_SIZE        # watch expressions, one per line
 .data
 .globl g_dap_gen
 g_dap_gen: .long 1              # bumped by every change the debug view shows
+.globl g_hv_root, g_hv_slot, g_hv_epoch, g_hv_vgen
+g_hv_root: .long -1             # the hover's value in the pool (r_hover), -1 none
+g_hv_slot: .long -1             # its session, and the stop and pool it belongs to
+g_hv_epoch: .long 0
+g_hv_vgen: .long 0
 .bss
 
 .text
@@ -236,13 +241,19 @@ FN dap_start
     test dword ptr [r15 + EXT_needs], NEEDS_DEBUG
     jz .Lst_noneeds
     # resolve = yes: the extension sees the configuration first (debugext.s); the launch goes on
-    # in dap_start_resolved. Not for its own debug-start sessions
+    # in dap_start_resolved. Not for its own debug-start sessions; another extension's debug-start
+    # of it ([needs] debuggers: the Tests extension's of the Debug extension's js-debug) is resolved,
+    # its answer waiting for the launch
     cmp dword ptr [r14 + DBG_resolve], 0
     je 1f
-    cmp qword ptr [rip + dstart_owner], 0
-    jne 1f
     cmp dword ptr [rip + dstart_resolved], 0
     jne 1f
+    mov rax, [rip + dstart_owner]
+    cmp rax, r15
+    je 1f
+    mov rdi, rax
+    mov rsi, [rip + dstart_oid]
+    call dbgx_resolve_owner
     mov rdi, r15
     mov esi, [rip + g_lc_dbg]
     call dbgx_resolve_begin
@@ -429,8 +440,9 @@ FN dap_start_ext
 #   (debugext.s) and g_lc_* hold the configuration to launch
 FN dap_start_resolved
     PROLOGUE 16
-    mov qword ptr [rip + dstart_owner], 0
-    mov qword ptr [rip + dstart_oid], 0
+    call dbgx_take_owner        # another extension's debug-start: it hears of the session
+    mov [rip + dstart_owner], rax
+    mov [rip + dstart_oid], rdx
     mov dword ptr [rip + dstart_resolved], 1
     mov dword ptr [rip + dstart_before], 0
     jmp .Lst_prepared
@@ -655,7 +667,12 @@ launch_now:
     mov esi, DCON_INFO
     lea rdx, [rip + .Lm_starting]
     mov ecx, .Lm_starting_end - .Lm_starting
-    call dcon_line
+    cmp dword ptr [rbx + DS_nodebug], 0
+    je 42f
+    lea rdx, [rip + .Lm_starting_run]   # without debugging: the program, not the debugger
+    mov ecx, .Lm_starting_run_end - .Lm_starting_run
+42: call dcon_line
+    mov rdi, rbx
     call dview_session_started
     mov dword ptr [rip + g_dirty], 1
     inc dword ptr [rip + g_dap_gen]
@@ -1062,6 +1079,7 @@ FN dap_tick
     call dg_hover_tick
     call dbgx_resolve_tick
     call compound_next
+    call dview_anim_tick        # a spinner that moves (debugview.s)
     EPILOGUE
 
 # ds_tick(ds)
@@ -1206,7 +1224,11 @@ FN dap_timeout
     cmp rax, -1
     je 92f
     call near_ms
-92: cmp qword ptr [rip + cq + SB_len], 0
+92: call dview_anim_due         # the spinners' next step
+    cmp eax, -1
+    je 921f
+    call near_ms
+921: cmp qword ptr [rip + cq + SB_len], 0
     je 93f
     mov eax, 50                 # a compound's next configuration
     call near_ms
@@ -1568,6 +1590,7 @@ ds_end:
     call slot_index
     mov edi, eax
     call bp_session_gone
+    call dview_rtc_clear
     or dword ptr [rbx + DS_flags], DSF_STALE
     # debug-start: an answer still owed is an error; a session it was told of has ended
     mov rdi, [rbx + DS_owner]
@@ -2456,6 +2479,17 @@ e_stopped:
     call new_epoch
     mov dword ptr [rbx + DS_state], DSS_PAUSED
     and dword ptr [rbx + DS_flags], ~DSF_STALE
+    call dview_rtc_clear        # Run to Cursor's breakpoint: its work is done
+    call dap_focused            # the session that stopped takes the focus from one that is not paused
+    test rax, rax               #   (js-debug's launcher runs on while its child session stops)
+    jz 1f
+    cmp dword ptr [rax + DS_state], DSS_PAUSED
+    je 2f
+1:  mov rdi, rbx
+    call slot_index
+    mov edi, eax
+    call dap_focus_slot
+2:
     mov rdi, r12
     lea rsi, [rip + .Lk_reason]
     call jstr
@@ -3421,6 +3455,27 @@ r_scopes:
 9:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
+# vn_hover_tree(ds, node) -> eax 1 when the node is the hover's value or under it (its root's parent
+#   is -3)
+.equ HV_DEPTH, 2                # the hover's card: two levels of members
+FN vn_hover_tree
+    mov rcx, [rdi + DS_vars + VEC_ptr]
+    mov eax, esi
+    mov edx, 64
+1:  test eax, eax
+    js 8f
+    imul r8, rax, VN_SIZE
+    mov r9d, [rcx + r8 + VN_parent]
+    cmp r9d, -3
+    je 9f
+    mov eax, r9d
+    dec edx
+    jnz 1b
+8:  xor eax, eax
+    ret
+9:  mov eax, 1
+    ret
+
 # vn_expand(ds, node) -> eax 1 when its children were asked for (or are there): it is marked open
 FN vn_expand
     PROLOGUE
@@ -3434,7 +3489,13 @@ FN vn_expand
     or dword ptr [r13 + VN_flags], VNF_EXPANDED
     mov rdi, rbx
     mov esi, r12d
+    call vn_hover_tree
+    test eax, eax
+    jnz 0f                      # the hover's: not remembered across stops
+    mov rdi, rbx
+    mov esi, r12d
     call open_path_add
+0:
     cmp qword ptr [r13 + VN_ref], 0
     je 8f
     cmp dword ptr [r13 + VN_kid0], 0
@@ -3936,6 +3997,10 @@ r_variables:
     mov ecx, [rsp + 4]
     mov [rax + VN_kid0], ecx
     mov [rax + VN_nkids], r15d
+    mov rdi, rbx                # the hover's: its members open, HV_DEPTH levels down
+    mov esi, [r13 + PD_ctx]
+    call vn_hover_tree
+    mov [rsp + 12], eax
     # reopen
     xor r12d, r12d
 4:  cmp r12d, r15d
@@ -3943,7 +4008,15 @@ r_variables:
     mov esi, [rsp + 4]
     add esi, r12d
     mov [rsp + 8], esi
+    cmp dword ptr [rsp + 12], 0
+    je 41f
+    cmp dword ptr [rsp], HV_DEPTH
+    jae 5f
     mov rdi, rbx
+    mov esi, [rsp + 8]
+    call vn_expand
+    jmp 5f
+41: mov rdi, rbx
     call node_was_open
     test eax, eax
     jz 5f
@@ -4314,6 +4387,11 @@ FN dap_watch_remove
     call refresh_watches
 9:  EPILOGUE
 
+# dap_watches_changed(): the watch list was changed by hand (an evaluation, debugview.s): asked for
+#   again
+FN dap_watches_changed
+    jmp refresh_watches
+
 # refresh_watches(): the focused session's watch roots are dropped and asked for again
 refresh_watches:
     sub rsp, 8
@@ -4439,6 +4517,7 @@ FN dap_hover_eval
 # r_hover(ds, root, body, success, pd): the hover's value (an error shows nothing)
 r_hover:
     PROLOGUE
+    mov r14, rdi
     mov rbx, rdx
     test ecx, ecx
     jz 9f
@@ -4464,6 +4543,33 @@ r_hover:
     mov rdi, r12
     mov rsi, r13
     call dg_hover_answer
+    # the value as a root no view lists (parent -3), its members loaded two levels down for the
+    #   hover's card (debuggutter.s)
+    mov rdi, r14
+    mov esi, -1
+    xor edx, edx
+    mov rcx, rbx
+    lea r8, [rip + .Lk_novalue]
+    lea r9, [rip + .Lk_result]
+    call vn_add
+    test eax, eax
+    js 9f
+    mov r15d, eax
+    mov rdi, r14
+    mov esi, eax
+    call vn_node
+    mov dword ptr [rax + VN_parent], -3
+    mov [rip + g_hv_root], r15d
+    mov rdi, r14
+    call slot_index
+    mov [rip + g_hv_slot], eax
+    mov eax, [r14 + DS_epoch]
+    mov [rip + g_hv_epoch], eax
+    mov eax, [r14 + DS_vgen]
+    mov [rip + g_hv_vgen], eax
+    mov rdi, r14
+    mov esi, r15d
+    call vn_expand
 9:  EPILOGUE
 
 # r_repl(ds, root, body, success, pd): the value, or the error, in the console
@@ -5430,6 +5536,8 @@ dap_m_cancelled:
 .Lm_spawn: .asciz "the debugger could not be started"
 .Lm_starting: .ascii "Starting the debugger"
 .Lm_starting_end:
+.Lm_starting_run: .ascii "Running without debugging"
+.Lm_starting_run_end:
 .Lm_ended: .ascii "Debug session ended"
 .Lm_ended_end:
 .Lm_json: .asciz "the debugger sent a message that is not JSON"

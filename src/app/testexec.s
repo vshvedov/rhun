@@ -72,7 +72,7 @@ FN testexec_request
     call parse_command
     test rax, rax
     jnz .Lxr_error
-    # the program: a bare name the manifest lists
+    # the program: a name the manifest lists, bare or at the end of a path
     mov rdi, rbx
     call prog_allowed
     test eax, eax
@@ -571,7 +571,7 @@ parse_command:
     jz .Lpc_syntax
     test rax, rax
     jz .Lpc_syntax
-    cmp rax, TS_PROG_NAME
+    cmp rax, TS_PROG_PATH
     ja .Lpc_needs_name
     mov [rip + cmd_proglen], rax
     mov edi, 1
@@ -613,10 +613,10 @@ parse_command:
     mov rcx, [rip + cmd_cwdlen]
     mov byte ptr [rax + rcx], 0
     mov [rip + cmd_cwd], rax
-    # the program name: [A-Za-z0-9._+-]
+    # the program: a name [A-Za-z0-9._+-], or a path inside the project to one (a .venv's python)
     mov rdi, [rip + cmd_prog]
     mov rsi, [rip + cmd_proglen]
-    call bare_name
+    call prog_name_ok
     test eax, eax
     jz .Lpc_needs_name
     # args[0] holds the program's name until its path replaces it
@@ -712,6 +712,65 @@ counted:
     ret
 
 # bare_name(ptr, len) -> eax 1 for [A-Za-z0-9._+-]+ (not "." or "..")
+# prog_name_ok(ptr, len) -> eax 1 for a bare name (bare_name), or an absolute path inside the project
+#   (no "..") whose last part is one
+prog_name_ok:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    cmp r13, TS_PROG_NAME
+    ja 1f
+    call bare_name
+    test eax, eax
+    jnz 9f
+1:  cmp byte ptr [r12], '/'
+    jne 8f
+    mov rbx, [rip + g_project]  # the project's folder, then a slash
+    test rbx, rbx
+    jz 8f
+    mov rdi, rbx
+    call strlen
+    mov r14, rax
+    cmp r14, r13
+    jae 8f
+    mov rdi, r12
+    mov rsi, rbx
+    mov rdx, r14
+    call memeq
+    test eax, eax
+    jz 8f
+    cmp byte ptr [r12 + r14], '/'
+    jne 8f
+    xor ecx, ecx                # no ".." part
+2:  lea rdx, [rcx + 3]
+    cmp rdx, r13
+    ja 3f
+    cmp word ptr [r12 + rcx], 0x2e2f    # "/."
+    jne 21f
+    cmp byte ptr [r12 + rcx + 2], '.'
+    jne 21f
+    lea rdx, [rcx + 3]
+    cmp rdx, r13
+    je 8f
+    cmp byte ptr [r12 + rcx + 3], '/'
+    je 8f
+21: inc rcx
+    jmp 2b
+3:  mov rcx, r13                # the last part
+4:  test rcx, rcx
+    jz 8f
+    cmp byte ptr [r12 + rcx - 1], '/'
+    je 5f
+    dec rcx
+    jmp 4b
+5:  lea rdi, [r12 + rcx]
+    mov rsi, r13
+    sub rsi, rcx
+    call bare_name
+    EPILOGUE
+8:  xor eax, eax
+9:  EPILOGUE
+
 bare_name:
     test rsi, rsi
     jz 8f
@@ -768,10 +827,28 @@ env_name_ok:
     mov eax, 1
     ret
 
-# prog_allowed(ext) -> eax 1 when cmd_prog is a word of its [needs] tests
+# prog_allowed(ext) -> eax 1 when cmd_prog is a word of its [needs] tests, or a path whose last part
+#   is one (a project's .venv/bin/python for `python`; the approval shows the whole command)
 prog_allowed:
-    PROLOGUE
-    mov r12, [rdi + EXT_tests_progs]
+    PROLOGUE 16
+    mov rax, [rip + cmd_prog]   # the name: after the path's last slash
+    mov rcx, [rip + cmd_proglen]
+    mov [rsp], rax
+    mov [rsp + 8], rcx
+    xor edx, edx
+0:  cmp rdx, rcx
+    jae 01f
+    cmp byte ptr [rax + rdx], '/'
+    jne 02f
+    lea r8, [rax + rdx + 1]
+    mov [rsp], r8
+    mov r9, rcx
+    sub r9, rdx
+    dec r9
+    mov [rsp + 8], r9
+02: inc rdx
+    jmp 0b
+01: mov r12, [rdi + EXT_tests_progs]
     test r12, r12
     jz 8f
     mov rdi, r12
@@ -788,8 +865,10 @@ prog_allowed:
     jz 8f
     mov rdi, rax
     mov rsi, rdx
-    mov rdx, [rip + cmd_prog]
-    mov rcx, [rip + cmd_proglen]
+    mov rdx, [rsp]
+    mov rcx, [rsp + 8]
+    test rcx, rcx
+    jz 8f                       # a path ending in a slash
     call str_eq
     test eax, eax
     jz 1b

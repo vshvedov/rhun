@@ -155,6 +155,30 @@ ICONS.append(('SPIN2', [('W', 13)] + spokes(6, 0, 40)))
 ICONS.append(('SPIN3', star(6, 22, 50)))
 ICONS.append(('SPIN4', [('W', 16)] + spokes(8, 12, 50) + [('D', 64, 64, 14)]))
 ICONS.append(('SPIN5', [('W', 22)] + spokes(8, 14, 52) + [('D', 64, 64, 20)]))
+# the debugger (debugview.s: the run widget, the Debug tab, the Breakpoints dialog): the Sublime
+# Debugger's own icons, Lucide and Tabler line icons (ISC and MIT licences) on a 24-unit grid with a
+# stroke of 2, converted to this grid; Run to Cursor and Mute Breakpoints, which it has none of, are
+# drawn the same way
+ICONS.append(('DBG_RESUME', [('W', 11), ('M', 27, 21), ('L', 80, 64), ('L', 27, 107), ('L', 27, 21), ('M', 101, 27), ('L', 101, 101)]))
+ICONS.append(('DBG_PAUSE2', [('W', 11), ('M', 48, 21), ('L', 50, 22), ('L', 52, 23), ('L', 53, 25), ('L', 53, 27), ('L', 53, 101), ('L', 53, 103), ('L', 52, 105), ('L', 50, 106), ('L', 48, 107), ('L', 37, 107), ('L', 35, 106), ('L', 34, 105), ('L', 32, 103), ('L', 32, 101), ('L', 32, 27), ('L', 32, 25), ('L', 34, 23), ('L', 35, 22), ('L', 37, 21), ('L', 48, 21), ('M', 91, 21), ('L', 93, 22), ('L', 94, 23), ('L', 96, 25), ('L', 96, 27), ('L', 96, 101), ('L', 96, 103), ('L', 94, 105), ('L', 93, 106), ('L', 91, 107), ('L', 80, 107), ('L', 78, 106), ('L', 76, 105), ('L', 75, 103), ('L', 75, 101), ('L', 75, 27), ('L', 75, 25), ('L', 76, 23), ('L', 78, 22), ('L', 80, 21), ('L', 91, 21)]))
+ICONS.append(('DBG_STOP2', [('W', 11), ('M', 93, 24), ('L', 97, 25), ('L', 101, 27), ('L', 103, 31), ('L', 104, 35), ('L', 104, 93), ('L', 103, 97), ('L', 101, 101), ('L', 97, 103), ('L', 93, 104), ('L', 35, 104), ('L', 31, 103), ('L', 27, 101), ('L', 25, 97), ('L', 24, 93), ('L', 24, 35), ('L', 25, 31), ('L', 27, 27), ('L', 31, 25), ('L', 35, 24), ('L', 93, 24)]))
+ICONS.append(('DBG_RERUN', [('W', 11), ('M', 107, 59), ('L', 102, 43), ('L', 91, 31), ('L', 77, 24), ('L', 61, 21), ('L', 46, 25), ('L', 33, 35), ('L', 24, 48), ('M', 21, 27), ('L', 21, 48), ('L', 43, 48), ('M', 21, 69), ('L', 26, 85), ('L', 37, 97), ('L', 51, 104), ('L', 67, 107), ('L', 82, 103), ('L', 95, 93), ('L', 104, 80), ('M', 107, 101), ('L', 107, 80), ('L', 85, 80)]))
+ICONS.append(('DBG_STEP_OVER', [('W', 11), ('M', 48, 96), ('L', 80, 64), ('L', 48, 32)]))
+ICONS.append(('DBG_STEP_INTO', [('W', 11), ('M', 32, 48), ('L', 64, 80), ('L', 96, 48)]))
+ICONS.append(('DBG_STEP_OUT', [('W', 11), ('M', 32, 80), ('L', 64, 48), ('L', 96, 80)]))
+ICONS.append(('DBG_RUN_CURSOR', [('W', 11), ('M', 21, 64), ('L', 77, 64), ('M', 59, 46), ('L', 77, 64), ('L', 59, 82), ('M', 101, 32), ('L', 101, 96)]))
+ICONS.append(('DBG_BPS', [('W', 11), ('O', 64, 64, 48), ('D', 64, 64, 21)]))
+ICONS.append(('DBG_MUTE', [('W', 11), ('O', 64, 64, 48), ('M', 30, 98), ('L', 98, 30)]))
+ICONS.append(('RUN_OUTLINE', [('W', 11), ('M', 37, 21), ('L', 101, 64), ('L', 37, 107), ('L', 37, 21)]))
+ICONS.append(('DBG_BUG', [('W', 11), ('M', 48, 48), ('L', 48, 43), ('L', 49, 37), ('L', 53, 31), ('L', 58, 28), ('L', 64, 27), ('L', 70, 28), ('L', 75, 31), ('L', 79, 37), ('L', 80, 43), ('L', 80, 48), ('M', 43, 48), ('L', 85, 48), ('L', 89, 56), ('L', 91, 64), ('L', 91, 80), ('L', 89, 90), ('L', 83, 99), ('L', 74, 105), ('L', 64, 107), ('L', 54, 105), ('L', 45, 99), ('L', 39, 90), ('L', 37, 80), ('L', 37, 64), ('L', 39, 56), ('L', 43, 48), ('M', 16, 69), ('L', 37, 69), ('M', 91, 69), ('L', 112, 69), ('M', 64, 107), ('L', 64, 75), ('M', 21, 101), ('L', 39, 91), ('M', 107, 101), ('L', 89, 91), ('M', 21, 37), ('L', 41, 50), ('M', 107, 37), ('L', 87, 50)]))
+# a session getting ready (the run widget, the status bar): three quarters of a ring, sixteen steps
+# round (the first eight are numbered as before; the eight between them come after the icons above)
+for k in range(8):
+    ICONS.append(('SPINA%d' % k, [('W', 12)] + line(arc(64, 64, 40, 45 * k - 90, 45 * k + 180, 18))))
+for k in range(8):
+    ICONS.append(('SPINA%d' % (k + 8), [('W', 12)] + line(arc(64, 64, 40, 45 * k - 90 + 22.5, 45 * k + 180 + 22.5, 18))))
+# the Debug Console's Clear: the Sublime Debugger's bin (Tabler, MIT), converted as the icons above
+ICONS.append(('DBG_TRASH', [('W', 11), ('M', 21, 37), ('L', 107, 37), ('M', 53, 59), ('L', 53, 91), ('M', 75, 59), ('L', 75, 91), ('M', 27, 37), ('L', 32, 101), ('L', 33, 105), ('L', 35, 109), ('L', 39, 111), ('L', 43, 112), ('L', 85, 112), ('L', 89, 111), ('L', 93, 109), ('L', 95, 105), ('L', 96, 101), ('L', 101, 37), ('M', 48, 37), ('L', 48, 21), ('L', 48, 19), ('L', 50, 18), ('L', 51, 16), ('L', 53, 16), ('L', 75, 16), ('L', 77, 16), ('L', 78, 18), ('L', 80, 19), ('L', 80, 21), ('L', 80, 37)]))
 # icon_mask keys its cache by icon | size << 8
 assert len(ICONS) <= 256, len(ICONS)
 # the color names of file icons, in the order of their theme slots from T_ICON (src/app/theme.s)

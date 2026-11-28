@@ -51,6 +51,8 @@ cfg_sidebar: .long 1
 cfg_sidebar_w: .long SIDEBAR_W_DEFAULT
 cfg_agents: .long 1
 cfg_agents_w: .long AGENTS_W_DEFAULT
+.globl cfg_panel_full
+cfg_panel_full: .long 0         # [ui] panel_full_width: the bottom panel under the sidebars too
 cfg_ui_scale: .long 100
 cfg_final_newline: .long 1
 cfg_trim_trailing: .long 0
@@ -994,6 +996,7 @@ g_settings:
     SETTING .Ls_ui, sidebar_width, ST_INT, cfg_sidebar_w, 140, 600, 10, 0, "Explorer width", "Width of the file explorer in points."
     SETTING .Ls_ui, agents_panel, ST_BOOL, cfg_agents, 0, 1, 1, 0, "Show agents panel", "Agent sessions on the right (ctrl+shift+a)."
     SETTING .Ls_ui, agents_width, ST_INT, cfg_agents_w, 240, 900, 10, 0, "Agents panel width", "Width of the agents panel in points."
+    SETTING .Ls_ui, panel_full_width, ST_BOOL, cfg_panel_full, 0, 1, 1, 0, "Full-width bottom panel", "The terminal and debug panel span the window, under the explorer and the agents panel, as JetBrains IDEs lay it out."
     SETTING .Ls_ui, tooltips, ST_BOOL, cfg_tooltips, 0, 1, 1, 0, "Tooltips", "Show a button's name and shortcut on hover."
     SETTING .Ls_ui, auto_hide_scrollbars, ST_BOOL, cfg_autohide_scrollbars, 0, 1, 1, 0, "Auto-hide scrollbars", "Show scrollbars only while scrolling or under the pointer."
     SETTING .Ls_ui, decorations, ST_CHOICE, cfg_decorations, 0, 2, 1, 0, "Title bar", "Who draws window buttons on Wayland. Auto leaves tiling desktops bare.", .Ldeco_opts
@@ -1095,6 +1098,10 @@ g_settings:
     SETTING_ACTION .Ls_updates, check_extensions, cmd_check_extensions, .Lextup_label, g_extup_desc
     # debugger (debugview.s, debugconsole.s)
     SETTING .Ls_debug, show_on_start, ST_BOOL, g_debug_show_on_start, 0, 1, 1, 0, "Show the debug view on start", "Open the Variables, Watch, Call Stack and Breakpoints sections and the Debug Console when a session starts."
+    SETTING .Ls_debug, layout, ST_CHOICE, g_debug_layout, 0, 1, 1, 0, "Debugger layout", "Where Frames, Variables and Watches show: the sidebar's sections, or a Debugger tab in the bottom panel as in JetBrains IDEs.", .Ldbg_layout_opts
+    SETTING .Ls_debug, inline_values, ST_BOOL, g_debug_inline_values, 0, 1, 1, 0, "Inline values", "While paused, the values of the variables a line names show after it, up to the paused line."
+    SETTING .Ls_debug, inline_values_lines, ST_INT, g_debug_iv_lines, 1, 500, 10, 0, "Inline values: lines", "How many lines above the paused line show their values."
+    SETTING .Ls_debug, frames_width, ST_INT, g_debug_frames_pct, 10, 80, 5, 0, "Frames width", "The Debug tab's frames, in percent of its width; the divider beside them sets it too."
     SETTING .Ls_debug, keys_in_terminal, ST_BOOL, g_debug_keys_in_terminal, 0, 1, 1, 0, "Debug keys in the terminal", "While a session runs, F5, F6, F10, F11 and Shift+F5 reach the debugger even when the terminal has focus."
     SETTING .Ls_debug, console_lines, ST_INT, g_dcon_max, 1000, 100000, 1000, 0, "Debug console lines", "Lines the Debug Console keeps; older ones go."
     SETTING .Ls_remote, agent_binary, ST_STR, cfg_remote_agent_binary, 0, 0, 0, 0, "Remote agent binary", "A Linux rhun to start on remote hosts. Empty uses this release's own."
@@ -1102,6 +1109,7 @@ g_settings:
     SETTING .Ls_testing, gutter, ST_BOOL, cfg_test_gutter, 0, 1, 1, 0, "Test buttons in the gutter", "A run button and the result at each test's first line."
     .quad 0, 0, 0, 0, 0
     .long 0, 0, 0, 0, 0, 0
+.Ldbg_layout_opts: .asciz "sidebar", "Sidebar", "toolwindow", "Tool window", ""
 .Lextup_opts: .asciz "install", "Install", "check", "Show only", "off", "Off", ""
 .Lextup_label: .asciz "Check extensions now"
 .Lpaste_opts: .asciz "spread", "Spread lines", "full", "Full text", ""

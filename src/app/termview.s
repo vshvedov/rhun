@@ -147,6 +147,15 @@ FN term_clip_identity
 1:  add rsp, 8
     ret
 
+# term_line_metrics() -> eax the terminal's line height, g_face_term made for its font and size: the
+#   Debug Console draws its lines as the terminal does (debugview.s)
+FN term_line_metrics
+    sub rsp, 8
+    call term_metrics
+    add rsp, 8
+    mov eax, [rip + tlh]
+    ret
+
 # term_metrics(): the terminal face at the configured size, in its font (the editor's unless it has
 #   one of its own), and the line height: the font's own (ascent and descent) * line_height / 100,
 #   with the text in the middle, as terminals scale it: every step shows, and 1.0 is the font's

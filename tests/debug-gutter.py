@@ -84,8 +84,8 @@ class Gutter(debughost.DebugHost):
         self.assertEqual(out[0], 'left-lane 3')
         self.assertEqual(out[1], '%s 3 enabled=1 cond= hits= log= verified=- line=0 msg=' % a)
         self.assertEqual(out[3], '--')                   # the second click removed it
-        self.assertEqual(out[-5:], ['Edit Condition...', 'Edit Hit Count...', 'Edit Log Message...',
-                                    'Enable or Disable Breakpoint', 'Remove Breakpoint'])
+        self.assertEqual(out[-7:], ['Edit Condition...', 'Edit Hit Count...', 'Edit Log Message...',
+                                    'Enable or Disable Breakpoint', 'Remove Breakpoint', '-', 'Run to Line'])
 
     def test_menu_on_an_empty_line(self):
         out = self.run_editor(['print-xy 6 1'])
@@ -128,7 +128,8 @@ class Gutter(debughost.DebugHost):
 
     def test_hover_on_a_name(self):
         out = self.hover_at(26)                         # total
-        self.assertEqual(out[-2:], ['total = 3  int', 'tip=total = 3  int'])
+        # the value shows in the debugger's card (debug-view.py), which takes the tooltip's place
+        self.assertEqual(out[-2:], ['total = 3  int', 'tip='])
 
     def test_hover_on_a_member_chain(self):
         out = self.hover_at(15)                         # the x of p->x

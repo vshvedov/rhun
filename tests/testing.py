@@ -334,11 +334,14 @@ class Testing(unittest.TestCase):
         self.assertIn('errors=0 warnings=0', out)
 
     def test_gutter_glyphs_follow_states_run_on_click_and_coverage_tints(self):
-        out = self.run_editor([*EXPAND, 'wait 300', 'print-gutter', 'test-gutter 7', 'wait-tests', 'print-gutter',
+        out = self.run_editor([*EXPAND, 'wait 300', 'print-gutter', 'test-gutter 7', 'print-menu', 'menu-pick Run \'TestB\'',
+                               'wait-tests', 'print-gutter',
                                'cmd test_coverage_all', 'wait-tests', 'print-gutter', 'test-gutter 11 right', 'print-menu',
                                'key Escape', 'cmd test_coverage_toggle', 'print-gutter'])
         self.assertEqual(out[2:6], ['line=3 glyph=play item=go:example/pkg.TestA', 'line=7 glyph=play item=go:example/pkg.TestB',
                                     'line=11 glyph=play item=go:example/pkg.TestC', 'cov='])
+        # a click opens the play menu, as JetBrains IDEs and the Sublime Debugger: Run, Debug, Run with Coverage
+        self.assertEqual(out[6:9], ["Run 'TestB'", "Debug 'TestB'", "Run 'TestB' with Coverage"])
         self.assertIn('run 1 run 1 go:example/pkg.TestB', self.fake_log())
         self.assertIn('line=7 glyph=failed item=go:example/pkg.TestB', out)
         self.assertIn('line=4 glyph=passed item=go:example/pkg.TestA/sub', out)
@@ -356,7 +359,7 @@ class Testing(unittest.TestCase):
                                'wait 100', 'echo @after', 'print-gutter', 'print-marks',
                                'test-select testsfake go:example/pkg.TestB', 'test-action failure', 'print-state',
                                'test-select testsfake go:example/pkg.TestC', 'test-action goto', 'print-state',
-                               'test-gutter 9', 'wait-tests',
+                               'test-gutter 9', 'menu-pick Run \'TestB\'', 'wait-tests',
                                'cmd goto_line', 'type 10', 'key Return', 'cmd test_run_cursor', 'wait-tests'])
         at = out.index('@after')
         before, after = out[out.index('@before'):at], out[at:]

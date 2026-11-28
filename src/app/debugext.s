@@ -15,6 +15,9 @@
 
 .bss
 .p2align 3
+rs_owner: .quad 0               # the launch being resolved: another extension's debug-start
+rs_oid: .quad 0                 # and its request id
+.p2align 3
 rs_gen: .long 0                 # before tasks: the launch a task's end belongs to
 rs_pad: .long 0
 rs_state: .long 0               # debug-resolve: 0 none, 1 the extension starts, 2 asked
@@ -160,7 +163,15 @@ FN dbgx_h_debug_start
     call dcfg_from_leaves
     test eax, eax
     jnz 2f
-    cmp dword ptr [rip + g_dcfg_code], DCE_REFUSED
+    cmp dword ptr [rip + g_dcfg_code], DCE_MISSING
+    jne 11f
+    lea rdi, [rip + g_dcfg_err] # the user hears what to install; the extension, that it is missing
+    call app_toast
+    mov rdi, r12
+    lea rsi, [rip + .Le_missing]
+    call xp_reply_error
+    EPILOGUE
+11: cmp dword ptr [rip + g_dcfg_code], DCE_REFUSED
     jne .Lds_syntax
     mov rdi, r12
     lea rsi, [rip + .Le_type]
@@ -423,9 +434,39 @@ rs_fail:
     push rbx
     mov rbx, rdi
     mov dword ptr [rip + rs_state], 0
+    call rs_owner_fail
+    mov rdi, rbx
     call dap_error
     pop rbx
     ret
+
+# dbgx_resolve_owner(EXT* or 0, request id): the launch being resolved is that extension's
+#   debug-start (another extension's debugger): its answer waits for the launch
+FN dbgx_resolve_owner
+    mov [rip + rs_owner], rdi
+    mov [rip + rs_oid], rsi
+    ret
+
+# dbgx_take_owner() -> rax EXT* or 0, rdx request id: the resolved launch's waiting debug-start
+FN dbgx_take_owner
+    mov rax, [rip + rs_owner]
+    mov rdx, [rip + rs_oid]
+    mov qword ptr [rip + rs_owner], 0
+    mov qword ptr [rip + rs_oid], 0
+    ret
+
+# rs_owner_fail(reason cstr): the waiting debug-start, if any, hears that the launch did not happen
+rs_owner_fail:
+    PROLOGUE
+    mov rdx, rdi
+    mov rdi, [rip + rs_owner]
+    test rdi, rdi
+    jz 9f
+    mov rsi, [rip + rs_oid]
+    mov qword ptr [rip + rs_owner], 0
+    mov qword ptr [rip + rs_oid], 0
+    call dbgx_reply_failed
+9:  EPILOGUE
 
 # dbgx_before_begin(task name cstr) -> eax 1 when launch.ini's before task started (the launch goes
 #   on in dap_start_after_before once it exits 0), 0 with g_dstart_msg
@@ -663,6 +704,8 @@ FN dbgx_reply
     test r12d, r12d
     jnz .Lrr_go
     lea rdi, [rip + .Lm_badanswer]
+    call rs_owner_fail
+    lea rdi, [rip + .Lm_badanswer]
     call dap_error
     jmp 8f
 .Lrr_go:
@@ -676,6 +719,8 @@ FN dbgx_reply
     call str_starts_x
     test eax, eax
     jz 1f
+    lea rdi, [rip + dap_m_cancelled]
+    call rs_owner_fail
     xor edi, edi
     mov esi, DCON_INFO
     lea rdx, [rip + .Lm_cancelled]
@@ -697,6 +742,8 @@ FN dbgx_reply
     lea rdi, [rip + rs_line]
     xor esi, esi
     call sb_push_byte
+    mov rdi, [rip + rs_line + SB_ptr]
+    call rs_owner_fail
     mov rdi, [rip + rs_line + SB_ptr]
     call dap_error
 8:  mov dword ptr [rip + g_dirty], 1
@@ -919,6 +966,7 @@ dbgx_v_debug_stop: .asciz "debug-stop"
 .Le_unknown_stop: .asciz "unknown debug-stop needs the debug feature"
 .Le_not_yours: .asciz "refused not a session you started"
 .Le_type: .asciz "refused the configuration's type is not one of your debuggers"
+.Le_missing: .asciz "missing no installed extension provides a debugger of that type"
 .Le_window: .asciz "refused not within 10 s of one of your commands"
 .Le_toobig: .asciz "toobig 8 sessions"
 .Le_toobig_sp: .asciz " toobig 8 sessions"

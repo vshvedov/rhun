@@ -2648,7 +2648,17 @@ parse_needs:
     call val_dup
     mov [rbx + EXT_tests_progs], rax
     jmp 9f
-7:  mov rdi, r12                # debugger: debug = yes starts debug adapters as the user
+7:  mov rdi, r12                # debuggers = TYPE...: other extensions' debuggers it may start
+    lea rsi, [rip + .Ln_debuggers]
+    call ini_key_is
+    test eax, eax
+    jz 71f
+    mov rdi, [rbx + EXT_debuggers]
+    call mem_free
+    call val_dup
+    mov [rbx + EXT_debuggers], rax
+    jmp 9f
+71: mov rdi, r12                # debugger: debug = yes starts debug adapters as the user
     lea rsi, [rip + .Ln_debug]
     call ini_key_is
     test eax, eax
@@ -5395,6 +5405,7 @@ ext_target: .asciz "linux-x86_64"
 .Lpv_folding: .asciz "folding"
 .Lpv_linked: .asciz "linked"       # wsedit
 .Ln_debug: .asciz "debug"
+.Ln_debuggers: .asciz "debuggers"
 .Ls_debugger_dot: .ascii "debugger."
 .Lo_startup: .asciz "startup"
 .Lo_command: .asciz "command"

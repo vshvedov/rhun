@@ -646,7 +646,8 @@ at_line:
     mov rdx, [rsp + 16]
     EPILOGUE
 
-# tg_click(doc, line, button, glyph): a click runs the test, a right click opens its menu
+# tg_click(doc, line, button, glyph): a click opens the play menu (Run, Debug, Run with Coverage of
+#   that test, by its name), a right click the test's whole menu
 tg_click:
     PROLOGUE
     mov r12d, edx
@@ -657,14 +658,79 @@ tg_click:
     je 1f
     mov rdi, rax
     mov rsi, rdx
-    xor edx, edx
-    call testview_run_item
+    call tg_play_menu
     EPILOGUE
 1:  mov rdi, rax
     mov rsi, rdx
     mov edx, [rip + g_mx]
     mov ecx, [rip + g_my]
     call testview_menu_at
+9:  EPILOGUE
+
+# tg_play_menu(tsc, index): the test selected; Run 'NAME', Debug 'NAME', Run 'NAME' with Coverage at
+#   the pointer
+tg_play_menu:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    call testview_select
+    mov rdi, r12
+    mov rsi, r13
+    call testmodel_item
+    mov rbx, [rax + TSI_label]
+    lea rdi, [rip + tg_mtext]
+    call sb_clear
+    xor r14d, r14d
+1:  cmp r14d, 3
+    jae 2f
+    mov rax, [rip + tg_mtext + SB_len]
+    lea rcx, [rip + tg_moffs]
+    mov [rcx + r14*8], rax
+    lea rax, [rip + tg_mpre]
+    mov rsi, [rax + r14*8]
+    lea rdi, [rip + tg_mtext]
+    call sb_push_cstr
+    lea rdi, [rip + tg_mtext]
+    mov esi, 0x27
+    call sb_push_byte
+    lea rdi, [rip + tg_mtext]
+    mov rsi, rbx
+    test rsi, rsi
+    jz 11f
+    call sb_push_cstr
+11: lea rdi, [rip + tg_mtext]
+    mov esi, 0x27
+    call sb_push_byte
+    lea rax, [rip + tg_msuf]
+    mov rsi, [rax + r14*8]
+    lea rdi, [rip + tg_mtext]
+    call sb_push_cstr
+    lea rdi, [rip + tg_mtext]
+    xor esi, esi
+    call sb_push_byte
+    inc r14d
+    jmp 1b
+2:  lea rdx, [rip + tg_mitems]  # the labels, now that the text no longer grows
+    xor r14d, r14d
+3:  cmp r14d, 3
+    jae 4f
+    lea rcx, [rip + tg_moffs]
+    mov rax, [rcx + r14*8]
+    add rax, [rip + tg_mtext + SB_ptr]
+    mov rcx, r14
+    shl rcx, 4
+    mov [rdx + rcx], rax
+    lea rax, [rip + tg_mfns]
+    mov rax, [rax + r14*8]
+    mov [rdx + rcx + 8], rax
+    inc r14d
+    jmp 3b
+4:  mov qword ptr [rdx + 48], 0
+    mov qword ptr [rdx + 56], 0
+    lea rdi, [rip + tg_mitems]
+    mov esi, [rip + g_mx]
+    mov edx, [rip + g_my]
+    call ctx_menu_open
 9:  EPILOGUE
 
 # tg_tipfn(doc, line, glyph) -> rax "Run NAME", or "NAME: STATE" and its first message line
@@ -885,7 +951,7 @@ FN testgutter_cov_changed
 .p2align 2
 # per state: the glyph (GS_* | theme slot << 8 | GF_* << 16)
 state_glyphs:
-    .long GS_TRIANGLE | (T_MUTED << 8)          # not run: run it
+    .long GS_TRIANGLE | (T_SUCCESS << 8)        # not run: run it (green, as JetBrains IDEs and the Sublime Debugger)
     .long GS_MINUS | (T_MUTED << 8)             # skipped
     .long GS_CHECK | (T_SUCCESS << 8)           # passed
     .long GS_CROSS | (T_ERROR << 8)             # failed
@@ -1054,3 +1120,20 @@ FN testctl_gutter_click
     call tg_click
 9:  xor eax, eax
     EPILOGUE
+
+# the play menu (tg_play_menu)
+.bss
+.p2align 3
+tg_mtext: .zero SB_SIZE
+tg_moffs: .zero 8 * 3
+tg_mitems: .zero 16 * 4
+.data
+.p2align 3
+tg_mpre: .quad .Ltg_run, .Ltg_debug, .Ltg_run
+tg_msuf: .quad .Ltg_none, .Ltg_none, .Ltg_cov
+tg_mfns: .quad tv_m_run, tv_m_debug, tv_m_coverage
+.section .rodata
+.Ltg_run: .asciz "Run "
+.Ltg_debug: .asciz "Debug "
+.Ltg_cov: .asciz " with Coverage"
+.Ltg_none: .asciz ""

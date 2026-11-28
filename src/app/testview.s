@@ -1686,7 +1686,8 @@ FN testview_menu_at
     call ctx_menu_open
     EPILOGUE
 
-# the menu's items act on the selected item
+# the menu's items act on the selected item (the gutter's play menu uses the first three, testgutter.s)
+.globl tv_m_run, tv_m_debug, tv_m_coverage
 tv_m_run:
     mov edi, TSP_RUN
     jmp sel_run

@@ -144,18 +144,32 @@ FN dview_ensure
     mov dword ptr [rip + dv_shown], 0
 9:  EPILOGUE
 
-# dview_session_started(ds): a session began: the view shows ([debug] show_on_start)
+# dview_session_started(ds): a session began: the view shows ([debug] show_on_start), the Debug tab on
+#   its Console, where the build and the program's output come first
 FN dview_session_started
     PROLOGUE
-    xor eax, eax                # the Debug tab: a run without debugging on its Console (its output)
-    cmp dword ptr [rdi + DS_nodebug], 0
-    setne al
-    mov [rip + tw_sub], eax
+    mov dword ptr [rip + tw_sub], 1
     call dview_ensure
     cmp dword ptr [rip + g_debug_show_on_start], 0
     je 9f
     mov dword ptr [rip + dv_shown], 0
     call dview_show
+9:  EPILOGUE
+
+# dview_stopped(reason cstr or 0): a session stopped: the Debug tab goes to Threads & Variables with
+#   the call stack's pane current, as JetBrains IDEs show the frames at a breakpoint; a step leaves
+#   it where the user has it
+FN dview_stopped
+    PROLOGUE
+    test rdi, rdi
+    jz 1f
+    lea rsi, [rip + .Lreason_step]
+    call strcmp_eq
+    test eax, eax
+    jnz 9f
+1:  mov dword ptr [rip + tw_sub], 0
+    mov dword ptr [rip + tw_cur], 0     # the call stack's pane has the tab's keys
+    mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
 # dview_show(): Show/Hide the debug view (Ctrl+Shift+Y): the sections and the console, or with
@@ -1484,105 +1498,134 @@ console_draw:
     push rax
     call ui_textfield
     add rsp, 16
-    # the lines, from the last up
-    call term_line_metrics      # the terminal's font, size and line height
-    mov [rsp + 24], eax         # line height
-    # scrolled up into history: the newest lines move down, below the view (clipped)
-    call dcon_count
-    imul eax, [rsp + 24]
-    mov ecx, [rsp + 20]
-    sub ecx, [rsp + 4]          # the lines' room
-    sub eax, ecx
-    jns 61f
-    xor eax, eax
-61: cmp [rip + cscroll], eax
-    jle 62f
-    mov [rip + cscroll], eax    # no further than the oldest line
-62: call dcon_count            # fewer lines than the room: from the top, as a console reads
-    imul eax, [rsp + 24]
-    mov ecx, [rsp + 20]
-    sub ecx, [rsp + 4]
-    sub ecx, [rip + g_mt + 4*MI_6]
-    cmp eax, ecx
-    jge 63f
-    mov ecx, [rsp + 4]
-    add ecx, [rip + g_mt + 4*MI_6]
-    add ecx, eax
-    jmp 64f
-63: mov ecx, [rsp + 20]         # else the newest at the bottom, scrolled up into the history
-    add ecx, [rip + cscroll]
-64: mov [rsp + 28], ecx         # bottom of the next line up
-    mov esi, [rsp + 4]
-    mov ecx, [rsp + 20]
-    sub ecx, esi
-    mov edi, [rsp]
-    mov edx, [rsp + 8]
-    call gfx_clip_push
-    call dcon_count
-    mov r12, rax                # lines
-1:  test r12, r12
-    jz 4f
-    mov eax, [rsp + 28]
-    cmp eax, [rsp + 4]
-    jle 4f
-    dec r12
-    mov rdi, r12
-    call dcon_get
-    mov r13, rax
-    mov r14, rdx
-    mov edi, ecx
-    call cat_color
-    mov r15d, eax
-    mov eax, [rsp + 28]
-    sub eax, [rsp + 24]
-    mov [rsp + 28], eax
-    # the category of an input line shows as "> "
-    mov edi, [rsp]
-    M eax, MI_8
-    add edi, eax
-    mov [rsp + 32], edi
-    mov rdi, r12
-    call dcon_get
-    cmp ecx, DCON_INPUT
+    # the lines: the console's log (rlog.s) in the terminal's face: a click or a drag selects lines,
+    # Ctrl+C copies them (when the field has no selection), the wheel scrolls, the end follows
+    call term_line_metrics
+    call dc_sync
+    call place_focused
+    xor r9d, r9d
+    cmp eax, [rip + g_dv_places + 16]
+    sete r9b
+    cmp eax, [rip + g_dv_places + 20]
     jne 2f
-    lea rdi, [rip + g_face_term]
-    mov esi, [rsp + 32]
-    mov edx, [rsp + 28]
-    mov ecx, [rsp + 24]
-    lea r8, [rip + .Lgt]
-    mov r9d, r15d
-    call ui_text_c
-    mov [rsp + 32], eax
-2:  lea rdi, [rip + g_face_term]
-    mov esi, [rsp + 32]
-    mov edx, [rsp + 28]
-    mov ecx, [rsp + 24]
-    mov r8, r13
-    mov r9, r14
-    push r15
-    push r15
-    call ui_text_v
-    add rsp, 16
-    jmp 1b
-4:  call gfx_clip_pop
-    # the wheel scrolls the lines
-    mov edi, [rsp]
-    mov esi, [rsp + 4]
-    mov edx, [rsp + 8]
-    mov ecx, [rsp + 12]
-    call ui_in
-    test eax, eax
-    jz 9f
-    mov eax, [rip + g_scroll_y]
-    test eax, eax
-    jz 9f
-    neg eax                     # pixels, as the terminal takes them
-    add eax, [rip + cscroll]
-    jns 5f
-    xor eax, eax
-5:  mov [rip + cscroll], eax
-    mov dword ptr [rip + g_scroll_y], 0
+    cmp dword ptr [rip + tw_sub], 1
+    jne 2f
+    mov r9d, 1
+2:  mov rdi, [rip + dc_lg]
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 20]
+    sub r8d, edx
+    sub r8d, [rip + g_mt + 4*MI_4]
+    call log_draw
+    EPILOGUE
+
+# dc_sync(): the console's log holds its lines: new ones are appended; after a Clear, the cap, or a
+#   line that grew (output without its newline yet), all of them again
+.bss
+.p2align 3
+dc_lg: .quad 0
+dc_fed: .quad 0                 # lines in the log
+dc_lastlen: .quad 0             # the last of them's length when it went in
+dc_line: .zero SB_SIZE          # scratch: a line with its color
+.data
+dc_reset: .long -1              # g_dcon_reset and g_dcon_gen when the log was last brought up to date
+dc_gen: .long -1
+.text
+dc_sync:
+    PROLOGUE
+    cmp qword ptr [rip + dc_lg], 0
+    jne 1f
+    mov edi, 251                # its instance: ui ids of its own
+    call log_new
+    mov [rip + dc_lg], rax
+    mov rdi, rax
+    lea rsi, [rip + g_face_term]
+    call log_set_face
+1:  mov eax, [rip + g_dcon_gen]
+    cmp eax, [rip + dc_gen]
+    je 9f
+    call dcon_count
+    mov r12, rax                # lines now
+    mov eax, [rip + g_dcon_reset]
+    cmp eax, [rip + dc_reset]
+    jne 5f
+    cmp r12, [rip + dc_fed]
+    jbe 5f                      # none new: a line grew
+    mov rbx, [rip + dc_fed]
+    test rbx, rbx
+    jz 6f
+    lea rdi, [rbx - 1]
+    call dcon_get
+    cmp rdx, [rip + dc_lastlen]
+    jne 5f                      # the last one grew
+    jmp 6f
+5:  mov rdi, [rip + dc_lg]      # all again
+    call log_clear
+    xor ebx, ebx
+6:  cmp rbx, r12
+    jae 7f
+    mov rdi, rbx
+    call dc_append
+    inc rbx
+    jmp 6b
+7:  mov [rip + dc_fed], r12
+    mov qword ptr [rip + dc_lastlen], 0
+    test r12, r12
+    jz 8f
+    lea rdi, [r12 - 1]
+    call dcon_get
+    mov [rip + dc_lastlen], rdx
+8:  mov eax, [rip + g_dcon_gen]
+    mov [rip + dc_gen], eax
+    mov eax, [rip + g_dcon_reset]
+    mov [rip + dc_reset], eax
 9:  EPILOGUE
+
+# dc_append(i): console line i into the log, in its category's color ("> " before an input)
+dc_append:
+    PROLOGUE
+    call dcon_get
+    mov r12, rax
+    mov r13, rdx
+    mov r14d, ecx
+    lea rdi, [rip + dc_line]
+    call sb_clear
+    cmp r14d, DCON_RESULT
+    jbe 1f
+    xor r14d, r14d
+1:  lea rax, [rip + dc_sgr]
+    movzx esi, byte ptr [rax + r14]
+    test esi, esi
+    jz 2f
+    push rsi
+    push rsi
+    lea rdi, [rip + dc_line]
+    lea rsi, [rip + .Ldc_csi]
+    call sb_push_cstr
+    pop rsi
+    pop rsi
+    lea rdi, [rip + dc_line]
+    call sb_push_u64
+    lea rdi, [rip + dc_line]
+    mov esi, 'm'
+    call sb_push_byte
+2:  cmp r14d, DCON_INPUT
+    jne 3f
+    lea rdi, [rip + dc_line]
+    lea rsi, [rip + .Lgt]
+    call sb_push_cstr
+3:  lea rdi, [rip + dc_line]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    mov rdi, [rip + dc_lg]
+    xor esi, esi
+    mov rdx, [rip + dc_line + SB_ptr]
+    mov rcx, [rip + dc_line + SB_len]
+    call log_append
+    EPILOGUE
 
 # cmd_debug_clear_console (Debug: Clear Console, the bin): the console's lines go
 FN cmd_debug_clear_console
@@ -1666,7 +1709,19 @@ console_key:
     je 2f
     cmp r12d, KEY_DOWN
     je 3f
-    lea rdi, [rip + cin]
+    test r14d, MOD_CTRL         # Ctrl+C with nothing selected in the field: the log's lines
+    jz 4f
+    cmp r13d, 'c'
+    jne 4f
+    mov rax, [rip + cin + TF_cur]
+    cmp rax, [rip + cin + TF_anchor]
+    jne 4f
+    cmp qword ptr [rip + dc_lg], 0
+    je 4f
+    mov rdi, [rip + dc_lg]
+    call log_copy
+    jmp 8f
+4:  lea rdi, [rip + cin]
     mov esi, r12d
     mov edx, r13d
     mov ecx, r14d
@@ -4800,7 +4855,13 @@ tw_chips:
     mov eax, [r12 + DS_id]
     cmp eax, [rcx + rbx*4]
     je 6f
-    mov rsi, [r12 + DS_name]
+    mov edi, [r12 + DS_id]      # a launcher (js-debug's) with a live child: the child's chip is its
+    call tw_live_child
+    test eax, eax
+    jnz 6f
+    mov rdi, r12                # named as the configuration that started it
+    call tw_root_name
+    mov rsi, rax
     test rsi, rsi
     jnz 2f
     lea rsi, [rip + .Ltw_session]
@@ -4838,8 +4899,11 @@ tw_chips:
     M ecx, MI_24
     M r8d, MI_RADIUS
     call gfx_round_rect
-23: COLOR r8d, T_SUCCESS
-    cmp dword ptr [r12 + DS_state], DSS_ENDED
+23: COLOR r8d, T_SUCCESS        # running green, paused the warning color, ended muted
+    cmp dword ptr [r12 + DS_state], DSS_PAUSED
+    jne 231f
+    COLOR r8d, T_WARNING
+231: cmp dword ptr [r12 + DS_state], DSS_ENDED
     jne 24f
     COLOR r8d, T_MUTED
 24: M ecx, MI_16
@@ -4912,6 +4976,55 @@ tw_chips:
     COLOR r9d, T_MUTED
     call ui_text_c
 9:  EPILOGUE
+
+# tw_live_child(id) -> eax 1 when a session that is not over has that session as its parent
+tw_live_child:
+    PROLOGUE
+    mov r12d, edi
+    xor ebx, ebx
+1:  cmp ebx, DS_MAX
+    jae 8f
+    mov edi, ebx
+    inc ebx
+    call dap_slot
+    mov ecx, [rax + DS_state]
+    cmp ecx, DSS_FREE
+    je 1b
+    cmp ecx, DSS_ENDED
+    je 1b
+    cmp [rax + DS_parent], r12d
+    jne 1b
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# tw_root_name(ds) -> rax the name of the session that started it (its parent's parent ...), else
+#   its own; 0 for none
+tw_root_name:
+    PROLOGUE
+    mov r12, rdi
+    mov r13d, 8                 # at most this deep
+1:  mov eax, [r12 + DS_parent]
+    test eax, eax
+    jz 8f
+    dec r13d
+    jz 8f
+    mov r14d, eax
+    xor ebx, ebx
+2:  cmp ebx, DS_MAX
+    jae 8f
+    mov edi, ebx
+    inc ebx
+    call dap_slot
+    cmp dword ptr [rax + DS_state], DSS_FREE
+    je 2b
+    cmp [rax + DS_id], r14d
+    jne 2b
+    mov r12, rax
+    jmp 1b
+8:  mov rax, [r12 + DS_name]
+    EPILOGUE
 
 # tw_close_session(slot): a chip's x: the session stops when it lives; its chip goes either way
 tw_close_session:
@@ -5583,7 +5696,13 @@ FN dview_tw_dump
     mov rdi, rbx
     mov esi, 10
     call sb_push_byte
-    EPILOGUE
+    mov rdi, [rip + dc_lg]      # where the console's lines are (a click there selects one)
+    test rdi, rdi
+    jz 9f
+    mov rsi, rbx
+    lea rdx, [rip + .Ltw_conrect]
+    call log_print_rect
+9:  EPILOGUE
 
 # tw_dump_row(i, table, prefix or 0, n): onto rbx's SB, the prefix, then n numbers of the table's
 #   16-byte row i (space before each but a first with a prefix), a line's end
@@ -5621,6 +5740,7 @@ tw_dump_row:
 
 .section .rodata
 .Ln_variables: .asciz "debug.variables"
+.Lreason_step: .asciz "step"
 .Ln_watch: .asciz "debug.watch"
 .Ln_stack: .asciz "debug.callstack"
 .Ln_breakpoints: .asciz "debug.breakpoints"
@@ -5712,6 +5832,9 @@ term_cmds: .quad cmd_debug_start, cmd_debug_stop, cmd_debug_pause, cmd_debug_con
     .quad cmd_debug_step_over, cmd_debug_step_into, cmd_debug_step_out, cmd_debug_restart, 0
 cat_slots:
     .byte T_FG, T_ERROR, T_MUTED, T_WARNING, T_MUTED, T_ERROR, T_MUTED, T_ACCENT, T_FG
+dc_sgr:                         # the same as SGR colors for the console's log (0: the default)
+    .byte 0, 31, 90, 33, 90, 31, 90, 34, 0
+.Ldc_csi: .asciz "\033["
 .p2align 3
 section_names: .quad .Ln_variables, .Ln_watch, .Ln_stack, .Ln_breakpoints
 section_titles: .quad .Lt_variables, .Lt_watch, .Lt_stack, .Lt_breakpoints
@@ -5868,4 +5991,5 @@ tw_clear:                       # the Console's Clear (not in the bar's loop)
 .Ltw_pane: .asciz "pane "
 .Ltw_cur: .asciz "twpane="
 .Ltw_subeq: .asciz "\ntwsub="
+.Ltw_conrect: .asciz "conrect"
 .Lm_rtc: .asciz "Run to Line"

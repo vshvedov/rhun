@@ -479,7 +479,37 @@ class View(debughost.DebugHost):
         icons = [int(l.split()[1]) for l in out if l.startswith('widget ')]
         self.assertIn(IC['RUN_OUTLINE'], icons, icons)
         self.assertTrue(any(i in spin for i in icons[2:3]), icons)          # Debug
+        self.assertIn('twsub=1', out)                                       # it starts on the Console
+
+    def test_a_stop_shows_threads_and_variables_and_a_step_keeps_the_console(self):
+        # a session starts on the Console; a breakpoint's stop brings Threads & Variables; with the Console
+        # chosen again a step leaves it there
+        self.toolwindow()
+        out = self.paused(['wait 200', 'print-debug-toolbar'], line=9)
         self.assertIn('twsub=0', out)
+        self.assertIn('twpane=0', out)                  # the call stack's pane
+        sub = [l for l in out if l.startswith('sub 1 ')][0].split()
+        x, y, w = int(sub[2]), int(sub[3]), int(sub[4])
+        out = self.paused(['wait 200', 'click %d %d' % (x + w // 2, y + 10), 'wait 100', 'cmd debug_step_over',
+                           'wait-debug paused', 'wait 200', 'print-debug-toolbar'], line=9)
+        self.assertIn('twsub=1', out)
+
+    def test_console_lines_select_and_copy(self):
+        # the Debug Console's lines: a click selects one, Ctrl+C (Cmd+C) copies it when the field has no
+        # selection
+        self.toolwindow()
+        out = self.paused(['wait 200', 'print-debug-toolbar'], line=9)
+        sub = [l for l in out if l.startswith('sub 1 ')][0].split()
+        sx, sy, sw = int(sub[2]), int(sub[3]), int(sub[4])
+        tab = ['click %d %d' % (sx + sw // 2, sy + 10), 'wait 200']
+        out = self.paused(['wait 200', *tab, 'print-debug-toolbar', 'print-console'], line=9)
+        x, y, w, h = map(int, [l for l in out if l.startswith('conrect ')][0].split()[1:])
+        out = self.paused(['wait 200', *tab, 'click %d %d' % (x + 40, y + 6), 'wait 100', 'key ctrl+c',
+                           'wait 100', 'print-console', 'print-clip'], line=9)
+        lines = [l for l in out if l.startswith('console ') or l.startswith('info ') or l.startswith('stdout ')]
+        self.assertTrue(lines, out)
+        text = lines[0].split(' ', 1)[1]                 # the clipboard holds the line and its newline
+        self.assertTrue([l for l in out if l.startswith('text=%d ' % (len(text.encode()) + 1))], out)
 
     def test_clear_console(self):
         # Console's bin at the toolbar's right empties it; the command does too

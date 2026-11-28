@@ -2496,6 +2496,8 @@ e_stopped:
     lea rdi, [rbx + DS_reason]
     mov rsi, rax
     call ds_set_str
+    mov rdi, [rbx + DS_reason]  # the Debug tab shows the threads and variables (not for a step)
+    call dview_stopped
     mov rdi, r12
     lea rsi, [rip + .Lk_description]
     call jstr

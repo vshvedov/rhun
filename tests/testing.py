@@ -333,6 +333,19 @@ class Testing(unittest.TestCase):
                               mode='replaceafter')
         self.assertIn('errors=0 warnings=0', out)
 
+    def test_an_open_file_gets_its_glyphs_without_expanding(self):
+        # a lazy group whose folder holds the open file is resolved, then its file, so the play icons
+        # show as soon as the file is open; a group elsewhere (no path) is not asked
+        out = self.run_editor(['wait 2000', 'print-gutter'], mode='pkgpath')
+        self.assertIn('line=3 glyph=play item=go:example/pkg.TestA', out)
+        self.assertIn('line=7 glyph=play item=go:example/pkg.TestB', out)
+        resolved = self.logged('resolve ')
+        self.assertIn('resolve go:example/pkg', resolved)
+        self.assertNotIn('resolve go:example/other', resolved)
+        # without a path rhun cannot know the file is in it: the tree waits to be expanded
+        out = self.run_editor(['wait 1500', 'print-gutter'])
+        self.assertFalse([l for l in out if l.startswith('line=')], out)
+
     def test_gutter_glyphs_follow_states_run_on_click_and_coverage_tints(self):
         out = self.run_editor([*EXPAND, 'wait 300', 'print-gutter', 'test-gutter 7', 'print-menu', 'menu-pick Run \'TestB\'',
                                'wait-tests', 'print-gutter',

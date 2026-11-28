@@ -62,6 +62,7 @@ source_of:
 FN testgutter_tick
     PROLOGUE
     call testgutter_glyphs
+    call tg_autoresolve
     cmp dword ptr [rip + g_ts_marks], 0
     je 9f
     mov dword ptr [rip + g_ts_marks], 0
@@ -289,6 +290,9 @@ tg_cfg_seen: .long 0            # [testing] gutter as the glyphs were last set f
 .p2align 3
 tg_last: .quad 0                # time_ms of the last setting
 tg_doc_max: .quad 0             # the newest DOC_id that has its glyphs
+ar_doc_max: .quad 0             # tg_autoresolve: the newest DOC_id and the item count it looked at,
+ar_items: .quad 0               #   and when
+ar_last: .quad 0
 tg_cov_doc: .quad 0             # the tint's cache: the document, its coverage file, for which run
 tg_cov_cf: .quad 0
 tg_cov_run: .quad 0
@@ -443,6 +447,155 @@ item_lines:
     jnz 2f
     mov r13d, eax
 2:  mov edx, r13d
+    EPILOGUE
+
+# tg_autoresolve(): an open file's tests show in the gutter without expanding the Testing tree: a
+#   lazy item that holds an open document's file is resolved (tests-resolve): one whose path is the
+#   file, or a group whose path is a folder holding it or a file in such a folder (a go.mod, a
+#   package.json). The children that come are looked at the same way, down to the file's tests.
+#   It looks when a document opened or items came, at most every 250 ms; an item whose resolve
+#   failed (its error shows) is not asked again
+.equ AR_EVERY_MS, 250
+tg_autoresolve:
+    PROLOGUE 16
+    cmp dword ptr [rip + cfg_test_gutter], 0
+    je 9f
+    xor ebx, ebx                # the newest document
+    xor r12d, r12d
+1:  cmp rbx, [rip + g_tabs + VEC_len]
+    jae 2f
+    mov rdi, rbx
+    inc rbx
+    call tab_at
+    cmp qword ptr [rax + TAB_kind], TAB_DOC
+    jne 1b
+    mov rax, [rax + TAB_doc]
+    test rax, rax
+    jz 1b
+    mov rcx, [rax + DOC_id]
+    cmp rcx, r12
+    jbe 1b
+    mov r12, rcx
+    jmp 1b
+2:  mov rax, [rip + g_ts_items_all]
+    cmp r12, [rip + ar_doc_max]
+    jne 3f
+    cmp rax, [rip + ar_items]
+    je 9f
+3:  call time_ms
+    mov rcx, rax
+    sub rcx, [rip + ar_last]
+    cmp rcx, AR_EVERY_MS
+    jb 9f
+    mov [rip + ar_last], rax
+    mov [rip + ar_doc_max], r12
+    mov rax, [rip + g_ts_items_all]
+    mov [rip + ar_items], rax
+    lea r13, [rip + g_ts_ctrls]
+    xor r14d, r14d
+4:  cmp qword ptr [r13 + TSC_ext], 0
+    je 7f
+    cmp dword ptr [r13 + TSC_ready], 0
+    je 7f
+    mov r15d, 1
+5:  cmp r15, [r13 + TSC_items + VEC_len]
+    jae 7f
+    mov rdi, r13
+    mov rsi, r15
+    call testmodel_item
+    cmp qword ptr [rax + TSI_id], 0
+    je 6f
+    mov ecx, [rax + TSI_flags]
+    test ecx, TSF_LAZY
+    jz 6f
+    test ecx, TSF_RESOLVING
+    jnz 6f
+    cmp qword ptr [rax + TSI_error], 0
+    jne 6f
+    cmp qword ptr [rax + TSI_path], 0
+    je 6f
+    mov rdi, rax
+    call ar_holds_open
+    test eax, eax
+    jz 6f
+    mov rdi, [r13 + TSC_ext]
+    mov rsi, r13
+    mov rdx, r15
+    call testproto_resolve
+6:  inc r15
+    jmp 5b
+7:  add r13, TSC_SIZE
+    inc r14d
+    cmp r14d, TS_CTRL_MAX
+    jb 4b
+9:  EPILOGUE
+
+# ar_holds_open(TSI*) -> eax 1 when the item holds an open document's file (tg_autoresolve)
+ar_holds_open:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov qword ptr [rsp], -1     # the length of the folder it names, -1 before it is known
+    xor r12d, r12d
+1:  cmp r12, [rip + g_tabs + VEC_len]
+    jae 8f
+    mov rdi, r12
+    inc r12
+    call tab_at
+    cmp qword ptr [rax + TAB_kind], TAB_DOC
+    jne 1b
+    mov rax, [rax + TAB_doc]
+    test rax, rax
+    jz 1b
+    mov r13, [rax + DOC_path]
+    test r13, r13
+    jz 1b
+    mov rdi, [rbx + TSI_path]   # the file itself
+    mov rsi, r13
+    call strcmp_eq
+    test eax, eax
+    jnz 9f
+    cmp dword ptr [rbx + TSI_kind], TSK_GROUP
+    jne 1b
+    mov rax, [rsp]
+    cmp rax, -1
+    jne 2f
+    call ar_folder_len
+    mov [rsp], rax
+2:  test rax, rax
+    jz 1b
+    mov rdi, [rbx + TSI_path]   # the folder's bytes, then "/" in the document's path
+    mov rsi, rax
+    mov rdx, r13
+    mov rcx, rax
+    call str_eq
+    test eax, eax
+    jz 1b
+    mov rax, [rsp]
+    cmp byte ptr [r13 + rax], '/'
+    jne 1b
+    mov eax, 1
+    jmp 9f
+8:  xor eax, eax
+9:  EPILOGUE
+
+# ar_folder_len(rbx = TSI*) -> rax the length of the folder the group's path names: the path for a
+#   folder, else its parent's (a go.mod names its module's folder); 0 for none
+ar_folder_len:
+    PROLOGUE
+    mov rdi, [rbx + TSI_path]
+    call strlen
+    mov r12, rax
+    mov rdi, [rbx + TSI_path]
+    call app_path_is_dir
+    test eax, eax
+    jnz 8f
+    mov rdi, [rbx + TSI_path]
+1:  test r12, r12
+    jz 8f
+    dec r12
+    cmp byte ptr [rdi + r12], '/'
+    jne 1b
+8:  mov rax, r12
     EPILOGUE
 
 # testgutter_glyphs(): kind and tint at the first call; glyphs set again when due

@@ -2474,8 +2474,8 @@ Python, js-debug for JavaScript and TypeScript), so running tests needs only the
 debugging them the Debug extension too (without it, rhun says which to install): breakpoints, stepping and the Debug Console work as for any
 session, and when the session ends the program's exit status is the test's result.
 
-In the editor each test has a green play button in the gutter at its first line (`[testing] gutter =
-false` hides them): a click opens the play menu, as JetBrains IDEs and the Sublime Debugger do (Run
+In the editor each test has a green play button in the gutter at its first line, as soon as its file
+is open, without expanding the Testing tree (`[testing] gutter = false` hides them): a click opens the play menu, as JetBrains IDEs and the Sublime Debugger do (Run
 'NAME', Debug 'NAME', Run 'NAME' with Coverage), a right click the test's whole menu, and after a run
 the button shows the result. Buttons, failure marks and coverage follow your edits until the extension lists
 the file's tests again. A failure with a place is a problem (the Problems tab, a mark in the file with

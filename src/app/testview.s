@@ -820,6 +820,15 @@ FN testview_action
     mov rdi, [rax + TSI_path]
     test rdi, rdi
     jz 9b
+    push rax
+    push rax
+    call app_path_is_dir        # a group's folder: nothing to open
+    pop rcx
+    pop rcx
+    test eax, eax
+    jnz 9b
+    mov rax, rcx
+    mov rdi, [rax + TSI_path]
     mov r14d, [rax + TSI_c1]
     lea rsi, [rax + TSI_ver]
     mov edx, [rax + TSI_l1]

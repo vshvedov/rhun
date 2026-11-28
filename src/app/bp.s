@@ -11,6 +11,8 @@ g_bps: .zero VEC_SIZE           # BP records
 g_bp_hooks: .long 0             # 1 while any breakpoint exists: doc.s calls bp_note_*
 g_bp_gen: .long 0               # bumped on every change (drawing)
 fdirty: .long 0                 # function breakpoints changed
+.globl g_bp_muted
+g_bp_muted: .long 0             # Mute Breakpoints: none goes to the sessions
 save_due: .long 0
 .p2align 3
 dirty: .zero VEC_SIZE           # owned cstr paths whose list must go to sessions again
@@ -46,6 +48,27 @@ changed:
     setne al
     mov [rip + g_bp_hooks], eax
     ret
+
+# bp_mute_toggle(): Mute Breakpoints on or off: while on, the sessions get no breakpoints (the
+#   breakpoints stay as they are); every file's list goes to them again
+FN bp_mute_toggle
+    PROLOGUE
+    call bp_ensure_loaded
+    xor dword ptr [rip + g_bp_muted], 1
+    xor ebx, ebx
+1:  cmp rbx, [rip + g_bps + VEC_len]
+    jae 2f
+    mov rdi, rbx
+    call bp_row
+    cmp dword ptr [rax + BP_kind], 0
+    jne 11f
+    mov rdi, [rax + BP_path]
+    call mark_dirty
+11: inc rbx
+    jmp 1b
+2:  mov dword ptr [rip + fdirty], 1
+    call changed
+    EPILOGUE
 
 # bp_find(path cstr, line) -> eax the line breakpoint's index, -1
 FN bp_find
@@ -558,6 +581,8 @@ FN bp_send_file
     jne 4f
     cmp dword ptr [r14 + BP_enabled], 0
     je 4f
+    cmp dword ptr [rip + g_bp_muted], 0
+    jne 4f                      # muted: none goes
     mov rdi, [r14 + BP_path]
     mov rsi, r12
     call strcmp_eq
@@ -694,6 +719,8 @@ send_functions:
     jne 41f
     cmp dword ptr [r14 + BP_enabled], 0
     je 41f
+    cmp dword ptr [rip + g_bp_muted], 0
+    jne 41f
     lea rdi, [rip + g_dmsg]
     call jw_obj
     lea rdi, [rip + .Lk_name]
@@ -1750,7 +1777,15 @@ FN bp_save
     inc rcx
     jmp 71b
 72: lea r14, [rcx + 1]
-    lea rdi, [rip + line]
+    mov rdi, r12                # Evaluate Expression's is not kept (debugview.s)
+    mov rsi, rcx
+    sub rsi, r12
+    call dview_is_eval
+    test eax, eax
+    jz 73f
+    mov r12, r14
+    jmp 7b
+73: lea rdi, [rip + line]
     lea rsi, [rip + .Lrec_w]
     call sb_push_cstr
     lea rdi, [rip + line]

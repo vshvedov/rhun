@@ -208,6 +208,8 @@ FN extrec_pv_free
     call mem_free
     mov rdi, [rbx + EXT_tests_progs]
     call mem_free
+    mov rdi, [rbx + EXT_debuggers]
+    call mem_free
     mov rdi, [rbx + EXT_nb_kernels]
     call mem_free
     mov rdi, rbx
@@ -847,6 +849,13 @@ FN ext_needs_wider
     mov r8d, r14d
     call wider_list
     mov r14d, eax
+    mov rdi, [r12 + EXT_debuggers]  # other extensions' debuggers it starts
+    mov rsi, [rbx + EXT_debuggers]
+    lea rdx, [rip + .Ln_when_debuggers]
+    mov rcx, r13
+    mov r8d, r14d
+    call wider_list
+    mov r14d, eax
     mov rdi, [r12 + EXT_nb_kernels]
     mov rsi, [rbx + EXT_nb_kernels]
     lea rdx, [rip + .Ln_as_kernels]
@@ -1277,6 +1286,7 @@ put_num:
 .Ln_terminal: .asciz "suggest terminal commands for you to run"
 .Ln_run: .asciz "run "
 .Ln_when_tests: .asciz " with your access when you run tests"
+.Ln_when_debuggers: .asciz " in the debuggers other extensions provide"
 .Ln_as_kernels: .asciz " as you for notebooks"
 .Ln_term_run: .asciz "run programs as you in terminal tabs once you allow it in a project"
 .Ln_term_input: .asciz "type into the terminals it started"

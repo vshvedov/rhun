@@ -62,6 +62,8 @@ source_of:
 FN testgutter_tick
     PROLOGUE
     call testgutter_glyphs
+    call tg_autoresolve
+    call testresults_tick
     cmp dword ptr [rip + g_ts_marks], 0
     je 9f
     mov dword ptr [rip + g_ts_marks], 0
@@ -289,6 +291,9 @@ tg_cfg_seen: .long 0            # [testing] gutter as the glyphs were last set f
 .p2align 3
 tg_last: .quad 0                # time_ms of the last setting
 tg_doc_max: .quad 0             # the newest DOC_id that has its glyphs
+ar_doc_max: .quad 0             # tg_autoresolve: the newest DOC_id and the item count it looked at,
+ar_items: .quad 0               #   and when
+ar_last: .quad 0
 tg_cov_doc: .quad 0             # the tint's cache: the document, its coverage file, for which run
 tg_cov_cf: .quad 0
 tg_cov_run: .quad 0
@@ -443,6 +448,155 @@ item_lines:
     jnz 2f
     mov r13d, eax
 2:  mov edx, r13d
+    EPILOGUE
+
+# tg_autoresolve(): an open file's tests show in the gutter without expanding the Testing tree: a
+#   lazy item that holds an open document's file is resolved (tests-resolve): one whose path is the
+#   file, or a group whose path is a folder holding it or a file in such a folder (a go.mod, a
+#   package.json). The children that come are looked at the same way, down to the file's tests.
+#   It looks when a document opened or items came, at most every 250 ms; an item whose resolve
+#   failed (its error shows) is not asked again
+.equ AR_EVERY_MS, 250
+tg_autoresolve:
+    PROLOGUE 16
+    cmp dword ptr [rip + cfg_test_gutter], 0
+    je 9f
+    xor ebx, ebx                # the newest document
+    xor r12d, r12d
+1:  cmp rbx, [rip + g_tabs + VEC_len]
+    jae 2f
+    mov rdi, rbx
+    inc rbx
+    call tab_at
+    cmp qword ptr [rax + TAB_kind], TAB_DOC
+    jne 1b
+    mov rax, [rax + TAB_doc]
+    test rax, rax
+    jz 1b
+    mov rcx, [rax + DOC_id]
+    cmp rcx, r12
+    jbe 1b
+    mov r12, rcx
+    jmp 1b
+2:  mov rax, [rip + g_ts_items_all]
+    cmp r12, [rip + ar_doc_max]
+    jne 3f
+    cmp rax, [rip + ar_items]
+    je 9f
+3:  call time_ms
+    mov rcx, rax
+    sub rcx, [rip + ar_last]
+    cmp rcx, AR_EVERY_MS
+    jb 9f
+    mov [rip + ar_last], rax
+    mov [rip + ar_doc_max], r12
+    mov rax, [rip + g_ts_items_all]
+    mov [rip + ar_items], rax
+    lea r13, [rip + g_ts_ctrls]
+    xor r14d, r14d
+4:  cmp qword ptr [r13 + TSC_ext], 0
+    je 7f
+    cmp dword ptr [r13 + TSC_ready], 0
+    je 7f
+    mov r15d, 1
+5:  cmp r15, [r13 + TSC_items + VEC_len]
+    jae 7f
+    mov rdi, r13
+    mov rsi, r15
+    call testmodel_item
+    cmp qword ptr [rax + TSI_id], 0
+    je 6f
+    mov ecx, [rax + TSI_flags]
+    test ecx, TSF_LAZY
+    jz 6f
+    test ecx, TSF_RESOLVING
+    jnz 6f
+    cmp qword ptr [rax + TSI_error], 0
+    jne 6f
+    cmp qword ptr [rax + TSI_path], 0
+    je 6f
+    mov rdi, rax
+    call ar_holds_open
+    test eax, eax
+    jz 6f
+    mov rdi, [r13 + TSC_ext]
+    mov rsi, r13
+    mov rdx, r15
+    call testproto_resolve
+6:  inc r15
+    jmp 5b
+7:  add r13, TSC_SIZE
+    inc r14d
+    cmp r14d, TS_CTRL_MAX
+    jb 4b
+9:  EPILOGUE
+
+# ar_holds_open(TSI*) -> eax 1 when the item holds an open document's file (tg_autoresolve)
+ar_holds_open:
+    PROLOGUE 16
+    mov rbx, rdi
+    mov qword ptr [rsp], -1     # the length of the folder it names, -1 before it is known
+    xor r12d, r12d
+1:  cmp r12, [rip + g_tabs + VEC_len]
+    jae 8f
+    mov rdi, r12
+    inc r12
+    call tab_at
+    cmp qword ptr [rax + TAB_kind], TAB_DOC
+    jne 1b
+    mov rax, [rax + TAB_doc]
+    test rax, rax
+    jz 1b
+    mov r13, [rax + DOC_path]
+    test r13, r13
+    jz 1b
+    mov rdi, [rbx + TSI_path]   # the file itself
+    mov rsi, r13
+    call strcmp_eq
+    test eax, eax
+    jnz 9f
+    cmp dword ptr [rbx + TSI_kind], TSK_GROUP
+    jne 1b
+    mov rax, [rsp]
+    cmp rax, -1
+    jne 2f
+    call ar_folder_len
+    mov [rsp], rax
+2:  test rax, rax
+    jz 1b
+    mov rdi, [rbx + TSI_path]   # the folder's bytes, then "/" in the document's path
+    mov rsi, rax
+    mov rdx, r13
+    mov rcx, rax
+    call str_eq
+    test eax, eax
+    jz 1b
+    mov rax, [rsp]
+    cmp byte ptr [r13 + rax], '/'
+    jne 1b
+    mov eax, 1
+    jmp 9f
+8:  xor eax, eax
+9:  EPILOGUE
+
+# ar_folder_len(rbx = TSI*) -> rax the length of the folder the group's path names: the path for a
+#   folder, else its parent's (a go.mod names its module's folder); 0 for none
+ar_folder_len:
+    PROLOGUE
+    mov rdi, [rbx + TSI_path]
+    call strlen
+    mov r12, rax
+    mov rdi, [rbx + TSI_path]
+    call app_path_is_dir
+    test eax, eax
+    jnz 8f
+    mov rdi, [rbx + TSI_path]
+1:  test r12, r12
+    jz 8f
+    dec r12
+    cmp byte ptr [rdi + r12], '/'
+    jne 1b
+8:  mov rax, r12
     EPILOGUE
 
 # testgutter_glyphs(): kind and tint at the first call; glyphs set again when due
@@ -646,7 +800,8 @@ at_line:
     mov rdx, [rsp + 16]
     EPILOGUE
 
-# tg_click(doc, line, button, glyph): a click runs the test, a right click opens its menu
+# tg_click(doc, line, button, glyph): a click opens the play menu (Run, Debug, Run with Coverage of
+#   that test, by its name), a right click the test's whole menu
 tg_click:
     PROLOGUE
     mov r12d, edx
@@ -657,14 +812,79 @@ tg_click:
     je 1f
     mov rdi, rax
     mov rsi, rdx
-    xor edx, edx
-    call testview_run_item
+    call tg_play_menu
     EPILOGUE
 1:  mov rdi, rax
     mov rsi, rdx
     mov edx, [rip + g_mx]
     mov ecx, [rip + g_my]
     call testview_menu_at
+9:  EPILOGUE
+
+# tg_play_menu(tsc, index): the test selected; Run 'NAME', Debug 'NAME', Run 'NAME' with Coverage at
+#   the pointer
+tg_play_menu:
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    call testview_select
+    mov rdi, r12
+    mov rsi, r13
+    call testmodel_item
+    mov rbx, [rax + TSI_label]
+    lea rdi, [rip + tg_mtext]
+    call sb_clear
+    xor r14d, r14d
+1:  cmp r14d, 3
+    jae 2f
+    mov rax, [rip + tg_mtext + SB_len]
+    lea rcx, [rip + tg_moffs]
+    mov [rcx + r14*8], rax
+    lea rax, [rip + tg_mpre]
+    mov rsi, [rax + r14*8]
+    lea rdi, [rip + tg_mtext]
+    call sb_push_cstr
+    lea rdi, [rip + tg_mtext]
+    mov esi, 0x27
+    call sb_push_byte
+    lea rdi, [rip + tg_mtext]
+    mov rsi, rbx
+    test rsi, rsi
+    jz 11f
+    call sb_push_cstr
+11: lea rdi, [rip + tg_mtext]
+    mov esi, 0x27
+    call sb_push_byte
+    lea rax, [rip + tg_msuf]
+    mov rsi, [rax + r14*8]
+    lea rdi, [rip + tg_mtext]
+    call sb_push_cstr
+    lea rdi, [rip + tg_mtext]
+    xor esi, esi
+    call sb_push_byte
+    inc r14d
+    jmp 1b
+2:  lea rdx, [rip + tg_mitems]  # the labels, now that the text no longer grows
+    xor r14d, r14d
+3:  cmp r14d, 3
+    jae 4f
+    lea rcx, [rip + tg_moffs]
+    mov rax, [rcx + r14*8]
+    add rax, [rip + tg_mtext + SB_ptr]
+    mov rcx, r14
+    shl rcx, 4
+    mov [rdx + rcx], rax
+    lea rax, [rip + tg_mfns]
+    mov rax, [rax + r14*8]
+    mov [rdx + rcx + 8], rax
+    inc r14d
+    jmp 3b
+4:  mov qword ptr [rdx + 48], 0
+    mov qword ptr [rdx + 56], 0
+    lea rdi, [rip + tg_mitems]
+    mov esi, [rip + g_mx]
+    mov edx, [rip + g_my]
+    call ctx_menu_open
 9:  EPILOGUE
 
 # tg_tipfn(doc, line, glyph) -> rax "Run NAME", or "NAME: STATE" and its first message line
@@ -885,7 +1105,7 @@ FN testgutter_cov_changed
 .p2align 2
 # per state: the glyph (GS_* | theme slot << 8 | GF_* << 16)
 state_glyphs:
-    .long GS_TRIANGLE | (T_MUTED << 8)          # not run: run it
+    .long GS_TRIANGLE | (T_SUCCESS << 8)        # not run: run it (green, as JetBrains IDEs and the Sublime Debugger)
     .long GS_MINUS | (T_MUTED << 8)             # skipped
     .long GS_CHECK | (T_SUCCESS << 8)           # passed
     .long GS_CROSS | (T_ERROR << 8)             # failed
@@ -1054,3 +1274,20 @@ FN testctl_gutter_click
     call tg_click
 9:  xor eax, eax
     EPILOGUE
+
+# the play menu (tg_play_menu)
+.bss
+.p2align 3
+tg_mtext: .zero SB_SIZE
+tg_moffs: .zero 8 * 3
+tg_mitems: .zero 16 * 4
+.data
+.p2align 3
+tg_mpre: .quad .Ltg_run, .Ltg_debug, .Ltg_run
+tg_msuf: .quad .Ltg_none, .Ltg_none, .Ltg_cov
+tg_mfns: .quad tv_m_run, tv_m_debug, tv_m_coverage
+.section .rodata
+.Ltg_run: .asciz "Run "
+.Ltg_debug: .asciz "Debug "
+.Ltg_cov: .asciz " with Coverage"
+.Ltg_none: .asciz ""

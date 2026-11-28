@@ -10,7 +10,7 @@
 
 .bss
 .p2align 3
-.globl g_ext_hooks, g_hover_doc, g_hover_pos, g_hover_text, g_hover_since, g_hover_sent
+.globl g_ext_hooks, g_hover_doc, g_hover_pos, g_hover_text, g_hover_since, g_hover_sent, g_hover_x, g_hover_y
 g_ext_hooks: .long 0            # running extensions with an edits subscription, plus 1 once marks exist
 g_marks_ever: .long 0
 .p2align 3
@@ -1068,6 +1068,9 @@ FN ext_hover_tip
     # hides another
     lea r12, [rip + hover_both]
     mov byte ptr [r12], 0
+    call dg_hover_card_ds       # the debugger's card shows the value: no tooltip
+    test rax, rax
+    jnz 9f
     call dg_hover_text          # debugger: while paused, the value under the pointer wins
     test rax, rax
     jnz 1f

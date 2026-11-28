@@ -333,12 +333,66 @@ class Testing(unittest.TestCase):
                               mode='replaceafter')
         self.assertIn('errors=0 warnings=0', out)
 
+    def test_a_run_shows_its_logs_in_test_results_and_the_testing_tree_picks_whose(self):
+        # the bottom panel's Test Results tab opens on a run with the whole run's logs; selecting a test
+        # in the Testing tree shows its own, and the toolbar names it
+        out = self.run_editor([*EXPAND, 'print-results-view', 'cmd test_run_all', 'wait-tests', 'wait 200',
+                               'print-results-view', 'echo ==', 'test-select testsfake go:example/pkg.TestA',
+                               'wait 100', 'print-results-view', 'echo ==', 'print-panel-tabs'])
+        self.assertIn('test-results hidden', out)       # before the first run
+        first = out[:out.index('==')]
+        self.assertTrue([l for l in first if l.startswith('status=1 failed, 1 passed, 1 skipped')], first)
+        self.assertIn('shown=1', first)
+        self.assertIn('log ok A', first)
+        self.assertIn('log Greet mismatch', first)
+        self.assertIn('log Expected: Hello, rhun!', first)
+        self.assertIn('log Actual:   Hello, rhun', first)
+        second = out[out.index('==') + 1:]
+        second = second[:second.index('==')]
+        self.assertTrue([l for l in second if l.startswith('status=') and l.endswith('TestA')], second)
+        logs = [l for l in second if l.startswith('log ')]
+        self.assertIn('log ok A', logs)
+        self.assertNotIn('log Greet mismatch', logs)
+        self.assertTrue([l for l in out if l.startswith('test.results ') and 'visible chosen' in l], out)
+
+    def test_test_results_lines_select_and_copy(self):
+        # a click selects a log line, Ctrl+C (Cmd+C) copies it
+        out = self.run_editor([*EXPAND, 'cmd test_run_all', 'wait-tests', 'wait 200', 'print-results-view'])
+        x, y, w, h = map(int, [l for l in out if l.startswith('logrect ')][0].split()[1:])
+        out = self.run_editor([*EXPAND, 'cmd test_run_all', 'wait-tests', 'wait 200', 'print-results-view',
+                               'click %d %d' % (x + 40, y + 6), 'wait 100', 'key ctrl+c', 'wait 100', 'print-clip'])
+        first = [l for l in out if l.startswith('log ')][0][4:]
+        self.assertTrue([l for l in out if l.startswith('text=%d ' % (len(first.encode()) + 1))], out)
+
+    def test_a_new_run_takes_the_place_of_the_last_in_test_results(self):
+        # one tab, reused: a second run shows its own results, not the first run's as well
+        out = self.run_editor([*EXPAND, 'cmd test_run_all', 'wait-tests', 'cmd test_run_all', 'wait-tests',
+                               'wait 200', 'print-results-view'])
+        self.assertTrue([l for l in out if l.startswith('status=1 failed, 1 passed, 1 skipped')], out)
+        self.assertEqual(len([l for l in out if l.startswith('log Greet mismatch')]), 1, out)
+
+    def test_an_open_file_gets_its_glyphs_without_expanding(self):
+        # a lazy group whose folder holds the open file is resolved, then its file, so the play icons
+        # show as soon as the file is open; a group elsewhere (no path) is not asked
+        out = self.run_editor(['wait 2000', 'print-gutter'], mode='pkgpath')
+        self.assertIn('line=3 glyph=play item=go:example/pkg.TestA', out)
+        self.assertIn('line=7 glyph=play item=go:example/pkg.TestB', out)
+        resolved = self.logged('resolve ')
+        self.assertIn('resolve go:example/pkg', resolved)
+        self.assertNotIn('resolve go:example/other', resolved)
+        # without a path rhun cannot know the file is in it: the tree waits to be expanded
+        out = self.run_editor(['wait 1500', 'print-gutter'])
+        self.assertFalse([l for l in out if l.startswith('line=')], out)
+
     def test_gutter_glyphs_follow_states_run_on_click_and_coverage_tints(self):
-        out = self.run_editor([*EXPAND, 'wait 300', 'print-gutter', 'test-gutter 7', 'wait-tests', 'print-gutter',
+        out = self.run_editor([*EXPAND, 'wait 300', 'print-gutter', 'test-gutter 7', 'print-menu', 'menu-pick Run \'TestB\'',
+                               'wait-tests', 'print-gutter',
                                'cmd test_coverage_all', 'wait-tests', 'print-gutter', 'test-gutter 11 right', 'print-menu',
                                'key Escape', 'cmd test_coverage_toggle', 'print-gutter'])
         self.assertEqual(out[2:6], ['line=3 glyph=play item=go:example/pkg.TestA', 'line=7 glyph=play item=go:example/pkg.TestB',
                                     'line=11 glyph=play item=go:example/pkg.TestC', 'cov='])
+        # a click opens the play menu, as JetBrains IDEs and the Sublime Debugger: Run, Debug, Run with Coverage
+        self.assertEqual(out[6:9], ["Run 'TestB'", "Debug 'TestB'", "Run 'TestB' with Coverage"])
         self.assertIn('run 1 run 1 go:example/pkg.TestB', self.fake_log())
         self.assertIn('line=7 glyph=failed item=go:example/pkg.TestB', out)
         self.assertIn('line=4 glyph=passed item=go:example/pkg.TestA/sub', out)
@@ -356,7 +410,7 @@ class Testing(unittest.TestCase):
                                'wait 100', 'echo @after', 'print-gutter', 'print-marks',
                                'test-select testsfake go:example/pkg.TestB', 'test-action failure', 'print-state',
                                'test-select testsfake go:example/pkg.TestC', 'test-action goto', 'print-state',
-                               'test-gutter 9', 'wait-tests',
+                               'test-gutter 9', 'menu-pick Run \'TestB\'', 'wait-tests',
                                'cmd goto_line', 'type 10', 'key Return', 'cmd test_run_cursor', 'wait-tests'])
         at = out.index('@after')
         before, after = out[out.index('@before'):at], out[at:]

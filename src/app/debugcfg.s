@@ -2550,7 +2550,30 @@ FN dcfg_from_leaves
     xor eax, eax
     EPILOGUE
 .Lfl_notype:
-    mov dword ptr [rip + g_dcfg_code], DCE_REFUSED
+    mov rsi, [rsp + 16]         # a type it asked another extension for: none is installed
+    test rsi, rsi
+    jz 1f
+    mov rdi, [r14 + EXT_debuggers]
+    mov rdx, [rsp + 24]
+    call word_listed
+    test eax, eax
+    jz 1f
+    mov dword ptr [rip + g_dcfg_code], DCE_MISSING
+    lea rdi, [rip + g_dcfg_err]
+    lea rsi, [rip + .Lm_missing1]
+    call cstr_copy
+    mov rdi, rax
+    mov rsi, [rsp + 16]
+    mov rcx, [rsp + 24]
+    cmp rcx, 32
+    jbe 2f
+    mov ecx, 32
+2:  rep movsb
+    lea rsi, [rip + .Lm_missing2]
+    call cstr_copy
+    xor eax, eax
+    EPILOGUE
+1:  mov dword ptr [rip + g_dcfg_code], DCE_REFUSED
     lea rdi, [rip + .Lm_nottype]
     call err_set
     xor eax, eax
@@ -2717,7 +2740,8 @@ dec_at:
 3:  xor edx, edx
     ret
 
-# dbg_by_type_ext(EXT*, ptr, len) -> eax index of that extension's debugger of that type, or -1
+# dbg_by_type_ext(EXT*, ptr, len) -> eax index of that extension's debugger of that type, else of
+#   another extension's that its [needs] debuggers names, or -1
 FN dbg_by_type_ext
     PROLOGUE
     mov r14, rdi
@@ -2744,8 +2768,54 @@ FN dbg_by_type_ext
     EPILOGUE
 2:  inc ebx
     jmp 1b
-8:  mov eax, -1
+8:  # another extension's (the Debug extension's Delve, say), when its manifest names the type in
+    #   [needs] debuggers
+    mov rdi, [r14 + EXT_debuggers]
+    mov rsi, r12
+    mov rdx, r13
+    call word_listed
+    test eax, eax
+    jz 81f
+    mov rdi, r12
+    mov rsi, r13
+    call dbg_by_type
     EPILOGUE
+81: mov eax, -1
+    EPILOGUE
+
+# word_listed(cstr list or 0, ptr, len) -> eax 1 when the space-separated list holds that word
+word_listed:
+    xor eax, eax
+    test rdi, rdi
+    jz 9f
+1:  cmp byte ptr [rdi], 0
+    je 9f
+    cmp byte ptr [rdi], ' '
+    jne 2f
+    inc rdi
+    jmp 1b
+2:  xor ecx, ecx                # the word's length
+3:  movzx r8d, byte ptr [rdi + rcx]
+    test r8d, r8d
+    jz 4f
+    cmp r8d, ' '
+    je 4f
+    inc rcx
+    jmp 3b
+4:  cmp rcx, rdx
+    jne 6f
+    xor r9d, r9d
+5:  cmp r9, rcx
+    jae 7f
+    movzx r8d, byte ptr [rdi + r9]
+    cmp r8b, [rsi + r9]
+    jne 6f
+    inc r9
+    jmp 5b
+6:  add rdi, rcx
+    jmp 1b
+7:  mov eax, 1
+9:  ret
 
 # ---------------- the adapter's command ----------------
 
@@ -3097,6 +3167,8 @@ argw: .zero SB_SIZE
 .Lm_body: .asciz "the configuration body does not parse"
 .Lm_asking: .asciz "the configuration asks the user first"
 .Lm_nottype: .asciz "the configuration's type is not one of your debuggers"
+.Lm_missing1: .asciz "Debugging needs a debugger for "
+.Lm_missing2: .asciz ": install rhun-editor/debug (Extensions, Install from GitHub)"
 .Lm_no_debugger: .asciz "no installed extension provides a debugger of type "
 .Lm_no_debugger2: .asciz ""
 .Lm_request: .asciz " must be launch or attach"

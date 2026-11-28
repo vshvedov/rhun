@@ -48,6 +48,7 @@ ENDSTRUCT TS_SIZE
 .equ ID_TLINK, 0x6003           # the link under the pointer, for its tooltip
 .equ ID_THIDE, 0x6004
 .equ ID_TSCROLL, 0x6005
+.equ ID_TWIDE, 0x600a           # the panel at full width, or not ([ui] panel_full_width)
 .equ ID_TTAB, 0x6100            # + index
 .equ ID_TTABX, 0x6200           # + index
 .equ ID_TRESTART, 0x6006      # the current program's Restart and Stop buttons
@@ -145,6 +146,15 @@ FN term_clip_identity
     jz 1f
     mov rax, [rax + TS_id]
 1:  add rsp, 8
+    ret
+
+# term_line_metrics() -> eax the terminal's line height, g_face_term made for its font and size: the
+#   Debug Console draws its lines as the terminal does (debugview.s)
+FN term_line_metrics
+    sub rsp, 8
+    call term_metrics
+    add rsp, 8
+    mov eax, [rip + tlh]
     ret
 
 # term_metrics(): the terminal face at the configured size, in its font (the editor's unless it has
@@ -3396,7 +3406,42 @@ header_draw:
     jz 1f
     mov dword ptr [rip + g_term_open], 0
     mov dword ptr [rip + g_focus], FOCUS_EDITOR
-1:  sub r12d, r13d
+1:  sub r12d, r13d              # full width: the panel under the sidebars too, or between them
+    sub r12d, [rip + g_mt + 4*MI_4]
+    cmp dword ptr [rip + cfg_panel_full], 0
+    je 11f
+    mov edi, r12d               # on: it looks pressed
+    mov esi, r14d
+    mov edx, r13d
+    mov ecx, r13d
+    M r8d, MI_RADIUS
+    COLOR r9d, T_SELECTION
+    call gfx_round_rect
+11: mov edi, ID_TWIDE
+    mov esi, r12d
+    mov edx, r14d
+    mov ecx, r13d
+    mov r8d, r13d
+    mov r9d, IC_PANEL_WIDE
+    call ui_icon_btn
+    push rax
+    push rax
+    mov edi, ID_TWIDE
+    mov esi, r12d
+    mov edx, r14d
+    add edx, r13d
+    mov ecx, r13d
+    mov r8d, eax
+    lea r9, [rip + .Ltip_wide]
+    call tip_note_text
+    pop rax
+    pop rax
+    test eax, UB_CLICK
+    jz 12f
+    xor dword ptr [rip + cfg_panel_full], 1
+    mov dword ptr [rip + g_settings_changed], 1
+    mov dword ptr [rip + g_dirty], 1
+12: sub r12d, r13d
     sub r12d, [rip + g_mt + 4*MI_4]
     mov edi, ID_TNEW
     mov esi, r12d
@@ -5514,6 +5559,7 @@ rep_cell: .long -1
 .Lfoot_unchecked: .asciz " lines were not checked for problems"
 .Lfoot_close: .asciz " \342\224\200\342\224\200\033[0m\r\n\033[?25l"
 .Ltip_restart: .asciz "Restart"
+.Ltip_wide: .asciz "Full-Width Panel"
 .Ltip_stop: .asciz "Stop"
 .Ld_term: .asciz "term="
 .Ld_kind: .asciz " kind="

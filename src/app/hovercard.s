@@ -1262,6 +1262,9 @@ FN hovercard_draw
     PROLOGUE 48
     cmp dword ptr [rip + hc_state], 2
     jne .Lhd_ret
+    call dg_hover_card_ds       # while paused, the debugger's card of the value takes its place
+    test rax, rax
+    jnz .Lhd_ret
     cmp dword ptr [rip + cp_open], 0
     je 0f
     call close                  # the completion list hides it

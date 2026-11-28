@@ -27,7 +27,7 @@ for line in (ROOT / 'src/app/config.s').read_text(encoding='utf-8').splitlines()
 
 # These values are the public settings contract, independent of UI step logic.
 BOOLS = {
-    'ui': 'follow_system sidebar agents_panel tooltips auto_hide_scrollbars',
+    'ui': 'follow_system sidebar agents_panel panel_full_width tooltips auto_hide_scrollbars',
     'editor': ('insert_spaces line_numbers highlight_line animate_disk_changes match_brackets '
                'indent_guides word_wrap whitespace cursor_blink smooth_caret auto_pairs '
                'scroll_past_end vim_mode '
@@ -43,7 +43,7 @@ BOOLS = {
                'disable_login_prompt python_env'),                                   #   use_terminal, ide; p8
     'git': 'enabled', 'updates': 'check',
     'testing': 'gutter',
-    'debug': 'show_on_start keys_in_terminal',
+    'debug': 'show_on_start inline_values keys_in_terminal',
 }
 INTS = {
     ('files', 'format_on_save_timeout'): (250, 30000, 250),
@@ -57,6 +57,8 @@ INTS = {
     ('terminal', 'line_height'): (1., 2.5, .05),
     ('terminal', 'scrollback'): (0, 100000, 1000), ('terminal', 'height'): (80, 2000, 10),
     ('debug', 'console_lines'): (1000, 100000, 1000),
+    ('debug', 'inline_values_lines'): (1, 500, 10),
+    ('debug', 'frames_width'): (10, 80, 5),
     ('agents', 'idle_stop_minutes'): (0, 240, 5),
     ('agents', 'archive_after_days'): (0, 365, 1),      # phase 6: the session list's
 }
@@ -85,7 +87,8 @@ CHOICES = {('editor', 'multi_cursor_paste'): ('spread', 'full'),
            # the first is the CLI's own default, written as an empty value
            ('claude', 'initial_mode'): ('', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions'),
            ('claude', 'spinner_verbs'): ('append', 'replace'),
-           ('agents', 'location'): ('panel', 'tab')}       # phase 4 task 13
+           ('agents', 'location'): ('panel', 'tab'),       # phase 4 task 13
+           ('debug', 'layout'): ('sidebar', 'toolwindow')}
 
 
 # Theme shows without Follow system dark mode, the dark and light mode's themes with it.
@@ -244,7 +247,8 @@ class SettingsUI(unittest.TestCase):
                   ('extensions', 'secrets'): (76, 70, 44),
                   ('claude', 'initial_mode'): (166, 58, 141, 50, 50, 141),
                   ('claude', 'spinner_verbs'): (190, 106),
-                  ('agents', 'location'): (78, 76)}      # "Side panel", "Editor tab"
+                  ('agents', 'location'): (78, 76),      # "Side panel", "Editor tab"
+                  ('debug', 'layout'): (67, 90)}         # "Sidebar", "Tool window"
         for (section, key), options in CHOICES.items():
             for index, option in enumerate(options):
                 with self.subTest(setting=f'{section}.{key}', option=option):

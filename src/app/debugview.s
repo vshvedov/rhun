@@ -54,7 +54,15 @@ ctx_gen: .long 0
 .data
 .globl g_dv_places, g_debug_show_on_start, g_debug_keys_in_terminal
 g_debug_keys_in_terminal: .long 1   # [debug] keys_in_terminal
-g_dv_places: .long -1, -1, -1, -1, -1   # the four sections, then the console tab
+g_dv_places: .long -1, -1, -1, -1, -1, -1   # the four sections, the console tab, the Debugger tab
+.globl g_debug_layout
+g_debug_layout: .long 0         # [debug] layout: 0 the sidebar's sections, 1 the Debugger tab
+.globl g_debug_inline_values
+g_debug_inline_values: .long 1  # [debug] inline_values
+.globl g_debug_iv_lines
+g_debug_iv_lines: .long 50      # [debug] inline_values_lines
+.globl g_debug_frames_pct
+g_debug_frames_pct: .long 30    # [debug] frames_width: the Debug tab's frames, % of its width
 g_debug_show_on_start: .long 1  # [debug] show_on_start
 hist_at: .long -1               # console history: Up/Down position, -1 at the input
 
@@ -65,6 +73,7 @@ hist_at: .long -1               # console history: Up/Down position, -1 at the i
 .equ DP_FUNCTION, 5
 .equ DP_LAUNCH, 6               # a launch's ${ask:} (debugask.s)
 .equ DP_SETVAR, 7               # a variable's new value
+.equ DP_EVAL, 8                 # Evaluate Expression
 
 .text
 
@@ -97,7 +106,22 @@ FN dview_ensure
     mov [rcx + rbx*4], eax
     inc ebx
     jmp 1b
-2:  mov edi, PLACE_PANEL
+2:  mov edi, PLACE_PANEL         # the Debugger tab first: the panel shows its tabs in that order
+    lea rsi, [rip + .Ln_debugger]
+    lea rdx, [rip + .Lt_debugger]
+    lea rcx, [rip + tw_ops]
+    xor r8d, r8d
+    call place_add
+    mov [rip + g_dv_places + 20], eax
+    mov edi, eax
+    mov esi, IC_DBG_BUG
+    call place_set_icon
+    lea rdi, [rip + stack_tree_ops]     # its frames: Enter or a click focuses one, as Call Stack's
+    mov esi, 2
+    call tree_new
+    mov [rip + frames_tr], rax
+    mov dword ptr [rip + tw_eval + TF_id], ID_TW_EVAL
+    mov edi, PLACE_PANEL
     lea rsi, [rip + .Ln_console]
     lea rdx, [rip + .Lt_console]
     lea rcx, [rip + console_ops]
@@ -115,14 +139,16 @@ FN dview_ensure
     mov esi, 1
     call place_set_hidden
     inc ebx
-    cmp ebx, 5
+    cmp ebx, 6
     jb 3b
     mov dword ptr [rip + dv_shown], 0
 9:  EPILOGUE
 
-# dview_session_started(): a session began: the view shows ([debug] show_on_start)
+# dview_session_started(ds): a session began: the view shows ([debug] show_on_start), the Debug tab on
+#   its Console, where the build and the program's output come first
 FN dview_session_started
     PROLOGUE
+    mov dword ptr [rip + tw_sub], 1
     call dview_ensure
     cmp dword ptr [rip + g_debug_show_on_start], 0
     je 9f
@@ -130,7 +156,24 @@ FN dview_session_started
     call dview_show
 9:  EPILOGUE
 
-# dview_show(): Show/Hide the sections and the console (Ctrl+Shift+Y)
+# dview_stopped(reason cstr or 0): a session stopped: the Debug tab goes to Threads & Variables with
+#   the call stack's pane current, as JetBrains IDEs show the frames at a breakpoint; a step leaves
+#   it where the user has it
+FN dview_stopped
+    PROLOGUE
+    test rdi, rdi
+    jz 1f
+    lea rsi, [rip + .Lreason_step]
+    call strcmp_eq
+    test eax, eax
+    jnz 9f
+1:  mov dword ptr [rip + tw_sub], 0
+    mov dword ptr [rip + tw_cur], 0     # the call stack's pane has the tab's keys
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# dview_show(): Show/Hide the debug view (Ctrl+Shift+Y): the sections and the console, or with
+#   [debug] layout = toolwindow the Debugger tab and the console
 FN dview_show
     PROLOGUE
     call dview_ensure
@@ -140,18 +183,28 @@ FN dview_show
     mov [rip + dv_shown], eax
     mov r12d, eax
     xor ebx, ebx
-1:  cmp ebx, 5
+1:  cmp ebx, 6
     jae 2f
-    lea rax, [rip + g_dv_places]
+    mov esi, 1
+    test r12d, r12d
+    jz 11f
+    xor esi, esi
+    cmp dword ptr [rip + g_debug_layout], 0
+    jne 12f
+    cmp ebx, 5                  # the sections: the Debugger tab stays hidden
+    sete sil
+    jmp 11f
+12: cmp ebx, 5                  # the Debug tab: the sections and the console tab stay hidden
+    setb sil
+11: lea rax, [rip + g_dv_places]
     mov edi, [rax + rbx*4]
-    mov esi, r12d
-    xor esi, 1
     call place_set_hidden
     inc ebx
     jmp 1b
 2:  test r12d, r12d
     jnz 3f
-    # hidden: a section or the console with the keyboard gives it back to the editor
+    call dv_leave_panel
+    # hidden: a section, a tab with the keyboard gives it back to the editor
     cmp dword ptr [rip + g_focus], FOCUS_VIEW
     jne 9f
     call place_focused
@@ -160,12 +213,18 @@ FN dview_show
     cmp eax, [rcx + rbx*4]
     je 22f
     inc ebx
-    cmp ebx, 5
+    cmp ebx, 6
     jb 21b
     jmp 9f
 22: mov dword ptr [rip + g_focus], FOCUS_EDITOR
     jmp 9f
-3:  mov edi, [rip + g_dv_places]
+3:  cmp dword ptr [rip + g_debug_layout], 0
+    je 31f
+    mov edi, [rip + g_dv_places + 20]
+    xor esi, esi
+    call place_show
+    jmp 9f
+31: mov edi, [rip + g_dv_places]
     xor esi, esi
     call place_show
     mov edi, [rip + g_dv_places + 16]
@@ -173,6 +232,46 @@ FN dview_show
     call place_show
 9:  mov dword ptr [rip + g_dirty], 1
     EPILOGUE
+
+# dv_leave_panel(): the view hid while the panel was on one of its tabs: the panel goes to the
+#   terminals, or without any to its first other tab, or with nothing left it closes (not an empty panel)
+dv_leave_panel:
+    PROLOGUE
+    mov eax, [rip + g_panel_cur]
+    xor ecx, ecx
+    lea rdx, [rip + g_dv_places]
+1:  cmp ecx, 6
+    jae 9f
+    cmp eax, [rdx + rcx*4]
+    je 2f
+    inc ecx
+    jmp 1b
+2:  mov dword ptr [rip + g_panel_cur], -1
+    call term_count
+    test rax, rax
+    jnz 9f
+    call places_panel_count
+    test eax, eax
+    jz 3f
+    xor edi, edi
+    call places_panel_nth
+    mov [rip + g_panel_cur], eax
+    jmp 9f
+3:  mov dword ptr [rip + g_term_open], 0
+9:  EPILOGUE
+
+# dv_close(ctx): the x on the Debug tab or the Debug Console's: the debug view hides (Debug: Show or
+#   Hide brings it back, as a session's start does)
+dv_close:
+    PROLOGUE
+    cmp dword ptr [rip + dv_shown], 0
+    je 9f
+    call dview_show
+9:  EPILOGUE
+
+# dview_sync(section): its tree filled now (the Breakpoints dialog's list, bpdialog.s)
+FN dview_sync
+    jmp sync
 
 # dview_tree(section) -> rax its TR*, or 0 before the view exists (tests)
 FN dview_tree
@@ -1354,8 +1453,8 @@ bps_activate:
 
 # ---------------- the console ----------------
 
-# console_draw(ctx, x, y, w, h): the lines (the last at the bottom, colored by category) and the
-#   input line
+# console_draw(ctx, x, y, w, h): the lines (the last at the bottom, colored by category; the terminal's
+#   font, size and line height) and the input line
 console_draw:
     PROLOGUE 48
     mov [rsp], esi              # x
@@ -1374,12 +1473,18 @@ console_draw:
     mov ecx, [rsp + 4]
     add ecx, [rsp + 12]
     sub ecx, eax
+    sub ecx, [rip + g_mt + 4*MI_6]      # a little room under it
     mov [rsp + 20], ecx         # input y
     call place_focused
     xor r9d, r9d
     cmp eax, [rip + g_dv_places + 16]
     sete r9b
-    lea rdi, [rip + cin]
+    cmp eax, [rip + g_dv_places + 20]   # or the Debug tab's Console
+    jne 1f
+    cmp dword ptr [rip + tw_sub], 1
+    jne 1f
+    mov r9d, 1
+1:  lea rdi, [rip + cin]
     mov esi, [rsp]
     M eax, MI_8
     add esi, eax
@@ -1393,95 +1498,177 @@ console_draw:
     push rax
     call ui_textfield
     add rsp, 16
-    # the lines, from the last up
-    mov eax, [rip + g_face_code + FACE_lineh]
-    mov [rsp + 24], eax         # line height
-    # scrolled up into history: the newest lines move down, below the view (clipped)
-    call dcon_count
-    imul eax, [rsp + 24]
-    mov ecx, [rsp + 20]
-    sub ecx, [rsp + 4]          # the lines' room
-    sub eax, ecx
-    jns 61f
-    xor eax, eax
-61: cmp [rip + cscroll], eax
-    jle 62f
-    mov [rip + cscroll], eax    # no further than the oldest line
-62: mov ecx, [rsp + 20]
-    add ecx, [rip + cscroll]
-    mov [rsp + 28], ecx         # bottom of the next line up
-    mov esi, [rsp + 4]
-    mov ecx, [rsp + 20]
-    sub ecx, esi
-    mov edi, [rsp]
-    mov edx, [rsp + 8]
-    call gfx_clip_push
-    call dcon_count
-    mov r12, rax                # lines
-1:  test r12, r12
-    jz 4f
-    mov eax, [rsp + 28]
-    cmp eax, [rsp + 4]
-    jle 4f
-    dec r12
-    mov rdi, r12
-    call dcon_get
-    mov r13, rax
-    mov r14, rdx
-    mov edi, ecx
-    call cat_color
-    mov r15d, eax
-    mov eax, [rsp + 28]
-    sub eax, [rsp + 24]
-    mov [rsp + 28], eax
-    # the category of an input line shows as "> "
-    mov edi, [rsp]
-    M eax, MI_8
-    add edi, eax
-    mov [rsp + 32], edi
-    mov rdi, r12
-    call dcon_get
-    cmp ecx, DCON_INPUT
+    # the lines: the console's log (rlog.s) in the terminal's face: a click or a drag selects lines,
+    # Ctrl+C copies them (when the field has no selection), the wheel scrolls, the end follows
+    call term_line_metrics
+    call dc_sync
+    call place_focused
+    xor r9d, r9d
+    cmp eax, [rip + g_dv_places + 16]
+    sete r9b
+    cmp eax, [rip + g_dv_places + 20]
     jne 2f
-    lea rdi, [rip + g_face_code]
-    mov esi, [rsp + 32]
-    mov edx, [rsp + 28]
-    mov ecx, [rsp + 24]
-    lea r8, [rip + .Lgt]
-    mov r9d, r15d
-    call ui_text_c
-    mov [rsp + 32], eax
-2:  lea rdi, [rip + g_face_code]
-    mov esi, [rsp + 32]
-    mov edx, [rsp + 28]
-    mov ecx, [rsp + 24]
-    mov r8, r13
-    mov r9, r14
-    push r15
-    push r15
-    call ui_text_v
-    add rsp, 16
-    jmp 1b
-4:  call gfx_clip_pop
-    # the wheel scrolls the lines
-    mov edi, [rsp]
-    mov esi, [rsp + 4]
-    mov edx, [rsp + 8]
-    mov ecx, [rsp + 12]
-    call ui_in
-    test eax, eax
-    jz 9f
-    mov eax, [rip + g_scroll_y]
-    test eax, eax
-    jz 9f
-    imul eax, [rsp + 24]
-    neg eax
-    add eax, [rip + cscroll]
-    jns 5f
-    xor eax, eax
-5:  mov [rip + cscroll], eax
-    mov dword ptr [rip + g_scroll_y], 0
+    cmp dword ptr [rip + tw_sub], 1
+    jne 2f
+    mov r9d, 1
+2:  mov rdi, [rip + dc_lg]
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 20]
+    sub r8d, edx
+    sub r8d, [rip + g_mt + 4*MI_4]
+    call log_draw
+    EPILOGUE
+
+# dc_sync(): the console's log holds its lines: new ones are appended; after a Clear, the cap, or a
+#   line that grew (output without its newline yet), all of them again
+.bss
+.p2align 3
+dc_lg: .quad 0
+dc_fed: .quad 0                 # lines in the log
+dc_lastlen: .quad 0             # the last of them's length when it went in
+dc_line: .zero SB_SIZE          # scratch: a line with its color
+.data
+dc_reset: .long -1              # g_dcon_reset and g_dcon_gen when the log was last brought up to date
+dc_gen: .long -1
+.text
+dc_sync:
+    PROLOGUE
+    cmp qword ptr [rip + dc_lg], 0
+    jne 1f
+    mov edi, 251                # its instance: ui ids of its own
+    call log_new
+    mov [rip + dc_lg], rax
+    mov rdi, rax
+    lea rsi, [rip + g_face_term]
+    call log_set_face
+1:  mov eax, [rip + g_dcon_gen]
+    cmp eax, [rip + dc_gen]
+    je 9f
+    call dcon_count
+    mov r12, rax                # lines now
+    mov eax, [rip + g_dcon_reset]
+    cmp eax, [rip + dc_reset]
+    jne 5f
+    cmp r12, [rip + dc_fed]
+    jbe 5f                      # none new: a line grew
+    mov rbx, [rip + dc_fed]
+    test rbx, rbx
+    jz 6f
+    lea rdi, [rbx - 1]
+    call dcon_get
+    cmp rdx, [rip + dc_lastlen]
+    jne 5f                      # the last one grew
+    jmp 6f
+5:  mov rdi, [rip + dc_lg]      # all again
+    call log_clear
+    xor ebx, ebx
+6:  cmp rbx, r12
+    jae 7f
+    mov rdi, rbx
+    call dc_append
+    inc rbx
+    jmp 6b
+7:  mov [rip + dc_fed], r12
+    mov qword ptr [rip + dc_lastlen], 0
+    test r12, r12
+    jz 8f
+    lea rdi, [r12 - 1]
+    call dcon_get
+    mov [rip + dc_lastlen], rdx
+8:  mov eax, [rip + g_dcon_gen]
+    mov [rip + dc_gen], eax
+    mov eax, [rip + g_dcon_reset]
+    mov [rip + dc_reset], eax
 9:  EPILOGUE
+
+# dc_append(i): console line i into the log, in its category's color ("> " before an input)
+dc_append:
+    PROLOGUE
+    call dcon_get
+    mov r12, rax
+    mov r13, rdx
+    mov r14d, ecx
+    lea rdi, [rip + dc_line]
+    call sb_clear
+    cmp r14d, DCON_RESULT
+    jbe 1f
+    xor r14d, r14d
+1:  lea rax, [rip + dc_sgr]
+    movzx esi, byte ptr [rax + r14]
+    test esi, esi
+    jz 2f
+    push rsi
+    push rsi
+    lea rdi, [rip + dc_line]
+    lea rsi, [rip + .Ldc_csi]
+    call sb_push_cstr
+    pop rsi
+    pop rsi
+    lea rdi, [rip + dc_line]
+    call sb_push_u64
+    lea rdi, [rip + dc_line]
+    mov esi, 'm'
+    call sb_push_byte
+2:  cmp r14d, DCON_INPUT
+    jne 3f
+    lea rdi, [rip + dc_line]
+    lea rsi, [rip + .Lgt]
+    call sb_push_cstr
+3:  lea rdi, [rip + dc_line]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push
+    mov rdi, [rip + dc_lg]
+    xor esi, esi
+    mov rdx, [rip + dc_line + SB_ptr]
+    mov rcx, [rip + dc_line + SB_len]
+    call log_append
+    EPILOGUE
+
+# cmd_debug_clear_console (Debug: Clear Console, the bin): the console's lines go
+FN cmd_debug_clear_console
+    sub rsp, 8
+    call dcon_clear
+    add rsp, 8
+    mov dword ptr [rip + cscroll], 0
+    mov dword ptr [rip + g_dirty], 1
+    ret
+
+# console_actions(ctx, right, y, h) -> eax the x left of its button: Clear, on the console tab's row
+.equ ID_DCON_CLEAR, 0x5e0005
+console_actions:
+    PROLOGUE 16
+    mov r12d, esi
+    mov r13d, edx
+    mov r14d, ecx
+    M ecx, MI_24
+    sub r12d, ecx
+    mov [rsp], ecx
+    mov edi, ID_DCON_CLEAR
+    mov esi, r12d
+    mov edx, r14d
+    sub edx, ecx
+    sar edx, 1
+    add edx, r13d
+    mov [rsp + 4], edx
+    mov r8d, ecx
+    mov r9d, IC_DBG_TRASH
+    call ui_icon_btn
+    mov r8d, eax
+    mov edi, ID_DCON_CLEAR
+    mov esi, r12d
+    mov edx, [rsp + 4]
+    add edx, [rsp]
+    mov ecx, [rsp]
+    lea r9, [rip + .Ltw_clear]
+    call tip_note_text
+    test eax, UB_CLICK
+    jz 1f
+    call cmd_debug_clear_console
+1:  mov eax, r12d
+    EPILOGUE
 
 # cat_color(category) -> eax argb
 cat_color:
@@ -1506,8 +1693,7 @@ FN dview_console_field
     jne 1f
     lea rax, [rip + cin]
     ret
-1:  xor eax, eax
-    ret
+1:  jmp dview_tw_field          # the Debug tab's field, or 0
 
 # console_key(ctx, keysym, cp, mods) -> eax: the input line; Enter evaluates, Up/Down history
 console_key:
@@ -1523,7 +1709,19 @@ console_key:
     je 2f
     cmp r12d, KEY_DOWN
     je 3f
-    lea rdi, [rip + cin]
+    test r14d, MOD_CTRL         # Ctrl+C with nothing selected in the field: the log's lines
+    jz 4f
+    cmp r13d, 'c'
+    jne 4f
+    mov rax, [rip + cin + TF_cur]
+    cmp rax, [rip + cin + TF_anchor]
+    jne 4f
+    cmp qword ptr [rip + dc_lg], 0
+    je 4f
+    mov rdi, [rip + dc_lg]
+    call log_copy
+    jmp 8f
+4:  lea rdi, [rip + cin]
     mov esi, r12d
     mov edx, r13d
     mov ecx, r14d
@@ -1714,8 +1912,19 @@ FN dview_prompt_done
     mov rcx, r13
     call dap_set_variable
     jmp 9f
-11: cmp eax, DP_WATCH
+11: cmp eax, DP_EVAL
+    jne 12f
+    mov rdi, r12
+    mov rsi, r13
+    call dview_eval
+    jmp 9f
+12: cmp eax, DP_WATCH
     jne 1f
+    mov rdi, r12
+    mov rsi, r13
+    call eval_promote           # the evaluation's text: kept as a watch now
+    test eax, eax
+    jnz 9f
     mov rdi, r12
     mov rsi, r13
     call dap_watch_add
@@ -1895,6 +2104,61 @@ mi_disable:
 mi_remove:
     call mi_target
     jmp cmd_debug_toggle_breakpoint
+
+mi_rtc:
+    call mi_target
+    jmp cmd_debug_run_to_cursor
+
+# cmd_debug_run_to_cursor (Run to Cursor, Alt+F9 in JetBrains IDEs): the focused paused session runs
+#   on to the cursor's line. A breakpoint is put there for the time it takes, unless one is there
+#   already, and goes again at the next stop (that one or another) or when the session ends.
+FN cmd_debug_run_to_cursor
+    PROLOGUE
+    call dap_focused
+    test rax, rax
+    jz 9f
+    cmp dword ptr [rax + DS_state], DSS_PAUSED
+    jne 9f
+    call dview_rtc_clear
+    call cursor_line
+    test eax, eax
+    jz 9f
+    mov r12d, eax
+    mov rdi, [rip + prompt_path + SB_ptr]
+    mov esi, r12d
+    call bp_find
+    test eax, eax
+    jns 1f                      # a breakpoint is there: it stops there anyway
+    mov rdi, [rip + prompt_path + SB_ptr]
+    mov esi, r12d
+    xor edx, edx
+    xor ecx, ecx
+    xor r8d, r8d
+    call bp_set
+    lea rdi, [rip + rtc_path]
+    mov rsi, [rip + prompt_path + SB_ptr]
+    mov rdx, [rip + prompt_path + SB_len]
+    call sb_set
+    mov [rip + rtc_line], r12d
+    mov dword ptr [rip + rtc_on], 1
+1:  xor edi, edi                # continue (the breakpoint reaches the adapter first)
+    call dap_resume
+9:  EPILOGUE
+
+# dview_rtc_clear(): Run to Cursor's breakpoint goes (a stop, a session's end, another Run to Cursor)
+FN dview_rtc_clear
+    PROLOGUE
+    cmp dword ptr [rip + rtc_on], 0
+    je 9f
+    mov dword ptr [rip + rtc_on], 0
+    mov rdi, [rip + rtc_path + SB_ptr]
+    mov esi, [rip + rtc_line]
+    call bp_find
+    test eax, eax
+    js 9f
+    mov edi, eax
+    call bp_remove
+9:  EPILOGUE
 
 # cmd_debug_start (F5): continue the focused paused session, else start the selected configuration
 #   (the first in launch.ini until one is selected)
@@ -2091,7 +2355,14 @@ FN cmd_debug_evaluate_selection
 FN cmd_debug_focus_console
     PROLOGUE
     call dview_ensure
-    mov edi, [rip + g_dv_places + 16]
+    cmp dword ptr [rip + g_debug_layout], 0
+    je 1f
+    mov dword ptr [rip + tw_sub], 1     # the Debug tab's Console
+    mov edi, [rip + g_dv_places + 20]
+    mov esi, 1
+    call place_show
+    EPILOGUE
+1:  mov edi, [rip + g_dv_places + 16]
     mov esi, 1
     call place_show
     EPILOGUE
@@ -2495,7 +2766,8 @@ addcfg_chosen:
 
 # dview_toolbar(left, y, width, h, right) -> eax 1 when the toolbar took the title's place: a session
 #   picker (with more than one session), Continue or Pause, Step Over, Into and Out, Restart, Stop;
-#   a session without debugging has Restart and Stop only
+#   a session without debugging has Restart and Stop only. With [debug] layout = toolwindow the
+#   Debugger tab has them instead.
 FN dview_toolbar
     PROLOGUE 64
     mov dword ptr [rip + tb_n], 0
@@ -2504,6 +2776,8 @@ FN dview_toolbar
     mov [rsp + 8], edx          # the title bar's width
     mov [rsp + 12], ecx         # h
     mov [rsp + 16], r8d         # right limit
+    cmp dword ptr [rip + g_debug_layout], 0
+    jne 8f                      # the Debugger tab has the buttons
     call dap_focused
     test rax, rax
     jz 8f
@@ -2555,8 +2829,12 @@ FN dview_toolbar
 41: mov edx, ecx
     add edx, eax
     cmp edx, [rsp + 16]
-    jg 8f                       # no room: the title stays
-    mov r14d, ecx               # x
+    jle 42f
+    mov ecx, [rsp + 16]         # off center, left of what is at the right (the run widget)
+    sub ecx, eax
+    cmp ecx, [rsp]
+    jl 8f                       # no room: the title stays
+42: mov r14d, ecx               # x
     # the picker cycles the focused session
     cmp dword ptr [rsp + 28], 0
     je 5f
@@ -2587,7 +2865,7 @@ FN dview_toolbar
     mov [rsp + 40], rax
     mov eax, [rax]              # icon
     # Continue becomes Pause while the program runs
-    cmp eax, IC_PLAY
+    cmp eax, IC_DBG_RESUME
     jne 61f
     cmp dword ptr [rbx + DS_state], DSS_RUNNING
     jne 61f
@@ -2647,7 +2925,8 @@ FN dview_toolbar
 8:  xor eax, eax
     EPILOGUE
 
-# dview_toolbar_dump(sb): "button ICON x y size" for each toolbar button as last drawn
+# dview_toolbar_dump(sb): "button ICON x y size" for each toolbar button as last drawn, then the run
+#   widget's "widget ICON x y w" lines
 FN dview_toolbar_dump
     PROLOGUE
     mov rbx, rdi
@@ -2679,7 +2958,11 @@ FN dview_toolbar_dump
     call sb_push_byte
     inc r12d
     jmp 1b
-9:  EPILOGUE
+9:  mov rdi, rbx                # and the run widget's parts, and the Debugger tab's
+    call dview_run_widget_dump
+    mov rdi, rbx
+    call dview_tw_dump
+    EPILOGUE
 
 # focus_next_session(): the toolbar's picker: the next live session is focused
 focus_next_session:
@@ -2713,6 +2996,177 @@ FN dview_status_item
     mov [rsp], edi
     mov [rsp + 4], esi
     mov [rsp + 8], edx
+    mov ebx, edi
+    call rw_starting            # a session getting ready: its progress
+    test rax, rax
+    jz 0f
+    mov rcx, rax
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    call rw_progress
+    EPILOGUE
+0:  mov edi, 1
+    call status_label
+    test eax, eax
+    jz 9f
+7:  lea rdi, [rip + lab]
+    call sb_z_dv
+    lea rdi, [rip + g_face_small]
+    mov rsi, rax
+    mov rdx, [rip + lab + SB_len]
+    call text_width
+    M ecx, MI_16
+    add eax, ecx
+    mov r14d, eax               # its width
+    mov edi, ID_DBG_STATUS
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, r14d
+    mov r8d, [rsp + 8]
+    call ui_btn
+    mov r15d, eax
+    test eax, UB_HOVER
+    jz 71f
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, r14d
+    mov ecx, [rsp + 8]
+    COLOR r8d, T_HOVER
+    call gfx_fill
+71: lea rdi, [rip + g_face_small]
+    mov esi, [rsp]
+    M eax, MI_8
+    add esi, eax
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8, [rip + lab + SB_ptr]
+    COLOR r9d, T_ACCENT
+    call ui_text_c
+    test r15d, UB_CLICK
+    jz 8f
+    call dap_focused
+    test rax, rax
+    jz 72f
+    call dview_show_on
+    jmp 8f
+72: call cmd_debug_start
+8:  mov eax, [rsp]
+    add eax, r14d
+    EPILOGUE
+9:  mov eax, [rsp]
+    EPILOGUE
+
+# rw_progress(x, y, h, ds) -> eax the x after it: "Compiling..." (Go: Delve builds the program
+#   first) or "Starting...", a bar that moves, and x to stop the session, as JetBrains IDEs show it
+.equ ID_DBG_PROG, 0x5e0111
+rw_progress:
+    PROLOGUE 32
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    mov rbx, rcx
+    lea r12, [rip + .Lw_starting2]
+    mov edi, [rbx + DS_dbg]
+    call dbg_row
+    mov rdi, [rax + DBG_type]
+    test rdi, rdi
+    jz 1f
+    lea rsi, [rip + .Ls_go]
+    call strcmp_eq
+    test eax, eax
+    jz 1f
+    lea r12, [rip + .Lw_compiling]
+1:  lea rdi, [rip + g_face_small]
+    mov esi, [rsp]
+    add esi, [rip + g_mt + 4*MI_8]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8, r12
+    COLOR r9d, T_FG
+    call ui_text_c
+    add eax, [rip + g_mt + 4*MI_8]
+    mov r13d, eax               # the bar: 100 points, a third of it moving
+    mov edi, 100
+    call sc
+    mov r14d, eax
+    M ecx, MI_4
+    mov edx, [rsp + 8]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 4]
+    mov [rsp + 12], edx
+    mov edi, r13d
+    mov esi, edx
+    mov edx, r14d
+    mov r8d, ecx
+    sar r8d, 1
+    COLOR r9d, T_BORDER
+    call gfx_round_rect
+    call rw_spin_step           # it moves with the spinner
+    mov ecx, r14d
+    imul ecx, eax
+    shr ecx, 4                  # sixteen steps across
+    mov eax, r14d
+    xor edx, edx
+    mov r8d, 3
+    div r8d
+    mov r15d, eax               # its length
+    lea edi, [r13 + rcx]
+    mov edx, r15d
+    mov eax, r13d
+    add eax, r14d
+    sub eax, edi
+    cmp edx, eax
+    cmovg edx, eax
+    mov esi, [rsp + 12]
+    M ecx, MI_4
+    mov r8d, ecx
+    sar r8d, 1
+    COLOR r9d, T_ACCENT
+    call gfx_round_rect
+    add r13d, r14d
+    add r13d, [rip + g_mt + 4*MI_6]
+    M ecx, MI_16                # x: the session stops
+    mov edx, [rsp + 8]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 4]
+    mov edi, ID_DBG_PROG
+    mov esi, r13d
+    mov r8d, ecx
+    mov r9d, IC_CLOSE
+    call ui_icon_btn
+    test eax, UB_CLICK
+    jz 2f
+    mov rdi, rbx
+    call slot_of_ds_dv
+    mov edi, eax
+    call dap_focus_slot
+    call dap_stop
+2:  add r13d, [rip + g_mt + 4*MI_16]
+    add r13d, [rip + g_mt + 4*MI_8]
+    mov eax, r13d
+    EPILOGUE
+
+# slot_of_ds_dv(ds) -> eax its slot
+slot_of_ds_dv:
+    xor eax, eax
+1:  cmp eax, DS_MAX
+    jae 2f
+    imul rcx, rax, DS_SIZE
+    lea rdx, [rip + g_dsess]
+    add rcx, rdx
+    cmp rcx, rdi
+    je 2f
+    inc eax
+    jmp 1b
+2:  ret
+
+# status_label(fallback) -> eax 1 with lab the focused session's state ("Run: paused (breakpoint)
+#   a.c:3"), else with fallback 1 "▶ CONFIG" for the configuration F5 starts; 0 when there is neither
+status_label:
+    PROLOGUE
     mov ebx, edi
     lea rdi, [rip + lab]
     call sb_clear
@@ -2771,57 +3225,13 @@ FN dview_status_item
     lea rdi, [rip + lab]
     mov esi, [r13 + FR_line]
     call sb_push_u64
-2:  jmp 7f
-5:  # no session: the configuration F5 starts, when the project has some
-    call status_config
-    test eax, eax
+2:  mov eax, 1
+    EPILOGUE
+5:  xor eax, eax
+    test ebx, ebx
     jz 9f
-7:  lea rdi, [rip + lab]
-    call sb_z_dv
-    lea rdi, [rip + g_face_small]
-    mov rsi, rax
-    mov rdx, [rip + lab + SB_len]
-    call text_width
-    M ecx, MI_16
-    add eax, ecx
-    mov r14d, eax               # its width
-    mov edi, ID_DBG_STATUS
-    mov esi, [rsp]
-    mov edx, [rsp + 4]
-    mov ecx, r14d
-    mov r8d, [rsp + 8]
-    call ui_btn
-    mov r15d, eax
-    test eax, UB_HOVER
-    jz 71f
-    mov edi, [rsp]
-    mov esi, [rsp + 4]
-    mov edx, r14d
-    mov ecx, [rsp + 8]
-    COLOR r8d, T_HOVER
-    call gfx_fill
-71: lea rdi, [rip + g_face_small]
-    mov esi, [rsp]
-    M eax, MI_8
-    add esi, eax
-    mov edx, [rsp + 4]
-    mov ecx, [rsp + 8]
-    mov r8, [rip + lab + SB_ptr]
-    COLOR r9d, T_ACCENT
-    call ui_text_c
-    test r15d, UB_CLICK
-    jz 8f
-    call dap_focused
-    test rax, rax
-    jz 72f
-    call dview_show_on
-    jmp 8f
-72: call cmd_debug_start
-8:  mov eax, [rsp]
-    add eax, r14d
-    EPILOGUE
-9:  mov eax, [rsp]
-    EPILOGUE
+    call status_config  # no session: the configuration F5 starts, when the project has some
+9:  EPILOGUE
 
 # status_word(state) -> cstr as the status bar says it
 status_word:
@@ -3057,8 +3467,2280 @@ FN dview_terminal_key
 9:  mov eax, 1
     EPILOGUE
 
+
+# ---------------- the title bar's run widget ----------------
+
+# The run widget at the title bar's right, as JetBrains IDEs have it: the configuration F5 starts (a
+# click lists launch.ini's configurations to choose another, Edit Configurations and Add
+# Configuration), Run, Debug, and Stop while a session lives. It shows when launch.ini has
+# configurations.
+
+.equ ID_DBG_RW, 0x5e0120        # + 0 the configuration, 1 Run, 2 Debug, 3 Stop
+.equ RW_MAX, 32                 # the configurations the menu lists
+
+# rw_name() -> eax 1 with rwlab the configuration F5 starts (the selected one, else launch.ini's
+#   first), 0 when launch.ini has none
+rw_name:
+    PROLOGUE
+    cmp qword ptr [rip + cfg_first + SB_len], 0
+    je 8f
+    mov rsi, [rip + g_dsel + SB_ptr]
+    mov rdx, [rip + g_dsel + SB_len]
+    test rdx, rdx
+    jnz 2f
+    mov rsi, [rip + cfg_first + SB_ptr]
+    xor edx, edx
+1:  cmp byte ptr [rsi + rdx], 10
+    je 2f
+    inc rdx
+    jmp 1b
+2:  lea rdi, [rip + rwlab]
+    call sb_set
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# dview_run_widget_width() -> eax the run widget's width, 0 when it does not show
+FN dview_run_widget_width
+    PROLOGUE
+    call rw_name
+    test eax, eax
+    jz 9f
+    lea rdi, [rip + g_face_small]
+    mov rsi, [rip + rwlab + SB_ptr]
+    mov rdx, [rip + rwlab + SB_len]
+    call text_width
+    M ecx, MI_8
+    add eax, ecx
+    add eax, ecx
+    M ecx, MI_12
+    add eax, ecx
+    add eax, ecx                # the configuration's icon before its name
+    M ecx, MI_6
+    add eax, ecx
+    M ecx, MI_4
+    add eax, ecx
+    M ecx, MI_28                # a long name is cut
+    shl ecx, 3
+    cmp eax, ecx
+    cmovg eax, ecx
+    mov [rip + rw_lw], eax
+    mov ebx, 3
+    call dap_live_count
+    test eax, eax
+    jz 1f
+    mov ebx, 4
+1:  M eax, MI_28
+    M ecx, MI_2
+    add eax, ecx
+    imul eax, ebx
+    add eax, [rip + rw_lw]
+    M ecx, MI_4
+    add eax, ecx
+    EPILOGUE
+9:  xor eax, eax
+    EPILOGUE
+
+# rw_rect(icon, x, y, w): a part as drawn, for print-debug-toolbar
+rw_rect:
+    mov eax, [rip + rw_n]
+    cmp eax, 8
+    jae 1f
+    inc dword ptr [rip + rw_n]
+    shl eax, 4
+    lea r8, [rip + rw_rects]
+    mov [r8 + rax], edi
+    mov [r8 + rax + 4], esi
+    mov [r8 + rax + 8], edx
+    mov [r8 + rax + 12], ecx
+1:  ret
+
+# dview_run_widget(x, y, h): the run widget drawn from x, at the width dview_run_widget_width gave
+FN dview_run_widget
+    PROLOGUE 48
+    mov dword ptr [rip + rw_n], 0
+    mov [rsp], edi              # x
+    mov [rsp + 4], esi          # y
+    mov [rsp + 8], edx          # h
+    call dview_run_widget_width
+    test eax, eax
+    jz 9f
+    M eax, MI_28
+    mov [rsp + 12], eax         # a button's size
+    mov ecx, [rsp + 8]
+    sub ecx, eax
+    sar ecx, 1
+    add ecx, [rsp + 4]
+    mov [rsp + 16], ecx         # the buttons' y
+    # the configuration, and its menu
+    mov r14d, [rsp]
+    xor edi, edi
+    mov esi, r14d
+    mov edx, ecx
+    mov ecx, [rip + rw_lw]
+    call rw_rect
+    mov edi, ID_DBG_RW
+    mov esi, r14d
+    mov edx, [rsp + 16]
+    mov ecx, [rip + rw_lw]
+    mov r8d, [rsp + 12]
+    call ui_btn
+    mov r15d, eax
+    test r15d, UB_HOVER
+    jnz 1f
+    call ctx_menu_list          # its menu open
+    lea rcx, [rip + rw_items]
+    cmp rax, rcx
+    jne 2f
+1:  mov edi, r14d
+    mov esi, [rsp + 16]
+    mov edx, [rip + rw_lw]
+    mov ecx, [rsp + 12]
+    M r8d, MI_RADIUS
+    COLOR r9d, T_HOVER
+    call gfx_round_rect
+2:  mov edi, r14d
+    mov esi, [rsp + 4]
+    mov edx, [rip + rw_lw]
+    mov ecx, [rsp + 8]
+    call gfx_clip_push
+    M ecx, MI_12                # the configuration's icon, as JetBrains IDEs show its type
+    mov esi, r14d
+    add esi, [rip + g_mt + 4*MI_8]
+    mov edx, [rsp + 8]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 4]
+    mov edi, IC_PLAY
+    COLOR r8d, T_SUCCESS
+    call icon_draw
+    lea rdi, [rip + g_face_small]
+    M esi, MI_8
+    add esi, r14d
+    add esi, [rip + g_mt + 4*MI_12]
+    add esi, [rip + g_mt + 4*MI_6]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8, [rip + rwlab + SB_ptr]
+    COLOR r9d, T_FG
+    call ui_text_c
+    call gfx_clip_pop
+    M ecx, MI_12                # the chevron at its right
+    mov esi, r14d
+    add esi, [rip + rw_lw]
+    sub esi, ecx
+    M eax, MI_4
+    sub esi, eax
+    mov edx, [rsp + 8]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 4]
+    mov edi, IC_CHEV_D
+    COLOR r8d, T_MUTED
+    test r15d, UB_HOVER
+    jz 21f
+    COLOR r8d, T_FG
+21: call icon_draw
+    mov edi, ID_DBG_RW
+    mov esi, r14d
+    mov edx, [rsp + 16]
+    add edx, [rsp + 12]
+    mov ecx, [rip + rw_lw]
+    mov r8d, r15d
+    lea r9, [rip + .Lrw_tip_cfg]
+    call tip_note_text
+    test r15d, UB_CLICK
+    jz 3f
+    mov edi, r14d
+    mov esi, [rsp + 4]
+    add esi, [rsp + 8]
+    call rw_menu_open
+3:  add r14d, [rip + rw_lw]
+    M eax, MI_4
+    add r14d, eax
+    # Run, Debug, and Stop while a session lives
+    xor r13d, r13d
+4:  cmp r13d, 4
+    jae 9f
+    cmp r13d, 2
+    jne 41f
+    call dap_live_count
+    test eax, eax
+    jz 46f                      # Stop only while a session lives
+41: imul eax, r13d, 24
+    lea rcx, [rip + rw_parts]
+    add rax, rcx
+    mov [rsp + 24], rax         # icon, color, command, tooltip
+    # the tooltip names the configuration: Run 'NAME'
+    lea rdi, [rip + rwtip]
+    call sb_clear
+    lea rdi, [rip + rwtip]
+    mov rax, [rsp + 24]
+    mov rsi, [rax + 16]
+    call sb_push_cstr
+    cmp r13d, 2
+    jae 42f                     # Stop, More: no name
+    lea rdi, [rip + rwtip]
+    mov esi, 0x27
+    call sb_push_byte
+    lea rdi, [rip + rwtip]
+    mov rsi, [rip + rwlab + SB_ptr]
+    mov rdx, [rip + rwlab + SB_len]
+    call sb_push
+    lea rdi, [rip + rwtip]
+    mov esi, 0x27
+    call sb_push_byte
+42: lea rdi, [rip + rwtip]
+    xor esi, esi
+    call sb_push_byte
+    mov rax, [rsp + 24]
+    mov edi, [rax]
+    mov esi, r14d
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 12]
+    call rw_rect
+    lea edi, [r13 + ID_DBG_RW + 1]
+    mov esi, r14d
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 12]
+    mov r8d, [rsp + 12]
+    call ui_btn
+    mov r15d, eax
+    cmp r13d, 1                 # Debug, the main action: on a tinted ground
+    jne 431f
+    mov edi, r14d
+    mov esi, [rsp + 16]
+    mov edx, [rsp + 12]
+    mov ecx, [rsp + 12]
+    M r8d, MI_RADIUS
+    COLOR r9d, T_SELECTION
+    call gfx_round_rect
+431: test r15d, UB_HOVER
+    jz 44f
+    mov edi, r14d
+    mov esi, [rsp + 16]
+    mov edx, [rsp + 12]
+    mov ecx, [rsp + 12]
+    M r8d, MI_RADIUS
+    COLOR r9d, T_HOVER
+    test r15d, UB_HELD
+    jz 43f
+    COLOR r9d, T_ACTIVE
+43: call gfx_round_rect
+44: mov rax, [rsp + 24]
+    mov edi, [rax]
+    cmp r13d, 2                 # Run or Debug: a spinner while a session of that kind gets ready
+    jae 441f
+    mov esi, r13d
+    call rw_spin_icon
+    mov edi, eax
+441: mov [rsp + 32], edi
+    mov eax, [rip + rw_n]       # the icon as drawn, for tests (a spinner's frame)
+    test eax, eax
+    jz 4411f
+    dec eax
+    shl eax, 4
+    lea rcx, [rip + rw_rects]
+    mov [rcx + rax], edi
+4411:
+    mov rax, [rsp + 24]
+    mov ecx, [rax + 4]          # its color's theme slot
+    lea rdx, [rip + g_theme]
+    mov r9d, [rdx + rcx*4]
+    cmp dword ptr [rsp + 32], IC_SPINA0
+    jb 442f
+    COLOR r9d, T_MUTED
+442: mov edi, [rsp + 32]
+    mov esi, r14d
+    mov edx, [rsp + 16]
+    mov ecx, [rsp + 12]
+    mov r8d, [rsp + 12]
+    call ui_icon_center
+    cmp r13d, 2                 # Run or Debug: a green dot while a session of that kind runs
+    jae 443f
+    xor edi, edi
+    test r13d, r13d
+    sete dil
+    call rw_running_kind
+    test eax, eax
+    jz 443f
+    M ecx, MI_8
+    mov edi, r14d
+    add edi, [rsp + 12]
+    sub edi, ecx
+    sub edi, [rip + g_mt + 4*MI_2]
+    mov esi, [rsp + 16]
+    add esi, [rsp + 12]
+    sub esi, ecx
+    sub esi, [rip + g_mt + 4*MI_2]
+    mov edx, ecx
+    mov r8d, ecx
+    sar r8d, 1
+    COLOR r9d, T_SUCCESS
+    call gfx_round_rect
+443:
+    lea edi, [r13 + ID_DBG_RW + 1]
+    mov esi, r14d
+    mov edx, [rsp + 16]
+    add edx, [rsp + 12]
+    mov ecx, [rsp + 12]
+    mov r8d, r15d
+    mov r9, [rip + rwtip + SB_ptr]
+    call tip_note_text
+    test r15d, UB_CLICK
+    jz 45f
+    mov [rip + rw_more_x], r14d     # More's menu opens under it
+    mov eax, [rsp + 16]
+    add eax, [rsp + 12]
+    mov [rip + rw_more_y], eax
+    mov rax, [rsp + 24]
+    call [rax + 8]
+45: add r14d, [rsp + 12]
+    M eax, MI_2
+    add r14d, eax
+46: inc r13d
+    jmp 4b
+9:  EPILOGUE
+
+# rw_running_kind(nodebug) -> eax 1 while a session of that kind runs or is paused (Run's: without
+#   debugging; Debug's: debugging)
+FN rw_running_kind
+    PROLOGUE
+    mov r12d, edi
+    xor ebx, ebx
+1:  cmp ebx, DS_MAX
+    jae 8f
+    mov edi, ebx
+    call dap_slot
+    mov ecx, [rax + DS_state]
+    cmp ecx, DSS_RUNNING
+    je 2f
+    cmp ecx, DSS_PAUSED
+    jne 3f
+2:  xor ecx, ecx
+    cmp dword ptr [rax + DS_nodebug], 0
+    setne cl
+    cmp ecx, r12d
+    jne 3f
+    mov eax, 1
+    EPILOGUE
+3:  inc ebx
+    jmp 1b
+8:  xor eax, eax
+    EPILOGUE
+
+# rw_starting() -> rax a session getting ready (its adapter starting, the program building), the
+#   focused one first, or 0
+FN rw_starting
+    PROLOGUE
+    call dap_focused
+    test rax, rax
+    jz 1f
+    mov rdi, rax
+    call rw_getting_ready
+    test eax, eax
+    jz 1f
+    call dap_focused
+    EPILOGUE
+1:  xor ebx, ebx
+2:  cmp ebx, DS_MAX
+    jae 8f
+    mov edi, ebx
+    call dap_slot
+    mov r12, rax
+    mov rdi, rax
+    call rw_getting_ready
+    test eax, eax
+    jz 3f
+    mov rax, r12
+    EPILOGUE
+3:  inc ebx
+    jmp 2b
+8:  xor eax, eax
+    EPILOGUE
+
+# rw_getting_ready(ds) -> eax 1 while it starts: initializing, configuring, connecting
+rw_getting_ready:
+    xor eax, eax
+    mov ecx, [rdi + DS_state]
+    cmp ecx, DSS_INITIALIZING
+    je 1f
+    cmp ecx, DSS_CONFIGURING
+    je 1f
+    cmp ecx, DSS_CONNECTING
+    jne 2f
+1:  mov eax, 1
+2:  ret
+
+# rw_spin_icon(icon, part) -> eax the icon, or the spinner's frame while a session of the part's kind
+#   gets ready (Run: one without debugging; Debug: one debugging); it then moves (dview_anim_due)
+rw_spin_icon:
+    PROLOGUE
+    mov ebx, edi
+    mov r12d, esi
+    call rw_starting
+    test rax, rax
+    jz 8f
+    xor ecx, ecx
+    cmp dword ptr [rax + DS_nodebug], 0
+    setne cl
+    xor edx, edx
+    test r12d, r12d
+    sete dl
+    cmp ecx, edx
+    jne 8f                      # the other button's
+    call rw_spin_frame
+    EPILOGUE
+8:  mov eax, ebx
+    EPILOGUE
+
+# rw_spin_step() -> eax the spinner's step now, 0 to 15 (one every RW_SPIN_MS); it moves
+FN rw_spin_step
+    sub rsp, 8
+    call time_ms
+    add rsp, 8
+    xor edx, edx
+    mov ecx, RW_SPIN_MS
+    div rcx
+    and eax, 15
+    mov dword ptr [rip + rw_spin], 1
+    ret
+
+# rw_spin_frame() -> eax the spinner's frame now: sixteen steps round, a quarter of a right angle
+#   each (the even ones IC_SPINA0..7, the odd ones IC_SPINA8..15)
+.equ RW_SPIN_MS, 40
+FN rw_spin_frame
+    sub rsp, 8
+    call rw_spin_step
+    add rsp, 8
+    mov ecx, eax
+    shr eax, 1
+    add eax, IC_SPINA0
+    test ecx, 1
+    jz 1f
+    add eax, IC_SPINA8 - IC_SPINA0
+1:  ret
+
+# dview_anim_due() -> eax ms to the spinner's next step, -1 when none was drawn last frame (dap.s's
+#   timeout)
+FN dview_anim_due
+    mov eax, -1
+    cmp dword ptr [rip + rw_spin_shown], 0
+    je 1f
+    mov eax, RW_SPIN_MS
+1:  ret
+
+# dview_anim_tick(): every frame (dap_tick): the frame's spinners noted, a frame asked for while one
+#   moves
+FN dview_anim_tick
+    mov eax, [rip + rw_spin]
+    mov [rip + rw_spin_shown], eax
+    mov dword ptr [rip + rw_spin], 0
+    test eax, eax
+    jz 1f
+    sub rsp, 8
+    call time_ms
+    add rsp, 8
+    mov rcx, rax
+    sub rcx, [rip + rw_spin_last]
+    cmp rcx, RW_SPIN_MS
+    jb 1f
+    mov [rip + rw_spin_last], rax
+    mov dword ptr [rip + g_dirty], 1
+1:  ret
+
+# rw_more(): the widget's More: Run, Debug, Stop while a session lives, Edit and Add Configuration
+rw_more:
+    PROLOGUE
+    lea rbx, [rip + rw_more_items]
+    lea rax, [rip + rw_more_run]
+    mov [rbx], rax
+    lea rax, [rip + cmd_debug_run]
+    mov [rbx + 8], rax
+    lea rax, [rip + rw_more_debug]
+    mov [rbx + 16], rax
+    lea rax, [rip + rw_debug]
+    mov [rbx + 24], rax
+    add rbx, 32
+    call dap_live_count
+    test eax, eax
+    jz 1f
+    lea rax, [rip + .Lrw_stop]
+    mov [rbx], rax
+    lea rax, [rip + cmd_debug_stop]
+    mov [rbx + 8], rax
+    add rbx, 16
+1:  lea rax, [rip + .Lrw_line]
+    mov [rbx], rax
+    mov qword ptr [rbx + 8], 0
+    lea rax, [rip + .Lrw_edit]
+    mov [rbx + 16], rax
+    lea rax, [rip + cmd_debug_open_configurations]
+    mov [rbx + 24], rax
+    lea rax, [rip + .Lrw_add]
+    mov [rbx + 32], rax
+    lea rax, [rip + cmd_debug_add_configuration]
+    mov [rbx + 40], rax
+    lea rax, [rip + .Lrw_viewbps2]
+    mov [rbx + 48], rax
+    lea rax, [rip + cmd_debug_view_breakpoints]
+    mov [rbx + 56], rax
+    mov qword ptr [rbx + 64], 0
+    mov qword ptr [rbx + 72], 0
+    lea rdi, [rip + rw_more_run]    # the labels name the configuration
+    call sb_clear
+    lea rdi, [rip + rw_more_run]
+    lea rsi, [rip + .Lrw_run]
+    call sb_push_cstr
+    lea rdi, [rip + rw_more_debug]
+    call sb_clear
+    lea rdi, [rip + rw_more_debug]
+    lea rsi, [rip + .Lrw_debug]
+    call sb_push_cstr
+    lea rdi, [rip + rw_more_run]
+    call rw_more_name
+    lea rdi, [rip + rw_more_debug]
+    call rw_more_name
+    lea rax, [rip + rw_more_items]
+    mov rcx, [rip + rw_more_run + SB_ptr]
+    mov [rax], rcx
+    mov rcx, [rip + rw_more_debug + SB_ptr]
+    mov [rax + 16], rcx
+    mov edi, [rip + rw_more_x]
+    mov esi, [rip + rw_more_y]
+    lea rdi, [rip + rw_more_items]
+    mov esi, [rip + rw_more_x]
+    mov edx, [rip + rw_more_y]
+    call ctx_menu_open
+    EPILOGUE
+
+# rw_more_name(sb): 'NAME' and a NUL after what it holds
+rw_more_name:
+    PROLOGUE
+    mov rbx, rdi
+    mov esi, 0x27
+    call sb_push_byte
+    mov rdi, rbx
+    mov rsi, [rip + rwlab + SB_ptr]
+    mov rdx, [rip + rwlab + SB_len]
+    call sb_push
+    mov rdi, rbx
+    mov esi, 0x27
+    call sb_push_byte
+    mov rdi, rbx
+    xor esi, esi
+    call sb_push_byte
+    EPILOGUE
+
+# rw_debug(): the widget's Debug: the configuration starts, also while another session is paused
+rw_debug:
+    xor edi, edi
+    jmp start_selected
+
+# rw_menu_open(x, y): launch.ini's configurations, the one F5 starts with a check after it, then Edit
+#   Configurations and Add Configuration
+rw_menu_open:
+    PROLOGUE 16
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    lea rdi, [rip + rwall]
+    call sb_clear
+    lea rdi, [rip + rwall]
+    call dcfg_names
+    lea rdi, [rip + rwnames]
+    call sb_clear
+    mov r12, [rip + rwall + SB_ptr]
+    mov r14, r12
+    add r14, [rip + rwall + SB_len]
+    xor r13d, r13d
+1:  cmp r12, r14
+    jae 5f
+    cmp r13d, RW_MAX
+    jae 5f
+    mov r15, r12
+2:  cmp r15, r14
+    jae 3f
+    cmp byte ptr [r15], 10
+    je 3f
+    inc r15
+    jmp 2b
+3:  mov rax, [rip + rwnames + SB_len]
+    lea rcx, [rip + rw_offs]
+    mov [rcx + r13*8], rax
+    # checked: the one rwlab names
+    lea rbx, [rip + .Lrw_line]
+    mov rdx, r15
+    sub rdx, r12
+    cmp rdx, [rip + rwlab + SB_len]
+    jne 4f
+    mov rdi, r12
+    mov rsi, [rip + rwlab + SB_ptr]
+    call memeq
+    test eax, eax
+    jz 4f
+    lea rbx, [rip + .Lrw_checked]
+4:  lea rdi, [rip + rwnames]
+    mov rsi, r12
+    mov rdx, r15
+    sub rdx, r12
+    call sb_push
+    lea rdi, [rip + rwnames]
+    mov rsi, rbx
+    call sb_push_cstr
+    lea rdi, [rip + rwnames]
+    xor esi, esi
+    call sb_push_byte
+    lea r12, [r15 + 1]
+    inc r13d
+    jmp 1b
+5:  mov [rip + rw_count], r13d
+    # the items: the labels are in rwnames, which no longer grows
+    lea rbx, [rip + rw_items]
+    xor r12d, r12d
+6:  cmp r12d, r13d
+    jae 7f
+    lea rcx, [rip + rw_offs]
+    mov rax, [rcx + r12*8]
+    add rax, [rip + rwnames + SB_ptr]
+    mov [rbx], rax
+    lea rax, [rip + rw_pick]
+    mov [rbx + 8], rax
+    add rbx, 16
+    inc r12d
+    jmp 6b
+7:  test r13d, r13d
+    jz 71f
+    lea rax, [rip + .Lrw_line]
+    mov [rbx], rax
+    mov qword ptr [rbx + 8], 0
+    add rbx, 16
+71: lea rax, [rip + .Lrw_edit]
+    mov [rbx], rax
+    lea rax, [rip + cmd_debug_open_configurations]
+    mov [rbx + 8], rax
+    lea rax, [rip + .Lrw_add]
+    mov [rbx + 16], rax
+    lea rax, [rip + cmd_debug_add_configuration]
+    mov [rbx + 24], rax
+    mov qword ptr [rbx + 32], 0
+    mov qword ptr [rbx + 40], 0
+    lea rdi, [rip + rw_items]
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    call ctx_menu_open
+    EPILOGUE
+
+# rw_pick(): the configuration picked in the widget's menu is the one F5 starts
+rw_pick:
+    PROLOGUE
+    mov ebx, [rip + g_menu_index]
+    cmp ebx, [rip + rw_count]
+    jae 9f
+    mov r12, [rip + rwall + SB_ptr]
+    mov r14, r12
+    add r14, [rip + rwall + SB_len]
+1:  mov r13, r12
+2:  cmp r13, r14
+    jae 3f
+    cmp byte ptr [r13], 10
+    je 3f
+    inc r13
+    jmp 2b
+3:  test ebx, ebx
+    jz 4f
+    dec ebx
+    lea r12, [r13 + 1]
+    cmp r12, r14
+    jb 1b
+    jmp 9f
+4:  lea rdi, [rip + g_dsel]
+    mov rsi, r12
+    mov rdx, r13
+    sub rdx, r12
+    call sb_set
+    mov dword ptr [rip + g_dirty], 1
+9:  EPILOGUE
+
+# dview_run_widget_dump(sb): "widget ICON x y w" for each part of the run widget as last drawn
+#   (ICON 0: the configuration)
+FN dview_run_widget_dump
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12d, [rip + rw_n]
+    jae 9f
+    mov r13d, r12d
+    shl r13d, 4
+    lea r14, [rip + rw_rects]
+    add r14, r13
+    mov rdi, rbx
+    lea rsi, [rip + .Lrw_widget]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [r14]
+    call sb_push_u64
+    xor r15d, r15d
+2:  mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, [r14 + 4 + r15*4]
+    call sb_push_u64
+    inc r15d
+    cmp r15d, 3
+    jb 2b
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    inc r12d
+    jmp 1b
+9:  EPILOGUE
+
+
+
+
+# ---------------- Evaluate Expression, View and Mute Breakpoints ----------------
+
+# cmd_debug_evaluate (Evaluate Expression, Alt+F8 in JetBrains IDEs): the selection, or the identifier
+#   at the cursor, in the Debug tab's field (in a prompt with the sidebar layout); its result shows at
+#   the top of the watches (dview_eval)
+FN cmd_debug_evaluate
+    PROLOGUE
+    lea rdi, [rip + evalinit]
+    call sb_clear
+    mov rbx, [rip + g_doc]
+    test rbx, rbx
+    jz 5f
+    mov r12, [rbx + DOC_cur]
+    mov r13, [rbx + DOC_anchor]
+    cmp r12, r13
+    je 3f
+    jb 1f
+    xchg r12, r13
+1:  mov r14, r13
+    sub r14, r12
+    cmp r14, 1024
+    ja 5f
+    mov rdi, rbx
+    mov rsi, r12
+    mov rdx, r14
+    call doc_range
+    lea rdi, [rip + evalinit]
+    mov rsi, rax
+    mov rdx, r14
+    call sb_push_clean_bp
+    jmp 5f
+3:  # the identifier at the cursor
+    mov rdi, rbx
+    mov rsi, r12
+    call doc_line_of
+    mov r14, rax
+    mov rdi, rbx
+    mov rsi, r14
+    call doc_line_start
+    mov r15, r12
+    sub r15, rax                # the column
+    mov rdi, rbx
+    mov rsi, r14
+    call doc_line_text
+    mov r13, rax
+    mov r14, rdx
+    cmp r15, r14
+    ja 5f
+    mov rbx, r15                # its start
+31: test rbx, rbx
+    jz 32f
+    movzx edi, byte ptr [r13 + rbx - 1]
+    call is_ident
+    test eax, eax
+    jz 32f
+    dec rbx
+    jmp 31b
+32: mov r12, r15                # its end
+33: cmp r12, r14
+    jae 34f
+    movzx edi, byte ptr [r13 + r12]
+    call is_ident
+    test eax, eax
+    jz 34f
+    inc r12
+    jmp 33b
+34: cmp r12, rbx
+    jbe 5f
+    lea rdi, [rip + evalinit]
+    lea rsi, [r13 + rbx]
+    mov rdx, r12
+    sub rdx, rbx
+    call sb_push
+5:  lea rdi, [rip + evalinit]
+    xor esi, esi
+    call sb_push_byte
+    cmp dword ptr [rip + g_debug_layout], 0
+    jne 7f
+    xor edx, edx
+    cmp qword ptr [rip + evalinit + SB_len], 1
+    jbe 6f
+    mov rdx, [rip + evalinit + SB_ptr]
+6:  mov edi, DP_EVAL
+    lea rsi, [rip + .Lq_eval]
+    call ask
+    EPILOGUE
+7:  call dview_ensure               # the Debug tab: its field takes the text and the keys
+    cmp dword ptr [rip + dv_shown], 0
+    jne 71f
+    call dview_show
+71: lea rdi, [rip + tw_eval]
+    mov rsi, [rip + evalinit + SB_ptr]
+    mov rdx, [rip + evalinit + SB_len]
+    dec rdx
+    call tf_set
+    lea rdi, [rip + tw_eval]
+    call tf_select_all
+    mov dword ptr [rip + tw_sub], 0
+    mov dword ptr [rip + tw_cur], 1
+    mov edi, [rip + g_dv_places + 20]
+    mov esi, 1
+    call place_show
+    EPILOGUE
+
+# dview_eval(ptr, len): the evaluation at the top of Watches, in place of the one before; it is
+#   evaluated in the focused frame at every stop, like a watch, until the next one, and is not kept
+#   with the watches (Add to Watches with its text keeps it). The Watches pane shows with the keys.
+FN dview_eval
+    PROLOGUE
+    mov r12, rdi
+    mov r13, rsi
+    test r13, r13
+    jz 9f
+    call bp_ensure_loaded
+    cmp dword ptr [rip + eval_on], 0
+    je 1f
+    mov dword ptr [rip + eval_on], 0
+    mov rdi, [rip + evalsb + SB_ptr]
+    mov rsi, [rip + evalsb + SB_len]
+    call dap_watch_remove
+1:  xor ebx, ebx                # a watch already: it shows as it is
+2:  mov edi, ebx
+    call dap_watch_text
+    test rax, rax
+    jz 4f
+    mov rdi, rax
+    mov rsi, rdx
+    mov rdx, r12
+    mov rcx, r13
+    call str_eq
+    test eax, eax
+    jnz 7f
+    inc ebx
+    jmp 2b
+4:  lea rdi, [rip + evaltmp]    # the expression, then the watches as they were
+    call sb_clear
+    lea rdi, [rip + evaltmp]
+    mov rsi, r12
+    mov rdx, r13
+    call sb_push_clean_bp
+    lea rdi, [rip + evaltmp]
+    mov esi, 10
+    call sb_push_byte
+    lea rdi, [rip + evaltmp]
+    mov rsi, [rip + g_watches + SB_ptr]
+    mov rdx, [rip + g_watches + SB_len]
+    call sb_push
+    lea rdi, [rip + g_watches]
+    call sb_clear
+    lea rdi, [rip + g_watches]
+    mov rsi, [rip + evaltmp + SB_ptr]
+    mov rdx, [rip + evaltmp + SB_len]
+    call sb_push
+    xor edi, edi                # its text as the list has it
+    call dap_watch_text
+    lea rdi, [rip + evalsb]
+    mov rsi, rax
+    call sb_set
+    mov dword ptr [rip + eval_on], 1
+    call dap_watches_changed
+7:  call dview_ensure
+    cmp dword ptr [rip + dv_shown], 0
+    jne 71f
+    call dview_show
+71: cmp dword ptr [rip + g_debug_layout], 0
+    je 72f
+    mov dword ptr [rip + tw_cur], 2
+    mov edi, [rip + g_dv_places + 20]
+    mov esi, 1
+    call place_show
+    jmp 9f
+72: mov edi, [rip + g_dv_places + 4]
+    mov esi, 1
+    call place_show
+9:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# dview_is_eval(ptr, len) -> eax 1 when that watch is the evaluation (not kept, bp.s)
+FN dview_is_eval
+    xor eax, eax
+    cmp dword ptr [rip + eval_on], 0
+    je 1f
+    mov rdx, [rip + evalsb + SB_ptr]
+    mov rcx, [rip + evalsb + SB_len]
+    jmp str_eq
+1:  ret
+
+# eval_promote(ptr, len) -> eax 1 when the text is the evaluation's: it is a watch from now on
+eval_promote:
+    PROLOGUE
+    call dview_is_eval
+    test eax, eax
+    jz 9f
+    mov dword ptr [rip + eval_on], 0
+    call bp_save_soon
+    mov eax, 1
+9:  EPILOGUE
+
+# cmd_debug_view_breakpoints (View Breakpoints, Shift+Cmd+F8 in JetBrains IDEs on macOS): the
+#   Breakpoints dialog (bpdialog.s)
+FN cmd_debug_view_breakpoints
+    jmp bpdlg_open
+
+# cmd_debug_mute_breakpoints (Mute Breakpoints): no breakpoint reaches the sessions until it is
+#   turned off again; they stay as they are, grey in the gutter
+FN cmd_debug_mute_breakpoints
+    jmp bp_mute_toggle
+
+
+# ---------------- the Debug tab ([debug] layout = toolwindow) ----------------
+
+# The bottom panel's Debug tab, laid out as JetBrains IDEs lay out their debug tool window: a row of
+# session chips (a click focuses the session; its x stops it, or puts away the chip of one that
+# ended), a toolbar (Rerun, Stop | Resume, Pause, Step Over, Into, Out, Run to Cursor | View
+# Breakpoints, Mute Breakpoints) with the Threads & Variables and Console tabs after it. Threads &
+# Variables has the thread picker above the focused thread's frames at the left, and at the right a
+# field that evaluates an expression (Enter) or adds it as a watch (Shift+Ctrl+Enter, Shift+Cmd+Enter
+# on macOS), the watches, then the variables. Tab and Shift+Tab move the keys between the frames, the
+# field, the watches and the variables. The trees are the sidebar sections' (their keys, menus and
+# prompts), the frames a list of the focused thread's own.
+
+.equ ID_TW, 0x5e0200            # + toolbar entry
+.equ ID_TW_SUB, 0x5e0230        # + 0 Threads & Variables, 1 Console
+.equ ID_TW_THREAD, 0x5e0234
+.equ ID_TW_EVAL, 0x5e0235
+.equ ID_TW_CHIP, 0x5e0240       # + slot: a session's chip; + DS_MAX + slot: its x
+.equ TWB_MAX, 16
+.equ TWC_ANY, 0                 # a button acts: always
+.equ TWC_LIVE, 1                # while the focused session lives
+.equ TWC_PAUSED, 2              # while it is paused
+.equ TWC_RUNNING, 3             # while it runs
+.equ TWC_MUTE, 4                # always; on while breakpoints are muted
+.equ TW_BAR, 12                 # toolbar entries, the separators (icon 0) among them
+.equ TW_THR_MAX, 32             # threads the picker lists
+
+# tw_can(cond) -> eax 1 when a button with that condition acts now
+tw_can:
+    mov eax, 1
+    cmp edi, TWC_ANY
+    je 9f
+    cmp edi, TWC_MUTE
+    je 9f
+    push rdi
+    call dap_focused
+    pop rdi
+    test rax, rax
+    jz 8f
+    mov ecx, [rax + DS_state]
+    cmp ecx, DSS_ENDED
+    je 8f
+    mov eax, 1
+    cmp edi, TWC_LIVE
+    je 9f
+    cmp edi, TWC_PAUSED
+    jne 1f
+    cmp ecx, DSS_PAUSED
+    je 9f
+    jmp 8f
+1:  cmp ecx, DSS_RUNNING
+    je 9f
+8:  xor eax, eax
+9:  ret
+
+# tw_color(icon) -> eax its color: the text's, Stop red (as the Sublime Debugger's bar)
+tw_color:
+    COLOR eax, T_FG
+    cmp edi, IC_DBG_STOP2
+    jne 1f
+    COLOR eax, T_ERROR
+1:  ret
+
+# tw_button(id, x, y, size, entry): a toolbar button; entry: icon, condition, command, tooltip. One
+#   that cannot act now is drawn faint and does nothing; Mute Breakpoints looks pressed while on.
+tw_button:
+    PROLOGUE 32
+    mov [rsp], edi
+    mov r12d, esi
+    mov r13d, edx
+    mov r14d, ecx
+    mov rbx, r8
+    mov edi, [rbx + 4]
+    call tw_can
+    mov [rsp + 4], eax
+    mov eax, [rip + twb_n]      # where it is, for tests
+    cmp eax, TWB_MAX
+    jae 2f
+    inc dword ptr [rip + twb_n]
+    shl eax, 4
+    lea rcx, [rip + twb_rects]
+    mov edx, [rbx]
+    mov [rcx + rax], edx
+    mov [rcx + rax + 4], r12d
+    mov [rcx + rax + 8], r13d
+    mov [rcx + rax + 12], r14d
+2:  mov edi, [rsp]
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    mov r8d, r14d
+    call ui_btn
+    mov r15d, eax
+    cmp dword ptr [rbx + 4], TWC_MUTE
+    jne 3f
+    cmp dword ptr [rip + g_bp_muted], 0
+    je 3f
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, r14d
+    mov ecx, r14d
+    M r8d, MI_RADIUS
+    COLOR r9d, T_SELECTION
+    call gfx_round_rect
+3:  cmp dword ptr [rsp + 4], 0
+    je 4f
+    test r15d, UB_HOVER
+    jz 4f
+    mov edi, r12d
+    mov esi, r13d
+    mov edx, r14d
+    mov ecx, r14d
+    M r8d, MI_RADIUS
+    COLOR r9d, T_HOVER
+    test r15d, UB_HELD
+    jz 31f
+    COLOR r9d, T_ACTIVE
+31: call gfx_round_rect
+4:  mov edi, [rbx]
+    call tw_color
+    mov r9d, eax
+    cmp dword ptr [rsp + 4], 0
+    jne 5f
+    COLOR r9d, T_MUTED          # faint: the muted color at half strength
+    and r9d, 0x00ffffff
+    or r9d, 0x80000000
+5:  mov edi, [rbx]
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    mov r8d, r14d
+    call ui_icon_center
+    mov edi, [rsp]
+    mov esi, r12d
+    mov edx, r13d
+    add edx, r14d
+    mov ecx, r14d
+    mov r8d, r15d
+    mov r9, [rbx + 16]
+    call tip_note_text
+    cmp dword ptr [rsp + 4], 0
+    je 9f
+    test r15d, UB_CLICK
+    jz 9f
+    call [rbx + 8]
+9:  EPILOGUE
+
+# tw_rerun(): Rerun: the focused session again, or the configuration F5 starts when none lives
+tw_rerun:
+    PROLOGUE
+    mov edi, TWC_LIVE
+    call tw_can
+    test eax, eax
+    jz 1f
+    call cmd_debug_restart
+    EPILOGUE
+1:  xor edi, edi
+    call start_selected
+    EPILOGUE
+
+# tw_focus(pane) -> eax 1 when the tab has the keys and the pane is the current one
+tw_focus:
+    push rdi
+    call place_focused
+    pop rdi
+    xor ecx, ecx
+    cmp eax, [rip + g_dv_places + 20]
+    jne 1f
+    cmp edi, [rip + tw_cur]
+    jne 1f
+    mov ecx, 1
+1:  mov eax, ecx
+    ret
+
+# tw_press(pane, x, y, w, h): a press there makes the pane the current one
+tw_press:
+    test dword ptr [rip + g_pressed], (1 << BTN_LEFT) | (1 << BTN_RIGHT)
+    jz 9f
+    push rdi
+    mov edi, esi
+    mov esi, edx
+    mov edx, ecx
+    mov ecx, r8d
+    call ui_in
+    pop rdi
+    test eax, eax
+    jz 9f
+    mov [rip + tw_cur], edi
+9:  ret
+
+# tw_rect(pane, x, y, w, h): where the pane is, for tests (w 0: not drawn)
+tw_rect:
+    shl edi, 4
+    lea rax, [rip + tw_rects]
+    mov [rax + rdi], esi
+    mov [rax + rdi + 4], edx
+    mov [rax + rdi + 8], ecx
+    mov [rax + rdi + 12], r8d
+    ret
+
+# tw_draw(ctx, x, y, w, h)
+tw_draw:
+    PROLOGUE 64
+    mov [rsp], esi              # x
+    mov [rsp + 4], edx          # y
+    mov [rsp + 8], ecx          # w
+    mov [rsp + 12], r8d         # h
+    mov dword ptr [rip + twb_n], 0
+    mov dword ptr [rip + tw_nchips], 0
+    lea rdi, [rip + tw_rects]   # the panes: none drawn yet
+    xor eax, eax
+    mov ecx, 8
+    rep stosq
+    M eax, MI_32
+    mov [rsp + 16], eax         # a bar's height
+    M eax, MI_28
+    mov [rsp + 20], eax         # a button's size
+    mov ecx, [rsp + 16]
+    sub ecx, eax
+    sar ecx, 1
+    mov [rsp + 24], ecx         # a button's inset in its bar
+    # the sessions
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 16]
+    call tw_chips
+    # the toolbar
+    mov eax, [rsp + 4]
+    add eax, [rsp + 16]
+    mov [rsp + 28], eax         # its top
+    mov r14d, [rsp]
+    add r14d, [rip + g_mt + 4*MI_6]
+    xor ebx, ebx
+1:  cmp ebx, TW_BAR
+    jae 2f
+    imul r8, rbx, 24
+    lea rax, [rip + tw_bar]
+    add r8, rax
+    cmp dword ptr [r8], 0
+    jne 11f
+    add r14d, [rip + g_mt + 4*MI_6]     # a separator
+    mov edi, r14d
+    mov esi, [rsp + 28]
+    add esi, [rip + g_mt + 4*MI_8]
+    M edx, MI_1
+    mov ecx, [rsp + 16]
+    sub ecx, [rip + g_mt + 4*MI_16]
+    COLOR r8d, T_BORDER
+    call gfx_fill
+    add r14d, [rip + g_mt + 4*MI_6]
+    add r14d, [rip + g_mt + 4*MI_1]
+    jmp 12f
+11: lea edi, [rbx + ID_TW]
+    mov esi, r14d
+    mov edx, [rsp + 28]
+    add edx, [rsp + 24]
+    mov ecx, [rsp + 20]
+    call tw_button
+    add r14d, [rsp + 20]
+    add r14d, [rip + g_mt + 4*MI_2]
+12: inc ebx
+    jmp 1b
+2:  add r14d, [rip + g_mt + 4*MI_16]    # the tabs
+    mov edi, r14d
+    mov esi, [rsp + 28]
+    mov edx, [rsp + 16]
+    call tw_subtabs
+    cmp dword ptr [rip + tw_sub], 1     # Console: Clear at the right end
+    jne 21f
+    mov esi, [rsp]
+    add esi, [rsp + 8]
+    sub esi, [rsp + 20]
+    sub esi, [rip + g_mt + 4*MI_8]
+    lea r8, [rip + tw_clear]
+    mov edi, ID_TW + 15
+    mov edx, [rsp + 28]
+    add edx, [rsp + 24]
+    mov ecx, [rsp + 20]
+    call tw_button
+21:
+    mov esi, [rsp + 28]         # a line under the bars
+    add esi, [rsp + 16]
+    mov [rsp + 32], esi
+    mov edi, [rsp]
+    mov edx, [rsp + 8]
+    M ecx, MI_1
+    COLOR r8d, T_BORDER
+    call gfx_fill
+    mov eax, [rsp + 32]
+    add eax, [rip + g_mt + 4*MI_1]
+    mov [rsp + 32], eax         # the body's top
+    mov ecx, [rsp + 4]
+    add ecx, [rsp + 12]
+    sub ecx, eax
+    mov [rsp + 36], ecx         # its height
+    test ecx, ecx
+    jle 9f
+    cmp dword ptr [rip + tw_sub], 1
+    jne 3f
+    xor edi, edi                # Console
+    mov esi, [rsp]
+    mov edx, [rsp + 32]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 36]
+    call console_draw
+    jmp 9f
+3:  mov eax, [rsp + 8]          # Threads & Variables: the frames [debug] frames_width % (at least 120)
+    mov ecx, [rip + g_debug_frames_pct]
+    imul eax, ecx
+    xor edx, edx
+    mov ecx, 100
+    div ecx
+    mov ecx, 120
+    call sc_dv
+    cmp eax, ecx
+    cmovl eax, ecx
+    mov ecx, [rsp + 8]
+    sub ecx, 120
+    cmp eax, ecx
+    cmovg eax, ecx
+    mov [rsp + 40], eax
+    mov edi, [rsp]              # the divider: a drag sets that share
+    mov esi, [rsp + 32]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 36]
+    mov r8d, eax
+    call tw_divider
+    mov eax, [rsp + 40]
+    mov edi, [rsp]
+    mov esi, [rsp + 32]
+    mov edx, eax
+    mov ecx, [rsp + 36]
+    call tw_frames
+    mov edi, [rsp]
+    add edi, [rsp + 40]
+    mov esi, [rsp + 32]
+    M edx, MI_1
+    mov ecx, [rsp + 36]
+    COLOR r8d, T_BORDER
+    call gfx_fill
+    mov edi, [rsp]
+    add edi, [rsp + 40]
+    add edi, [rip + g_mt + 4*MI_1]
+    mov esi, [rsp + 32]
+    mov edx, [rsp + 8]
+    sub edx, [rsp + 40]
+    sub edx, [rip + g_mt + 4*MI_1]
+    mov ecx, [rsp + 36]
+    call tw_values
+9:  EPILOGUE
+
+# tw_divider(x, y, w, h, frames width): the line between the frames and the values as a handle: the
+#   pointer over it shows the resize cursor, a drag sets [debug] frames_width (10 to 80% of the tab),
+#   a double click gives back 30%
+.equ ID_TW_SPLIT, 0x5e0236
+tw_divider:
+    PROLOGUE 16
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    mov [rsp + 12], ecx
+    lea r12d, [rdi + r8]        # its x
+    M eax, MI_3
+    mov edi, ID_TW_SPLIT
+    mov esi, r12d
+    sub esi, eax
+    mov edx, [rsp + 4]
+    lea ecx, [rax + rax + 1]
+    mov r8d, [rsp + 12]
+    call ui_btn
+    mov r13d, eax
+    test r13d, UB_PRESS
+    jz 1f
+    and dword ptr [rip + g_pressed], ~(1 << BTN_LEFT)   # the press is the drag's
+1:  test r13d, UB_HOVER | UB_HELD
+    jz 9f
+    mov dword ptr [rip + g_cursor], CUR_EW
+    mov edi, r12d
+    sub edi, [rip + g_mt + 4*MI_1]
+    mov esi, [rsp + 4]
+    M edx, MI_2
+    mov ecx, [rsp + 12]
+    COLOR r8d, T_ACCENT
+    call gfx_fill
+    mov eax, 30
+    test r13d, UB_DOUBLE
+    jnz 3f
+    test r13d, UB_HELD
+    jz 9f
+    mov eax, [rip + g_mx]       # the share where the pointer is
+    sub eax, [rsp]
+    imul eax, eax, 100
+    cdq
+    mov ecx, [rsp + 8]
+    test ecx, ecx
+    jz 9f
+    idiv ecx
+    mov ecx, 10
+    cmp eax, ecx
+    cmovl eax, ecx
+    mov ecx, 80
+    cmp eax, ecx
+    cmovg eax, ecx
+3:  cmp eax, [rip + g_debug_frames_pct]
+    je 9f
+    mov [rip + g_debug_frames_pct], eax
+    mov dword ptr [rip + g_dirty], 1
+    mov dword ptr [rip + g_settings_changed], 1
+9:  EPILOGUE
+
+# sc_dv(ecx points) -> ecx at the interface's scale (keeps eax)
+sc_dv:
+    push rax
+    mov edi, ecx
+    call sc
+    mov ecx, eax
+    pop rax
+    ret
+
+# tw_chips(x, y, w, h): a chip per session not put away: its bug (green while it lives), its name, x
+tw_chips:
+    PROLOGUE 48
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    mov [rsp + 12], ecx
+    mov r14d, edi
+    add r14d, [rip + g_mt + 4*MI_8]
+    M eax, MI_24
+    mov ecx, [rsp + 12]
+    sub ecx, eax
+    sar ecx, 1
+    add ecx, [rsp + 4]
+    mov [rsp + 24], ecx         # a chip's top
+    xor ebx, ebx
+1:  cmp ebx, DS_MAX
+    jae 7f
+    mov edi, ebx
+    call dap_slot
+    mov r12, rax
+    cmp dword ptr [r12 + DS_state], DSS_FREE
+    je 6f
+    lea rcx, [rip + tw_closed]  # put away
+    mov eax, [r12 + DS_id]
+    cmp eax, [rcx + rbx*4]
+    je 6f
+    mov edi, [r12 + DS_id]      # a launcher (js-debug's) with a live child: the child's chip is its
+    call tw_live_child
+    test eax, eax
+    jnz 6f
+    mov rdi, r12                # named as the configuration that started it
+    call tw_root_name
+    mov rsi, rax
+    test rsi, rsi
+    jnz 2f
+    lea rsi, [rip + .Ltw_session]
+2:  mov [rsp + 16], rsi
+    mov rdi, rsi
+    call strlen
+    lea rdi, [rip + g_face_small]
+    mov rsi, [rsp + 16]
+    mov rdx, rax
+    call text_width
+    mov r13d, eax               # the chip's width: 8, bug 16, 6, name, 6, x 16, 6
+    add r13d, [rip + g_mt + 4*MI_8]
+    add r13d, [rip + g_mt + 4*MI_16]
+    add r13d, [rip + g_mt + 4*MI_16]
+    add r13d, [rip + g_mt + 4*MI_6]
+    add r13d, [rip + g_mt + 4*MI_6]
+    add r13d, [rip + g_mt + 4*MI_6]
+    lea edi, [rbx + ID_TW_CHIP]
+    mov esi, r14d
+    mov edx, [rsp + 24]
+    mov ecx, r13d
+    M r8d, MI_24
+    call ui_btn
+    mov [rsp + 28], eax
+    cmp ebx, [rip + g_dfocus]
+    jne 21f
+    COLOR r9d, T_SELECTION
+    jmp 22f
+21: test dword ptr [rsp + 28], UB_HOVER
+    jz 23f
+    COLOR r9d, T_HOVER
+22: mov edi, r14d
+    mov esi, [rsp + 24]
+    mov edx, r13d
+    M ecx, MI_24
+    M r8d, MI_RADIUS
+    call gfx_round_rect
+23: COLOR r8d, T_SUCCESS        # running green, paused the warning color, ended muted
+    cmp dword ptr [r12 + DS_state], DSS_PAUSED
+    jne 231f
+    COLOR r8d, T_WARNING
+231: cmp dword ptr [r12 + DS_state], DSS_ENDED
+    jne 24f
+    COLOR r8d, T_MUTED
+24: M ecx, MI_16
+    mov esi, r14d
+    add esi, [rip + g_mt + 4*MI_8]
+    mov edx, [rip + g_mt + 4*MI_24]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 24]
+    mov edi, IC_DBG_BUG
+    cmp dword ptr [r12 + DS_nodebug], 0
+    je 25f
+    mov edi, IC_RUN_OUTLINE     # a run without debugging: the run icon
+25: call icon_draw
+    lea rdi, [rip + g_face_small]
+    mov esi, r14d
+    add esi, [rip + g_mt + 4*MI_8]
+    add esi, [rip + g_mt + 4*MI_16]
+    add esi, [rip + g_mt + 4*MI_6]
+    mov edx, [rsp + 24]
+    M ecx, MI_24
+    mov r8, [rsp + 16]
+    COLOR r9d, T_FG
+    call ui_text_c
+    mov esi, r14d               # its x
+    add esi, r13d
+    sub esi, [rip + g_mt + 4*MI_6]
+    sub esi, [rip + g_mt + 4*MI_16]
+    M ecx, MI_16
+    mov edx, [rip + g_mt + 4*MI_24]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 24]
+    lea edi, [rbx + ID_TW_CHIP + DS_MAX]
+    mov r8d, ecx
+    mov r9d, IC_CLOSE
+    call ui_icon_btn
+    test eax, UB_CLICK
+    jz 3f
+    mov edi, ebx
+    call tw_close_session
+    jmp 4f
+3:  test dword ptr [rsp + 28], UB_CLICK
+    jz 4f
+    mov edi, ebx
+    call dap_focus_slot
+4:  mov eax, [rip + tw_nchips]  # where it is, for tests
+    cmp eax, DS_MAX
+    jae 5f
+    inc dword ptr [rip + tw_nchips]
+    shl eax, 4
+    lea rcx, [rip + tw_chip_rects]
+    mov [rcx + rax], ebx
+    mov [rcx + rax + 4], r14d
+    mov edx, [rsp + 24]
+    mov [rcx + rax + 8], edx
+    mov [rcx + rax + 12], r13d
+5:  add r14d, r13d
+    add r14d, [rip + g_mt + 4*MI_4]
+6:  inc ebx
+    jmp 1b
+7:  cmp dword ptr [rip + tw_nchips], 0
+    jne 9f
+    lea rdi, [rip + g_face_small]       # no session: what the tab is for
+    mov esi, [rsp]
+    add esi, [rip + g_mt + 4*MI_12]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 12]
+    lea r8, [rip + .Ltw_idle]
+    COLOR r9d, T_MUTED
+    call ui_text_c
+9:  EPILOGUE
+
+# tw_live_child(id) -> eax 1 when a session that is not over has that session as its parent
+tw_live_child:
+    PROLOGUE
+    mov r12d, edi
+    xor ebx, ebx
+1:  cmp ebx, DS_MAX
+    jae 8f
+    mov edi, ebx
+    inc ebx
+    call dap_slot
+    mov ecx, [rax + DS_state]
+    cmp ecx, DSS_FREE
+    je 1b
+    cmp ecx, DSS_ENDED
+    je 1b
+    cmp [rax + DS_parent], r12d
+    jne 1b
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# tw_root_name(ds) -> rax the name of the session that started it (its parent's parent ...), else
+#   its own; 0 for none
+tw_root_name:
+    PROLOGUE
+    mov r12, rdi
+    mov r13d, 8                 # at most this deep
+1:  mov eax, [r12 + DS_parent]
+    test eax, eax
+    jz 8f
+    dec r13d
+    jz 8f
+    mov r14d, eax
+    xor ebx, ebx
+2:  cmp ebx, DS_MAX
+    jae 8f
+    mov edi, ebx
+    inc ebx
+    call dap_slot
+    cmp dword ptr [rax + DS_state], DSS_FREE
+    je 2b
+    cmp [rax + DS_id], r14d
+    jne 2b
+    mov r12, rax
+    jmp 1b
+8:  mov rax, [r12 + DS_name]
+    EPILOGUE
+
+# tw_close_session(slot): a chip's x: the session stops when it lives; its chip goes either way
+tw_close_session:
+    PROLOGUE
+    mov ebx, edi
+    call dap_slot
+    mov r12, rax
+    mov eax, [r12 + DS_id]
+    lea rcx, [rip + tw_closed]
+    mov [rcx + rbx*4], eax
+    cmp dword ptr [r12 + DS_state], DSS_ENDED
+    je 9f
+    mov edi, ebx
+    call dap_focus_slot
+    call dap_stop
+9:  mov dword ptr [rip + g_dirty], 1
+    EPILOGUE
+
+# tw_subtabs(x, y, h): Threads & Variables and Console, the chosen one filled
+tw_subtabs:
+    PROLOGUE 32
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    mov r14d, edi
+    xor ebx, ebx
+1:  cmp ebx, 2
+    jae 9f
+    lea rax, [rip + tw_subnames]
+    mov r12, [rax + rbx*8]
+    mov rdi, r12
+    call strlen
+    lea rdi, [rip + g_face_small]
+    mov rsi, r12
+    mov rdx, rax
+    call text_width
+    M ecx, MI_12
+    lea r13d, [rax + rcx*2]     # its width
+    M eax, MI_24
+    mov ecx, [rsp + 8]
+    sub ecx, eax
+    sar ecx, 1
+    add ecx, [rsp + 4]
+    mov r15d, ecx               # its top
+    lea edi, [rbx + ID_TW_SUB]
+    mov esi, r14d
+    mov edx, r15d
+    mov ecx, r13d
+    M r8d, MI_24
+    call ui_btn
+    mov [rsp + 12], eax
+    cmp ebx, [rip + tw_sub]
+    jne 2f
+    COLOR r9d, T_SELECTION
+    jmp 3f
+2:  test dword ptr [rsp + 12], UB_HOVER
+    jz 4f
+    COLOR r9d, T_HOVER
+3:  mov edi, r14d
+    mov esi, r15d
+    mov edx, r13d
+    M ecx, MI_24
+    M r8d, MI_RADIUS
+    call gfx_round_rect
+4:  COLOR r9d, T_MUTED
+    cmp ebx, [rip + tw_sub]
+    jne 41f
+    COLOR r9d, T_FG
+41: lea rdi, [rip + g_face_small]
+    mov esi, r14d
+    add esi, [rip + g_mt + 4*MI_12]
+    mov edx, r15d
+    M ecx, MI_24
+    mov r8, r12
+    call ui_text_c
+    mov eax, ebx                # where it is, for tests
+    shl eax, 4
+    lea rcx, [rip + tw_sub_rects]
+    mov [rcx + rax], r14d
+    mov [rcx + rax + 4], r15d
+    mov [rcx + rax + 8], r13d
+    test dword ptr [rsp + 12], UB_CLICK
+    jz 5f
+    mov [rip + tw_sub], ebx
+    mov dword ptr [rip + g_dirty], 1
+5:  add r14d, r13d
+    add r14d, [rip + g_mt + 4*MI_4]
+    inc ebx
+    jmp 1b
+9:  EPILOGUE
+
+# tw_frames(x, y, w, h): the thread picker, then the focused thread's frames
+tw_frames:
+    PROLOGUE 48
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    mov [rsp + 12], ecx
+    call tw_sync_frames
+    M eax, MI_28
+    mov [rsp + 16], eax         # the picker's height
+    xor edi, edi
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 12]
+    call tw_press
+    xor edi, edi
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 12]
+    call tw_rect
+    call dap_focused
+    test rax, rax
+    jz 5f
+    mov r12, rax
+    cmp dword ptr [r12 + DS_state], DSS_ENDED
+    je 5f
+    mov rdi, r12                # the focused thread's name
+    call tw_thread_name
+    test eax, eax
+    jz 5f
+    mov edi, ID_TW_THREAD
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 16]
+    call ui_btn
+    mov [rsp + 20], eax
+    test eax, UB_HOVER
+    jz 1f
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 8]
+    mov ecx, [rsp + 16]
+    COLOR r8d, T_HOVER
+    call gfx_fill
+1:  M ecx, MI_12                # a check while it is suspended, as JetBrains IDEs mark it
+    mov esi, [rsp]
+    add esi, [rip + g_mt + 4*MI_8]
+    mov edx, [rsp + 16]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 4]
+    mov edi, IC_CHECK
+    COLOR r8d, T_SUCCESS
+    cmp dword ptr [r12 + DS_state], DSS_PAUSED
+    je 2f
+    mov edi, IC_DBG_RESUME
+    COLOR r8d, T_MUTED
+2:  call icon_draw
+    lea rdi, [rip + g_face_small]
+    mov esi, [rsp]
+    add esi, [rip + g_mt + 4*MI_8]
+    add esi, [rip + g_mt + 4*MI_12]
+    add esi, [rip + g_mt + 4*MI_8]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 16]
+    mov r8, [rip + twlab + SB_ptr]
+    COLOR r9d, T_FG
+    call ui_text_c
+    mov esi, eax
+    add esi, [rip + g_mt + 4*MI_6]
+    M ecx, MI_12
+    mov edx, [rsp + 16]
+    sub edx, ecx
+    sar edx, 1
+    add edx, [rsp + 4]
+    mov edi, IC_CHEV_D
+    COLOR r8d, T_MUTED
+    call icon_draw
+    mov edi, ID_TW_THREAD
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    add edx, [rsp + 16]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 20]
+    lea r9, [rip + .Ltw_thread_tip]
+    call tip_note_text
+    test dword ptr [rsp + 20], UB_CLICK
+    jz 5f
+    mov edi, [rsp]
+    mov esi, [rsp + 4]
+    add esi, [rsp + 16]
+    call tw_thread_menu
+5:  xor edi, edi
+    call tw_focus
+    mov r9d, eax
+    mov rdi, [rip + frames_tr]
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    add edx, [rsp + 16]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 12]
+    sub r8d, [rsp + 16]
+    test r8d, r8d
+    jle 9f
+    call tree_draw
+9:  EPILOGUE
+
+# tw_thread_name(ds) -> eax 1 with twlab the focused thread's name (NUL-terminated)
+tw_thread_name:
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12, [rbx + DS_threads + VEC_len]
+    jae 8f
+    imul r13, r12, THR_SIZE
+    add r13, [rbx + DS_threads + VEC_ptr]
+    mov rax, [r13 + THR_id]
+    cmp rax, [rbx + DS_thread]
+    je 2f
+    inc r12
+    jmp 1b
+2:  mov esi, [r13 + THR_name]
+    add rsi, [rbx + DS_strs + SB_ptr]
+    mov edx, [r13 + THR_namelen]
+    lea rdi, [rip + twlab]
+    call sb_set
+    mov eax, 1
+    EPILOGUE
+8:  xor eax, eax
+    EPILOGUE
+
+# tw_sync_frames(): the frames list follows the focused session (its generation)
+tw_sync_frames:
+    PROLOGUE
+    mov eax, [rip + g_dap_gen]
+    cmp eax, [rip + tw_fgen]
+    je 9f
+    mov [rip + tw_fgen], eax
+    call dap_focused
+    mov rbx, rax
+    mov rdi, [rip + frames_tr]
+    test rbx, rbx
+    jz 1f
+    cmp dword ptr [rbx + DS_state], DSS_ENDED
+    je 1f
+    xor esi, esi
+    mov rdx, rbx
+    call list_frames
+    jmp 9f
+1:  xor esi, esi
+    call tree_kids_begin
+    mov rdi, [rip + frames_tr]
+    xor esi, esi
+    call tree_kids_end
+9:  EPILOGUE
+
+# tw_thread_menu(x, y): the focused session's threads, the focused one checked; a pick focuses it
+tw_thread_menu:
+    PROLOGUE 16
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    call dap_focused
+    test rax, rax
+    jz 9f
+    mov rbx, rax
+    lea rdi, [rip + twthr]
+    call sb_clear
+    xor r12d, r12d
+1:  cmp r12, [rbx + DS_threads + VEC_len]
+    jae 3f
+    cmp r12d, TW_THR_MAX
+    jae 3f
+    mov rax, [rip + twthr + SB_len]
+    lea rcx, [rip + tw_thr_offs]
+    mov [rcx + r12*8], rax
+    imul r13, r12, THR_SIZE
+    add r13, [rbx + DS_threads + VEC_ptr]
+    lea rdi, [rip + twthr]
+    mov esi, [r13 + THR_name]
+    add rsi, [rbx + DS_strs + SB_ptr]
+    mov edx, [r13 + THR_namelen]
+    call sb_push
+    mov rax, [r13 + THR_id]
+    cmp rax, [rbx + DS_thread]
+    jne 2f
+    lea rdi, [rip + twthr]
+    lea rsi, [rip + .Lrw_checked]
+    call sb_push_cstr
+2:  lea rdi, [rip + twthr]
+    xor esi, esi
+    call sb_push_byte
+    inc r12
+    jmp 1b
+3:  mov [rip + tw_thr_n], r12d
+    lea r13, [rip + tw_thr_items]
+    xor r14d, r14d
+4:  cmp r14d, r12d
+    jae 5f
+    lea rcx, [rip + tw_thr_offs]
+    mov rax, [rcx + r14*8]
+    add rax, [rip + twthr + SB_ptr]
+    mov [r13], rax
+    lea rax, [rip + tw_pick_thread]
+    mov [r13 + 8], rax
+    add r13, 16
+    inc r14d
+    jmp 4b
+5:  mov qword ptr [r13], 0
+    mov qword ptr [r13 + 8], 0
+    lea rdi, [rip + tw_thr_items]
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    call ctx_menu_open
+9:  EPILOGUE
+
+# tw_pick_thread(): the thread picked in the menu is the focused one
+tw_pick_thread:
+    PROLOGUE
+    mov ebx, [rip + g_menu_index]
+    cmp ebx, [rip + tw_thr_n]
+    jae 9f
+    call dap_focused
+    test rax, rax
+    jz 9f
+    cmp rbx, [rax + DS_threads + VEC_len]
+    jae 9f
+    mov rdi, rax
+    imul rcx, rbx, THR_SIZE
+    add rcx, [rax + DS_threads + VEC_ptr]
+    mov rsi, [rcx + THR_id]
+    call dap_focus_thread
+9:  EPILOGUE
+
+# tw_values(x, y, w, h): the field, then the watches and the variables, or a word that there are none
+tw_values:
+    PROLOGUE 48
+    mov [rsp], edi
+    mov [rsp + 4], esi
+    mov [rsp + 8], edx
+    mov [rsp + 12], ecx
+    M eax, MI_32
+    mov [rsp + 16], eax         # the field's row
+    mov edi, 1
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 16]
+    call tw_press
+    mov edi, 1
+    mov esi, [rsp]
+    mov edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 16]
+    call tw_rect
+    mov edi, 1
+    call tw_focus
+    mov r9d, eax
+    lea rdi, [rip + tw_eval]
+    mov esi, [rsp]
+    add esi, [rip + g_mt + 4*MI_6]
+    M eax, MI_24
+    mov edx, [rsp + 16]
+    sub edx, eax
+    sar edx, 1
+    add edx, [rsp + 4]
+    mov ecx, [rsp + 8]
+    sub ecx, [rip + g_mt + 4*MI_12]
+    mov r8d, eax
+    lea rax, [rip + .Ltw_eval_ph]
+    push rax
+    push rax
+    mov dword ptr [rip + g_tf_flat], 1  # flat, as JetBrains IDEs draw it: the lines around it frame it
+    call ui_textfield
+    mov dword ptr [rip + g_tf_flat], 0
+    add rsp, 16
+    mov edi, [rsp]              # a line under it
+    mov esi, [rsp + 4]
+    add esi, [rsp + 16]
+    mov edx, [rsp + 8]
+    M ecx, MI_1
+    COLOR r8d, T_BORDER
+    call gfx_fill
+    mov eax, [rsp + 4]
+    add eax, [rsp + 16]
+    add eax, [rip + g_mt + 4*MI_1]
+    mov [rsp + 20], eax         # the values' top
+    mov ecx, [rsp + 4]
+    add ecx, [rsp + 12]
+    sub ecx, eax
+    mov [rsp + 24], ecx         # their height
+    test ecx, ecx
+    jle 9f
+    call dap_focused            # paused: values to show
+    test rax, rax
+    jz 1f
+    cmp dword ptr [rax + DS_state], DSS_PAUSED
+    je 2f
+1:  lea rdi, [rip + g_face_small]
+    mov esi, [rsp]
+    mov edx, [rsp + 20]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 24]
+    lea r9, [rip + .Ltw_novalues]
+    COLOR eax, T_MUTED
+    push rax
+    push rax
+    call ui_text_center
+    add rsp, 16
+    jmp 9f
+2:  mov edi, 1                  # the watches: as tall as their rows, half the height at most
+    call sync
+    mov rdi, [rip + trees + 8]
+    call tree_rows
+    mov rdi, [rip + trees + 8]
+    call tree_rows_count
+    M ecx, MI_ROW
+    imul eax, ecx
+    mov ecx, [rsp + 24]
+    shr ecx, 1
+    cmp eax, ecx
+    cmovg eax, ecx
+    mov [rsp + 28], eax
+    test eax, eax
+    jz 3f
+    mov edi, 2
+    mov esi, [rsp]
+    mov edx, [rsp + 20]
+    mov ecx, [rsp + 8]
+    mov r8d, eax
+    call tw_press
+    mov edi, 2
+    mov esi, [rsp]
+    mov edx, [rsp + 20]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 28]
+    call tw_rect
+    mov edi, 2
+    call tw_focus
+    mov r9d, eax
+    mov rdi, [rip + trees + 8]
+    mov esi, [rsp]
+    mov edx, [rsp + 20]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 28]
+    call tree_draw
+    mov edi, [rsp]
+    mov esi, [rsp + 20]
+    add esi, [rsp + 28]
+    mov edx, [rsp + 8]
+    M ecx, MI_1
+    COLOR r8d, T_BORDER
+    call gfx_fill
+    mov eax, [rsp + 28]
+    add eax, [rip + g_mt + 4*MI_1]
+    mov [rsp + 28], eax
+3:  xor edi, edi                # the variables
+    call sync
+    mov eax, [rsp + 20]
+    add eax, [rsp + 28]
+    mov [rsp + 32], eax
+    mov ecx, [rsp + 24]
+    sub ecx, [rsp + 28]
+    mov [rsp + 36], ecx
+    test ecx, ecx
+    jle 9f
+    mov edi, 3
+    mov esi, [rsp]
+    mov edx, eax
+    mov r8d, ecx
+    mov ecx, [rsp + 8]
+    call tw_press
+    mov edi, 3
+    mov esi, [rsp]
+    mov edx, [rsp + 32]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 36]
+    call tw_rect
+    mov edi, 3
+    call tw_focus
+    mov r9d, eax
+    mov rdi, [rip + trees]
+    mov esi, [rsp]
+    mov edx, [rsp + 32]
+    mov ecx, [rsp + 8]
+    mov r8d, [rsp + 36]
+    call tree_draw
+9:  EPILOGUE
+
+# tw_key(ctx, keysym, cp, mods) -> eax
+tw_key:
+    PROLOGUE
+    mov r12d, esi
+    mov r13d, edx
+    mov r14d, ecx
+    cmp dword ptr [rip + tw_sub], 1
+    jne 1f
+    call console_key            # Console: its input line
+    EPILOGUE
+1:  cmp r12d, KEY_TAB
+    je 2f
+    cmp r12d, KEY_ISO_LEFT_TAB
+    jne 4f
+    mov ebx, 3                  # back: three on, of four
+    jmp 3f
+2:  mov ebx, 1
+    test r14d, MOD_SHIFT
+    jz 3f
+    mov ebx, 3
+3:  mov eax, [rip + tw_cur]
+    mov ecx, 4
+31: add eax, ebx
+    and eax, 3
+    dec ecx
+    jz 32f
+    mov edx, eax                # passed over: a pane not drawn (no watches, nothing paused)
+    shl edx, 4
+    lea r8, [rip + tw_rects]
+    cmp dword ptr [r8 + rdx + 8], 0
+    je 31b
+32: mov [rip + tw_cur], eax
+    mov dword ptr [rip + g_dirty], 1
+    mov eax, 1
+    EPILOGUE
+4:  mov eax, [rip + tw_cur]
+    cmp eax, 1
+    jne 6f
+    cmp r12d, KEY_RETURN        # the field
+    je 41f
+    cmp r12d, KEY_KP_ENTER
+    jne 5f
+41: lea rdi, [rip + tw_eval]
+    call tf_text
+    test rdx, rdx
+    jz 48f
+    mov rbx, rax
+    mov r15, rdx
+    mov eax, r14d
+    and eax, MOD_SHIFT | MOD_CTRL
+    cmp eax, MOD_SHIFT | MOD_CTRL
+    jne 42f
+    mov rdi, rbx                # Shift+Ctrl+Enter: a watch
+    mov rsi, r15
+    call eval_promote
+    test eax, eax
+    jnz 43f
+    mov rdi, rbx
+    mov rsi, r15
+    call dap_watch_add
+    call bp_save_soon
+    jmp 43f
+42: mov rdi, rbx
+    mov rsi, r15
+    call dview_eval
+43: lea rdi, [rip + tw_eval]
+    call tf_clear
+48: mov eax, 1
+    EPILOGUE
+5:  cmp r12d, KEY_ESCAPE
+    jne 51f
+    mov dword ptr [rip + tw_cur], 3
+    mov eax, 1
+    EPILOGUE
+51: lea rdi, [rip + tw_eval]
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    call tf_key
+    EPILOGUE
+6:  test eax, eax
+    jnz 7f
+    mov rdi, [rip + frames_tr]  # the frames
+    mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    call tree_key
+    EPILOGUE
+7:  mov edi, 1                  # the watches' section, the variables'
+    cmp eax, 2
+    je 71f
+    xor edi, edi
+71: mov esi, r12d
+    mov edx, r13d
+    mov ecx, r14d
+    call section_key
+    EPILOGUE
+
+# dview_tw_field() -> rax the Debug tab's field with the keys (the evaluation's, the console's), or 0
+FN dview_tw_field
+    sub rsp, 8
+    call place_focused
+    add rsp, 8
+    cmp dword ptr [rip + g_dv_places + 20], 0
+    jl 8f
+    cmp eax, [rip + g_dv_places + 20]
+    jne 8f
+    lea rax, [rip + cin]
+    cmp dword ptr [rip + tw_sub], 1
+    je 9f
+    cmp dword ptr [rip + tw_cur], 1
+    jne 8f
+    lea rax, [rip + tw_eval]
+9:  ret
+8:  xor eax, eax
+    ret
+
+# dview_tw_dump(sb): the Debug tab as last drawn: "twbutton ICON x y size", "chip SLOT x y w",
+#   "sub N x y w", "pane N x y w h" (w 0: not drawn), "twpane=N", "twsub=N"
+FN dview_tw_dump
+    PROLOGUE
+    mov rbx, rdi
+    xor r12d, r12d
+1:  cmp r12d, [rip + twb_n]
+    jae 2f
+    mov edi, r12d
+    lea rsi, [rip + twb_rects]
+    lea rdx, [rip + .Ltw_button]
+    mov ecx, 4
+    call tw_dump_row
+    inc r12d
+    jmp 1b
+2:  xor r12d, r12d
+21: cmp r12d, [rip + tw_nchips]
+    jae 3f
+    mov edi, r12d
+    lea rsi, [rip + tw_chip_rects]
+    lea rdx, [rip + .Ltw_chip]
+    mov ecx, 4
+    call tw_dump_row
+    inc r12d
+    jmp 21b
+3:  xor r12d, r12d
+31: cmp r12d, 2
+    jae 4f
+    mov rdi, rbx
+    lea rsi, [rip + .Ltw_subl]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r12d
+    call sb_push_u64
+    mov edi, r12d
+    lea rsi, [rip + tw_sub_rects]
+    xor edx, edx
+    mov ecx, 3
+    call tw_dump_row
+    inc r12d
+    jmp 31b
+4:  xor r12d, r12d
+41: cmp r12d, 4
+    jae 6f
+    mov rdi, rbx
+    lea rsi, [rip + .Ltw_pane]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, r12d
+    call sb_push_u64
+    mov edi, r12d
+    lea rsi, [rip + tw_rects]
+    xor edx, edx
+    mov ecx, 4
+    call tw_dump_row
+    inc r12d
+    jmp 41b
+6:  mov rdi, rbx
+    lea rsi, [rip + .Ltw_cur]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + tw_cur]
+    call sb_push_u64
+    mov rdi, rbx
+    lea rsi, [rip + .Ltw_subeq]
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [rip + tw_sub]
+    call sb_push_u64
+    mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    mov rdi, [rip + dc_lg]      # where the console's lines are (a click there selects one)
+    test rdi, rdi
+    jz 9f
+    mov rsi, rbx
+    lea rdx, [rip + .Ltw_conrect]
+    call log_print_rect
+9:  EPILOGUE
+
+# tw_dump_row(i, table, prefix or 0, n): onto rbx's SB, the prefix, then n numbers of the table's
+#   16-byte row i (space before each but a first with a prefix), a line's end
+tw_dump_row:
+    PROLOGUE
+    mov r12d, edi
+    shl r12d, 4
+    add r12, rsi
+    mov r13d, ecx
+    xor r14d, r14d
+    test rdx, rdx
+    jz 1f
+    mov rdi, rbx
+    mov rsi, rdx
+    call sb_push_cstr
+    mov rdi, rbx
+    mov esi, [r12]
+    call sb_push_u64
+    inc r14d
+1:  cmp r14d, r13d
+    jae 2f
+    mov rdi, rbx
+    mov esi, ' '
+    call sb_push_byte
+    mov rdi, rbx
+    mov esi, [r12 + r14*4]
+    call sb_push_u64
+    inc r14d
+    jmp 1b
+2:  mov rdi, rbx
+    mov esi, 10
+    call sb_push_byte
+    EPILOGUE
+
+
 .section .rodata
 .Ln_variables: .asciz "debug.variables"
+.Lreason_step: .asciz "step"
 .Ln_watch: .asciz "debug.watch"
 .Ln_stack: .asciz "debug.callstack"
 .Ln_breakpoints: .asciz "debug.breakpoints"
@@ -3121,13 +5803,13 @@ FN dview_terminal_key
 .Lt_stop: .asciz "Stop (Shift+F5)"
 .p2align 3
 # toolbar entries: icon (qword), command, tooltip
-tbe_continue: .quad IC_PLAY, cmd_debug_continue, .Lt_continue
-tbe_pause: .quad IC_DBG_PAUSE, cmd_debug_pause, .Lt_pause
-tbe_over: .quad IC_DBG_OVER, cmd_debug_step_over, .Lt_over
-tbe_into: .quad IC_DBG_INTO, cmd_debug_step_into, .Lt_into
-tbe_out: .quad IC_DBG_OUT, cmd_debug_step_out, .Lt_out
-tbe_restart: .quad IC_REFRESH, cmd_debug_restart, .Lt_restart
-tbe_stop: .quad IC_STOP, cmd_debug_stop, .Lt_stop
+tbe_continue: .quad IC_DBG_RESUME, cmd_debug_continue, .Lt_continue
+tbe_pause: .quad IC_DBG_PAUSE2, cmd_debug_pause, .Lt_pause
+tbe_over: .quad IC_DBG_STEP_OVER, cmd_debug_step_over, .Lt_over
+tbe_into: .quad IC_DBG_STEP_INTO, cmd_debug_step_into, .Lt_into
+tbe_out: .quad IC_DBG_STEP_OUT, cmd_debug_step_out, .Lt_out
+tbe_restart: .quad IC_DBG_RERUN, cmd_debug_restart, .Lt_restart
+tbe_stop: .quad IC_DBG_STOP2, cmd_debug_stop, .Lt_stop
 .Lp_setvar: .asciz "New value"
 .Ls_status_eq: .asciz "status="
 .Lp_select: .asciz "Debug configuration"
@@ -3141,22 +5823,173 @@ tbe_stop: .quad IC_STOP, cmd_debug_stop, .Lt_stop
 .Lm_disable: .asciz "Enable or Disable Breakpoint"
 .Lm_remove: .asciz "Remove Breakpoint"
 .p2align 3
-menu_add: .quad .Lm_add, mi_add, .Lm_cond, mi_condition, .Lm_log, mi_log, 0
+menu_add: .quad .Lm_add, mi_add, .Lm_cond, mi_condition, .Lm_log, mi_log, .Lrw_line, 0, .Lm_rtc, mi_rtc, 0
 menu_edit: .quad .Lm_editcond, mi_condition, .Lm_edithit, mi_hit, .Lm_editlog, mi_log
-    .quad .Lm_disable, mi_disable, .Lm_remove, mi_remove, 0
+    .quad .Lm_disable, mi_disable, .Lm_remove, mi_remove, .Lrw_line, 0, .Lm_rtc, mi_rtc, 0
 tb_debug: .quad tbe_continue, tbe_over, tbe_into, tbe_out, tbe_restart, tbe_stop, 0
 tb_nodebug: .quad tbe_restart, tbe_stop, 0
 term_cmds: .quad cmd_debug_start, cmd_debug_stop, cmd_debug_pause, cmd_debug_continue
     .quad cmd_debug_step_over, cmd_debug_step_into, cmd_debug_step_out, cmd_debug_restart, 0
 cat_slots:
     .byte T_FG, T_ERROR, T_MUTED, T_WARNING, T_MUTED, T_ERROR, T_MUTED, T_ACCENT, T_FG
+dc_sgr:                         # the same as SGR colors for the console's log (0: the default)
+    .byte 0, 31, 90, 33, 90, 31, 90, 34, 0
+.Ldc_csi: .asciz "\033["
 .p2align 3
 section_names: .quad .Ln_variables, .Ln_watch, .Ln_stack, .Ln_breakpoints
 section_titles: .quad .Lt_variables, .Lt_watch, .Lt_stack, .Lt_breakpoints
 sync_fns: .quad sync_vars, sync_watch, sync_stack, sync_bps
 section_ops: .quad section_draw, section_key, 0, 0, section_actions, 0
-console_ops: .quad console_draw, console_key, 0, 0, 0, 0
+console_ops: .quad console_draw, console_key, 0, dv_close, console_actions, 0
 vars_tree_ops: .quad 0, vars_expand, 0, 0, 0, 0, 0, vars_load
 stack_tree_ops: .quad stack_activate, 0, 0, 0, 0, 0, 0, 0
 bps_tree_ops: .quad bps_activate, 0, 0, bps_check, 0, 0, 0, 0
 tree_ops: .quad vars_tree_ops, vars_tree_ops, stack_tree_ops, bps_tree_ops
+
+# the run widget's state (the title bar's run widget, above)
+.bss
+.p2align 3
+rwlab: .zero SB_SIZE            # the configuration F5 starts, NUL-terminated
+rwtip: .zero SB_SIZE            # a button's tooltip
+rwall: .zero SB_SIZE            # the menu's configurations, one per line
+rwnames: .zero SB_SIZE          # its labels, NUL-terminated one after another
+rw_offs: .zero 8 * RW_MAX       # each label's offset in rwnames
+rw_items: .zero 16 * (RW_MAX + 4)
+rw_rects: .zero 16 * 8          # icon (0: the configuration), x, y, w, as last drawn
+rw_more_items: .zero 16 * 10
+rw_more_run: .zero SB_SIZE
+rw_more_debug: .zero SB_SIZE
+rw_spin_last: .quad 0
+rw_spin: .long 0                # a spinner was drawn this frame
+rw_spin_shown: .long 0          # and last frame
+rw_more_x: .long 0
+rw_more_y: .long 0
+rw_n: .long 0
+rw_lw: .long 0                  # the configuration's width
+rw_count: .long 0               # the configurations the menu lists
+
+.data
+.p2align 3
+.p2align 3
+rw_parts:                       # icon, color (theme slot), command, tooltip
+    .long IC_RUN_OUTLINE, T_FG
+    .quad cmd_debug_run, .Lrw_run
+    .long IC_DBG_BUG, T_FG
+    .quad rw_debug, .Lrw_debug
+    .long IC_DBG_STOP2, T_ERROR
+    .quad cmd_debug_stop, .Lrw_stop
+    .long IC_MORE, T_FG
+    .quad rw_more, .Lrw_more
+
+.section .rodata
+.Lrw_tip_cfg: .asciz "Select Run/Debug Configuration"
+.Lrw_run: .asciz "Run "
+.Lrw_debug: .asciz "Debug "
+.Lrw_stop: .asciz "Stop"
+.Lrw_more: .asciz "More"
+.Lw_compiling: .asciz "Compiling\342\200\246"
+.Lw_starting2: .asciz "Starting\342\200\246"
+.Ls_go: .asciz "go"
+.Lrw_viewbps2: .asciz "View Breakpoints\342\200\246"
+.Lrw_checked: .asciz "  \342\234\223"
+.Lrw_line: .asciz ""
+.Lrw_edit: .asciz "Edit Configurations\342\200\246"
+.Lrw_add: .asciz "Add Configuration\342\200\246"
+.Lrw_widget: .asciz "widget "
+
+# the Debug tab's state (above)
+.bss
+.p2align 3
+twb_rects: .zero 16 * TWB_MAX   # its buttons as last drawn: icon, x, y, size
+tw_rects: .zero 16 * 4          # its panes: x, y, w, h (frames, the field, watches, variables)
+tw_chip_rects: .zero 16 * DS_MAX    # the chips: slot, x, y, w
+tw_sub_rects: .zero 16 * 2      # Threads & Variables, Console: x, y, w
+tw_closed: .zero 4 * DS_MAX     # the id of the session whose chip each slot's x put away
+tw_thr_offs: .zero 8 * TW_THR_MAX
+tw_thr_items: .zero 16 * (TW_THR_MAX + 1)
+twlab: .zero SB_SIZE            # the focused thread's name
+twthr: .zero SB_SIZE            # the thread menu's labels
+tw_eval: .zero TF_SIZE          # Evaluate expression or add a watch
+frames_tr: .quad 0              # the focused thread's frames
+twb_n: .long 0
+tw_nchips: .long 0
+tw_cur: .long 0                 # the pane with the keys: 0 frames, 1 the field, 2 watches, 3 variables
+tw_sub: .long 0                 # 0 Threads & Variables, 1 Console
+tw_fgen: .long 0                # the generation the frames were listed at
+tw_thr_n: .long 0
+rtc_on: .long 0                 # Run to Cursor put a breakpoint at rtc_path:rtc_line
+rtc_line: .long 0
+eval_on: .long 0                # the first watch is Evaluate Expression's
+.p2align 3
+rtc_path: .zero SB_SIZE
+evalsb: .zero SB_SIZE           # its text
+evalinit: .zero SB_SIZE         # the prompt's initial text
+evaltmp: .zero SB_SIZE
+
+.data
+.p2align 3
+tw_ops: .quad tw_draw, tw_key, 0, dv_close, 0, 0
+tw_subnames: .quad .Ltw_sub0, .Ltw_sub1
+.p2align 3                      # entries of 24 bytes: the quads must not be padded
+tw_bar:                         # icon (0: a separator), condition, command, tooltip
+    .long IC_DBG_RERUN, TWC_ANY
+    .quad tw_rerun, .Ltw_rerun
+    .long IC_DBG_STOP2, TWC_LIVE
+    .quad cmd_debug_stop, .Lrw_stop
+    .long 0, 0
+    .quad 0, 0
+    .long IC_DBG_RESUME, TWC_PAUSED
+    .quad cmd_debug_continue, .Ltw_resume
+    .long IC_DBG_PAUSE2, TWC_RUNNING
+    .quad cmd_debug_pause, .Ltw_pause
+    .long IC_DBG_STEP_OVER, TWC_PAUSED
+    .quad cmd_debug_step_over, .Ltw_over
+    .long IC_DBG_STEP_INTO, TWC_PAUSED
+    .quad cmd_debug_step_into, .Ltw_into
+    .long IC_DBG_STEP_OUT, TWC_PAUSED
+    .quad cmd_debug_step_out, .Ltw_out
+    .long IC_DBG_RUN_CURSOR, TWC_PAUSED
+    .quad cmd_debug_run_to_cursor, .Ltw_rtc
+    .long 0, 0
+    .quad 0, 0
+    .long IC_DBG_BPS, TWC_ANY
+    .quad cmd_debug_view_breakpoints, .Ltw_viewbps
+    .long IC_DBG_MUTE, TWC_MUTE
+    .quad cmd_debug_mute_breakpoints, .Ltw_mute
+tw_clear:                       # the Console's Clear (not in the bar's loop)
+    .long IC_DBG_TRASH, TWC_ANY
+    .quad cmd_debug_clear_console, .Ltw_clear
+
+.section .rodata
+.Ln_debugger: .asciz "debug.debugger"
+.Lt_debugger: .asciz "Debug"
+.Ltw_idle: .asciz "No debug sessions"
+.Ltw_session: .asciz "Session"
+.Ltw_sub0: .asciz "Threads & Variables"
+.Ltw_sub1: .asciz "Console"
+.Ltw_novalues: .asciz "Variables are not available"
+.Ltw_thread_tip: .asciz "Threads"
+.ifdef MACOS
+.Ltw_eval_ph: .asciz "Evaluate expression (\342\206\251) or add a watch (\342\207\247\342\214\230\342\206\251)"
+.else
+.Ltw_eval_ph: .asciz "Evaluate expression (Enter) or add a watch (Shift+Ctrl+Enter)"
+.endif
+.Ltw_rerun: .asciz "Rerun"
+.Ltw_resume: .asciz "Resume Program"
+.Ltw_pause: .asciz "Pause Program"
+.Ltw_over: .asciz "Step Over"
+.Ltw_into: .asciz "Step Into"
+.Ltw_out: .asciz "Step Out"
+.Ltw_rtc: .asciz "Run to Cursor"
+.Ltw_viewbps: .asciz "View Breakpoints\342\200\246"
+.Ltw_mute: .asciz "Mute Breakpoints"
+.Ltw_clear: .asciz "Clear Console"
+.Lq_eval: .asciz "Evaluate expression"
+.Ltw_button: .asciz "twbutton "
+.Ltw_chip: .asciz "chip "
+.Ltw_subl: .asciz "sub "
+.Ltw_pane: .asciz "pane "
+.Ltw_cur: .asciz "twpane="
+.Ltw_subeq: .asciz "\ntwsub="
+.Ltw_conrect: .asciz "conrect"
+.Lm_rtc: .asciz "Run to Line"

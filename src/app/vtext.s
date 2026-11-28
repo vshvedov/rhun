@@ -31,6 +31,8 @@ vt_kver: .quad 0
 vt_kgen: .quad 0
 vt_kdgen: .quad 0
 vt_ktheme: .quad 0
+vt_kdap: .long 0                # the debugger's generation (inline values)
+.p2align 3
 vr_i0: .quad 0                  # the row's inlays: items [vr_i0, vr_i1)
 vr_i1: .quad 0
 vr_next: .quad 0                # vt_draw_at's place in them
@@ -71,6 +73,9 @@ FN vt_line
     mov rax, [rip + g_deco_gen]
     cmp [rip + vt_kdgen], rax
     jne 1f
+    mov eax, [rip + g_dap_gen]
+    cmp [rip + vt_kdap], eax
+    jne 1f
     mov eax, [rip + g_theme + 4*T_FG]
     shl rax, 32
     or eax, [rip + g_theme + 4*T_BG]
@@ -84,6 +89,8 @@ FN vt_line
     mov [rip + vt_kgen], rax
     mov rax, [rip + g_deco_gen]
     mov [rip + vt_kdgen], rax
+    mov eax, [rip + g_dap_gen]
+    mov [rip + vt_kdap], eax
     mov eax, [rip + g_theme + 4*T_FG]
     shl rax, 32
     or eax, [rip + g_theme + 4*T_BG]
@@ -105,6 +112,9 @@ FN vt_line
     mov rdi, rbx
     mov rsi, r12
     call ghost_line_inlays      # inline completion's first line (ghost.s)
+    mov rdi, rbx
+    mov rsi, r12
+    call dg_line_inlays         # the debugger's inline values (debuggutter.s)
 .Lvl_have:
     lea rax, [rip + vt_items]
     mov rdx, [rip + vt_n]

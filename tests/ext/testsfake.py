@@ -343,8 +343,12 @@ def main():
             parent = body.decode()
             if 'resolveslow' in MODE:
                 continue                    # never answered: rhun gives up after 30 s
+            log('resolve ' + parent)
             if parent == '':
-                send_reply(rid, items_body('', [item('group', 'go:example/pkg', 'pkg', flags='lazy'),
+                # pkgpath: the package names its folder, as the real controllers do, so rhun resolves it
+                # when a file in it is open
+                pkg_path = project[0] if 'pkgpath' in MODE else ''
+                send_reply(rid, items_body('', [item('group', 'go:example/pkg', 'pkg', pkg_path, flags='lazy'),
                                                  item('group', 'go:example/other', 'other', flags='lazy')]))
                 if 'flood' in MODE:
                     threading.Thread(target=lambda: (log('flood-body ' + flood(10001)),

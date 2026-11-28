@@ -29,6 +29,33 @@ class FeatureHost(debughost.DebugHost):
         return leaves
 
 
+class Borrowed(FeatureHost):
+    """[needs] debuggers: an extension starts a type another extension provides; one nobody provides is
+    refused with a toast that says what to install"""
+    def ext_state(self):
+        return self.work / 'state/rhun/extensions/rhun-tests--debuguser'
+
+    def test_another_extensions_debugger(self):
+        self.mode(start=[{'name': 'Borrowed', 'leaves': self.leaves()}])
+        out = self.run_editor(['cmd rhun-tests/debuguser.start', 'wait 500', 'print-dialog', 'dialog yes',
+                               'wait-debug ended', 'print-debug', 'wait 300'])
+        session = self.debug_lines(out)[0]
+        self.assertEqual(self.field(session, 'type'), 'fake', out)
+        self.assertEqual(self.field(session, 'exit'), '3', out)
+        self.assertIn('0 debug-ended 1 3', self.ext_log())
+
+    def test_a_type_nobody_provides(self):
+        self.mode(start=[{'leaves': [['s', 'type', 'nosuch'], ['s', 'program', 'x']]}])
+        out = self.run_editor(['cmd rhun-tests/debuguser.start', 'wait 500', 'print-toast', 'print-debug'])
+        self.assertTrue(any('Debugging needs a debugger for nosuch: install rhun-editor/debug' in l for l in out), out)
+        self.assertTrue(any(l.startswith('error 1 missing') for l in self.ext_log()), self.ext_log())
+
+    def test_a_type_not_listed(self):
+        self.mode(start=[{'leaves': [['s', 'type', 'faketcp'], ['s', 'program', 'x']]}])
+        self.run_editor(['cmd rhun-tests/debuguser.start', 'wait 500'])
+        self.assertIn("error 1 refused the configuration's type is not one of your debuggers", self.ext_log())
+
+
 class Feature(FeatureHost):
     def test_debug_start_runs_a_session_and_reports_its_end(self):
         self.mode(start=[{'name': 'From ext', 'leaves': self.leaves(

@@ -2443,7 +2443,13 @@ FN app_on_paste
 
 # focused_field() -> TF* that has keyboard focus, or 0
 FN focused_field
-    mov eax, [rip + g_focus]
+    sub rsp, 8                  # the Breakpoints dialog's field (bpdialog.s)
+    call bpdlg_field
+    add rsp, 8
+    test rax, rax
+    jz 0f
+    ret
+0:  mov eax, [rip + g_focus]
     cmp eax, FOCUS_VIEW
     je 1f
     cmp eax, FOCUS_QUICK
@@ -2537,6 +2543,12 @@ FN app_on_key
     jmp 9f
 10: mov edi, r12d               # a menu opened by the keys takes its keys (task 10: explorer.s)
     call ctx_menu_key
+    test eax, eax
+    jnz 9f
+    mov edi, r12d               # the Breakpoints dialog takes every key while it is open (bpdialog.s)
+    mov esi, r13d
+    mov edx, r14d
+    call bpdlg_key
     test eax, eax
     jnz 9f
     # focused components get the first chance
@@ -3132,6 +3144,26 @@ FN app_render
     mov dword ptr [rsp + 28], 0 # body x
     mov eax, [rsp]
     mov [rsp + 32], eax         # body right
+    # [ui] panel_full_width: the bottom panel spans the window; the sidebars and the editor column
+    #   share what is above it
+    mov dword ptr [rsp + 56], 0 # the full-width panel's height, 0 for none
+    cmp dword ptr [rip + cfg_panel_full], 0
+    je 33f
+    cmp dword ptr [rip + g_term_open], 0
+    je 33f
+    mov edi, [rip + cfg_term_h]
+    call sc
+    M edx, MI_64
+    mov ecx, [rsp + 24]
+    sub ecx, edx
+    sub ecx, edx
+    cmp eax, ecx
+    cmovg eax, ecx
+    cmp eax, edx
+    cmovl eax, edx
+    mov [rsp + 56], eax
+    sub [rsp + 24], eax
+33:
     # the dividers take their strips first: the panels either side are drawn before them
     mov dword ptr [rip + split_l_bits], 0
     mov dword ptr [rip + split_r_bits], 0
@@ -3198,6 +3230,8 @@ FN app_render
     mov [rsp + 48], eax         # editor h
     cmp dword ptr [rip + g_term_open], 0
     je 52f
+    cmp dword ptr [rsp + 56], 0 # full width: its height is taken already
+    jne 52f
     mov edi, [rip + cfg_term_h]
     call sc
     M edx, MI_64
@@ -3217,13 +3251,17 @@ FN app_render
     cmp dword ptr [rip + g_term_open], 0
     je 54f
     mov eax, [rsp + 40]
-    mov [rip + g_hole], eax
+    mov ecx, [rsp + 44]
+    cmp dword ptr [rsp + 56], 0
+    je 541f
+    xor eax, eax                # full width: across the window
+    mov ecx, [rsp]
+541: mov [rip + g_hole], eax
+    mov [rip + g_hole + 8], ecx
     mov eax, [rsp + 20]
     add eax, [rsp + 48]
     sub eax, [rip + g_mt + 4*MI_3]
     mov [rip + g_hole + 4], eax
-    mov eax, [rsp + 44]
-    mov [rip + g_hole + 8], eax
     M eax, MI_3
     lea eax, [rax + rax + 1]
     mov [rip + g_hole + 12], eax
@@ -3254,7 +3292,12 @@ FN app_render
     add esi, [rsp + 48]
     mov edx, [rsp + 44]
     mov ecx, [rsp + 52]
-    call term_panel_draw
+    cmp dword ptr [rsp + 56], 0
+    je 531f
+    xor edi, edi                # full width
+    mov edx, [rsp]
+    mov ecx, [rsp + 56]
+531: call term_panel_draw
 53: # the dividers over everything in the body: their line and cursor win
     cmp dword ptr [rip + g_show_side], 0
     je 55f
@@ -3289,9 +3332,11 @@ FN app_render
     call notify_draw            # notification cards (notify.s), under popups, menus and dialogs
     call complete_draw
     call hovercard_draw         # language features: the hover card (hovercard.s)
+    call dg_hover_card_draw     # the debugger: the value under the pointer while paused (debuggutter.s)
     call extbar_draw
     call explorer_menu_draw
     call palette_draw
+    call bpdlg_draw             # the debugger's Breakpoints dialog (bpdialog.s), under the palette's prompts
     call quick_draw             # an extension's quick input (quick.s)
     call dialog_draw
     call toast_draw
@@ -3317,6 +3362,8 @@ FN app_render
 # app_modal_open() -> 1 when a modal layer should block the base ui
 FN app_modal_open
     cmp dword ptr [rip + dlg_kind], 0
+    jne 1f
+    cmp dword ptr [rip + bpd_open], 0   # the Breakpoints dialog (bpdialog.s)
     jne 1f
     call explorer_menu_open
     test eax, eax
@@ -3746,7 +3793,27 @@ FN titlebar_draw
     mov ecx, [rsp + 52]
     imul ecx, ecx, 3
     add eax, ecx
-32: mov ecx, [rsp + 8]
+32: # the debugger's run widget left of the buttons, when it leaves the title room (debugview.s)
+    mov [rsp + 64], eax
+    call dview_run_widget_width
+    mov ecx, [rsp + 64]
+    test eax, eax
+    jz 33f
+    lea edx, [rcx + rax]
+    add edx, [rsp + 44]
+    mov r8d, [rsp + 8]
+    sub r8d, edx
+    M r9d, MI_48
+    add r9d, r9d
+    add r9d, r12d
+    cmp r8d, r9d
+    jl 33f
+    mov ecx, edx
+    mov [rsp + 68], eax
+    jmp 34f
+33: mov dword ptr [rsp + 68], 0
+34: mov eax, ecx
+    mov ecx, [rsp + 8]
     sub ecx, eax
     mov [rsp + 36], ecx        # left edge of the toolbar, with a gap
     # project name and a chevron: the button for the project menu
@@ -4015,7 +4082,17 @@ FN titlebar_draw
     test eax, UB_CLICK
     jz 9f
     call cmd_toggle_git
-9:  # a press on a button must not start a window move: the compositor would take the release
+9:  # the run widget (its width reserved above)
+    mov eax, [rsp + 68]
+    test eax, eax
+    jz 91f
+    mov edi, r12d
+    sub edi, eax
+    sub edi, [rsp + 44]
+    mov esi, [rsp + 4]
+    mov edx, [rsp + 12]
+    call dview_run_widget
+91: # a press on a button must not start a window move: the compositor would take the release
     cmp dword ptr [rip + g_hot], 0
     jne 13f
     mov edi, ID_TITLE

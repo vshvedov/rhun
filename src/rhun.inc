@@ -1632,7 +1632,37 @@ ENDSTRUCT TF_SIZE
 .equ IC_SPIN3, 176
 .equ IC_SPIN4, 177
 .equ IC_SPIN5, 178
-.equ IC_COUNT, 179
+.equ IC_DBG_RESUME, 179
+.equ IC_DBG_PAUSE2, 180
+.equ IC_DBG_STOP2, 181
+.equ IC_DBG_RERUN, 182
+.equ IC_DBG_STEP_OVER, 183
+.equ IC_DBG_STEP_INTO, 184
+.equ IC_DBG_STEP_OUT, 185
+.equ IC_DBG_RUN_CURSOR, 186
+.equ IC_DBG_BPS, 187
+.equ IC_DBG_MUTE, 188
+.equ IC_RUN_OUTLINE, 189
+.equ IC_DBG_BUG, 190
+.equ IC_SPINA0, 191
+.equ IC_SPINA1, 192
+.equ IC_SPINA2, 193
+.equ IC_SPINA3, 194
+.equ IC_SPINA4, 195
+.equ IC_SPINA5, 196
+.equ IC_SPINA6, 197
+.equ IC_SPINA7, 198
+.equ IC_SPINA8, 199
+.equ IC_SPINA9, 200
+.equ IC_SPINA10, 201
+.equ IC_SPINA11, 202
+.equ IC_SPINA12, 203
+.equ IC_SPINA13, 204
+.equ IC_SPINA14, 205
+.equ IC_SPINA15, 206
+.equ IC_DBG_TRASH, 207
+.equ IC_PANEL_WIDE, 208
+.equ IC_COUNT, 209
 # end of the icons from SVG files
 
 # explorer header buttons; the title bar's tooltips name them too
@@ -2111,6 +2141,7 @@ F EXT_pv_scm, 8         # "yes": it registers VCS provider tabs
 F EXT_pv_tests, 8       # testing: [provides] tests, the files it has tests in (patterns, cstr) or 0
 F EXT_tests_profiles, 8 # tests.profiles: run kinds it offers besides run (cstr) or 0
 F EXT_tests_progs, 8    # [needs] tests: programs rhun may start for its test runs (cstr) or 0
+F EXT_debuggers, 8      # [needs] debuggers: other extensions' debugger types it may start (cstr) or 0
 # language features (query.s): the [provides] keys of 0.18's kinds, provider-scope's narrowed
 # values and the session's statistics per kind
 F EXT_pv_hover, 8       # [provides] hover: patterns, cstr, or 0
@@ -2614,6 +2645,7 @@ ENDSTRUCT XK_SIZE
 .equ TS_QUEUE_PAUSE, 262144     # pipes wait while the extension's queue holds this much
 .equ TS_PROGS_MAX, 16           # [needs] tests: program names
 .equ TS_PROG_NAME, 64
+.equ TS_PROG_PATH, 1024                 # a program given as a path inside the project
 .equ TS_CTRL_MAX, 64            # controllers (extensions with tests agreed or declared)
 .equ TS_RESOLVE_MAX, 64         # tests-resolve requests out at once, all controllers
 # a controller: an extension's test tree
@@ -3966,6 +3998,7 @@ ENDSTRUCT MDO_SIZE
 .equ DCE_SYNTAX, 1                   # dcfg_from_leaves: the configuration body does not parse
 .equ DCE_REFUSED, 2                  # its type is not one of the extension's debuggers
 .equ DCE_ASK, 3                      # dcfg_prepare: a ${ask:} ${pick:} ${process} needs the user's answer
+.equ DCE_MISSING, 4                  # dcfg_from_leaves: a type its [needs] debuggers names, and no extension provides
 .equ DTR_STDIO, 0                   # DS_transport: the adapter's standard input and output
 .equ DTR_TCP, 1                     # rhun picks a port, starts the adapter and connects
 .equ DTR_SERVER, 2                  # launch.ini's server = HOST:PORT: no process
@@ -5052,6 +5085,7 @@ ENDSTRUCT VI_SIZE
 .equ VK_DECO, 3
 .equ VK_SWATCH, 4
 .equ VK_LENS, 5                 # (not an inlay: a code lens item under the pointer, lens.s)
+.equ VK_DEBUG, 6                # the debugger's inline values (debuggutter.s), after a line's text
 .equ VTM_LEFT, 0                # vt_x modes: before every inlay at the gap, after them, the caret's
 .equ VTM_RIGHT, 1
 .equ VTM_CARET, 2

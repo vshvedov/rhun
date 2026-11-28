@@ -2011,7 +2011,8 @@ default) let the formatter tidy lines as you type or paste.
 
 Extensions can also fill **trees and logs** that rhun draws and keeps: sections in the sidebar
 under the Explorer (click a header to fold it), tabs in the bottom panel after the terminals
-(`ctrl+j` **Toggle Panel** shows or hides the panel without starting a shell), tabs in the right
+(`ctrl+j` **Toggle Panel** shows or hides the panel without starting a shell; the ⇔ button at its
+top right spans it under the sidebars too, `[ui] panel_full_width`), tabs in the right
 column beside the Agents panel (**Toggle Side Views**), or a tab of their own. Trees keep your
 expansion and selection as the extension updates them: arrows move and fold, Enter opens, Space
 ticks a checkbox, typing jumps to a label, Shift+F10 opens the item's menu, and the buttons in the
@@ -2468,13 +2469,22 @@ a test's name ("add" finds TestAdd); the button beside it shows only failed test
 run a **Coverage** section lists the files, the least covered first. The status bar counts a run's
 progress, then the passed and failed tests (a click shows Testing).
 
-Debugging a test starts the extension's own debugger on it in rhun's debugger (`rhun-editor/tests`:
-Delve for Go, lldb-dap for Rust): breakpoints, stepping and the Debug Console work as for any
+Debugging a test starts a debugger on it in rhun's debugger: the Tests extension's runs use the
+Debug extension's debuggers (`[needs] debuggers`; Delve for Go, lldb-dap for Rust, debugpy for
+Python, js-debug for JavaScript and TypeScript), so running tests needs only the Tests extension and
+debugging them the Debug extension too (without it, rhun says which to install): breakpoints, stepping and the Debug Console work as for any
 session, and when the session ends the program's exit status is the test's result.
 
-In the editor each test has a run button in the gutter at its first line (`[testing] gutter =
-false` hides them): a click runs it, a right click opens its menu, and after a run the button
-shows the result. Buttons, failure marks and coverage follow your edits until the extension lists
+A run opens the **Test Results** tab in the bottom panel, one tab reused by every run (a debug run
+shows in the Debug tab instead): Rerun, Rerun Failed Tests and Stop, the counts and the time the run
+took, then its logs. They are the whole run's until you select a test or group in the Testing tree;
+then they are that one's: its output, then its failure messages with the expected and actual values
+(a group: everything under it; a test the run left out: its last result).
+
+In the editor each test has a green play button in the gutter at its first line, as soon as its file
+is open, without expanding the Testing tree (`[testing] gutter = false` hides them): a click opens the play menu, as JetBrains IDEs and the Sublime Debugger do (Run
+'NAME', Debug 'NAME', Run 'NAME' with Coverage), a right click the test's whole menu, and after a run
+the button shows the result. Buttons, failure marks and coverage follow your edits until the extension lists
 the file's tests again. A failure with a place is a problem (the Problems tab, a mark in the file with
 the expected and actual values on hover) until the test passes. After a run with coverage the line
 numbers are tinted: covered green, missed red, partly covered yellow (Show Test Coverage toggles
@@ -2575,6 +2585,17 @@ debugging, Shift+F5 Stop, Ctrl+Shift+F5 Restart, F6 Pause, F10 Step Over, F11 St
 Shift+F11 Step Out, F9 Toggle Breakpoint, Ctrl+Shift+Y the debug view. While a session runs they
 also work from the terminal (`[debug] keys_in_terminal`).
 
+**The run widget** at the title bar's right, as JetBrains IDEs have it, shows while launch.ini has
+configurations: the configuration F5 starts, then **Run** (as Ctrl+F5) and **Debug** (a new session
+of it, also while another one is paused), and **Stop** while a session lives. A click on the
+configuration lists launch.ini's configurations, the one F5 starts with a check after it, then
+**Edit Configurations…** (Open Launch Configurations) and **Add Configuration…**; **More** (⋮) has
+Run and Debug of it, Stop, those two and View Breakpoints. The buttons' tooltips name the
+configuration ("Debug 'Run server'"). While a session gets ready (its adapter starting; Delve building
+the program) Debug turns into a spinner, and the status bar says "Compiling…" (Go) or "Starting…"
+with a moving bar and × to stop it. When the window is too narrow for both, the
+widget gives way to the title, and the debugging toolbar moves off center to leave it room.
+
 **While debugging**, the title bar holds the toolbar (Continue or Pause, Step Over, Into, Out,
 Restart, Stop); the sidebar shows Variables, Watch, Call Stack and Breakpoints, and the panel the
 Debug Console, where an expression evaluates in the selected frame (Up and Down recall earlier
@@ -2586,13 +2607,50 @@ Program output, the adapter's messages and rhun's notes ("Program exited with co
 console. A program the adapter starts "in the terminal" (debugpy's `console =
 integratedTerminal`) gets a terminal tab of its own, where you type its input.
 
+**The Debug tab** (`[debug] layout = toolwindow`; **Debugger layout** in Settings) lays the debug
+view out as JetBrains IDEs do, in the bottom panel instead of the sidebar. A row of chips names the
+sessions (a click focuses one; its × stops it, or puts away the chip of one that ended). Below it,
+the toolbar: Rerun and Stop, then Resume, Pause, Step Over, Into, Out and Run to Cursor, then View
+Breakpoints and Mute Breakpoints, and the **Threads & Variables** and **Console** tabs. Threads &
+Variables has the thread picker (the focused thread, a check while it is suspended; a click lists the
+others) above that thread's frames at the left; at the right a field that evaluates an expression
+(Enter) or adds it as a watch (Shift+Ctrl+Enter, Shift+Cmd+Enter on macOS), the watches, then the
+variables, or "Variables are not available" while nothing is paused. Tab and Shift+Tab move the keys
+between the frames, the field, the watches and the variables; the trees keep the sections' keys and
+menus. Console is the Debug Console. The title bar keeps the run widget and leaves the stepping
+buttons to the tab.
+
+**Inline values** (`[debug] inline_values`, on): while a session is paused, each line of the paused
+frame's file from 50 lines above the paused line down to it shows the values of the variables it
+names after its text ("total = 3, i = 2"), from the scopes that are loaded; a name after `.` or `->`
+is a member and is passed over.
+
+**Run to Cursor** (Debug: Run to Cursor, the tab's arrow, or **Run to Line** in the gutter's menu)
+lets the paused program run on to the cursor's line: a breakpoint is put there for the time it takes
+and goes at the next stop, wherever that is, or when the session ends.
+
+**Evaluate Expression** (Debug: Evaluate Expression) puts the selection, or the identifier at the
+cursor, in the Debug tab's field (in a prompt with the sidebar layout); its result shows at the top of
+the watches, where it opens like any watch and is evaluated again at every stop. The next evaluation
+takes its place, and it is not kept with the watches (Shift+Ctrl+Enter, or Watch's +, keeps it).
+
+**View Breakpoints** opens the **Breakpoints** dialog, as JetBrains IDEs have it: every breakpoint
+with its checkbox at the left (+ adds a function breakpoint, − removes the selected one), and at the
+right the selected one's file and line, Enabled, its condition, hit count and log message ("Evaluate
+and log": a logpoint, the program does not stop), and the lines around it. A field applies when the
+selection moves, Enter is pressed in it or the dialog closes (Done, Escape); in the list Space turns
+the breakpoint on or off, Delete removes it and Enter opens its line. **Mute Breakpoints** keeps every
+breakpoint from the sessions until it is turned off again, the breakpoints greyed in the gutter but
+otherwise as they were.
+
 **Breakpoints**: click the gutter's left lane or press F9; a right click adds a conditional
 breakpoint (an expression), a hit count or a logpoint (a message with `{expressions}`), and
 disables or removes one. Breakpoints follow edits, are kept per project, and show hollow until the
 debugger confirms them. The Breakpoints section also lists function breakpoints and exception
 filters (such as Python's "Uncaught Exceptions").
 
-**Settings** (`[debug]`): `show_on_start` opens the debug view when a session starts,
+**Settings** (`[debug]`): `layout` (`sidebar` or `toolwindow`, above), `inline_values`,
+`show_on_start` opens the debug view when a session starts,
 `keys_in_terminal` as above, `console_lines` the lines the console keeps (10000).
 
 | Debugger | macOS | Linux | Windows |

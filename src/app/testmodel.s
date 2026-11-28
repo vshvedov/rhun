@@ -16,7 +16,8 @@ g_ts_runs: .zero TSR_SIZE * TS_RUNS_MAX
 g_ts_items_all: .quad 0         # items of every controller
 g_ts_bytes: .quad 0             # messages, values and outputs every run holds
 g_ts_runnum: .quad 0            # the last run number given
-g_ts_dirty: .long 0             # the tree or a result changed since the view last looked
+g_ts_dirty: .long 0             # the tree or a result changed since the view last looked: bit 0
+                                # the Testing section's, bit 1 Test Results' (testresults.s)
 .p2align 3
 # body parsing (tsb_*): the cursor over the body being read and the fields of its last line
 bp_p: .quad 0
@@ -247,7 +248,7 @@ FN testmodel_ctrl_make
     mov dword ptr [r13 + TSI_next], -1
     mov dword ptr [r13 + TSI_prev], -1
     mov dword ptr [r13 + TSI_ms], -1
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov rax, r12
 9:  EPILOGUE
 
@@ -300,7 +301,7 @@ FN testmodel_forget
     call memset
     mov rdi, rbx
     call testview_forget
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 
@@ -696,7 +697,7 @@ item_propagate:
     dec dword ptr [rax + TSI_cnt + r15*4]
     inc dword ptr [rax + TSI_cnt + r14*4]
     jmp 1b
-9:  mov dword ptr [rip + g_ts_dirty], 1
+9:  mov dword ptr [rip + g_ts_dirty], 3
     EPILOGUE
 
 # testmodel_set_own(tsc, index, state): its own result's state, and its ancestors' derived ones
@@ -771,7 +772,7 @@ item_remove:
     dec dword ptr [rbx + TSC_count]
     dec qword ptr [rip + g_ts_items_all]
     jmp 1b
-9:  mov dword ptr [rip + g_ts_dirty], 1
+9:  mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
     EPILOGUE
 
@@ -994,7 +995,7 @@ FN testmodel_items
 72: and dword ptr [rax + TSI_flags], ~TSF_MARK
 73: mov r14, r15
     jmp 71b
-8:  mov dword ptr [rip + g_ts_dirty], 1
+8:  mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
     xor eax, eax
     EPILOGUE
@@ -1643,7 +1644,7 @@ FN testmodel_resolving
     test ebx, ebx
     jz 1f
     or dword ptr [rax + TSI_flags], TSF_RESOLVING
-1:  mov dword ptr [rip + g_ts_dirty], 1
+1:  mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
     pop rbx
     ret
@@ -1663,7 +1664,7 @@ FN testmodel_set_error
     jbe 1f
     mov edx, TS_ERROR_MAX
 1:  call set_str_opt
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
     pop r13
     pop r12
@@ -1713,7 +1714,9 @@ FN testmodel_run_new
     mov [r13 + TSR_num], rax
     mov dword ptr [r13 + TSR_state], TSRS_QUEUED
     mov [r13 + TSR_profile], r12d
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
+    mov rdi, r13
+    call testresults_run_new    # the Test Results tab shows it
     mov rax, r13
 9:  EPILOGUE
 
@@ -1785,7 +1788,7 @@ run_free:
     xor esi, esi
     mov edx, TSR_SIZE
     call memset
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_ts_marks], 1
     EPILOGUE
 
@@ -1988,7 +1991,7 @@ FN testmodel_run_end
     call testexec_run_over      # its processes stop
     call testmodel_budget
     mov dword ptr [rip + g_ts_marks], 1
-    mov dword ptr [rip + g_ts_dirty], 1
+    mov dword ptr [rip + g_ts_dirty], 3
     mov dword ptr [rip + g_dirty], 1
 9:  EPILOGUE
 

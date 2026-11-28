@@ -16,8 +16,9 @@ ENDSTRUCT CL_SIZE
 clines: .zero VEC_SIZE
 ctext: .zero SB_SIZE
 clean: .zero SB_SIZE
-.globl g_dcon_max, g_dcon_gen
+.globl g_dcon_max, g_dcon_gen, g_dcon_reset
 g_dcon_gen: .long 0             # bumped on every change (drawing)
+g_dcon_reset: .long 0           # bumped when lines go (Clear, the cap): their indexes change
 .data
 g_dcon_max: .long 10000         # [debug] console_lines
 
@@ -163,6 +164,7 @@ trim_lines:
     cmp eax, [rip + g_dcon_max]
     jb 9f
     shr rax, 1
+    inc dword ptr [rip + g_dcon_reset]
     mov rbx, rax                # lines dropped
     imul rcx, rbx, CL_SIZE
     add rcx, [rip + clines + VEC_ptr]
@@ -259,6 +261,7 @@ sanitize:
 
 # dcon_clear(): an empty console
 FN dcon_clear
+    inc dword ptr [rip + g_dcon_reset]
     mov qword ptr [rip + clines + VEC_len], 0
     mov qword ptr [rip + ctext + SB_len], 0
     inc dword ptr [rip + g_dcon_gen]

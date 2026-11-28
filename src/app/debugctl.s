@@ -4,7 +4,7 @@
 # debug-eval EXPR | debug-forget | bp PATH LINE [cond=C] [hits=H] [log=L] | bp-toggle PATH LINE |
 # bp-enable PATH LINE 0|1 | bp-function NAME [cond=C] | bp-clear | exc-filter TYPE FILTER 0|1 |
 # wait-debug STATE [MS] | wait-console TEXT | print-debug | print-stack | print-vars | print-watch |
-# print-console [N] | print-bps | print-dap-log | print-configs
+# print-console [N] | print-bps | print-dap-log | print-configs | print-inline-values | print-bp-dialog
 .include "rhun.inc"
 
 .bss
@@ -752,6 +752,68 @@ c_print_debug_toolbar:
     xor eax, eax
     ret
 
+# print-value-card: the debugger's hover card as last drawn (debuggutter.s)
+c_print_hover_card:
+    mov rdi, [rip + outp]
+    call dg_hover_card_dump
+    xor eax, eax
+    ret
+
+# print-bp-dialog: the Breakpoints dialog's state (bpdialog.s)
+c_print_bp_dialog:
+    mov rdi, [rip + outp]
+    call bpdlg_dump
+    xor eax, eax
+    ret
+
+# print-inline-values: "inline LINE TEXT" for each line of the paused frame's file with inline values
+#   (1-based lines), from the first line to the paused one
+c_print_inline_values:
+    PROLOGUE
+    mov r12, [rip + g_dg_doc]
+    test r12, r12
+    jz 9f
+    xor ebx, ebx
+1:  cmp rbx, [rip + g_dg_line]
+    jg 9f
+    mov rdi, r12
+    mov rsi, rbx
+    call vt_line
+    mov r13, rax
+    mov r14, rdx
+    xor r15d, r15d
+2:  cmp r15, r14
+    jae 4f
+    imul rcx, r15, VI_SIZE
+    add rcx, r13
+    cmp byte ptr [rcx + VI_kind], VK_DEBUG
+    jne 3f
+    push rcx
+    push rcx
+    lea rdi, [rip + .Ls_inline]
+    call out_cstr
+    mov rdi, [rip + outp]
+    lea rsi, [rbx + 1]
+    call sb_push_u64
+    mov rdi, [rip + outp]
+    mov esi, ' '
+    call sb_push_byte
+    pop rcx
+    pop rcx
+    mov rdi, [rip + outp]
+    mov rsi, [rcx + VI_text]
+    mov edx, [rcx + VI_len]
+    call sb_push
+    mov rdi, [rip + outp]
+    mov esi, 10
+    call sb_push_byte
+3:  inc r15
+    jmp 2b
+4:  inc rbx
+    jmp 1b
+9:  xor eax, eax
+    EPILOGUE
+
 # print-debug-hover: the debugger's hover for the position the pointer rests on, or none
 c_print_debug_hover:
     call dg_hover_text
@@ -834,6 +896,9 @@ DCTL c_print_configs
 DCTL c_print_debug_tree
 DCTL c_print_debug_toolbar
 DCTL c_print_debug_hover
+DCTL c_print_inline_values
+DCTL c_print_bp_dialog
+DCTL c_print_hover_card
 
 .section .rodata
 .Ls_into: .asciz "into"
@@ -881,6 +946,10 @@ DCTL c_print_debug_hover
 .Lc_print_debug_tree: .asciz "print-debug-tree"
 .Lc_print_debug_toolbar: .asciz "print-debug-toolbar"
 .Lc_print_debug_hover: .asciz "print-debug-hover"
+.Lc_print_inline_values: .asciz "print-inline-values"
+.Lc_print_bp_dialog: .asciz "print-bp-dialog"
+.Lc_print_hover_card: .asciz "print-value-card"
+.Ls_inline: .asciz "inline "
 .Lt_variables: .asciz "variables"
 .Lt_watch: .asciz "watch"
 .Lt_stack: .asciz "stack"
@@ -907,5 +976,6 @@ debug_ctl:
     .quad .Lc_print_console, e_c_print_console, .Lc_print_bps, e_c_print_bps
     .quad .Lc_print_dap_log, e_c_print_dap_log, .Lc_print_configs, e_c_print_configs
     .quad .Lc_print_debug_tree, e_c_print_debug_tree, .Lc_print_debug_toolbar, e_c_print_debug_toolbar
-    .quad .Lc_print_debug_hover, e_c_print_debug_hover
+    .quad .Lc_print_debug_hover, e_c_print_debug_hover, .Lc_print_inline_values, e_c_print_inline_values
+    .quad .Lc_print_bp_dialog, e_c_print_bp_dialog, .Lc_print_hover_card, e_c_print_hover_card
     .quad 0, 0

@@ -17,6 +17,8 @@ g_hot: .long 0
 g_active: .long 0
 g_cursor: .long 0
 g_block: .long 0                # 1 while drawing layers under a modal
+.globl g_tf_flat
+g_tf_flat: .long 0              # ui_textfield draws no frame (the Debug tab's field)
 g_hole: .zero 16                # x, y, w, h: a handle drawn later owns this strip, nothing drawn
 g_hole2: .zero 16               # the same for a popup drawn over the editor later in the frame
                                 # before it takes the pointer there (h 0: none)
@@ -1425,7 +1427,9 @@ FN ui_textfield
     test eax, UB_HOVER
     jz 1f
     mov dword ptr [rip + g_cursor], CUR_TEXT
-1:  # background
+1:  # background (none for a flat field: g_tf_flat)
+    cmp dword ptr [rip + g_tf_flat], 0
+    jne 20f
     mov edi, [rsp]
     mov esi, [rsp + 4]
     mov edx, [rsp + 8]
@@ -1440,7 +1444,7 @@ FN ui_textfield
     push rax
     call gfx_frame
     add rsp, 16
-    # content
+20: # content
     M r12d, MI_10
     add r12d, [rsp]             # text x
     mov edi, [rsp]
